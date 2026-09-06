@@ -5,7 +5,13 @@ const nav = [
   { label: "Overview", href: "/dashboard", icon: "◈" },
   { label: "Domains", href: "/dashboard/domains", icon: "◐" },
   { label: "Mailboxes", href: "/dashboard/mailboxes", icon: "✉" },
+  { label: "Drafts", href: "/dashboard/drafts", icon: "▤" },
+  { label: "Contacts", href: "/dashboard/contacts", icon: "◎" },
+  { label: "Search", href: "/dashboard/search", icon: "🔍" },
   { label: "Storage", href: "/dashboard/storage", icon: "▦" },
+  { label: "Billing", href: "/dashboard/billing", icon: "💳" },
+  { label: "Members", href: "/dashboard/members", icon: "👥" },
+  { label: "Recovery", href: "/dashboard/recovery", icon: "🔑" },
   { label: "Settings", href: "/dashboard/settings", icon: "⚙" },
 ];
 

@@ -11,6 +11,7 @@ const options: Array<{ value: StorageProvider; label: string; desc: string; badg
   { value: "minio", label: "MinIO", desc: "Self-hosted S3-compatible" },
   { value: "s3", label: "S3", desc: "AWS S3 or compatible" },
   { value: "google_drive_mock", label: "Google Drive Mock", desc: "Filesystem mock at /tmp/byos-drive-mock", badge: "DEV" },
+  { value: "google_drive", label: "Google Drive", desc: "OAuth access token, encrypted at rest", badge: "OAUTH" },
 ];
 
 const ProviderSelector: Component<Props> = (props) => {

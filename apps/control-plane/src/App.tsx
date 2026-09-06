@@ -6,6 +6,12 @@ import DashboardOverview from "./routes/dashboard";
 import DomainsPage from "./routes/dashboard/domains";
 import MailboxesPage from "./routes/dashboard/mailboxes";
 import RecoveryPage from "./routes/dashboard/recovery";
+import DraftsPage from "./routes/dashboard/drafts";
+import ContactsPage from "./routes/dashboard/contacts";
+import MembersPage from "./routes/dashboard/members";
+import SettingsPage from "./routes/dashboard/settings";
+import SearchPage from "./routes/dashboard/search";
+import BillingPage from "./routes/dashboard/billing";
 import LoginPage from "./routes/login";
 import RegisterPage from "./routes/register";
 
@@ -20,6 +26,12 @@ const App: Component = () => {
         <Route path="/domains" component={DomainsPage} />
         <Route path="/mailboxes" component={MailboxesPage} />
         <Route path="/recovery" component={RecoveryPage} />
+        <Route path="/drafts" component={DraftsPage} />
+        <Route path="/contacts" component={ContactsPage} />
+        <Route path="/search" component={SearchPage} />
+        <Route path="/billing" component={BillingPage} />
+        <Route path="/members" component={MembersPage} />
+        <Route path="/settings" component={SettingsPage} />
       </Route>
       {/* Fallback: redirect root to dashboard */}
       <Route path="/" component={() => { window.location.replace("/dashboard/storage"); return null; }} />
@@ -28,3 +40,4 @@ const App: Component = () => {
 };
 
 export default App;
+

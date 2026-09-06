@@ -18,6 +18,7 @@ const providerLabel: Record<string, string> = {
   minio: "MinIO",
   s3_compatible: "S3 Compatible",
   google_drive_mock: "Google Drive Mock",
+  google_drive: "Google Drive",
 };
 
 const StorageCard: Component<Props> = (props) => {

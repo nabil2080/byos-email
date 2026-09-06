@@ -275,6 +275,29 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// Quota check: enforce plan mailbox limits
+		var usedMailboxes int
+		_ = conn.QueryRow(ctx, `SELECT count(*) FROM mailboxes WHERE org_id=$1 AND is_active=true`, orgID).Scan(&usedMailboxes)
+		var currentPlan string
+		err = conn.QueryRow(ctx, `SELECT plan FROM organizations WHERE id=$1`, orgID).Scan(&currentPlan)
+		if err != nil || currentPlan == "" {
+			currentPlan = "solo"
+		}
+		spec, ok := PLAN_SPECS[currentPlan]
+		if !ok {
+			spec = PLAN_SPECS["solo"]
+		}
+		if usedMailboxes >= spec.MailboxLimit {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "mailbox_limit_reached",
+				"limit": spec.MailboxLimit,
+				"plan":  spec.Plan,
+			})
+			return
+		}
+
 		// Mailbox creation requires an active storage connection; never fall
 		// back to a default. Deleted/error connections do not qualify.
 		var storageConnID string
@@ -521,6 +544,30 @@ func mailboxAliasesHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid alias local_part", http.StatusBadRequest)
 			return
 		}
+
+		// Quota check: enforce aliases per mailbox limit
+		var usedAliases int
+		_ = conn.QueryRow(ctx, `SELECT count(*) FROM aliases WHERE mailbox_id=$1 AND is_active=true`, mailboxID).Scan(&usedAliases)
+		var currentPlan string
+		err = conn.QueryRow(ctx, `SELECT plan FROM organizations WHERE id=$1`, mailboxOrgID).Scan(&currentPlan)
+		if err != nil || currentPlan == "" {
+			currentPlan = "solo"
+		}
+		spec, ok := PLAN_SPECS[currentPlan]
+		if !ok {
+			spec = PLAN_SPECS["solo"]
+		}
+		if usedAliases >= spec.AliasesPerMail {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "alias_limit_reached",
+				"limit": spec.AliasesPerMail,
+				"plan":  spec.Plan,
+			})
+			return
+		}
+
 		var newAliasID string
 		err = conn.QueryRow(ctx, `INSERT INTO aliases (mailbox_id, local_part, domain_id) VALUES ($1, $2, $3) RETURNING id::text`, mailboxID, aliasLocal, aliasDomainID).Scan(&newAliasID)
 		if err != nil {

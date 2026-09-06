@@ -4,7 +4,7 @@
  * Never handles DEK, never stores credentials, never returns ciphertext to UI.
  */
 
-export type StorageProvider = "s3" | "minio" | "google_drive_mock";
+export type StorageProvider = "s3" | "minio" | "google_drive_mock" | "google_drive";
 
 export interface StorageConnection {
   id: string;
@@ -28,6 +28,19 @@ export interface StorageTestResult {
 export interface StorageCreatePayload {
   provider: StorageProvider;
   config: Record<string, unknown>;
+}
+
+export interface StorageMigrationStatus {
+  id: string;
+  status: "pending" | "running" | "completed" | "failed";
+  objects: number;
+  error_code?: string;
+  retry_count: number;
+}
+
+export interface GoogleDriveAuthorization {
+  authorization_url: string;
+  state: string;
 }
 
 function getAuthHeader(): Record<string, string> {
@@ -140,4 +153,20 @@ export async function deleteStorageConnection(orgId: string): Promise<void> {
     if (res.status === 403) throw new Error("You don't have permission to disconnect storage");
     throw new Error(text || `Request failed ${res.status}`);
   }
+
+}
+
+export async function authorizeGoogleDrive(orgId: string): Promise<GoogleDriveAuthorization> {
+  return request<GoogleDriveAuthorization>(`/v1/organizations/${orgId}/storage/google-drive/authorize`);
+}
+
+export async function getStorageMigrationStatus(orgId: string, migrationId: string): Promise<StorageMigrationStatus> {
+  return request<StorageMigrationStatus>(`/v1/organizations/${orgId}/storage/migration/${migrationId}`);
+}
+
+export async function retryStorageMigration(orgId: string, migrationId: string): Promise<StorageMigrationStatus> {
+  return request<StorageMigrationStatus>(`/v1/organizations/${orgId}/storage/migration/${migrationId}/retry`, {
+    method: "POST",
+    body: "{}",
+  });
 }

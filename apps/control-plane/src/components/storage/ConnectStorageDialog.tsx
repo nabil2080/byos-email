@@ -4,6 +4,7 @@ import S3Form from "./S3Form";
 import MockForm from "./MockForm";
 import type { StorageProvider } from "../../lib/api/storage";
 import { validateStorageConfig } from "../../lib/validation/storage";
+import { authorizeGoogleDrive } from "../../lib/api/storage";
 
 interface Props {
   open: boolean;
@@ -21,6 +22,9 @@ const ConnectStorageDialog: Component<Props> = (props) => {
   const [region, setRegion] = createSignal("");
   const [pathStyle, setPathStyle] = createSignal(true);
   const [root, setRoot] = createSignal("");
+  const [accessToken, setAccessToken] = createSignal("");
+  const [refreshToken, setRefreshToken] = createSignal("");
+  const [folderId, setFolderId] = createSignal("");
   const [submitting, setSubmitting] = createSignal(false);
   const [errors, setErrors] = createSignal<Record<string, string>>({});
   const [topError, setTopError] = createSignal("");
@@ -31,6 +35,8 @@ const ConnectStorageDialog: Component<Props> = (props) => {
   function clearSensitive() {
     setAccessKey("");
     setSecretKey("");
+    setAccessToken("");
+    setRefreshToken("");
   }
 
   function handleClose() {
@@ -75,6 +81,22 @@ const ConnectStorageDialog: Component<Props> = (props) => {
     if (props.open) handleClose();
   }
 
+  async function startGoogleAuthorization() {
+    setTopError("");
+    setSubmitting(true);
+    try {
+      const orgId = (document.querySelector('meta[name="org-id"]') as HTMLMetaElement)?.content || "";
+      if (!orgId) {
+        throw new Error("Organization ID is unavailable.");
+      }
+      const result = await authorizeGoogleDrive(orgId);
+      window.location.assign(result.authorization_url);
+    } catch {
+      setTopError("Google Drive authorization is unavailable. Check OAuth configuration.");
+      setSubmitting(false);
+    }
+  }
+
   async function handleSubmit(e: Event) {
     e.preventDefault();
     setTopError("");
@@ -84,6 +106,12 @@ const ConnectStorageDialog: Component<Props> = (props) => {
     if (provider() === "google_drive_mock") {
       config = {};
       if (root().trim() !== "") config.root = root().trim();
+    } else if (provider() === "google_drive") {
+      config = {
+        access_token: accessToken(),
+        ...(refreshToken().trim() ? { refresh_token: refreshToken().trim() } : {}),
+        ...(folderId().trim() ? { folder_id: folderId().trim() } : {}),
+      };
     } else {
       config = {
         endpoint: endpoint().trim(),
@@ -154,7 +182,7 @@ const ConnectStorageDialog: Component<Props> = (props) => {
           <form onSubmit={handleSubmit} class="mt-6 space-y-6">
             <ProviderSelector value={provider()} onChange={setProvider} disabled={submitting()} />
 
-            <Show when={provider() !== "google_drive_mock"}>
+            <Show when={provider() !== "google_drive_mock" && provider() !== "google_drive"}>
               <S3Form
                 endpoint={endpoint()}
                 setEndpoint={setEndpoint}
@@ -171,6 +199,17 @@ const ConnectStorageDialog: Component<Props> = (props) => {
                 disabled={submitting()}
                 errors={errors()}
               />
+            </Show>
+
+            <Show when={provider() === "google_drive"}>
+              <div class="grid gap-3">
+                <button type="button" onClick={startGoogleAuthorization} disabled={submitting()} class="rounded-md border border-sky-600 px-3 py-2 text-sm font-medium text-sky-700 disabled:opacity-50">Authorize with Google</button>
+                <p class="text-xs text-slate-500">Or enter an existing OAuth token below for controlled service-account deployments.</p>
+                <input type="password" autocomplete="off" placeholder="Google OAuth access token" value={accessToken()} onInput={(event) => setAccessToken(event.currentTarget.value)} disabled={submitting()} class="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                <input type="password" autocomplete="off" placeholder="Refresh token (optional)" value={refreshToken()} onInput={(event) => setRefreshToken(event.currentTarget.value)} disabled={submitting()} class="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                <input placeholder="Drive folder ID (optional)" value={folderId()} onInput={(event) => setFolderId(event.currentTarget.value)} disabled={submitting()} class="rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                <p class="text-xs text-slate-500">Tokens are sent once for encrypted storage and are never returned by the API.</p>
+              </div>
             </Show>
 
             <Show when={provider() === "google_drive_mock"}>

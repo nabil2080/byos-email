@@ -1,0 +1,31 @@
+---
+import Layout from "../layouts/Layout.astro";
+---
+
+<Layout title="Privacy Policy">
+  <section class="py-20 px-6 max-w-4xl mx-auto">
+    <h1 class="text-4xl font-extrabold text-white">Privacy Policy</h1>
+    <p class="mt-4 text-slate-400">Effective Date: August 2026</p>
+
+    <div class="mt-8 space-y-6 text-sm text-slate-300 leading-relaxed">
+      <p>
+        BYOS Business Email is designed from the ground up to minimize data collection and preserve customer ownership over mailbox content.
+      </p>
+
+      <h2 class="text-xl font-bold text-white mt-6">1. Storage Ownership</h2>
+      <p>
+        Persistent mailbox content (emails, attachments, drafts, contacts) is stored in persistent storage accounts provided and owned by you (the Customer). We do not maintain unencrypted copies of your mailbox contents.
+      </p>
+
+      <h2 class="text-xl font-bold text-white mt-6">2. Transient Processing Window</h2>
+      <p>
+        Inbound internet SMTP email received for your domain is parsed, spam-checked via Rspamd, encrypted immediately, and uploaded to your connected storage. No plaintext email content is persisted on BYOS infrastructure.
+      </p>
+
+      <h2 class="text-xl font-bold text-white mt-6">3. Operational Metadata</h2>
+      <p>
+        To route mail and enforce rate limits, BYOS maintains operational metadata including email addresses, custom domain routing records, rate-limit counters, and audit logs.
+      </p>
+    </div>
+  </section>
+</Layout>

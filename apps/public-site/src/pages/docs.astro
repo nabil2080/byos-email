@@ -1,0 +1,36 @@
+---
+import Layout from "../layouts/Layout.astro";
+---
+
+<Layout title="Documentation & Setup Guides">
+  <section class="py-20 px-6 max-w-4xl mx-auto">
+    <h1 class="text-4xl font-extrabold text-white">Documentation & Setup Guides</h1>
+    <p class="mt-4 text-slate-400">Everything you need to configure your BYOS Business Email environment.</p>
+
+    <div class="mt-12 grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="rounded-xl border border-slate-800 bg-slate-950 p-6">
+        <h2 class="text-lg font-bold text-white">Connecting Amazon S3 / MinIO</h2>
+        <p class="mt-2 text-xs text-slate-400">Step-by-step guide to provisioning S3 buckets, creating IAM access keys, and configuring path-style S3 storage.</p>
+        <a href="http://127.0.0.1:3000/dashboard/storage" class="mt-4 inline-block text-xs font-semibold text-sky-400 hover:text-sky-300">Open Storage Settings &rarr;</a>
+      </div>
+
+      <div class="rounded-xl border border-slate-800 bg-slate-950 p-6">
+        <h2 class="text-lg font-bold text-white">Google Drive OAuth Setup</h2>
+        <p class="mt-2 text-xs text-slate-400">How to authorize BYOS to store encrypted email objects in your organization or individual Google Drive account.</p>
+        <a href="http://127.0.0.1:3000/dashboard/storage" class="mt-4 inline-block text-xs font-semibold text-sky-400 hover:text-sky-300">Open Storage Settings &rarr;</a>
+      </div>
+
+      <div class="rounded-xl border border-slate-800 bg-slate-950 p-6">
+        <h2 class="text-lg font-bold text-white">Custom Domain & MX Verification</h2>
+        <p class="mt-2 text-xs text-slate-400">Adding MX, SPF, DKIM, and DMARC TXT records to your DNS provider to verify custom domain ownership.</p>
+        <a href="http://127.0.0.1:3000/dashboard/domains" class="mt-4 inline-block text-xs font-semibold text-sky-400 hover:text-sky-300">Open Domain Settings &rarr;</a>
+      </div>
+
+      <div class="rounded-xl border border-slate-800 bg-slate-950 p-6">
+        <h2 class="text-lg font-bold text-white">IMAP / SMTP Desktop Bridge</h2>
+        <p class="mt-2 text-xs text-slate-400">Setting up the local BYOS Bridge application to use Outlook, Thunderbird, or Apple Mail with local decryption.</p>
+        <a href="http://127.0.0.1:3000/dashboard/settings" class="mt-4 inline-block text-xs font-semibold text-sky-400 hover:text-sky-300">Open Settings &rarr;</a>
+      </div>
+    </div>
+  </section>
+</Layout>

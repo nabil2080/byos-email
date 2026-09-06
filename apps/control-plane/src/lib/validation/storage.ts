@@ -35,8 +35,26 @@ export function validateMockConfig(config: Record<string, unknown>): ValidationR
   for (const k of Object.keys(config)) {
     if (!allowed.has(k)) return { ok: false, field: k, message: `Unknown field: ${k}` };
   }
+
   if ("root" in config && typeof config["root"] !== "string") {
     return { ok: false, field: "root", message: "Field root must be string" };
+  }
+
+  return { ok: true };
+}
+
+export function validateGoogleDriveConfig(config: Record<string, unknown>): ValidationResult {
+  if (typeof config.access_token !== "string" || config.access_token.trim() === "") {
+    return { ok: false, field: "access_token", message: "Access token must be non-empty" };
+  }
+  const allowed = new Set(["access_token", "refresh_token", "folder_id"]);
+  for (const key of Object.keys(config)) {
+    if (!allowed.has(key)) return { ok: false, field: key, message: `Unknown field: ${key}` };
+  }
+  for (const key of ["refresh_token", "folder_id"]) {
+    if (key in config && typeof config[key] !== "string") {
+      return { ok: false, field: key, message: `${key} must be a string` };
+    }
   }
   return { ok: true };
 }
@@ -50,6 +68,9 @@ export function validateStorageConfig(
   }
   if (provider === "google_drive_mock") {
     return validateMockConfig(config);
+  }
+  if (provider === "google_drive") {
+    return validateGoogleDriveConfig(config);
   }
   return { ok: false, field: "provider", message: "Invalid provider" };
 }

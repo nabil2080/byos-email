@@ -101,6 +101,30 @@ func domainsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid domain", http.StatusBadRequest)
 			return
 		}
+
+		// Quota check: enforce plan domain limits
+		var usedDomains int
+		_ = conn.QueryRow(ctx, `SELECT count(*) FROM domains WHERE org_id=$1`, orgID).Scan(&usedDomains)
+		var currentPlan string
+		err = conn.QueryRow(ctx, `SELECT plan FROM organizations WHERE id=$1`, orgID).Scan(&currentPlan)
+		if err != nil || currentPlan == "" {
+			currentPlan = "solo"
+		}
+		spec, ok := PLAN_SPECS[currentPlan]
+		if !ok {
+			spec = PLAN_SPECS["solo"]
+		}
+		if usedDomains >= spec.DomainLimit {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "domain_limit_reached",
+				"limit": spec.DomainLimit,
+				"plan":  spec.Plan,
+			})
+			return
+		}
+
 		var newID string
 		var verified bool
 		err = conn.QueryRow(ctx, `INSERT INTO domains (org_id, name) VALUES ($1, $2) RETURNING id::text, is_verified`, orgID, name).Scan(&newID, &verified)

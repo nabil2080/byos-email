@@ -123,3 +123,36 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		Timestamp: time.Now(),
 	})
 }
+
+var startTime = time.Now()
+
+func metricsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	uptime := time.Since(startTime).Seconds()
+	checks := []ServiceHealth{
+		checkPostgres(),
+		checkRedis(),
+		checkMinIO(),
+		checkSMTP(),
+		checkRspamd(),
+	}
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	fmt.Fprintf(w, "# HELP byos_uptime_seconds System uptime in seconds.\n")
+	fmt.Fprintf(w, "# TYPE byos_uptime_seconds counter\n")
+	fmt.Fprintf(w, "byos_uptime_seconds %.2f\n\n", uptime)
+
+	fmt.Fprintf(w, "# HELP byos_service_up Dependency service health status (1 = up, 0 = down).\n")
+	fmt.Fprintf(w, "# TYPE byos_service_up gauge\n")
+	for _, c := range checks {
+		val := 0
+		if c.Status == "up" {
+			val = 1
+		}
+		fmt.Fprintf(w, "byos_service_up{service=\"%s\"} %d\n", c.Name, val)
+	}
+}
+

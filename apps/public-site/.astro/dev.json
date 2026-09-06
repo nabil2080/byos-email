@@ -1,0 +1,14 @@
+{
+	"pid": 10752,
+	"port": 3002,
+	"url": "http://127.0.0.1:3002",
+	"urls": {
+		"local": [
+			"http://127.0.0.1:3002/"
+		],
+		"network": [],
+		"networkInterfaceNames": []
+	},
+	"background": false,
+	"startedAt": "2026-09-06T13:23:26.829Z"
+}

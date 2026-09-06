@@ -1,6 +1,6 @@
 package main
 
-// Step 8 Slice B: Draft create / list / get-one (backend only).
+// Step 8 Drafts: create / list / get-one / update / delete (backend).
 //
 // Evidence:
 // - BYOS_V1_Prototype_Roadmap.md Section 17 (Drafts: encrypted storage,
@@ -18,9 +18,8 @@ package main
 // - Crypto: Section 12 canonical AES-GCM envelope, client-encrypted. The
 //   server validates envelope structure only (same doctrine as outbound
 //   send) and never decrypts.
-// Slice B implements create/list/get-one ONLY. Update (Slice C), delete
-// (Slice D), and frontend (Slice E) are explicitly out of scope: PUT, PATCH
-// and DELETE return 405 here.
+// The API stores encrypted envelopes opaquely; the frontend remains a separate
+// roadmap slice.
 
 import (
 	"context"
@@ -103,13 +102,20 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 	_ = userID
 
 	if draftID := r.PathValue("draft_id"); draftID != "" {
-		if r.Method != http.MethodGet {
-			// Update (Slice C) and delete (Slice D) are not implemented yet.
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
 		if _, err := uuid.Parse(draftID); err != nil {
 			http.Error(w, "draft ID must be UUID", http.StatusBadRequest)
+			return
+		}
+		switch r.Method {
+		case http.MethodPut:
+			draftUpdateHandler(w, r, conn, ctx, mailboxID, userID, draftID)
+			return
+		case http.MethodDelete:
+			draftDeleteHandler(w, r, conn, ctx, mailboxID, userID, draftID)
+			return
+		case http.MethodGet:
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		var id, subject, recipient string
@@ -154,6 +160,91 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func draftUpdateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, ctx context.Context, mailboxID, userID, draftID string) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		Subject           string `json:"subject"`
+		Recipient         string `json:"recipient"`
+		EncryptedEnvelope string `json:"encrypted_envelope"`
+		Version           int    `json:"version"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	subject := strings.TrimSpace(req.Subject)
+	if len(subject) > 998 {
+		http.Error(w, "subject too long", http.StatusBadRequest)
+		return
+	}
+	recipient := strings.TrimSpace(req.Recipient)
+	if recipient != "" && (!strings.Contains(recipient, "@") || len(recipient) > 254) {
+		http.Error(w, "invalid recipient", http.StatusBadRequest)
+		return
+	}
+	if req.Version < 1 {
+		http.Error(w, "version must be at least 1", http.StatusBadRequest)
+		return
+	}
+	envelope, err := base64.StdEncoding.DecodeString(strings.TrimSpace(req.EncryptedEnvelope))
+	if err != nil || len(envelope) < 29 || envelope[0] != 0x01 {
+		http.Error(w, "invalid encrypted_envelope", http.StatusBadRequest)
+		return
+	}
+	var id string
+	var version int
+	var createdAt, updatedAt time.Time
+	err = conn.QueryRow(ctx, `
+		UPDATE drafts
+		SET subject=$1, recipient=$2, encrypted_envelope=$3,
+		    version=version+1, updated_at=now()
+		WHERE id=$4 AND mailbox_id=$5 AND version=$6
+		RETURNING id::text, version, created_at, updated_at
+	`, subject, recipient, envelope, draftID, mailboxID, req.Version).Scan(&id, &version, &createdAt, &updatedAt)
+	if err == pgx.ErrNoRows {
+		var currentVersion int
+		err = conn.QueryRow(ctx, `SELECT version FROM drafts WHERE id=$1 AND mailbox_id=$2`, draftID, mailboxID).Scan(&currentVersion)
+		if err == pgx.ErrNoRows {
+			http.Error(w, "draft not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, "failed to check draft version", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "draft_version_conflict", "current_version": currentVersion})
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to update draft", http.StatusInternalServerError)
+		return
+	}
+	var orgID string
+	_ = conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&orgID)
+	auditLog(ctx, conn, orgID, userID, "draft_update", "draft", draftID, map[string]interface{}{"mailbox_id": mailboxID, "version": version})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, createdAt, updatedAt))
+}
+
+func draftDeleteHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, ctx context.Context, mailboxID, userID, draftID string) {
+	var deletedID string
+	err := conn.QueryRow(ctx, `DELETE FROM drafts WHERE id=$1 AND mailbox_id=$2 RETURNING id::text`, draftID, mailboxID).Scan(&deletedID)
+	if err == pgx.ErrNoRows {
+		http.Error(w, "draft not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to delete draft", http.StatusInternalServerError)
+		return
+	}
+	var orgID string
+	_ = conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&orgID)
+	auditLog(ctx, conn, orgID, userID, "draft_delete", "draft", deletedID, map[string]interface{}{"mailbox_id": mailboxID})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func draftCreateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, ctx context.Context, mailboxID, userID string) {

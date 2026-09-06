@@ -9,7 +9,7 @@ ALTER TABLE storage_connections ALTER COLUMN provider SET DEFAULT 'minio';
 -- Add check constraint if not exists (use DO block to avoid duplicate) — only minimal providers, no real google_drive yet
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'storage_connections_provider_check') THEN
-    ALTER TABLE storage_connections ADD CONSTRAINT storage_connections_provider_check CHECK (provider IN ('minio','s3','google_drive_mock'));
+    ALTER TABLE storage_connections ADD CONSTRAINT storage_connections_provider_check CHECK (provider IN ('minio','s3','google_drive_mock','google_drive'));
   END IF;
 END $$;
 

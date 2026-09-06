@@ -1,0 +1,63 @@
+---
+interface Props {
+  title: string;
+}
+
+const { title } = Astro.props;
+---
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title} | BYOS Business Email</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body class="bg-slate-900 text-slate-100 antialiased font-sans flex flex-col min-h-screen">
+    {/* Navigation */}
+    <header class="border-b border-slate-800 bg-slate-950/80 backdrop-blur sticky top-0 z-50">
+      <div class="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
+        <a href="/" class="flex items-center gap-2 font-bold text-xl text-white">
+          <span class="bg-sky-600 text-white px-2 py-0.5 rounded text-sm font-mono">BYOS</span>
+          <span>Business Email</span>
+        </a>
+        <nav class="hidden md:flex items-center gap-8 text-sm font-medium text-slate-300">
+          <a href="/" class="hover:text-white transition-colors">Features</a>
+          <a href="/pricing" class="hover:text-white transition-colors">Pricing</a>
+          <a href="/security" class="hover:text-white transition-colors">Security</a>
+          <a href="/docs" class="hover:text-white transition-colors">Docs</a>
+          <a href="/privacy" class="hover:text-white transition-colors">Privacy Policy</a>
+        </nav>
+        <div class="flex items-center gap-4">
+          <a href="http://127.0.0.1:3000/login" class="text-sm font-medium text-slate-300 hover:text-white transition-colors">Sign In</a>
+          <a href="http://127.0.0.1:3000/register" class="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-500 transition-all">
+            Get Started
+          </a>
+        </div>
+      </div>
+    </header>
+
+    {/* Main Content */}
+    <main class="flex-1">
+      <slot />
+    </main>
+
+    {/* Footer */}
+    <footer class="border-t border-slate-800 bg-slate-950 py-12 text-slate-400 text-sm">
+      <div class="mx-auto max-w-7xl px-6 flex flex-col md:flex-row items-center justify-between gap-6">
+        <div>
+          <div class="font-bold text-white text-lg">BYOS Email Platform</div>
+          <div class="text-xs text-slate-500 mt-1">Normal email on the outside. Customer-controlled storage underneath.</div>
+        </div>
+        <div class="flex gap-6 text-xs text-slate-400">
+          <a href="/privacy" class="hover:text-white">Privacy</a>
+          <a href="/security" class="hover:text-white">Security Specs</a>
+          <a href="/docs" class="hover:text-white">Documentation</a>
+          <a href="/pricing" class="hover:text-white">Pricing</a>
+        </div>
+        <div class="text-xs text-slate-500">© 2026 BYOS Business Email. All rights reserved.</div>
+      </div>
+    </footer>
+  </body>
+</html>

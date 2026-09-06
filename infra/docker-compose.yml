@@ -107,6 +107,7 @@ services:
       OUTBOUND_DELIVERY_PK_FILE: /run/secrets/outbound_delivery_pk
       BYOS_LEGACY_AUTH_ENABLED: "false"
       BYOS_ENV: "development"
+      STORAGE_HEALTH_INTERVAL: "${STORAGE_HEALTH_INTERVAL:-300}"
     secrets:
       - outbound_delivery_pk
     depends_on:

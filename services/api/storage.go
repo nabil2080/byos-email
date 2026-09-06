@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -38,9 +39,436 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func googleDriveAuthorizeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	orgID := r.PathValue("org_id")
+	if _, err := uuid.Parse(orgID); err != nil {
+		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
+		return
+	}
+	clientID := strings.TrimSpace(os.Getenv("GOOGLE_DRIVE_CLIENT_ID"))
+	redirectURI := strings.TrimSpace(os.Getenv("GOOGLE_DRIVE_REDIRECT_URI"))
+	if clientID == "" || redirectURI == "" {
+		http.Error(w, "Google Drive OAuth is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	state := uuid.NewString()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "******localhost:5432/byos?sslmode=disable"
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+	var memberID string
+	if err := conn.QueryRow(ctx, `SELECT id::text FROM users WHERE id=$1 AND org_id=$2 AND is_active=true`, userID, orgID).Scan(&memberID); err != nil {
+		http.Error(w, "not authorized for this organization", http.StatusForbidden)
+		return
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO google_drive_oauth_states (state, org_id, user_id, redirect_uri, expires_at) VALUES ($1,$2,$3,$4,now()+interval '10 minutes')`, state, orgID, userID, redirectURI); err != nil {
+		http.Error(w, "failed to persist OAuth state", http.StatusInternalServerError)
+		return
+	}
+	authURL := "https://accounts.google.com/o/oauth2/v2/auth?" + url.Values{
+		"client_id":     {clientID},
+		"redirect_uri":  {redirectURI},
+		"response_type": {"code"},
+		"scope":         {"https://www.googleapis.com/auth/drive.file"},
+		"access_type":   {"offline"},
+		"prompt":        {"consent"},
+		"state":         {state},
+	}.Encode()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"authorization_url": authURL, "state": state})
+}
+
+func googleDriveCallbackHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+	if code == "" || state == "" {
+		http.Error(w, "missing OAuth code or state", http.StatusBadRequest)
+		return
+	}
+	clientID := strings.TrimSpace(os.Getenv("GOOGLE_DRIVE_CLIENT_ID"))
+	clientSecret := strings.TrimSpace(os.Getenv("GOOGLE_DRIVE_CLIENT_SECRET"))
+	if clientID == "" || clientSecret == "" {
+		http.Error(w, "Google Drive OAuth is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "******localhost:5432/byos?sslmode=disable"
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		http.Error(w, "failed to begin OAuth callback", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+	var orgID, userID, redirectURI string
+	if err := tx.QueryRow(ctx, `UPDATE google_drive_oauth_states SET used_at=now() WHERE state=$1 AND used_at IS NULL AND expires_at>now() RETURNING org_id::text, user_id::text, redirect_uri`, state).Scan(&orgID, &userID, &redirectURI); err != nil {
+		http.Error(w, "invalid or expired OAuth state", http.StatusBadRequest)
+		return
+	}
+	tokenBody := url.Values{
+		"code": {code}, "client_id": {clientID}, "client_secret": {clientSecret},
+		"redirect_uri": {redirectURI}, "grant_type": {"authorization_code"},
+	}.Encode()
+	tokenReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://oauth2.googleapis.com/token", strings.NewReader(tokenBody))
+	if err != nil {
+		http.Error(w, "failed to prepare OAuth exchange", http.StatusInternalServerError)
+		return
+	}
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenResp, err := (&http.Client{Timeout: 20 * time.Second}).Do(tokenReq)
+	if err != nil {
+		http.Error(w, "Google OAuth exchange unavailable", http.StatusBadGateway)
+		return
+	}
+	defer tokenResp.Body.Close()
+	if tokenResp.StatusCode < 200 || tokenResp.StatusCode >= 300 {
+		http.Error(w, "Google OAuth exchange failed", http.StatusBadGateway)
+		return
+	}
+	var tokens struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.NewDecoder(tokenResp.Body).Decode(&tokens); err != nil || tokens.AccessToken == "" {
+		http.Error(w, "Google OAuth response invalid", http.StatusBadGateway)
+		return
+	}
+	encrypted, err := encryptStorageConfig(ctx, toJSON(map[string]interface{}{"access_token": tokens.AccessToken, "refresh_token": tokens.RefreshToken}))
+	if err != nil {
+		http.Error(w, "failed to encrypt Google credentials", http.StatusBadGateway)
+		return
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE storage_connections SET provider='google_drive', provider_type='google_drive',
+		  credentials_enc='', config=jsonb_build_object('ciphertext',$1::text),
+		  encrypted=true, status='pending', updated_at=now()
+		WHERE org_id=$2 AND status <> 'deleted'`, encrypted, orgID)
+	if err != nil {
+		http.Error(w, "failed to save Google Drive connection", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO storage_connections
+			  (org_id, provider_type, provider, bucket_name, credentials_enc, config, is_active, encrypted, status)
+			VALUES ($1,'google_drive','google_drive','', ''::bytea, jsonb_build_object('ciphertext',$2::text), true, true, 'pending')`,
+			orgID, encrypted); err != nil {
+			http.Error(w, "failed to create Google Drive connection", http.StatusInternalServerError)
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		http.Error(w, "failed to commit Google Drive connection", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "connected", "provider": "google_drive"})
+}
+
 type StorageConnectionRequest struct {
 	Provider string                 `json:"provider"`
 	Config   map[string]interface{} `json:"config"`
+}
+
+func storageMigrationCopyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	orgID := r.PathValue("org_id")
+	if _, err := uuid.Parse(orgID); err != nil {
+		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
+		return
+	}
+	var request struct {
+		Provider string                 `json:"provider"`
+		Config   map[string]interface{} `json:"config"`
+		Prefix   string                 `json:"prefix"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&request); err != nil {
+		http.Error(w, "invalid migration request", http.StatusBadRequest)
+		return
+	}
+	if request.Prefix == "" {
+		http.Error(w, "prefix is required", http.StatusBadRequest)
+		return
+	}
+	if _, _, _, err := validateStorageConfig(request.Provider, request.Config); err != nil {
+		http.Error(w, "invalid migration target: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "******localhost:5432/byos?sslmode=disable"
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+	var sourceProvider, sourceCiphertext string
+	var sourceConnectionID string
+	bucket, _, _, err := validateStorageConfig(request.Provider, request.Config)
+	if err != nil {
+		http.Error(w, "invalid migration target: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := conn.QueryRow(ctx, `
+		SELECT sc.id::text, sc.provider, sc.config->>'ciphertext'
+		FROM users u JOIN storage_connections sc ON sc.org_id=u.org_id
+		WHERE u.id=$1 AND u.org_id=$2 AND u.is_active=true
+		  AND sc.status IN ('active','error')
+		ORDER BY sc.updated_at DESC LIMIT 1`,
+		userID, orgID).Scan(&sourceConnectionID, &sourceProvider, &sourceCiphertext); err != nil {
+		http.Error(w, "no active storage connection found", http.StatusNotFound)
+		return
+	}
+	targetCiphertext, err := encryptStorageConfig(ctx, toJSON(request.Config))
+	if err != nil {
+		http.Error(w, "failed to prepare migration target", http.StatusBadGateway)
+		return
+	}
+	var migrationID string
+	if err := conn.QueryRow(ctx, `
+		INSERT INTO storage_migrations
+		  (org_id, source_connection_id, target_provider, target_config_enc, target_bucket_name, object_prefix, status, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,'running',$7)
+		RETURNING id::text`, orgID, sourceConnectionID, request.Provider, targetCiphertext, bucket, request.Prefix, userID).Scan(&migrationID); err != nil {
+		http.Error(w, "failed to create migration job", http.StatusInternalServerError)
+		return
+	}
+	body, _ := json.Marshal(map[string]string{
+		"source_provider": sourceProvider, "source_ciphertext": sourceCiphertext,
+		"target_provider": request.Provider, "target_ciphertext": targetCiphertext,
+		"prefix": request.Prefix,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/internal/migrate-encrypted", bytes.NewReader(body))
+	if err != nil {
+		_, _ = conn.Exec(ctx, `UPDATE storage_migrations SET status='failed', error_code='worker_unavailable', updated_at=now() WHERE id=$1`, migrationID)
+		http.Error(w, "failed to prepare migration", http.StatusBadGateway)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
+	if err != nil {
+		_, _ = conn.Exec(ctx, `UPDATE storage_migrations SET status='failed', error_code='worker_unavailable', updated_at=now() WHERE id=$1`, migrationID)
+		http.Error(w, "storage migration unavailable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "application/json")
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		var result struct {
+			Objects int `json:"objects"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
+			_, _ = conn.Exec(ctx, `UPDATE storage_migrations SET status='completed', objects_copied=$2, updated_at=now(), completed_at=now() WHERE id=$1`, migrationID, result.Objects)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"id": migrationID, "status": "completed", "objects": result.Objects, "changes_applied": false})
+			return
+		}
+	}
+	_, _ = conn.Exec(ctx, `UPDATE storage_migrations SET status='failed', error_code='copy_failed', updated_at=now() WHERE id=$1`, migrationID)
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+func storageMigrationRetryHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	orgID, migrationID := r.PathValue("org_id"), r.PathValue("migration_id")
+	if _, err := uuid.Parse(orgID); err != nil {
+		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "******localhost:5432/byos?sslmode=disable"
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		http.Error(w, "failed to begin migration retry", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var sourceProvider, sourceCiphertext, targetProvider, targetCiphertext, prefix, status string
+	var retryCount int
+	err = tx.QueryRow(ctx, `
+			SELECT source.provider, source.config->>'ciphertext',
+			       sm.target_provider, sm.target_config_enc, sm.object_prefix,
+			       sm.status, sm.retry_count
+			FROM storage_migrations sm
+			JOIN users u ON u.org_id=sm.org_id
+			JOIN storage_connections source ON source.id=sm.source_connection_id
+			WHERE sm.id=$1 AND sm.org_id=$2 AND u.id=$3 AND u.is_active=true
+			FOR UPDATE`, migrationID, orgID, userID).
+		Scan(&sourceProvider, &sourceCiphertext, &targetProvider, &targetCiphertext, &prefix, &status, &retryCount)
+	if err != nil {
+		http.Error(w, "migration not found", http.StatusNotFound)
+		return
+	}
+	if status == "completed" {
+		http.Error(w, "migration is already completed", http.StatusConflict)
+		return
+	}
+	if status == "running" {
+		http.Error(w, "migration is already running", http.StatusConflict)
+		return
+	}
+	if status != "failed" {
+		http.Error(w, "only failed migrations can be retried", http.StatusConflict)
+		return
+	}
+	if _, err := tx.Exec(ctx, `
+			UPDATE storage_migrations
+			SET status='running', error_code=NULL, retry_count=retry_count+1,
+			    started_at=now(), updated_at=now()
+			WHERE id=$1`, migrationID); err != nil {
+		http.Error(w, "failed to start migration retry", http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		http.Error(w, "failed to commit migration retry", http.StatusInternalServerError)
+		return
+	}
+
+	body, err := json.Marshal(map[string]string{
+		"source_provider": sourceProvider, "source_ciphertext": sourceCiphertext,
+		"target_provider": targetProvider, "target_ciphertext": targetCiphertext,
+		"prefix": prefix,
+	})
+	if err != nil {
+		http.Error(w, "failed to prepare migration retry", http.StatusInternalServerError)
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/internal/migrate-encrypted", bytes.NewReader(body))
+	if err != nil {
+		_, _ = conn.Exec(ctx, `UPDATE storage_migrations SET status='failed', error_code='worker_unavailable', updated_at=now() WHERE id=$1`, migrationID)
+		http.Error(w, "failed to prepare migration retry", http.StatusBadGateway)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
+	if err != nil {
+		_, _ = conn.Exec(ctx, `UPDATE storage_migrations SET status='failed', error_code='worker_unavailable', updated_at=now() WHERE id=$1`, migrationID)
+		http.Error(w, "storage migration unavailable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		var result struct {
+			Objects int `json:"objects"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
+			_, _ = conn.Exec(ctx, `
+					UPDATE storage_migrations
+					SET status='completed', objects_copied=$2, error_code=NULL,
+					    updated_at=now(), completed_at=now()
+					WHERE id=$1`, migrationID, result.Objects)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"id": migrationID, "status": "completed", "objects": result.Objects, "retry_count": retryCount + 1})
+			return
+		}
+	}
+	_, _ = conn.Exec(ctx, `UPDATE storage_migrations SET status='failed', error_code='copy_failed', updated_at=now() WHERE id=$1`, migrationID)
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+func storageMigrationStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	orgID := r.PathValue("org_id")
+	migrationID := r.PathValue("migration_id")
+	if _, err := uuid.Parse(orgID); err != nil {
+		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "******localhost:5432/byos?sslmode=disable"
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+	var status, errorCode string
+	var copied, retryCount int
+	if err := conn.QueryRow(ctx, `
+		SELECT sm.status, COALESCE(sm.error_code,''), sm.objects_copied, sm.retry_count
+		FROM storage_migrations sm JOIN users u ON u.org_id=sm.org_id
+		WHERE sm.id=$1 AND sm.org_id=$2 AND u.id=$3 AND u.is_active=true`,
+		migrationID, orgID, userID).Scan(&status, &errorCode, &copied, &retryCount); err != nil {
+		http.Error(w, "migration not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"id": migrationID, "status": status, "objects": copied, "error_code": errorCode, "retry_count": retryCount})
 }
 
 type StorageConnectionResponse struct {
@@ -132,6 +560,19 @@ func validateStorageConfig(provider string, config map[string]interface{}) (buck
 			bucket = rs
 		}
 		return bucket, "", "", nil
+	case "google_drive":
+		allowed := map[string]bool{"access_token": true, "refresh_token": true, "folder_id": true}
+		for k := range config {
+			if !allowed[k] {
+				return "", "", "", fmt.Errorf("unknown field %q", k)
+			}
+		}
+		token, _ := config["access_token"].(string)
+		if trimSpace(token) == "" {
+			return "", "", "", fmt.Errorf("access_token is required")
+		}
+		folderID, _ := config["folder_id"].(string)
+		return folderID, "", "", nil
 	default:
 		return "", "", "", fmt.Errorf("invalid provider")
 	}
@@ -200,6 +641,7 @@ func storageConnectionHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "organization ID required", http.StatusBadRequest)
 		return
 	}
+
 	if _, err := uuid.Parse(orgID); err != nil {
 		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
 		return
@@ -242,6 +684,189 @@ func storageConnectionHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func storageMigrationPreflightHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	orgID := r.PathValue("org_id")
+	if _, err := uuid.Parse(orgID); err != nil {
+		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
+		return
+	}
+	var request StorageConnectionRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&request); err != nil {
+		http.Error(w, "invalid migration target", http.StatusBadRequest)
+		return
+	}
+	if _, _, _, err := validateStorageConfig(request.Provider, request.Config); err != nil {
+		http.Error(w, "invalid migration target: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "******localhost:5432/byos?sslmode=disable"
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	var memberID, sourceProvider, sourceCiphertext string
+	err = conn.QueryRow(ctx, `
+		SELECT u.id::text, sc.provider, sc.config->>'ciphertext'
+		FROM users u
+		JOIN storage_connections sc ON sc.org_id=u.org_id
+		WHERE u.id=$1 AND u.org_id=$2 AND u.is_active=true
+		  AND sc.status IN ('active','error')
+		ORDER BY sc.updated_at DESC
+		LIMIT 1`, userID, orgID).Scan(&memberID, &sourceProvider, &sourceCiphertext)
+	if err != nil {
+		http.Error(w, "no active storage connection found", http.StatusNotFound)
+		return
+	}
+
+	targetCiphertext, err := encryptStorageConfig(ctx, toJSON(request.Config))
+	if err != nil {
+		http.Error(w, "failed to prepare migration target", http.StatusBadGateway)
+		return
+	}
+	sourceCode := testEncryptedStorage(sourceProvider, sourceCiphertext)
+	targetCode := testEncryptedStorage(request.Provider, targetCiphertext)
+	w.Header().Set("Content-Type", "application/json")
+	status := http.StatusOK
+	result := "ready"
+	if sourceCode != "verified" || targetCode != "verified" {
+		status = http.StatusConflict
+		result = "blocked"
+	}
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":          result,
+		"source":          map[string]string{"status": sourceCode},
+		"target":          map[string]string{"provider": request.Provider, "status": targetCode},
+		"changes_applied": false,
+	})
+}
+
+func storageMigrationCutoverHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	orgID, migrationID := r.PathValue("org_id"), r.PathValue("migration_id")
+	if _, err := uuid.Parse(orgID); err != nil {
+		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://postgres:postgres@localhost:5432/byos?sslmode=disable"
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		http.Error(w, "failed to begin cutover", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+	var memberID string
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM users WHERE id=$1 AND org_id=$2 AND is_active=true`, userID, orgID).Scan(&memberID); err != nil {
+		http.Error(w, "not authorized for this organization", http.StatusForbidden)
+		return
+	}
+	var lockedOrgID string
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM organizations WHERE id=$1 FOR UPDATE`, orgID).Scan(&lockedOrgID); err != nil {
+		http.Error(w, "organization not found", http.StatusNotFound)
+		return
+	}
+	var status, targetProvider, targetConfig, targetBucket, sourceConnectionID string
+	var cutoverApplied bool
+	var targetConnectionID *string
+	err = tx.QueryRow(ctx, `
+		SELECT status, target_provider, target_config_enc, target_bucket_name,
+		       source_connection_id::text, target_connection_id::text, cutover_applied
+		FROM storage_migrations
+		WHERE id=$1 AND org_id=$2
+		FOR UPDATE`, migrationID, orgID).Scan(&status, &targetProvider, &targetConfig, &targetBucket, &sourceConnectionID, &targetConnectionID, &cutoverApplied)
+	if err != nil {
+		http.Error(w, "migration not found", http.StatusNotFound)
+		return
+	}
+	if cutoverApplied && targetConnectionID != nil {
+		if err := tx.Commit(ctx); err != nil {
+			http.Error(w, "failed to commit cutover", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "cutover", "target_connection_id": *targetConnectionID})
+		return
+	}
+	if status != "completed" {
+		http.Error(w, "migration is not completed", http.StatusConflict)
+		return
+	}
+	var newConnectionID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO storage_connections
+		  (org_id, provider_type, provider, bucket_name, credentials_enc, config, is_active, encrypted, status)
+		VALUES ($1,$2,$2,$3,''::bytea,jsonb_build_object('ciphertext',$4::text),true,true,'active')
+		RETURNING id::text`, orgID, targetProvider, targetBucket, targetConfig).Scan(&newConnectionID)
+	if err != nil {
+		http.Error(w, "failed to create target connection", http.StatusInternalServerError)
+		return
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE mailbox_storage SET storage_connection_id=$1, status='active', updated_at=now()
+		WHERE storage_connection_id=$2`, newConnectionID, sourceConnectionID); err != nil {
+		http.Error(w, "failed to switch mailbox mappings", http.StatusInternalServerError)
+		return
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE organizations SET default_storage_connection_id=$1
+		WHERE id=$2 AND default_storage_connection_id=$3`, newConnectionID, orgID, sourceConnectionID); err != nil {
+		http.Error(w, "failed to switch organization default", http.StatusInternalServerError)
+		return
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE storage_migrations
+		SET target_connection_id=$1, cutover_applied=true, updated_at=now()
+		WHERE id=$2`, newConnectionID, migrationID); err != nil {
+		http.Error(w, "failed to record cutover", http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		http.Error(w, "failed to commit cutover", http.StatusInternalServerError)
+		return
+	}
+	auditLog(ctx, conn, orgID, userID, "storage_migration_cutover", "storage_migration", migrationID, map[string]interface{}{"target_connection_id": newConnectionID})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "cutover", "target_connection_id": newConnectionID})
 }
 
 func storageConnectionGetHandler(w http.ResponseWriter, r *http.Request, orgID string, conn *pgx.Conn, userID string) {
@@ -423,6 +1048,7 @@ func storageConnectionTestHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
 	orgID := r.PathValue("org_id")
 	if orgID == "" {
 		http.Error(w, "organization ID required", http.StatusBadRequest)

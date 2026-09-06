@@ -1,0 +1,33 @@
+---
+import Layout from "../layouts/Layout.astro";
+---
+
+<Layout title="Security Architecture & Threat Model">
+  <section class="py-20 px-6 max-w-4xl mx-auto">
+    <h1 class="text-4xl font-extrabold text-white">Security & Cryptographic Architecture</h1>
+    <p class="mt-4 text-slate-400">
+      Our security model is built on zero-trust principles: persistent mailbox storage is under customer control, while client-side Rust/WASM handles key derivation and HPKE encryption.
+    </p>
+
+    <div class="mt-12 space-y-8">
+      <div class="rounded-2xl border border-slate-800 bg-slate-950 p-6">
+        <h2 class="text-xl font-bold text-white">Cryptographic Primitives</h2>
+        <ul class="mt-4 space-y-2 text-sm text-slate-300">
+          <li><strong>HPKE Key Wrapping:</strong> RFC 9180 implementation using <code>DHKEM(X25519, HKDF-SHA256)</code> + <code>AES-256-GCM</code>.</li>
+          <li><strong>Message Content Encryption:</strong> Random 32-byte content keys encrypted with AES-256-GCM per message payload.</li>
+          <li><strong>Key Derivation:</strong> HKDF-SHA256 for scoped sub-keys and recovery-root secret derivation from 24-word BIP39 mnemonics.</li>
+          <li><strong>DKIM Signing:</strong> RSA-2048 signing keys stored encrypted at rest using isolated worker DEKs.</li>
+        </ul>
+      </div>
+
+      <div class="rounded-2xl border border-slate-800 bg-slate-950 p-6">
+        <h2 class="text-xl font-bold text-white">Threat Mitigation Matrix</h2>
+        <div class="mt-4 space-y-3 text-sm text-slate-300">
+          <div><strong class="text-sky-400">Compromised API / DB Leak:</strong> Mailbox payloads in customer storage remain encrypted. Attacker gains only metadata and wrapped keys.</div>
+          <div><strong class="text-sky-400">Customer Storage Compromise:</strong> All storage objects are AES-256-GCM encrypted prior to upload. Storage compromise reveals zero plaintext.</div>
+          <div><strong class="text-sky-400">Lost Device / Credentials:</strong> Devices can be revoked instantly from the control plane. Mailbox keys can be restored using the stable offline recovery phrase.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+</Layout>

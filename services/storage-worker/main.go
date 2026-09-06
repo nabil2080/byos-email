@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,6 +40,171 @@ type ObjectInfo struct {
 	Key          string    `json:"key"`
 	Size         int64     `json:"size"`
 	LastModified time.Time `json:"lastModified"`
+}
+
+type GoogleDriveStorage struct {
+	accessToken string
+	folderID    string
+	client      *http.Client
+}
+
+func NewGoogleDriveStorage(accessToken, folderID string) (*GoogleDriveStorage, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return nil, fmt.Errorf("google drive access_token is required")
+	}
+	return &GoogleDriveStorage{accessToken: accessToken, folderID: folderID, client: &http.Client{Timeout: 2 * time.Minute}}, nil
+}
+
+func (g *GoogleDriveStorage) request(ctx context.Context, method, endpoint string, body io.Reader, contentType string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.accessToken)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	return g.client.Do(req)
+}
+
+func (g *GoogleDriveStorage) PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64) error {
+	data, err := io.ReadAll(io.LimitReader(r, size+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) != size {
+		return fmt.Errorf("object size mismatch")
+	}
+	meta := map[string]interface{}{"name": filepath.Base(key), "appProperties": map[string]string{"byos_object_key": key}}
+	if g.folderID != "" {
+		meta["parents"] = []string{g.folderID}
+	}
+	metaJSON, _ := json.Marshal(meta)
+	boundary := "byos-drive-boundary"
+	var payload bytes.Buffer
+	payload.WriteString("--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n")
+	payload.Write(metaJSON)
+	payload.WriteString("\r\n--" + boundary + "\r\nContent-Type: application/octet-stream\r\n\r\n")
+	payload.Write(data)
+	payload.WriteString("\r\n--" + boundary + "--\r\n")
+	resp, err := g.request(ctx, http.MethodPost, "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", &payload, "multipart/related; boundary="+boundary)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("google drive upload returned %s", resp.Status)
+	}
+	return nil
+}
+
+func (g *GoogleDriveStorage) find(ctx context.Context, key string) (string, int64, error) {
+	q := "trashed = false and appProperties has { key = 'byos_object_key' and value = '" + strings.ReplaceAll(key, "'", "\\'") + "' }"
+	endpoint := "https://www.googleapis.com/drive/v3/files?fields=files(id,size,appProperties)&pageSize=10&q=" + url.QueryEscape(q)
+	resp, err := g.request(ctx, http.MethodGet, endpoint, nil, "")
+	if err != nil {
+		return "", 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", 0, fmt.Errorf("google drive list returned %s", resp.Status)
+	}
+	var result struct {
+		Files []struct {
+			ID            string            `json:"id"`
+			Size          int64             `json:"size,string"`
+			AppProperties map[string]string `json:"appProperties"`
+		} `json:"files"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", 0, err
+	}
+	if len(result.Files) == 0 {
+		return "", 0, os.ErrNotExist
+	}
+	return result.Files[0].ID, result.Files[0].Size, nil
+}
+
+func (g *GoogleDriveStorage) GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	id, _, err := g.find(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := g.request(ctx, http.MethodGet, "https://www.googleapis.com/drive/v3/files/"+url.PathEscape(id)+"?alt=media", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		resp.Body.Close()
+		return nil, fmt.Errorf("google drive download returned %s", resp.Status)
+	}
+	return resp.Body, nil
+}
+
+func (g *GoogleDriveStorage) DeleteObject(ctx context.Context, bucket, key string) error {
+	id, _, err := g.find(ctx, key)
+	if err != nil {
+		return err
+	}
+	resp, err := g.request(ctx, http.MethodDelete, "https://www.googleapis.com/drive/v3/files/"+url.PathEscape(id), nil, "")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("google drive delete returned %s", resp.Status)
+	}
+	return nil
+}
+
+func (g *GoogleDriveStorage) HeadObject(ctx context.Context, bucket, key string) (ObjectInfo, error) {
+	_, size, err := g.find(ctx, key)
+	if err != nil {
+		return ObjectInfo{}, err
+	}
+	return ObjectInfo{Key: key, Size: size}, nil
+}
+
+func (g *GoogleDriveStorage) ListObjects(ctx context.Context, bucket, prefix string) ([]ObjectInfo, error) {
+	q := "trashed = false and appProperties has { key = 'byos_object_key' }"
+	endpoint := "https://www.googleapis.com/drive/v3/files?fields=files(size,appProperties)&pageSize=1000&q=" + url.QueryEscape(q)
+	resp, err := g.request(ctx, http.MethodGet, endpoint, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("google drive list returned %s", resp.Status)
+	}
+	var result struct {
+		Files []struct {
+			Size          int64             `json:"size,string"`
+			AppProperties map[string]string `json:"appProperties"`
+		} `json:"files"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	objects := []ObjectInfo{}
+	for _, file := range result.Files {
+		key := file.AppProperties["byos_object_key"]
+		if strings.HasPrefix(key, prefix) {
+			objects = append(objects, ObjectInfo{Key: key, Size: file.Size})
+		}
+	}
+	return objects, nil
+}
+
+func (g *GoogleDriveStorage) TestConnection(ctx context.Context) error {
+	resp, err := g.request(ctx, http.MethodGet, "https://www.googleapis.com/drive/v3/about?fields=user", nil, "")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("google drive authentication returned %s", resp.Status)
+	}
+	return nil
 }
 
 // S3Storage implements Storage via minio-go (S3-compatible)
@@ -308,8 +474,12 @@ func storageFromConfig(provider string, config map[string]interface{}) (Storage,
 			}
 		}
 		return NewMockDriveStorage(root)
+	case "google_drive":
+		accessToken, _ := config["access_token"].(string)
+		folderID, _ := config["folder_id"].(string)
+		return NewGoogleDriveStorage(accessToken, folderID)
 	default:
-		return nil, fmt.Errorf("unknown provider %s (only s3/minio and google_drive_mock are supported in this stage)", provider)
+		return nil, fmt.Errorf("unknown provider %s", provider)
 	}
 }
 
@@ -471,11 +641,14 @@ func main() {
 	http.HandleFunc("/internal/decrypt", worker.decryptHandler)
 	http.HandleFunc("/internal/test", worker.testHandler)
 	http.HandleFunc("/internal/test-encrypted", worker.testEncryptedHandler)
+	http.HandleFunc("/internal/migrate-encrypted", worker.migrateEncryptedHandler)
+	http.HandleFunc("/internal/google-drive-refresh", worker.googleDriveRefreshHandler)
 
 	port := os.Getenv("STORAGE_WORKER_PORT")
 	if port == "" {
 		port = "8083"
 	}
+
 	log.Printf("Storage worker starting on port %s (default bucket %s)", port, bucket)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
@@ -948,4 +1121,155 @@ func (w *StorageWorker) testEncryptedHandler(resp http.ResponseWriter, req *http
 	}
 	resp.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(resp).Encode(map[string]string{"status": "ok", "code": "verified"})
+}
+
+func (w *StorageWorker) migrateEncryptedHandler(resp http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var r struct {
+		SourceProvider   string `json:"source_provider"`
+		SourceCiphertext string `json:"source_ciphertext"`
+		TargetProvider   string `json:"target_provider"`
+		TargetCiphertext string `json:"target_ciphertext"`
+		Prefix           string `json:"prefix"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(resp, req.Body, 1<<20)).Decode(&r); err != nil {
+		http.Error(resp, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	dek, err := loadStorageDEK()
+	if err != nil {
+		http.Error(resp, "DEK load failed", http.StatusInternalServerError)
+		return
+	}
+	decodeConfig := func(provider, ciphertext string) (Storage, error) {
+		plain, err := decryptWithDEK(ciphertext, dek)
+		if err != nil {
+			return nil, err
+		}
+		var config map[string]interface{}
+		if err := json.Unmarshal(plain, &config); err != nil {
+			return nil, err
+		}
+		return storageFromConfig(provider, config)
+	}
+	source, err := decodeConfig(r.SourceProvider, r.SourceCiphertext)
+	if err != nil {
+		http.Error(resp, "source configuration error", http.StatusBadRequest)
+		return
+	}
+	target, err := decodeConfig(r.TargetProvider, r.TargetCiphertext)
+	if err != nil {
+		http.Error(resp, "target configuration error", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), 5*time.Minute)
+	defer cancel()
+	objects, err := source.ListObjects(ctx, "", r.Prefix)
+	if err != nil {
+		http.Error(resp, "source listing failed", http.StatusBadGateway)
+		return
+	}
+	copied := 0
+	for _, object := range objects {
+		reader, err := source.GetObject(ctx, "", object.Key)
+		if err != nil {
+			http.Error(resp, "source read failed", http.StatusBadGateway)
+			return
+		}
+		err = target.PutObject(ctx, "", object.Key, reader, object.Size)
+		reader.Close()
+		if err != nil {
+			http.Error(resp, "target write failed", http.StatusBadGateway)
+			return
+		}
+		targetInfo, err := target.HeadObject(ctx, "", object.Key)
+		if err != nil || targetInfo.Size != object.Size {
+			http.Error(resp, "target verification failed", http.StatusBadGateway)
+			return
+		}
+		copied++
+	}
+	resp.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(resp).Encode(map[string]interface{}{
+		"status": "copied", "objects": copied, "changes_applied": false,
+	})
+}
+
+func (w *StorageWorker) googleDriveRefreshHandler(resp http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var request struct {
+		Ciphertext string `json:"ciphertext"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(resp, req.Body, 1<<20)).Decode(&request); err != nil || request.Ciphertext == "" {
+		http.Error(resp, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	dek, err := loadStorageDEK()
+	if err != nil {
+		http.Error(resp, "DEK load failed", http.StatusInternalServerError)
+		return
+	}
+	plain, err := decryptWithDEK(request.Ciphertext, dek)
+	if err != nil {
+		http.Error(resp, "credential decryption failed", http.StatusBadRequest)
+		return
+	}
+	var config struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(plain, &config); err != nil || config.RefreshToken == "" {
+		http.Error(resp, "refresh token unavailable", http.StatusBadRequest)
+		return
+	}
+	clientID := os.Getenv("GOOGLE_DRIVE_CLIENT_ID")
+	clientSecret := os.Getenv("GOOGLE_DRIVE_CLIENT_SECRET")
+	if clientID == "" || clientSecret == "" {
+		http.Error(resp, "Google OAuth is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	form := url.Values{"client_id": {clientID}, "client_secret": {clientSecret}, "refresh_token": {config.RefreshToken}, "grant_type": {"refresh_token"}}
+	refreshReq, err := http.NewRequestWithContext(req.Context(), http.MethodPost, "https://oauth2.googleapis.com/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		http.Error(resp, "failed to prepare refresh", http.StatusInternalServerError)
+		return
+	}
+	refreshReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	refreshResp, err := (&http.Client{Timeout: 20 * time.Second}).Do(refreshReq)
+	if err != nil {
+		http.Error(resp, "Google OAuth refresh unavailable", http.StatusBadGateway)
+		return
+	}
+	defer refreshResp.Body.Close()
+	if refreshResp.StatusCode < 200 || refreshResp.StatusCode >= 300 {
+		http.Error(resp, "Google OAuth refresh failed", http.StatusBadGateway)
+		return
+	}
+	var token struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(refreshResp.Body).Decode(&token); err != nil || token.AccessToken == "" {
+		http.Error(resp, "Google OAuth refresh response invalid", http.StatusBadGateway)
+		return
+	}
+	config.AccessToken = token.AccessToken
+	updated, err := json.Marshal(config)
+	if err != nil {
+		http.Error(resp, "failed to encode refreshed credentials", http.StatusInternalServerError)
+		return
+	}
+	updatedCiphertext, err := encryptWithDEK(updated, dek)
+	if err != nil {
+		http.Error(resp, "failed to encrypt refreshed credentials", http.StatusInternalServerError)
+		return
+	}
+	resp.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(resp).Encode(map[string]string{"ciphertext": updatedCiphertext, "status": "refreshed"})
 }

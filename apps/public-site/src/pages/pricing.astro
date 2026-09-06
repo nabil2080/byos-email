@@ -1,0 +1,50 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+const plans = [
+  { name: "Solo", monthly: 3, annual: 31, mailboxes: 1, domains: 1, aliases: 10 },
+  { name: "Starter", monthly: 14, annual: 143, mailboxes: 5, domains: 2, aliases: 15 },
+  { name: "Business", monthly: 26, annual: 265, mailboxes: 10, domains: 3, aliases: 20 },
+  { name: "Team", monthly: 60, annual: 612, mailboxes: 25, domains: 5, aliases: 30 },
+  { name: "Business+", monthly: 110, annual: 1122, mailboxes: 50, domains: 10, aliases: 40 },
+  { name: "Enterprise", monthly: "Custom", annual: "Custom", mailboxes: "Custom", domains: "Custom", aliases: "Custom" },
+];
+---
+
+<Layout title="Simple Capacity-Based Pricing">
+  <section class="py-20 px-6 max-w-7xl mx-auto">
+    <div class="text-center max-w-3xl mx-auto">
+      <h1 class="text-4xl font-extrabold text-white">Simple Capacity Pricing</h1>
+      <p class="mt-4 text-slate-400">
+        Every plan receives the complete BYOS product. You pay for resource capacity and scale, not for artificial feature walls.
+      </p>
+    </div>
+
+    <div class="mt-16 grid grid-cols-1 md:grid-cols-3 gap-8">
+      {plans.map((p) => (
+        <div class="rounded-2xl border border-slate-800 bg-slate-950 p-8 flex flex-col justify-between">
+          <div>
+            <h3 class="text-xl font-bold text-white">{p.name}</h3>
+            <div class="mt-4">
+              <span class="text-4xl font-extrabold text-white">{typeof p.monthly === "number" ? `$${p.monthly}` : p.monthly}</span>
+              {typeof p.monthly === "number" && <span class="text-slate-400 text-sm">/mo</span>}
+            </div>
+            {typeof p.annual === "number" && <div class="text-xs text-slate-500 mt-1">${p.annual}/yr billed annually</div>}
+
+            <ul class="mt-6 space-y-3 text-sm text-slate-300">
+              <li class="flex items-center gap-2"><span class="text-emerald-400">✓</span> {p.mailboxes} Mailbox{p.mailboxes === 1 ? "" : "es"}</li>
+              <li class="flex items-center gap-2"><span class="text-emerald-400">✓</span> {p.domains} Custom Domain{p.domains === 1 ? "" : "s"}</li>
+              <li class="flex items-center gap-2"><span class="text-emerald-400">✓</span> {p.aliases} Aliases per Mailbox</li>
+              <li class="flex items-center gap-2 text-slate-400"><span class="text-emerald-400">✓</span> Full Security & Encryption</li>
+              <li class="flex items-center gap-2 text-slate-400"><span class="text-emerald-400">✓</span> S3, MinIO, or Google Drive BYOS</li>
+            </ul>
+          </div>
+
+          <a href="http://127.0.0.1:3000/register" class="mt-8 block text-center rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-500 transition-all">
+            Choose {p.name}
+          </a>
+        </div>
+      ))}
+    </div>
+  </section>
+</Layout>
