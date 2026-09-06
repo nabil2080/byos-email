@@ -1,0 +1,1 @@
+INSERT INTO storage_connections (id, org_id, provider, config, encrypted, status, bucket_name, endpoint) SELECT gen_random_uuid(), (SELECT id FROM organizations LIMIT 1), 's3', jsonb_build_object('ciphertext', '__CIPHER__'), true, 'active', 'byos-mailbox', 'minio:9000' WHERE NOT EXISTS (SELECT 1 FROM storage_connections WHERE provider='s3' AND status='active') RETURNING id::text;

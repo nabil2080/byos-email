@@ -1,0 +1,30 @@
+import { Component } from "solid-js";
+import { Router, Route } from "@solidjs/router";
+import DashboardLayout from "./components/layout/DashboardLayout";
+import StoragePage from "./routes/dashboard/storage";
+import DashboardOverview from "./routes/dashboard";
+import DomainsPage from "./routes/dashboard/domains";
+import MailboxesPage from "./routes/dashboard/mailboxes";
+import RecoveryPage from "./routes/dashboard/recovery";
+import LoginPage from "./routes/login";
+import RegisterPage from "./routes/register";
+
+const App: Component = () => {
+  return (
+    <Router>
+      <Route path="/login" component={LoginPage} />
+      <Route path="/register" component={RegisterPage} />
+      <Route path="/dashboard" component={DashboardLayout}>
+        <Route path="/" component={DashboardOverview} />
+        <Route path="/storage" component={StoragePage} />
+        <Route path="/domains" component={DomainsPage} />
+        <Route path="/mailboxes" component={MailboxesPage} />
+        <Route path="/recovery" component={RecoveryPage} />
+      </Route>
+      {/* Fallback: redirect root to dashboard */}
+      <Route path="/" component={() => { window.location.replace("/dashboard/storage"); return null; }} />
+    </Router>
+  );
+};
+
+export default App;

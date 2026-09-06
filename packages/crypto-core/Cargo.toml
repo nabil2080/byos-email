@@ -1,0 +1,68 @@
+[package]
+name = "byos-crypto-core"
+version = "0.1.0"
+edition = "2021"
+description = "BYOS V5.3 cryptographic core — HPKE, X25519, AES-GCM, HKDF, BIP39"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "byos_crypto_core"
+
+[[bin]]
+name = "byos-crypto-worker"
+path = "src/bin/crypto-worker.rs"
+
+[[bin]]
+name = "byos-crypto-client"
+path = "src/bin/crypto-client.rs"
+
+[[bin]]
+name = "byos-native-crypto-worker"
+path = "src/bin/native-crypto-worker.rs"
+
+[dependencies]
+# HPKE (RFC 9180)
+hpke = { version = "0.14", features = ["x25519", "aes"] }
+# X25519 key agreement (hpke 0.14 requires x25519-dalek 3)
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+# Ed25519 recovery authentication
+ed25519-dalek = { version = "2.1", features = ["pkcs8"] }
+# AES-256-GCM (0.10 uses generic-array, avoiding hybrid-array compat issues with hpke)
+aes-gcm = "0.10"
+generic-array = "0.14"
+# HKDF-SHA256
+hkdf = "0.12"
+sha2 = { version = "0.10", features = ["oid"] }
+# BIP39 mnemonic
+bip39 = "1"
+# Random number generation
+rand = "0.10"
+# Argon2 for passphrase derivation
+argon2 = "0.5"
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# RSA/DKIM: use rsa crate for key generation and DKIM signing (pem enables pkcs1/pkcs8 PEM encoding)
+rsa = { version = "0.9", features = ["pem"] }
+# WASM support
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+
+# WASM: enable getrandom backends for wasm32 target
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+base64 = "0.22"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+axum = "0.7"
+base64 = "0.22"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true

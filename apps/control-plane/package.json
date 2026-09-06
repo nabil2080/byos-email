@@ -1,0 +1,24 @@
+{
+  "name": "byos-control-plane",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 3000 --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --port 3000",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solidjs/router": "^0.15.3",
+    "solid-js": "^1.9.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.4.5",
+    "vite": "^6.2.0",
+    "vite-plugin-solid": "^2.10.2",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vite-plugin-wasm": "^3.6.0"
+  }
+}

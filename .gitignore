@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build outputs
+dist/
+build/
+out/
+coverage/
+
+# Compiled binaries (never commit; rebuild from source)
+*.exe
+*.out
+*.test
+*.corrupt-backup
+
+# Local env
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local runtime data
+tmp/
+*.sqlite
+
+# Rust/Cargo build artifacts
+target/
+
+# Node modules (explicit; also covers nested workspaces)
+**/node_modules/
+
+# Dev-only DB bootstrap (contains dev passwords, never commit to production image)
+infra/postgres/dev-bootstrap/
+# Docker secrets (contain private keys, never commit)
+infra/secrets/
+

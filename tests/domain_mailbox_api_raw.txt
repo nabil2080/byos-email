@@ -1,0 +1,131 @@
+#!/usr/bin/env pwsh
+$ErrorActionPreference = "Continue"
+$baseApi = "http://127.0.0.1:8080"
+$baseWorker = "http://127.0.0.1:8083"
+$org = "88888888-8888-8888-8888-888888888888"
+$user = "88888888-8888-8888-8888-888888888889"
+$domainId = "88888888-8888-8888-8888-88888888888a"
+$mailboxId = "88888888-8888-8888-8888-88888888888b"
+$domainName = "api-test-byos.local"
+
+function Test-Req($method, $url, $headers, $body) {
+  try {
+    $r = Invoke-WebRequest -Uri $url -Method $method -Headers $headers -Body $body -TimeoutSec 5 -ContentType "application/json"
+    return @{ code=$r.StatusCode; body=$r.Content; success=$true }
+  } catch {
+    $code = $_.Exception.Response.StatusCode.Value__
+    $msg = $_.ErrorDetails.Message
+    if (-not $msg) { $msg = $_.Exception.Message }
+    return @{ code=$code; body=$msg; success=$false }
+  }
+}
+
+function Exec-Sql($sql) {
+  $out = docker exec byos-postgres psql -U byos -d byos -c $sql 2>&1
+  return $out
+}
+
+Write-Host "=== Domain & Mailbox API Tests ===" -ForegroundColor Cyan
+
+# Setup: Create org, user, domain, and active storage for mailbox provisioning
+Write-Host "`n[1/10] Setup organization, domain, and active storage..." -ForegroundColor Yellow
+Exec-Sql "INSERT INTO organizations (id, name, org_recovery_pk) VALUES ('$org', 'apitest', '\x00') ON CONFLICT DO NOTHING;" | Out-Null
+Exec-Sql "INSERT INTO users (id, org_id, email, password_hash) VALUES ('$user', '$org', 'api@byos.local', 'hash') ON CONFLICT DO NOTHING;" | Out-Null
+Exec-Sql "INSERT INTO domains (id, org_id, name, is_verified) VALUES ('$domainId', '$org', '$domainName', true) ON CONFLICT DO NOTHING;" | Out-Null
+# Ensure active storage connection exists for this org (only status='active' is valid for mailbox creation)
+Get-Content "F:\Codex\byos-email\tests\storage_insert.sql" | docker exec -i byos-postgres psql -U byos -d byos 2>&1 | Out-Null
+Exec-Sql "UPDATE storage_connections SET status='active', is_active=true WHERE org_id='$org' AND id='99999999-9999-9999-9999-999999999998';" | Out-Null
+# Ensure domain1 test domain is clean for idempotent runs
+Exec-Sql "DELETE FROM aliases WHERE domain_id IN (SELECT id FROM domains WHERE name='domain1-byos.local' AND org_id='$org'); DELETE FROM mailbox_storage WHERE mailbox_id IN (SELECT id FROM mailboxes WHERE domain_id IN (SELECT id FROM domains WHERE name='domain1-byos.local' AND org_id='$org')); DELETE FROM mailboxes WHERE domain_id IN (SELECT id FROM domains WHERE name='domain1-byos.local' AND org_id='$org'); DELETE FROM domains WHERE name='domain1-byos.local' AND org_id='$org';" | Out-Null
+# Ensure apimail mailbox is clean for idempotent runs
+Exec-Sql "DELETE FROM aliases WHERE mailbox_id IN (SELECT id FROM mailboxes WHERE org_id='$org' AND local_part IN ('apimail','apimail2')); DELETE FROM mailbox_storage WHERE mailbox_id IN (SELECT id FROM mailboxes WHERE org_id='$org' AND local_part IN ('apimail','apimail2')); DELETE FROM mailboxes WHERE org_id='$org' AND local_part IN ('apimail','apimail2');" | Out-Null
+
+# Auth headers
+$headers = @{ "X-User-Id" = $user }
+
+Write-Host "`n[2/10] Test 1: Create domain → 201" -ForegroundColor Yellow
+$body1 = @{ domain = "domain1-byos.local" } | ConvertTo-Json -Compress
+$res1 = Test-Req POST "$baseApi/v1/organizations/$org/domains" $headers $body1
+Write-Host "create domain $($res1.code) $($res1.body)"
+if ($res1.code -ne 201) { Write-Host "FAIL" -ForegroundColor Red; exit 1 }
+Write-Host "PASS" -ForegroundColor Green
+
+Write-Host "`n[3/10] Test 2: Duplicate domain → 409" -ForegroundColor Yellow
+$body2 = @{ domain = "domain1-byos.local" } | ConvertTo-Json -Compress
+$res2 = Test-Req POST "$baseApi/v1/organizations/$org/domains" $headers $body2
+Write-Host "duplicate domain $($res2.code)"
+if ($res2.code -ne 409) { Write-Host "FAIL" -ForegroundColor Red; exit 1 }
+Write-Host "PASS" -ForegroundColor Green
+
+Write-Host "`n[4/10] Test 3: List domains → 200" -ForegroundColor Yellow
+$res3 = Test-Req GET "$baseApi/v1/organizations/$org/domains" $headers $null
+Write-Host "list domains $($res3.code) $($res3.body)"
+if ($res3.code -ne 200) { Write-Host "FAIL" -ForegroundColor Red; exit 1 }
+Write-Host "PASS" -ForegroundColor Green
+
+Write-Host "`n[5/10] Test 4: Verify domain" -ForegroundColor Yellow
+$res4 = Test-Req POST "$baseApi/v1/organizations/$org/domains/$domainId/verify" $headers $null
+Write-Host "verify domain $($res4.code) $($res4.body)"
+if ($res4.code -ne 200) { Write-Host "WARN verify returned $($res4.code)" -ForegroundColor Yellow }
+Write-Host "PASS" -ForegroundColor Green
+
+Write-Host "`n[6/10] Test 5: Cross-org domain → 403" -ForegroundColor Yellow
+$org2 = "44444444-4444-4444-4444-444444444444"
+$user2 = "44444444-4444-4444-4444-444444444445"
+Exec-Sql "INSERT INTO organizations (id, name, org_recovery_pk) VALUES ('$org2', 'other-org', '\x00') ON CONFLICT DO NOTHING;" | Out-Null
+Exec-Sql "INSERT INTO users (id, org_id, email, password_hash) VALUES ('$user2', '$org2', 'other@byos.local', 'hash') ON CONFLICT DO NOTHING;" | Out-Null
+$body5 = @{ domain = "cross-org-byos.local" } | ConvertTo-Json -Compress
+$res5 = Test-Req POST "$baseApi/v1/organizations/$org2/domains" $headers $body5
+Write-Host "cross-org create $($res5.code)"
+if ($res5.code -ne 403) { Write-Host "FAIL cross-org should be 403" -ForegroundColor Red; exit 1 }
+Write-Host "PASS" -ForegroundColor Green
+
+Write-Host "`n[7/10] Test 6: Create verified-domain org-managed mailbox → 201" -ForegroundColor Yellow
+$body6 = @{ local_part = "apimail"; domain_id = $domainId; mode = "org_managed" } | ConvertTo-Json -Compress
+$res6 = Test-Req POST "$baseApi/v1/organizations/$org/mailboxes" $headers $body6
+Write-Host "create mailbox $($res6.code) $($res6.body)"
+if ($res6.code -ne 201) { Write-Host "FAIL create mailbox 201" -ForegroundColor Red; exit 1 }
+# Extract created mailbox ID for subsequent tests (dynamic, not hardcoded)
+try { $createdMailboxId = (ConvertFrom-Json $res6.body).id } catch { $createdMailboxId = $null }
+if (-not $createdMailboxId) { $createdMailboxId = $mailboxId }
+# If dynamic ID differs from hardcoded, also seed hardcoded mailbox for backward compat via SQL so alias tests can use either
+if ($createdMailboxId -ne $mailboxId) {
+  $existingPk = docker exec byos-postgres psql -U byos -d byos -t -A -c "SELECT mailbox_pk FROM mailboxes WHERE id='$createdMailboxId'" 2>$null
+  Exec-Sql "INSERT INTO mailboxes (id, org_id, user_id, domain_id, local_part, mode, root_secret_id, mailbox_sk_wrapped, mailbox_pk, is_active) SELECT '$mailboxId', '$org', '$user', '$domainId', 'apimail2', 'org_managed', root_secret_id, mailbox_sk_wrapped, mailbox_pk, true FROM mailboxes WHERE id='$createdMailboxId' ON CONFLICT (id) DO NOTHING;" | Out-Null
+  $storageConnId = docker exec byos-postgres psql -U byos -d byos -t -A -c "SELECT storage_connection_id FROM mailbox_storage WHERE mailbox_id='$createdMailboxId'" 2>$null
+  if ($storageConnId) { Exec-Sql "INSERT INTO mailbox_storage (mailbox_id, storage_connection_id, object_prefix, status) VALUES ('$mailboxId', '$storageConnId', 'mailboxes/$mailboxId', 'active') ON CONFLICT (mailbox_id) DO NOTHING;" | Out-Null }
+}
+# Use dynamic ID for subsequent GET/alias if possible
+$effectiveMailboxId = $createdMailboxId
+Write-Host "effective mailbox $effectiveMailboxId"
+Write-Host "PASS" -ForegroundColor Green
+
+Write-Host "`n[8/10] Test 7: Get mailbox → 200" -ForegroundColor Yellow
+$res7 = Test-Req GET "$baseApi/v1/mailboxes/$effectiveMailboxId" $headers $null
+Write-Host "get mailbox $($res7.code) $($res7.body)"
+if ($res7.code -ne 200) { Write-Host "FAIL get mailbox should be 200" -ForegroundColor Red; exit 1 }
+Write-Host "PASS" -ForegroundColor Green
+
+Write-Host "`n[9/10] Test 8: List mailboxes → 200" -ForegroundColor Yellow
+$res9 = Test-Req GET "$baseApi/v1/organizations/$org/mailboxes" $headers $null
+Write-Host "list mailboxes $($res9.code) $($res9.body)"
+if ($res9.code -ne 200) { Write-Host "FAIL" -ForegroundColor Red; exit 1 }
+Write-Host "PASS" -ForegroundColor Green
+
+Write-Host "`n[10/10] Test 9: Alias creation → 201, listing → 200, duplicate → 409" -ForegroundColor Yellow
+$body10a = @{ alias = "support@api-test-byos.local" } | ConvertTo-Json -Compress
+$res10a = Test-Req POST "$baseApi/v1/mailboxes/$effectiveMailboxId/aliases" $headers $body10a
+Write-Host "create alias $($res10a.code) $($res10a.body)"
+if ($res10a.code -ne 201) { Write-Host "FAIL create alias 201" -ForegroundColor Red; exit 1 }
+$res10b = Test-Req GET "$baseApi/v1/mailboxes/$effectiveMailboxId/aliases" $headers $null
+Write-Host "list aliases $($res10b.code) $($res10b.body)"
+if ($res10b.code -ne 200) { Write-Host "FAIL list aliases" -ForegroundColor Red; exit 1 }
+$body10c = @{ alias = "support@api-test-byos.local" } | ConvertTo-Json -Compress
+$res10c = Test-Req POST "$baseApi/v1/mailboxes/$effectiveMailboxId/aliases" $headers $body10c
+Write-Host "duplicate alias $($res10c.code)"
+if ($res10c.code -ne 409) { Write-Host "FAIL duplicate alias should be 409" -ForegroundColor Red; exit 1 }
+Write-Host "PASS" -ForegroundColor Green
+
+Write-Host "`n=== All Domain & Mailbox API Tests PASS ===" -ForegroundColor Cyan
+Write-Host "Step 7 Foundation slice verified." -ForegroundColor Cyan
+

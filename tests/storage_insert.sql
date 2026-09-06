@@ -1,0 +1,1 @@
+INSERT INTO storage_connections (id, org_id, provider, provider_type, bucket_name, endpoint, config, encrypted, status, credentials_enc, is_active) VALUES ('99999999-9999-9999-9999-999999999998', '88888888-8888-8888-8888-888888888888', 'minio', 'minio', 'byos-mailbox', 'minio:9000', '{"ciphertext":"dGVzdA=="}'::jsonb, true, 'active', '\x00', true) ON CONFLICT (id) DO NOTHING;

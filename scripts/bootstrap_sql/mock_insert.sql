@@ -1,0 +1,1 @@
+INSERT INTO storage_connections (id, org_id, provider, config, encrypted, status) SELECT gen_random_uuid(), (SELECT id FROM organizations LIMIT 1), 'google_drive_mock', jsonb_build_object('ciphertext', '__CIPHER__'), true, 'active' WHERE NOT EXISTS (SELECT 1 FROM storage_connections WHERE provider='google_drive_mock' AND status='active') RETURNING id::text;

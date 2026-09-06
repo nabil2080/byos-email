@@ -1,0 +1,261 @@
+name: byos-email
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: byos-postgres
+    environment:
+      POSTGRES_DB: byos
+      POSTGRES_USER: byos
+      POSTGRES_PASSWORD: byos_dev_password
+    ports:
+      - "127.0.0.1:5432:5432"
+    expose:
+      - "5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U byos -d byos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: byos-redis
+    expose:
+      - "6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: byos-minio
+    environment:
+      MINIO_ROOT_USER: byosminio
+      MINIO_ROOT_PASSWORD: byosminio_dev_password
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    command: ["server", "/data", "--console-address", ":9001"]
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  postfix:
+    image: boky/postfix:latest
+    container_name: byos-postfix
+    environment:
+      ALLOWED_SENDER_DOMAINS: byos.local
+      HOSTNAME: mail.byos.local
+      POSTFIX_mydestination: localhost, localhost.localdomain, byos.local
+      POSTFIX_relay_domains: ""
+      POSTFIX_local_recipient_maps: ""
+      POSTFIX_smtpd_recipient_restrictions: permit_mynetworks, reject_unauth_destination
+      # No milters - Rspamd is now a standalone service called by inbound-bridge
+      POSTFIX_smtpd_milters: ""
+      POSTFIX_non_smtpd_milters: ""
+      POSTFIX_milter_default_action: accept
+      POSTFIX_milter_protocol: "6"
+    ports:
+      - "127.0.0.1:2525:587"
+    volumes:
+      - ./postfix/init:/docker-init.d:ro
+    healthcheck:
+      test: ["CMD", "postfix", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rspamd:
+    image: rspamd/rspamd:latest
+    container_name: byos-rspamd
+    expose:
+      - "11333"
+      - "11334"
+    volumes:
+      - ./rspamd/local.d:/etc/rspamd/local.d:ro
+
+  api:
+    build: ../services/api
+    container_name: byos-api
+    ports:
+      - "127.0.0.1:8080:8080"
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    environment:
+      DATABASE_URL: "postgres://byos:byos_dev_password@postgres:5432/byos"
+      REDIS_ADDR: "redis:6379"
+      MINIO_ADDR: "minio:9000"
+      POSTFIX_ADDR: "postfix:25"
+      RSPAMD_ADDR: "rspamd:11334"
+      OUTBOUND_DELIVERY_PK_FILE: /run/secrets/outbound_delivery_pk
+      BYOS_LEGACY_AUTH_ENABLED: "false"
+      BYOS_ENV: "development"
+    secrets:
+      - outbound_delivery_pk
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  mail-router:
+    build: ../services/mail-router
+    container_name: byos-mail-router
+    expose:
+      - "8081"
+      - "8082"
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    environment:
+      DATABASE_URL: "postgres://byos:byos_dev_password@postgres:5432/byos"
+      MAIL_ROUTER_PORT: "8081"
+      CRYPTO_WORKER_URL: "http://crypto-worker:8084"
+      STORAGE_WORKER_URL: "http://storage-worker:8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      storage-worker:
+        condition: service_started
+      crypto-worker:
+        condition: service_started
+
+  storage-worker:
+    build: ../services/storage-worker
+    container_name: byos-storage-worker
+    expose:
+      - "8083"
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    environment:
+      DATABASE_URL: "postgres://byos:byos_dev_password@postgres:5432/byos"
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "byosminio"
+      MINIO_SECRET_KEY: "byosminio_dev_password"
+      MINIO_BUCKET: "byos-mailbox"
+      STORAGE_WORKER_PORT: "8083"
+      STORAGE_DEK_FILE: /run/secrets/storage_dek
+    secrets:
+      - storage_dek
+    depends_on:
+      minio:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  crypto-worker:
+    build:
+      context: ..
+      dockerfile: services/native-crypto-worker/Dockerfile
+    container_name: byos-crypto-worker
+    expose:
+      - "8084"
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    environment:
+      CRYPTO_WORKER_PORT: "8084"
+
+  inbound-bridge:
+    build: ../services/inbound-bridge
+    container_name: byos-inbound-bridge
+    ports:
+      - "25:25"
+      - "127.0.0.1:8085:8085"
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    environment:
+      INBOUND_LISTEN: ":25"
+      INBOUND_HEALTH_LISTEN: ":8085"
+      MAIL_ROUTER_URL: "http://mail-router:8081"
+      RSPAMD_URL: "http://rspamd:11333"
+    depends_on:
+      mail-router:
+        condition: service_started
+      rspamd:
+        condition: service_healthy
+
+  outbound-worker:
+    build:
+      context: ..
+      dockerfile: services/outbound-worker/Dockerfile.rust
+    container_name: byos-outbound-worker
+    expose:
+      - "8086"
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    environment:
+      DATABASE_URL: "postgres://outbound_worker_login:byos_outbound_worker_dev@postgres:5432/byos"
+      REDIS_ADDR: "redis:6379"
+      OUTBOUND_DELIVERY_SK_FILE: /run/secrets/outbound_delivery_sk
+      OUTBOUND_WORKER_DB_PASSWORD_FILE: /run/secrets/outbound_worker_db_password
+      POSTFIX_ADDR: "postfix:25"
+      OUTBOUND_WORKER_ADDR: ":8086"
+      POLL_INTERVAL_MS: "5000"
+      RUST_LOG: info
+      BYOS_DKIM_DEK_FILE: /run/secrets/byos_dkim_dek
+    secrets:
+      - outbound_delivery_sk
+      - outbound_worker_db_password
+      - byos_dkim_dek
+    depends_on:
+      postgres:
+        condition: service_healthy
+      crypto-worker:
+        condition: service_started
+
+secrets:
+  outbound_delivery_sk:
+    file: ./secrets/outbound_delivery_sk.b64
+  outbound_delivery_pk:
+    file: ./secrets/outbound_delivery_pk.b64
+  outbound_worker_db_password:
+    file: ./secrets/outbound_worker_db_password.txt
+  byos_dkim_dek:
+    file: ./secrets/byos_dkim_dek.b64
+  storage_dek:
+    file: ./secrets/storage_dek.b64
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

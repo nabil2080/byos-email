@@ -1,0 +1,1 @@
+INSERT INTO mailbox_storage (mailbox_id, storage_connection_id, object_prefix, status) SELECT m.id, sc.id, 'mailboxes/' || m.id::text, 'active' FROM mailboxes m CROSS JOIN (SELECT id FROM storage_connections WHERE provider='s3' AND status='active' LIMIT 1) sc WHERE NOT EXISTS (SELECT 1 FROM mailbox_storage ms WHERE ms.mailbox_id=m.id) RETURNING mailbox_id::text;
