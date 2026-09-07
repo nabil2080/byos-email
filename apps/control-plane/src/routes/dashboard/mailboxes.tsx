@@ -1,7 +1,7 @@
 import { Component, createResource, createSignal, For, Show } from "solid-js";
 import { useAuth } from "../../lib/auth/context";
 import { listDomains } from "../../lib/api/domains";
-import { listMailboxes, createMailbox } from "../../lib/api/mailboxes";
+import { listMailboxes, createMailbox, recoverMailboxSecret } from "../../lib/api/mailboxes";
 
 const MailboxesPage: Component = () => {
   const { orgId } = useAuth();
@@ -10,6 +10,9 @@ const MailboxesPage: Component = () => {
   const [selectedMode, setSelectedMode] = createSignal<"org_managed" | "private">("org_managed");
   const [banner, setBanner] = createSignal<{ kind: "success" | "error"; text: string } | null>(null);
   const [isCreating, setIsCreating] = createSignal(false);
+  const [recoveryMailboxId, setRecoveryMailboxId] = createSignal("");
+  const [recoveryKeyFile, setRecoveryKeyFile] = createSignal<File | null>(null);
+  const [isRecovering, setIsRecovering] = createSignal(false);
 
   const [domains, { refetch: refetchDomains }] = createResource(
     () => orgId,
@@ -63,6 +66,30 @@ const MailboxesPage: Component = () => {
       setTimeout(() => setBanner(null), 6000);
     } finally {
       setIsCreating(false);
+    }
+
+  }
+
+  async function handleRecovery() {
+    const file = recoveryKeyFile();
+    const mailboxId = recoveryMailboxId();
+    if (!file || !mailboxId || !orgId) return;
+    setIsRecovering(true);
+    setBanner(null);
+    try {
+      const mailboxSkHex = await recoverMailboxSecret(orgId, mailboxId, await file.text());
+      const output = new Blob([mailboxSkHex], { type: "text/plain" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(output);
+      link.download = `byos-mailbox-${mailboxId}-recovered-sk.hex`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      setBanner({ kind: "success", text: "Mailbox key recovered and downloaded. Store it securely." });
+    } catch (e) {
+      const status = (e as unknown as { status?: number }).status;
+      setBanner({ kind: "error", text: status === 403 ? "Private mailboxes cannot be recovered by the organization." : "Mailbox recovery failed." });
+    } finally {
+      setIsRecovering(false);
     }
   }
 
@@ -179,6 +206,36 @@ const MailboxesPage: Component = () => {
               </table>
             </div>
           </Show>
+        </div>
+
+        <div class="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-6">
+          <h3 class="text-sm font-medium text-amber-900">Recover organization-managed mailbox</h3>
+          <p class="mt-1 text-xs text-amber-800">Choose an organization-managed mailbox and upload the org recovery key file downloaded during registration. Private mailboxes are never recoverable by the organization.</p>
+          <div class="mt-3 grid gap-2 sm:grid-cols-2">
+            <select
+              value={recoveryMailboxId()}
+              onChange={(e) => setRecoveryMailboxId(e.currentTarget.value)}
+              class="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm"
+            >
+              <option value="">Select organization-managed mailbox</option>
+              <For each={(mailboxes() ?? []).filter((mb) => mb.mode === "org_managed")}>
+                {(mb) => <option value={mb.id}>{mb.local_part} ({mb.id.slice(0, 8)}…)</option>}
+              </For>
+            </select>
+            <input
+              type="file"
+              accept=".hex,text/plain"
+              onChange={(e) => setRecoveryKeyFile(e.currentTarget.files?.[0] ?? null)}
+              class="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm"
+            />
+          </div>
+          <button
+            onClick={handleRecovery}
+            disabled={!recoveryMailboxId() || !recoveryKeyFile() || isRecovering()}
+            class="mt-3 rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+          >
+            {isRecovering() ? "Recovering…" : "Recover and download mailbox key"}
+          </button>
         </div>
       </Show>
     </div>

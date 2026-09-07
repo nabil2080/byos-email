@@ -14,7 +14,15 @@ const RegisterPage: Component = () => {
     setError(null);
     setLoading(true);
     try {
-      await register(email().trim(), password());
+      const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
+      const keypair = JSON.parse(wasm.wasm_generate_keypair()) as { secret_key: string; public_key: string };
+      const result = await register(email().trim(), password(), keypair.public_key);
+      const recoveryKey = new Blob([keypair.secret_key], { type: "text/plain" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(recoveryKey);
+      link.download = `byos-org-recovery-${result.org_id}.hex`;
+      link.click();
+      URL.revokeObjectURL(link.href);
       navigate("/dashboard", { replace: true });
       window.location.reload();
     } catch (err) {

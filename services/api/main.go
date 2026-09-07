@@ -331,6 +331,7 @@ func main() {
 	http.HandleFunc("/v1/organizations/{org_id}/domains/{domain_id}/verify", withSecurityHeaders(withCORS(domainVerifyHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}", withSecurityHeaders(withCORS(organizationGetHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/mailboxes", withSecurityHeaders(withCORS(mailboxesHandler)))
+	http.HandleFunc("/v1/organizations/{org_id}/mailboxes/{mailbox_id}/recovery-material", withSecurityHeaders(withCORS(mailboxRecoveryMaterialHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}", withSecurityHeaders(withCORS(mailboxGetHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages", withSecurityHeaders(withCORS(messagesHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/aliases", withSecurityHeaders(withCORS(mailboxAliasesHandler)))

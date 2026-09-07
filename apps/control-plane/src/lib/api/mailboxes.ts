@@ -9,6 +9,7 @@ export interface Mailbox {
   local_part: string;
   domain_id: string;
   mode: string;
+  mailbox_sk_wrapped?: string;
   localPart?: string;
   domainId?: string;
 }
@@ -58,6 +59,23 @@ export async function listMailboxes(orgId: string): Promise<Mailbox[]> {
 
 export async function getMailbox(mailboxId: string): Promise<Mailbox> {
   return request<Mailbox>(`/v1/mailboxes/${mailboxId}`, { method: "GET" });
+}
+
+export async function recoverMailboxSecret(orgId: string, mailboxId: string, recoverySkHex: string): Promise<string> {
+  const material = await request<{ mailbox_id: string; root_secret_wrapped: string }>(
+    `/v1/organizations/${orgId}/mailboxes/${mailboxId}/recovery-material`,
+    { method: "GET" },
+  );
+  const mailbox = await getMailbox(mailboxId);
+  const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
+  const wrappedRoot = atob(material.root_secret_wrapped);
+  const wrappedRootHex = Array.from(wrappedRoot, (c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join("");
+  const rootSecretHex = wasm.wasm_hpke_open(recoverySkHex.trim(), wrappedRootHex, "");
+  const mailboxIdHex = mailboxId.replace(/-/g, "");
+  if (!mailbox.mailbox_sk_wrapped) throw new Error("mailbox wrapped key unavailable");
+  const wrappedMailboxKey = atob(mailbox.mailbox_sk_wrapped);
+  const wrappedMailboxKeyHex = Array.from(wrappedMailboxKey, (c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join("");
+  return wasm.wasm_unwrap_mailbox_key(rootSecretHex, wrappedMailboxKeyHex, mailboxIdHex);
 }
 
 export async function createMailbox(orgId: string, localPart: string, domainId: string, mode: "org_managed" | "private" = "org_managed"): Promise<Mailbox> {

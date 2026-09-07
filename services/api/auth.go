@@ -24,6 +24,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -195,8 +196,9 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email         string `json:"email"`
+		Password      string `json:"password"`
+		OrgRecoveryPK string `json:"org_recovery_pk"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -210,6 +212,11 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(password) < 8 || len(password) > 128 {
 		http.Error(w, "password must be 8-128 characters", http.StatusBadRequest)
+		return
+	}
+	recPk, err := hex.DecodeString(strings.TrimSpace(req.OrgRecoveryPK))
+	if err != nil || len(recPk) != 32 {
+		http.Error(w, "org_recovery_pk must be a 32-byte hex public key", http.StatusBadRequest)
 		return
 	}
 	dsn := os.Getenv("DATABASE_URL")
@@ -244,16 +251,13 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 	orgID := uuid.New().String()
 	orgName := strings.Split(email, "@")[0] + "'s organization"
-	// Generate random org recovery pk for new org (32 bytes)
-	recPk := make([]byte, 32)
-	rand.Read(recPk)
 	err = tx.QueryRow(ctx, `INSERT INTO organizations (id, name, org_recovery_pk) VALUES ($1, $2, $3) RETURNING id::text`, orgID, orgName, recPk).Scan(&orgID)
 	if err != nil {
 		http.Error(w, "failed to create organization", http.StatusInternalServerError)
 		return
 	}
 	userID := uuid.New().String()
-	err = tx.QueryRow(ctx, `INSERT INTO users (id, org_id, email, password_hash, display_name, is_active) VALUES ($1, $2, $3, $4, $5, true) RETURNING id::text`, userID, orgID, email, hash, strings.Split(email, "@")[0]).Scan(&userID)
+	err = tx.QueryRow(ctx, `INSERT INTO users (id, org_id, email, password_hash, display_name, is_active, role) VALUES ($1, $2, $3, $4, $5, true, 'owner') RETURNING id::text`, userID, orgID, email, hash, strings.Split(email, "@")[0]).Scan(&userID)
 	if err != nil {
 		http.Error(w, "failed to create user", http.StatusInternalServerError)
 		return

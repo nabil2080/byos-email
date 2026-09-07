@@ -2,12 +2,12 @@ function apiBase(): string {
   return (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_BASE || "";
 }
 
-export async function register(email: string, password: string): Promise<{ id: string; email: string; org_id: string }> {
+export async function register(email: string, password: string, orgRecoveryPk: string): Promise<{ id: string; email: string; org_id: string }> {
   const res = await fetch(`${apiBase()}/v1/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, org_recovery_pk: orgRecoveryPk }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
