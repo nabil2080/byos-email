@@ -26,6 +26,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -33,6 +34,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -300,24 +302,31 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	// Check rate limit via Redis if available
-	if redisClient != nil {
-		ctx := context.Background()
-		keys := []string{"auth:login:ip:" + ip, "auth:login:email:" + email}
-		for _, k := range keys {
-			cnt, _ := redisClient.Get(ctx, k).Int()
-			if cnt >= 5 {
-				w.Header().Set("Retry-After", "60")
-				http.Error(w, "too many attempts, try later", http.StatusTooManyRequests)
-				return
-			}
+	// Authentication rate limiting fails closed so Redis outages cannot bypass
+	// brute-force protection.
+	if redisClient == nil {
+		http.Error(w, "authentication rate limiter unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	ctx := context.Background()
+	keys := []string{"auth:login:ip:" + ip, "auth:login:email:" + email}
+	for _, k := range keys {
+		cnt, err := redisClient.Get(ctx, k).Int()
+		if err != nil && err != redis.Nil {
+			log.Printf("login rate check failed: %v", err)
+			http.Error(w, "authentication rate limiter unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if cnt >= 5 {
+			w.Header().Set("Retry-After", "60")
+			http.Error(w, "too many attempts, try later", http.StatusTooManyRequests)
+			return
 		}
 	}
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
 	}
-	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)

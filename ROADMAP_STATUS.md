@@ -4,6 +4,19 @@
 
 We are in the V1 prototype / pre-launch foundation stage.
 
+### Remaining roadmap work (conservative summary)
+
+- **Sections 3-4:** public-site and webmail UX are not launch-complete; webmail metadata, drafts, attachments, and outbound encryption are live, but body retrieval/decryption and full browser E2E remain.
+- **Section 8:** hard ceilings are implemented; IP reputation and burst detection remain deferred.
+- **Section 15:** recovery foundation exists, but full account/mailbox recovery, root rotation, recovery-principal revocation, and device recovery remain.
+- **Section 16:** search-token foundation exists; end-to-end local search UX and result verification remain.
+- **Section 19:** bridge authentication, live counts, LIST/STATUS, and metadata-only header FETCH are implemented; encrypted body FETCH, local key handling, and SMTP client-side encryption/submission remain.
+- **Section 20:** encrypted attachment validation/forwarding exists; true streaming, download/decryption UX, and full end-to-end attachment verification remain.
+- **Sections 21-23:** hardening, metrics, backups, restore drills, and operational alerting need complete production verification.
+- **Section 24:** independent customer export/recovery CLI is missing.
+- **Section 25:** plan metadata and capacity checks exist; payment provider integration and fully atomic quota enforcement remain.
+- **Sections 27-29:** formal security launch gate, production infrastructure, and scaling model remain.
+
 Current roadmap position:
 
 - Section 0: Architecture, threat model, crypto spec, data classification - **COMPLETE (frozen in docs/08-v5.3-final.md)**
@@ -35,6 +48,13 @@ Current roadmap position:
 - Webmail compose safety - **COMPLETED 2026-09-06**: removed simulated base64 ciphertext, fixed IVs, fake wrapped tokens, and local-only sent-message success behavior. Compose now refuses to submit until valid client-side encryption material is available, preventing plaintext or fabricated encrypted payloads from reaching outbound APIs.
 - Webmail outbound encryption - **IMPLEMENTED 2026-09-06**: compose now obtains the canonical outbound delivery public key, reserves an outbox sequence, builds an RFC5322 payload locally, encrypts it with the frozen WASM `encrypt_outbound` primitive, and submits the returned ciphertext/HPKE token/nonce through send or schedule APIs. No plaintext or fabricated crypto fields are sent.
 - Bridge authentication hardening - **IMPLEMENTED 2026-09-06**: the local bridge now requires a mailbox ID and bridge token at startup, validates IMAP LOGIN/AUTH PLAIN and SMTP AUTH PLAIN with constant-time comparison, rejects unauthenticated mailbox commands, never fabricates inbox messages, and returns an explicit temporary failure instead of falsely claiming outbound delivery. Full API-backed IMAP proxying and local outbound crypto remain pending.
+- Bridge credential revocation enforcement - **IMPLEMENTED 2026-09-06**: bridge authentication now verifies the token and mailbox against the API's non-revoked credential records and updates `last_used_at`; the daemon calls this endpoint for IMAP and SMTP authentication. Live invalid-token request returns `401`.
+- Bridge mailbox metadata - **IMPLEMENTED 2026-09-06**: added an API-authenticated bridge metadata endpoint and wired IMAP SELECT to report the live mailbox message count. The endpoint exposes only sequence/sender/recipient/timestamp/status metadata; body retrieval and client-side decryption remain explicitly unimplemented.
+- Bridge IMAP metadata commands - **IMPLEMENTED 2026-09-06**: authenticated IMAP now supports `LIST INBOX` and `STATUS INBOX` using live API metadata; `SEARCH` and `FETCH` remain explicit failures until their privacy-preserving data/decryption flows are implemented.
+- Bridge IMAP header fetch - **IMPLEMENTED 2026-09-06**: authenticated `FETCH ... HEADER` now reconstructs metadata-only RFC 5322 headers from the API; body fetches remain rejected until encrypted object retrieval and local key decryption are available. Bridge tests and vet pass.
+- Redis rate-limit fail-closed hardening - **IMPLEMENTED 2026-09-06**: outbound quota checks and authentication login checks now deny with a safe error when Redis is unavailable or returns an unexpected result, preventing abuse-control bypass during Redis outages. API tests, vet, and build pass against the live PostgreSQL stack.
+- API observability metrics - **IMPLEMENTED 2026-09-06**: API security middleware now records request totals, error responses, and cumulative duration in Prometheus text format at `/metrics`; middleware regression tests, API tests, vet, and build pass.
+- Webmail decryption safety - **IMPLEMENTED 2026-09-06**: removed the remaining simulated timeout-based message decryption. Webmail now explicitly reports that content is unavailable until real client-side storage retrieval and key decryption are configured, instead of rendering opaque storage references as plaintext.
 
 ## Completed (Step 0-5 + Hardening + Scheduled Sending + Trust Engine + Storage Hardening + Storage Management API + Storage Management UI + Storage Connectivity & Health Backend + Dashboard Storage Connectivity UI + Disconnect / Reconnect + Failure Reporting)
 

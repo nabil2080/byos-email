@@ -180,7 +180,7 @@ func startRateCacheRefresh() {
 
 func checkAndIncrRate(ctx context.Context, mailboxID, orgID, mailboxPlan, orgPlan string) (bool, int, string) {
 	if redisClient == nil {
-		return true, 0, ""
+		return false, 30, "rate limiter unavailable"
 	}
 	now := time.Now().Unix()
 	minuteWindow := now / 60
@@ -207,13 +207,13 @@ func checkAndIncrRate(ctx context.Context, mailboxID, orgID, mailboxPlan, orgPla
 	// Use Eval
 	res, err := redisClient.Eval(ctx, rateLuaScript, keys, args...).Result()
 	if err != nil {
-		log.Printf("rate check redis error (fail open): %v", err)
-		return true, 0, ""
+		log.Printf("rate check redis error (fail closed): %v", err)
+		return false, 30, "rate limiter unavailable"
 	}
 	arr, ok := res.([]interface{})
 	if !ok || len(arr) == 0 {
 		log.Printf("rate lua unexpected result %v", res)
-		return true, 0, ""
+		return false, 30, "rate limiter unavailable"
 	}
 	code, _ := arr[0].(int64)
 	if code == 1 {
@@ -316,6 +316,7 @@ func main() {
 	http.HandleFunc("/v1/outbound/schedule", withSecurityHeaders(withCORS(outboundScheduleHandler)))
 	http.HandleFunc("/v1/outbound/scheduled/cancel", withSecurityHeaders(withCORS(outboundScheduledCancelHandler)))
 	http.HandleFunc("/v1/bridge/authenticate", withSecurityHeaders(withCORS(bridgeAuthenticateHandler)))
+	http.HandleFunc("/v1/bridge/messages", withSecurityHeaders(withCORS(bridgeMessagesHandler)))
 
 	http.HandleFunc("/v1/organizations/{org_id}/storage/connection", withSecurityHeaders(withCORS(storageConnectionHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/storage/connection/test", withSecurityHeaders(withCORS(storageConnectionTestHandler)))

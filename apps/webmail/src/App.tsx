@@ -142,12 +142,10 @@ const App: Component = () => {
       prev.map((m) => (m.id === msg.id ? { ...m, read: true } : m))
     );
 
-    // Local client-side payload decrypt
-    setTimeout(() => {
-      const cleanBody = msg.encryptedBody.replace(/0x[0-9a-fA-F]+\.\.\. \[.*?\] /, "");
-      setDecryptedContent(cleanBody);
-      setIsDecrypting(false);
-    }, 200);
+    // Message bodies require a real client-side storage fetch and mailbox-key
+    // decryption flow. Never render opaque storage references as plaintext.
+    setDecryptedContent("Message content is encrypted and cannot be displayed until client-side key and storage retrieval are configured.");
+    setIsDecrypting(false);
   }
 
   async function handleSend(e: Event) {

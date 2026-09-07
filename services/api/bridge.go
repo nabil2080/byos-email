@@ -31,6 +31,69 @@ type BridgeAuthenticateRequest struct {
 	Token     string `json:"token"`
 }
 
+type BridgeMessageResponse struct {
+	ID         string     `json:"id"`
+	MessageSeq int64      `json:"message_seq"`
+	Sender     string     `json:"sender"`
+	Recipients []string   `json:"recipients"`
+	ReceivedAt time.Time  `json:"received_at"`
+	SentAt     *time.Time `json:"sent_at,omitempty"`
+	Status     string     `json:"status"`
+}
+
+func bridgeMessagesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mailboxID := r.URL.Query().Get("mailbox_id")
+	token := r.Header.Get("X-BYOS-Bridge-Token")
+	if _, err := uuid.Parse(mailboxID); err != nil || token == "" {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	hash := sha256.Sum256([]byte(token))
+	conn, err := pgx.Connect(r.Context(), bridgeDatabaseURL())
+	if err != nil {
+		http.Error(w, "authentication unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer conn.Close(r.Context())
+	var credentialID string
+	if err := conn.QueryRow(r.Context(), `SELECT id::text FROM bridge_credentials WHERE mailbox_id=$1 AND token_hash=$2 AND revoked_at IS NULL`, mailboxID, hash[:]).Scan(&credentialID); err != nil {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	if _, err := conn.Exec(r.Context(), `UPDATE bridge_credentials SET last_used_at=now() WHERE id=$1`, credentialID); err != nil {
+		http.Error(w, "authentication unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	rows, err := conn.Query(r.Context(), `
+		SELECT id::text, message_seq, sender, recipients, received_at, sent_at, status
+		FROM message_metadata WHERE mailbox_id=$1
+		ORDER BY message_seq DESC LIMIT 100`, mailboxID)
+	if err != nil {
+		http.Error(w, "failed to query messages", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	messages := make([]BridgeMessageResponse, 0)
+	for rows.Next() {
+		var message BridgeMessageResponse
+		if err := rows.Scan(&message.ID, &message.MessageSeq, &message.Sender, &message.Recipients, &message.ReceivedAt, &message.SentAt, &message.Status); err != nil {
+			http.Error(w, "failed to read messages", http.StatusInternalServerError)
+			return
+		}
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "failed to read messages", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"messages": messages})
+}
+
 func bridgeDatabaseURL() string {
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
 		return dsn

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -28,6 +29,53 @@ type BridgeConfig struct {
 	ImapPort   string
 	SmtpPort   string
 	StorageDir string
+}
+
+type bridgeMessage struct {
+	MessageSeq int64    `json:"message_seq"`
+	Sender     string   `json:"sender"`
+	Recipients []string `json:"recipients"`
+	ReceivedAt string   `json:"received_at"`
+	SentAt     string   `json:"sent_at"`
+}
+
+func fetchBridgeMessages(cfg *BridgeConfig) ([]bridgeMessage, bool) {
+	req, err := http.NewRequest(http.MethodGet, cfg.ApiURL+"/v1/bridge/messages?mailbox_id="+cfg.MailboxID, nil)
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("X-BYOS-Bridge-Token", cfg.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	var payload struct {
+		Messages []bridgeMessage `json:"messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, false
+	}
+	return payload.Messages, true
+}
+
+func fetchBridgeMessageCount(cfg *BridgeConfig) (int, bool) {
+	messages, ok := fetchBridgeMessages(cfg)
+	return len(messages), ok
+}
+
+func writeHeaderFetch(writer *bufio.Writer, tag string, message bridgeMessage) {
+	date := message.ReceivedAt
+	if message.SentAt != "" {
+		date = message.SentAt
+	}
+	headers := fmt.Sprintf("From: %s\r\nTo: %s\r\nDate: %s\r\nMessage-ID: <%d.%d@byos.local>\r\n\r\n",
+		message.Sender, strings.Join(message.Recipients, ", "), date, message.MessageSeq, message.MessageSeq)
+	writer.WriteString(fmt.Sprintf("* %d FETCH (UID %d BODY[HEADER] {%d}\r\n%s)\r\n", message.MessageSeq, message.MessageSeq, len(headers), headers))
+	writer.WriteString(fmt.Sprintf("%s OK FETCH completed\r\n", tag))
 }
 
 func authenticateWithAPI(cfg *BridgeConfig) bool {
@@ -171,7 +219,12 @@ func handleIMAPConnection(conn net.Conn, cfg *BridgeConfig) {
 			}
 			// The bridge must never invent server-side messages. A real
 			// mailbox proxy will populate this from the authenticated API.
-			writer.WriteString("* 0 EXISTS\r\n")
+			count, ok := fetchBridgeMessageCount(cfg)
+			if !ok {
+				writer.WriteString(fmt.Sprintf("%s NO mailbox metadata unavailable\r\n", tag))
+				break
+			}
+			writer.WriteString(fmt.Sprintf("* %d EXISTS\r\n", count))
 			writer.WriteString("* 0 RECENT\r\n")
 			writer.WriteString("* OK [UIDVALIDITY 1] UIDs valid\r\n")
 			writer.WriteString(fmt.Sprintf("%s OK [READ-ONLY] SELECT completed\r\n", tag))
@@ -180,13 +233,57 @@ func handleIMAPConnection(conn net.Conn, cfg *BridgeConfig) {
 				writer.WriteString(fmt.Sprintf("%s NO authenticate first\r\n", tag))
 				break
 			}
-			writer.WriteString(fmt.Sprintf("%s NO mailbox message proxy is not implemented\r\n", tag))
-		case "LIST", "STATUS", "SEARCH":
+			if len(parts) < 3 || !strings.Contains(strings.ToUpper(parts[2]), "HEADER") {
+				writer.WriteString(fmt.Sprintf("%s NO encrypted message body retrieval is not implemented\r\n", tag))
+				break
+			}
+			sequence := strings.Fields(parts[2])[0]
+			var requested int64
+			if _, err := fmt.Sscan(sequence, &requested); err != nil {
+				writer.WriteString(fmt.Sprintf("%s BAD invalid message sequence\r\n", tag))
+				break
+			}
+			messages, ok := fetchBridgeMessages(cfg)
+			if !ok {
+				writer.WriteString(fmt.Sprintf("%s NO mailbox metadata unavailable\r\n", tag))
+				break
+			}
+			found := false
+			for _, message := range messages {
+				if message.MessageSeq == requested {
+					writeHeaderFetch(writer, tag, message)
+					found = true
+					break
+				}
+			}
+			if !found {
+				writer.WriteString(fmt.Sprintf("%s NO message not found\r\n", tag))
+			}
+		case "LIST":
 			if !authenticated {
 				writer.WriteString(fmt.Sprintf("%s NO authenticate first\r\n", tag))
 				break
 			}
-			writer.WriteString(fmt.Sprintf("%s NO mailbox message proxy is not implemented\r\n", tag))
+			writer.WriteString(`* LIST (\HasNoChildren) "/" "INBOX"` + "\r\n")
+			writer.WriteString(fmt.Sprintf("%s OK LIST completed\r\n", tag))
+		case "STATUS":
+			if !authenticated {
+				writer.WriteString(fmt.Sprintf("%s NO authenticate first\r\n", tag))
+				break
+			}
+			count, ok := fetchBridgeMessageCount(cfg)
+			if !ok {
+				writer.WriteString(fmt.Sprintf("%s NO mailbox metadata unavailable\r\n", tag))
+				break
+			}
+			writer.WriteString(fmt.Sprintf("* STATUS INBOX (MESSAGES %d UIDNEXT %d UNSEEN 0)\r\n", count, count+1))
+			writer.WriteString(fmt.Sprintf("%s OK STATUS completed\r\n", tag))
+		case "SEARCH":
+			if !authenticated {
+				writer.WriteString(fmt.Sprintf("%s NO authenticate first\r\n", tag))
+				break
+			}
+			writer.WriteString(fmt.Sprintf("%s NO message search proxy is not implemented\r\n", tag))
 		case "LOGOUT":
 			writer.WriteString("* BYE BYOS Bridge logging out\r\n")
 			writer.WriteString(fmt.Sprintf("%s OK LOGOUT completed\r\n", tag))

@@ -145,6 +145,16 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# TYPE byos_uptime_seconds counter\n")
 	fmt.Fprintf(w, "byos_uptime_seconds %.2f\n\n", uptime)
 
+	fmt.Fprintf(w, "# HELP byos_http_requests_total Total API requests.\n")
+	fmt.Fprintf(w, "# TYPE byos_http_requests_total counter\n")
+	fmt.Fprintf(w, "byos_http_requests_total %d\n", apiRequestsTotal.Load())
+	fmt.Fprintf(w, "# HELP byos_http_responses_error_total Total API responses with status 4xx or 5xx.\n")
+	fmt.Fprintf(w, "# TYPE byos_http_responses_error_total counter\n")
+	fmt.Fprintf(w, "byos_http_responses_error_total %d\n", apiResponsesError.Load())
+	fmt.Fprintf(w, "# HELP byos_http_request_duration_seconds_total Cumulative API request duration.\n")
+	fmt.Fprintf(w, "# TYPE byos_http_request_duration_seconds_total counter\n")
+	fmt.Fprintf(w, "byos_http_request_duration_seconds_total %.6f\n\n", float64(apiRequestNanos.Load())/1e9)
+
 	fmt.Fprintf(w, "# HELP byos_service_up Dependency service health status (1 = up, 0 = down).\n")
 	fmt.Fprintf(w, "# TYPE byos_service_up gauge\n")
 	for _, c := range checks {
@@ -155,4 +165,3 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "byos_service_up{service=\"%s\"} %d\n", c.Name, val)
 	}
 }
-
