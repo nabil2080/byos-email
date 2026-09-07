@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestMailboxRecoveryMaterialAuthorizationAndPrivacy(t *testing.T) {
@@ -13,7 +15,7 @@ func TestMailboxRecoveryMaterialAuthorizationAndPrivacy(t *testing.T) {
 
 	orgID, ownerID, _, memberID := createTestOrgAndUsers(t, db)
 	var domainID, orgMailboxID, privateMailboxID, orgRootID, privateRootID string
-	if err := db.QueryRow(`INSERT INTO domains (org_id, name, is_verified) VALUES ($1, 'recovery.test', true) RETURNING id`, orgID).Scan(&domainID); err != nil {
+	if err := db.QueryRow(`INSERT INTO domains (org_id, name, is_verified) VALUES ($1, $2, true) RETURNING id`, orgID, "recovery-"+uuid.New().String()+".test").Scan(&domainID); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(`INSERT INTO root_secrets (root_secret_wrapped) VALUES (decode(repeat('11', 81), 'hex')) RETURNING id`).Scan(&orgRootID); err != nil {

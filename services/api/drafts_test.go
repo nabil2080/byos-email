@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // testEnvelope returns a deterministic structurally-valid Section 12
@@ -46,14 +48,15 @@ type draftJSON struct {
 // The tag keeps domain names / local parts unique within a test.
 func createTestMailbox(t *testing.T, db *sql.DB, orgID, userID, tag string) (domainID, mailboxID string) {
 	t.Helper()
-	if err := db.QueryRow(`INSERT INTO domains (org_id, name, is_verified) VALUES ($1, $2, true) RETURNING id`, orgID, "draft-test-"+tag+".local").Scan(&domainID); err != nil {
+	uniqueTag := tag + "-" + uuid.New().String()
+	if err := db.QueryRow(`INSERT INTO domains (org_id, name, is_verified) VALUES ($1, $2, true) RETURNING id`, orgID, "draft-test-"+uniqueTag+".local").Scan(&domainID); err != nil {
 		t.Fatalf("failed to insert domain: %v", err)
 	}
 	var rootID string
 	if err := db.QueryRow(`INSERT INTO root_secrets (root_secret_wrapped) VALUES (decode('AA==','base64')) RETURNING id`).Scan(&rootID); err != nil {
 		t.Fatalf("failed to insert root secret: %v", err)
 	}
-	if err := db.QueryRow(`INSERT INTO mailboxes (org_id, user_id, domain_id, local_part, mode, root_secret_id, mailbox_sk_wrapped, mailbox_pk) VALUES ($1, $2, $3, $4, 'org_managed', $5, decode('AA==','base64'), decode('AA==','base64')) RETURNING id`, orgID, userID, domainID, "drafter-"+tag, rootID).Scan(&mailboxID); err != nil {
+	if err := db.QueryRow(`INSERT INTO mailboxes (org_id, user_id, domain_id, local_part, mode, root_secret_id, mailbox_sk_wrapped, mailbox_pk) VALUES ($1, $2, $3, $4, 'org_managed', $5, decode('AA==','base64'), decode('AA==','base64')) RETURNING id`, orgID, userID, domainID, "drafter-"+uniqueTag, rootID).Scan(&mailboxID); err != nil {
 		t.Fatalf("failed to insert mailbox: %v", err)
 	}
 	return domainID, mailboxID
@@ -65,9 +68,10 @@ func createTestMailbox(t *testing.T, db *sql.DB, orgID, userID, tag string) (dom
 func createTestOrgWithEmail(t *testing.T, db *sql.DB, tag string) (orgID, ownerID, adminID, memberID string) {
 	t.Helper()
 	var orgIDVal, ownerIDVal, adminIDVal, memberIDVal string
+	uniqueTag := tag + "-" + uuid.New().String()
 	if err := db.QueryRow(`
 		INSERT INTO organizations (name, org_recovery_pk)
-		VALUES ('Test Org ` + tag + `', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))
+		VALUES ('Test Org ` + uniqueTag + `', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))
 		RETURNING id
 	`).Scan(&orgIDVal); err != nil {
 		t.Fatalf("failed to insert org: %v", err)
@@ -83,9 +87,9 @@ func createTestOrgWithEmail(t *testing.T, db *sql.DB, tag string) (orgID, ownerI
 		}
 		return id
 	}
-	ownerIDVal = mkuser(tag+"-owner@byos.local", "Owner", "owner")
-	adminIDVal = mkuser(tag+"-admin@byos.local", "Admin", "admin")
-	memberIDVal = mkuser(tag+"-member@byos.local", "Member", "member")
+	ownerIDVal = mkuser(uniqueTag+"-owner@byos.local", "Owner", "owner")
+	adminIDVal = mkuser(uniqueTag+"-admin@byos.local", "Admin", "admin")
+	memberIDVal = mkuser(uniqueTag+"-member@byos.local", "Member", "member")
 	return orgIDVal, ownerIDVal, adminIDVal, memberIDVal
 }
 

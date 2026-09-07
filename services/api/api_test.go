@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const testDSN = "postgres://byos:byos_dev_password@127.0.0.1:5432/byos?sslmode=disable"
@@ -22,12 +24,6 @@ func setupTestDB(t *testing.T) *sql.DB {
 		db.Close()
 		t.Fatalf("failed to ping database: %v", err)
 	}
-	// Truncate tables to ensure clean state for each test
-	_, err = db.Exec(`TRUNCATE organizations, users, domains, mailboxes, aliases, devices, device_mailbox_access, org_recovery_principals, storage_connections, mailbox_storage, message_metadata, search_index, scheduled_messages, outbound_queue, auto_reply_rules, delivery_log, audit_log, drafts CASCADE`)
-	if err != nil {
-		db.Close()
-		t.Fatalf("failed to truncate tables: %v", err)
-	}
 	return db
 }
 
@@ -36,13 +32,14 @@ func setupTestDB(t *testing.T) *sql.DB {
 func createTestOrgAndUsers(t *testing.T, db *sql.DB) (orgID, ownerID, adminID, memberID string) {
 	t.Helper()
 	var orgIDVal, ownerIDVal, adminIDVal, memberIDVal string
+	tag := uuid.New().String()
 
 	// Insert organization
 	err := db.QueryRow(`
 		INSERT INTO organizations (name, org_recovery_pk)
-		VALUES ('Test Org', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))
+		VALUES ($1, decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))
 		RETURNING id
-	`).Scan(&orgIDVal)
+	`, "Test Org "+tag).Scan(&orgIDVal)
 	if err != nil {
 		t.Fatalf("failed to insert org: %v", err)
 	}
@@ -51,9 +48,9 @@ func createTestOrgAndUsers(t *testing.T, db *sql.DB) (orgID, ownerID, adminID, m
 	// Insert owner user
 	err = db.QueryRow(`
 		INSERT INTO users (org_id, email, display_name, password_hash, is_active, role)
-		VALUES ($1, 'owner@byos.local', 'Owner', '$2a$10$dummyhashdummyhashdummyhashdummyhashdummyhas', true, 'owner')
+		VALUES ($1, $2, 'Owner', '$2a$10$dummyhashdummyhashdummyhashdummyhashdummyhas', true, 'owner')
 		RETURNING id
-	`, orgIDVal).Scan(&ownerIDVal)
+	`, orgIDVal, "owner-"+tag+"@byos.local").Scan(&ownerIDVal)
 	if err != nil {
 		t.Fatalf("failed to insert owner: %v", err)
 	}
@@ -62,9 +59,9 @@ func createTestOrgAndUsers(t *testing.T, db *sql.DB) (orgID, ownerID, adminID, m
 	// Insert admin user
 	err = db.QueryRow(`
 		INSERT INTO users (org_id, email, display_name, password_hash, is_active, role)
-		VALUES ($1, 'admin@byos.local', 'Admin', '$2a$10$dummyhashdummyhashdummyhashdummyhashdummyhas', true, 'admin')
+		VALUES ($1, $2, 'Admin', '$2a$10$dummyhashdummyhashdummyhashdummyhashdummyhas', true, 'admin')
 		RETURNING id
-	`, orgIDVal).Scan(&adminIDVal)
+	`, orgIDVal, "admin-"+tag+"@byos.local").Scan(&adminIDVal)
 	if err != nil {
 		t.Fatalf("failed to insert admin: %v", err)
 	}
@@ -73,9 +70,9 @@ func createTestOrgAndUsers(t *testing.T, db *sql.DB) (orgID, ownerID, adminID, m
 	// Insert member user
 	err = db.QueryRow(`
 		INSERT INTO users (org_id, email, display_name, password_hash, is_active, role)
-		VALUES ($1, 'member@byos.local', 'Member', '$2a$10$dummyhashdummyhashdummyhashdummyhashdummyhas', true, 'member')
+		VALUES ($1, $2, 'Member', '$2a$10$dummyhashdummyhashdummyhashdummyhashdummyhas', true, 'member')
 		RETURNING id
-	`, orgIDVal).Scan(&memberIDVal)
+	`, orgIDVal, "member-"+tag+"@byos.local").Scan(&memberIDVal)
 	if err != nil {
 		t.Fatalf("failed to insert member: %v", err)
 	}
