@@ -107,6 +107,7 @@ services:
       OUTBOUND_DELIVERY_PK_FILE: /run/secrets/outbound_delivery_pk
       BYOS_LEGACY_AUTH_ENABLED: "false"
       BYOS_ENV: "development"
+      BYOS_ALLOWED_ORIGINS: "${BYOS_ALLOWED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:4173,http://localhost:4173}"
       STORAGE_HEALTH_INTERVAL: "${STORAGE_HEALTH_INTERVAL:-300}"
     secrets:
       - outbound_delivery_pk
