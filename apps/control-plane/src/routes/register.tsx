@@ -2,6 +2,18 @@ import { Component, createSignal, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { register } from "../lib/api/auth";
 
+function recoveryFileSlug(value: string): string {
+  const slug = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase()
+    .slice(0, 48)
+    .replace(/-+$/g, "");
+  return slug || "organization";
+}
+
 const RegisterPage: Component = () => {
   const navigate = useNavigate();
   const [email, setEmail] = createSignal("");
@@ -20,7 +32,7 @@ const RegisterPage: Component = () => {
       const recoveryKey = new Blob([keypair.secret_key], { type: "text/plain" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(recoveryKey);
-      link.download = `byos-org-recovery-${result.org_id}.hex`;
+      link.download = `byos-recovery-key-${recoveryFileSlug(result.org_name)}-${new Date().toISOString().slice(0, 10)}.txt`;
       link.click();
       URL.revokeObjectURL(link.href);
       navigate("/dashboard", { replace: true });

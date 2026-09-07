@@ -2,7 +2,7 @@ function apiBase(): string {
   return (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_BASE || "";
 }
 
-export async function register(email: string, password: string, orgRecoveryPk: string): Promise<{ id: string; email: string; org_id: string }> {
+export async function register(email: string, password: string, orgRecoveryPk: string): Promise<{ id: string; email: string; org_id: string; org_name: string }> {
   const res = await fetch(`${apiBase()}/v1/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -15,7 +15,7 @@ export async function register(email: string, password: string, orgRecoveryPk: s
     err.status = res.status;
     throw err;
   }
-  return (await res.json()) as { id: string; email: string; org_id: string };
+  return (await res.json()) as { id: string; email: string; org_id: string; org_name: string };
 }
 
 export async function login(email: string, password: string): Promise<{ id: string; email: string; org_id: string }> {

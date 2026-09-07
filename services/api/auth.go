@@ -277,7 +277,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	setSessionCookie(w, token, expires)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{"id": userID, "email": email, "org_id": orgID})
+	json.NewEncoder(w).Encode(map[string]interface{}{"id": userID, "email": email, "org_id": orgID, "org_name": orgName})
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
