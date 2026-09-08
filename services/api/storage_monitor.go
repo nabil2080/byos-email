@@ -128,6 +128,7 @@ func testEncryptedStorage(provider, ciphertext string) string {
 		return "provider_unavailable"
 	}
 	req.Header.Set("Content-Type", "application/json")
+	setStorageInternalAuth(req)
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
 		return "provider_unavailable"

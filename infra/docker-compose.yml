@@ -109,8 +109,10 @@ services:
       BYOS_ENV: "development"
       BYOS_ALLOWED_ORIGINS: "${BYOS_ALLOWED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:4173,http://localhost:4173}"
       STORAGE_HEALTH_INTERVAL: "${STORAGE_HEALTH_INTERVAL:-300}"
+      STORAGE_WORKER_INTERNAL_KEY_FILE: /run/secrets/storage_worker_internal_key
     secrets:
       - outbound_delivery_pk
+      - storage_worker_internal_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -136,6 +138,9 @@ services:
       MAIL_ROUTER_PORT: "8081"
       CRYPTO_WORKER_URL: "http://crypto-worker:8084"
       STORAGE_WORKER_URL: "http://storage-worker:8083"
+      STORAGE_WORKER_INTERNAL_KEY_FILE: /run/secrets/storage_worker_internal_key
+    secrets:
+      - storage_worker_internal_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -163,8 +168,10 @@ services:
       MINIO_BUCKET: "byos-mailbox"
       STORAGE_WORKER_PORT: "8083"
       STORAGE_DEK_FILE: /run/secrets/storage_dek
+      STORAGE_WORKER_INTERNAL_KEY_FILE: /run/secrets/storage_worker_internal_key
     secrets:
       - storage_dek
+      - storage_worker_internal_key
     depends_on:
       minio:
         condition: service_healthy
@@ -256,6 +263,8 @@ secrets:
     file: ./secrets/byos_dkim_dek.b64
   storage_dek:
     file: ./secrets/storage_dek.b64
+  storage_worker_internal_key:
+    file: ./secrets/storage_worker_internal_key.txt
 
 volumes:
   postgres-data:

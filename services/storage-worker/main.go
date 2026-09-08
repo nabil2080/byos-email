@@ -6,12 +6,14 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -25,6 +27,46 @@ import (
 )
 
 var ErrStorageDisconnected = errors.New("storage_disconnected")
+
+// Internal caller authentication (SEC-001/SEC-002/SEC-003).
+// The storage-worker listener is internal-only (docker `expose`, no published
+// port), but network isolation alone lets any in-network caller read/write
+// mailbox objects and use the /internal/* crypto helpers. API and mail-router
+// callers present a shared secret in X-Internal-Key; the worker compares in
+// constant time. The secret is provisioned like other service secrets:
+// STORAGE_WORKER_INTERNAL_KEY or STORAGE_WORKER_INTERNAL_KEY_FILE
+// (default /run/secrets/storage_worker_internal_key). Enforcement is fail
+// closed: when the secret is missing the worker refuses the request instead
+// of silently operating unauthenticated.
+
+func loadInternalKey() string {
+	if v := strings.TrimSpace(os.Getenv("STORAGE_WORKER_INTERNAL_KEY")); v != "" {
+		return v
+	}
+	path := strings.TrimSpace(os.Getenv("STORAGE_WORKER_INTERNAL_KEY_FILE"))
+	if path == "" {
+		path = "/run/secrets/storage_worker_internal_key"
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func requireInternalKey(resp http.ResponseWriter, req *http.Request) bool {
+	expected := loadInternalKey()
+	if expected == "" {
+		http.Error(resp, "storage-worker internal auth not configured (set STORAGE_WORKER_INTERNAL_KEY or STORAGE_WORKER_INTERNAL_KEY_FILE)", http.StatusServiceUnavailable)
+		return false
+	}
+	got := strings.TrimSpace(req.Header.Get("X-Internal-Key"))
+	if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(resp, "forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
+}
 
 // Storage interface for BYOS providers
 type Storage interface {
@@ -650,6 +692,9 @@ func main() {
 	}
 
 	log.Printf("Storage worker starting on port %s (default bucket %s)", port, bucket)
+	if loadInternalKey() == "" {
+		log.Printf("ERROR: STORAGE_WORKER_INTERNAL_KEY(_FILE) not configured; /api/* and /internal/* will refuse requests until it is set")
+	}
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
@@ -763,14 +808,85 @@ func (w *StorageWorker) storeHandler(resp http.ResponseWriter, req *http.Request
 		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var storeReq StoreRequest
-	if err := json.NewDecoder(req.Body).Decode(&storeReq); err != nil {
-		http.Error(resp, "Invalid request body", http.StatusBadRequest)
+	if !requireInternalKey(resp, req) {
 		return
 	}
+
+	var objectKey, mailboxID string
+	var reader io.Reader
+	var size int64
+	var isOctetStream bool
+
+	// BUG-003: parse the media type instead of exact-matching the header so
+	// variants like `application/octet-stream; name="f.enc"` still take the
+	// raw-upload path instead of failing JSON decode.
+	if mediaType, _, _ := mime.ParseMediaType(req.Header.Get("Content-Type")); mediaType == "application/octet-stream" {
+		isOctetStream = true
+		objectKey = req.Header.Get("X-Object-Key")
+		mailboxID = req.Header.Get("X-Mailbox-ID")
+		reader = req.Body
+		size = req.ContentLength
+		// Octet-stream uploads must always carry an explicit mailbox scope so
+		// the object key can be constrained to that mailbox's prefix.
+		if strings.TrimSpace(mailboxID) == "" {
+			http.Error(resp, "X-Mailbox-ID required", http.StatusBadRequest)
+			return
+		}
+	} else {
+		var storeReq StoreRequest
+		if err := json.NewDecoder(req.Body).Decode(&storeReq); err != nil {
+			http.Error(resp, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		objectKey = storeReq.ObjectKey
+		mailboxID = storeReq.MailboxID
+		reader = bytes.NewReader(storeReq.Data)
+		size = int64(len(storeReq.Data))
+		// SEC-004: no bucket override on store. The bucket always comes from
+		// the mailbox's storage connection (or the worker default), so even
+		// an authenticated caller cannot redirect writes to arbitrary buckets
+		// via X-Bucket/StoreRequest.Bucket.
+	}
+
+	// Validate object key and sizes before touching storage (BUG-002/SEC-002).
+	objectKey = strings.TrimSpace(objectKey)
+	if objectKey == "" {
+		http.Error(resp, "object_key required", http.StatusBadRequest)
+		return
+	}
+	if strings.Contains(objectKey, "..") || strings.HasPrefix(objectKey, "/") || strings.Contains(objectKey, "\\") {
+		http.Error(resp, "invalid object_key", http.StatusBadRequest)
+		return
+	}
+	if size < 0 {
+		// Downstream providers (notably GoogleDriveStorage) require an exact
+		// non-negative size; chunked/unknown lengths would fail with
+		// "object size mismatch" after partial writes.
+		http.Error(resp, "Content-Length required", http.StatusLengthRequired)
+		return
+	}
+	const maxStoreObjectSize = 40 * 1024 * 1024
+	if size > maxStoreObjectSize {
+		http.Error(resp, "object exceeds maximum size limit of 40 MB", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if strings.TrimSpace(mailboxID) != "" {
+		// Constrain writes to the caller's mailbox prefix to prevent
+		// arbitrary cross-mailbox object writes via forged headers.
+		expectedPrefix := "mailboxes/" + strings.TrimSpace(mailboxID) + "/"
+		if !strings.HasPrefix(objectKey, expectedPrefix) {
+			http.Error(resp, "object_key must be within caller mailbox prefix", http.StatusBadRequest)
+			return
+		}
+	} else if isOctetStream {
+		// Already rejected above; defensive: never allow unscoped raw writes.
+		http.Error(resp, "X-Mailbox-ID required", http.StatusBadRequest)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Second)
 	defer cancel()
-	st, bucket, err := w.getStorageForMailbox(ctx, storeReq.MailboxID)
+	st, bucket, err := w.getStorageForMailbox(ctx, mailboxID)
 	if err != nil {
 		if errors.Is(err, ErrStorageDisconnected) {
 			resp.Header().Set("Content-Type", "application/json")
@@ -785,19 +901,18 @@ func (w *StorageWorker) storeHandler(resp http.ResponseWriter, req *http.Request
 		http.Error(resp, "No storage available", http.StatusInternalServerError)
 		return
 	}
-	if storeReq.Bucket != "" {
-		bucket = storeReq.Bucket
-	}
-	reader := bytes.NewReader(storeReq.Data)
-	if err := st.PutObject(ctx, bucket, storeReq.ObjectKey, reader, int64(len(storeReq.Data))); err != nil {
+	if err := st.PutObject(ctx, bucket, objectKey, reader, size); err != nil {
 		http.Error(resp, fmt.Sprintf("Failed to store object: %v", err), http.StatusInternalServerError)
 		return
 	}
 	resp.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(resp).Encode(map[string]string{"status": "stored", "object_key": storeReq.ObjectKey})
+	json.NewEncoder(resp).Encode(map[string]string{"status": "stored", "object_key": objectKey})
 }
 
 func (w *StorageWorker) retrieveHandler(resp http.ResponseWriter, req *http.Request) {
+	if !requireInternalKey(resp, req) {
+		return
+	}
 	if req.Method != http.MethodPost {
 		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -846,6 +961,9 @@ func (w *StorageWorker) retrieveHandler(resp http.ResponseWriter, req *http.Requ
 }
 
 func (w *StorageWorker) deleteHandler(resp http.ResponseWriter, req *http.Request) {
+	if !requireInternalKey(resp, req) {
+		return
+	}
 	if req.Method != http.MethodPost {
 		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -884,6 +1002,9 @@ func (w *StorageWorker) deleteHandler(resp http.ResponseWriter, req *http.Reques
 }
 
 func (w *StorageWorker) listHandler(resp http.ResponseWriter, req *http.Request) {
+	if !requireInternalKey(resp, req) {
+		return
+	}
 	if req.Method != http.MethodGet && req.Method != http.MethodPost {
 		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -937,6 +1058,9 @@ func (w *StorageWorker) listHandler(resp http.ResponseWriter, req *http.Request)
 }
 
 func (w *StorageWorker) headHandler(resp http.ResponseWriter, req *http.Request) {
+	if !requireInternalKey(resp, req) {
+		return
+	}
 	if req.Method != http.MethodPost {
 		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -978,6 +1102,9 @@ func (w *StorageWorker) headHandler(resp http.ResponseWriter, req *http.Request)
 // Internal encryption endpoints
 
 func (w *StorageWorker) encryptHandler(resp http.ResponseWriter, req *http.Request) {
+	if !requireInternalKey(resp, req) {
+		return
+	}
 	if req.Method != http.MethodPost {
 		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1004,6 +1131,9 @@ func (w *StorageWorker) encryptHandler(resp http.ResponseWriter, req *http.Reque
 }
 
 func (w *StorageWorker) decryptHandler(resp http.ResponseWriter, req *http.Request) {
+	if !requireInternalKey(resp, req) {
+		return
+	}
 	if req.Method != http.MethodPost {
 		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1030,6 +1160,9 @@ func (w *StorageWorker) decryptHandler(resp http.ResponseWriter, req *http.Reque
 }
 
 func (w *StorageWorker) testHandler(resp http.ResponseWriter, req *http.Request) {
+	if !requireInternalKey(resp, req) {
+		return
+	}
 	if req.Method != http.MethodPost {
 		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1060,6 +1193,9 @@ func (w *StorageWorker) testHandler(resp http.ResponseWriter, req *http.Request)
 }
 
 func (w *StorageWorker) testEncryptedHandler(resp http.ResponseWriter, req *http.Request) {
+	if !requireInternalKey(resp, req) {
+		return
+	}
 	if req.Method != http.MethodPost {
 		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1124,6 +1260,9 @@ func (w *StorageWorker) testEncryptedHandler(resp http.ResponseWriter, req *http
 }
 
 func (w *StorageWorker) migrateEncryptedHandler(resp http.ResponseWriter, req *http.Request) {
+	if !requireInternalKey(resp, req) {
+		return
+	}
 	if req.Method != http.MethodPost {
 		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1200,6 +1339,9 @@ func (w *StorageWorker) migrateEncryptedHandler(resp http.ResponseWriter, req *h
 }
 
 func (w *StorageWorker) googleDriveRefreshHandler(resp http.ResponseWriter, req *http.Request) {
+	if !requireInternalKey(resp, req) {
+		return
+	}
 	if req.Method != http.MethodPost {
 		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
 		return

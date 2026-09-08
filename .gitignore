@@ -43,3 +43,6 @@ infra/postgres/dev-bootstrap/
 # Docker secrets (contain private keys, never commit)
 infra/secrets/
 
+# Astro generated cache (contains local pid/startedAt dev artifacts)
+**/.astro/
+

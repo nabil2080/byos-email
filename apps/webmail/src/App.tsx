@@ -55,6 +55,7 @@ const App: Component = () => {
   const [scheduledTime, setScheduledTime] = createSignal("");
   const [composeStatus, setComposeStatus] = createSignal<string | null>(null);
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
+  const [composeAttachments, setComposeAttachments] = createSignal<AttachmentItem[]>([]);
 
   onMount(async () => {
     setIsLoading(true);
@@ -148,6 +149,32 @@ const App: Component = () => {
     setIsDecrypting(false);
   }
 
+  async function handleAttachmentSelected(e: Event) {
+    const input = e.target as HTMLInputElement;
+    // SEC-001: attachment uploads are disabled until a real per-mailbox key
+    // source exists. A previous prototype encrypted with a constant
+    // hard-coded key, which provides no security. Block here so no
+    // ciphertext created under a known key can reach storage.
+    input.value = ""; // reset
+    setErrorMessage(
+      "Attachment uploads are disabled in this build: mailbox encryption key exchange is not configured yet."
+    );
+    setComposeStatus(null);
+    return;
+  }
+
+  function removeComposeAttachment(id: string) {
+    setComposeAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  function clearComposeForm() {
+    setComposeTo("");
+    setComposeSubject("");
+    setComposeBody("");
+    setScheduledTime("");
+    setComposeAttachments([]);
+  }
+
   async function handleSend(e: Event) {
     e.preventDefault();
     const to = composeTo().trim();
@@ -192,6 +219,8 @@ const App: Component = () => {
         throw new Error("Crypto core returned an incomplete outbound envelope");
       }
 
+      const attIDs = composeAttachments().map((a) => a.id);
+
       if (scheduledTime()) {
         await scheduleOutbound({
           reservation_id: reservation.reservation_id,
@@ -204,6 +233,7 @@ const App: Component = () => {
           aad_version: reservation.aad_version,
           encryption_iv: encrypted.iv,
           scheduled_at: new Date(scheduledTime()).toISOString(),
+          attachment_ids: attIDs.length > 0 ? attIDs : undefined,
         });
       } else {
         await sendOutbound({
@@ -216,15 +246,13 @@ const App: Component = () => {
           encryption_version: reservation.encryption_version,
           aad_version: reservation.aad_version,
           encryption_iv: encrypted.iv,
+          attachment_ids: attIDs.length > 0 ? attIDs : undefined,
         });
       }
 
       setComposeStatus(scheduledTime() ? "Encrypted message scheduled." : "Encrypted message queued for delivery.");
       setComposeOpen(false);
-      setComposeTo("");
-      setComposeSubject("");
-      setComposeBody("");
-      setScheduledTime("");
+      clearComposeForm();
     } catch (err) {
       setErrorMessage(`Failed to send securely: ${err instanceof Error ? err.message : "unknown error"}`);
       setComposeStatus(null);
@@ -343,7 +371,10 @@ const App: Component = () => {
         {/* Compose Button */}
         <div class="p-4">
           <button
-            onClick={() => setComposeOpen(true)}
+            onClick={() => {
+              setComposeAttachments([]);
+              setComposeOpen(true);
+            }}
             class="w-full rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-sky-500 transition-all flex items-center justify-center gap-2"
           >
             <span>✏️</span> Compose Email
@@ -501,7 +532,7 @@ const App: Component = () => {
               <h3 class="font-semibold text-sm flex items-center gap-2">
                 <span>✏️</span> New Encrypted Message
               </h3>
-              <button onClick={() => setComposeOpen(false)} class="text-slate-400 hover:text-white text-lg">
+              <button onClick={() => { setComposeOpen(false); clearComposeForm(); setComposeStatus(null); }} class="text-slate-400 hover:text-white text-lg">
                 ✕
               </button>
             </div>
@@ -555,6 +586,41 @@ const App: Component = () => {
                 />
               </div>
 
+              {/* Attachments Section — uploads disabled until a real
+                  per-mailbox key source exists (SEC-001). No "encrypted"
+                  claim is made while uploads are blocked. */}
+              <div class="rounded-lg border border-slate-200 p-3 bg-slate-50">
+                <label class="block text-xs font-medium text-slate-700 mb-2">Attachments (Unavailable — encryption key not configured)</label>
+                <input
+                  type="file"
+                  multiple
+                  disabled
+                  onChange={handleAttachmentSelected}
+                  class="block w-full text-xs text-slate-500 file:mr-4 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-sky-100 file:text-sky-700 hover:file:bg-sky-200 disabled:opacity-50"
+                />
+                <span class="text-[11px] text-slate-500 mt-1 block">
+                  Attachment uploads are disabled in this build until mailbox key exchange is configured.
+                </span>
+                <Show when={composeAttachments().length > 0}>
+                  <ul class="mt-2 space-y-1 bg-white border border-slate-200 rounded-md p-2">
+                    <For each={composeAttachments()}>
+                      {(att) => (
+                        <li class="text-xs text-slate-600 flex items-center justify-between">
+                          <span class="truncate pr-4">{att.filename} ({Math.round(att.size_bytes / 1024)} KB)</span>
+                          <button
+                            type="button"
+                            onClick={() => removeComposeAttachment(att.id)}
+                            class="text-red-500 hover:text-red-700 font-mono flex-shrink-0"
+                          >
+                            Remove
+                          </button>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Show>
+              </div>
+
               {/* Scheduled Send Option */}
               <div class="rounded-lg bg-slate-50 p-3 border border-slate-200">
                 <label class="block text-xs font-medium text-slate-700">
@@ -582,7 +648,7 @@ const App: Component = () => {
                 <div class="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setComposeOpen(false)}
+                    onClick={() => { setComposeOpen(false); clearComposeForm(); setComposeStatus(null); }}
                     class="rounded-md border border-slate-300 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
                   >
                     Cancel

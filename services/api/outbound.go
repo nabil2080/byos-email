@@ -53,15 +53,16 @@ type OutboundPrepareResponse struct {
 }
 
 type OutboundSendRequest struct {
-	ReservationID     string `json:"reservation_id"`
-	MailboxID         string `json:"mailbox_id"`
-	Recipient         string `json:"recipient"`
-	EncryptedMessage  string `json:"encrypted_message"`
-	SendTokenWrapped  string `json:"send_token_wrapped"`
-	OutboxSeq         int64  `json:"outbox_seq"`
-	EncryptionVersion int    `json:"encryption_version"`
-	AADVersion        int    `json:"aad_version"`
-	EncryptionIV      string `json:"encryption_iv"`
+	ReservationID     string   `json:"reservation_id"`
+	MailboxID         string   `json:"mailbox_id"`
+	Recipient         string   `json:"recipient"`
+	EncryptedMessage  string   `json:"encrypted_message"`
+	SendTokenWrapped  string   `json:"send_token_wrapped"`
+	OutboxSeq         int64    `json:"outbox_seq"`
+	EncryptionVersion int      `json:"encryption_version"`
+	AADVersion        int      `json:"aad_version"`
+	EncryptionIV      string   `json:"encryption_iv"`
+	AttachmentIDs     []string `json:"attachment_ids,omitempty"`
 }
 
 type OutboundSendResponse struct {
@@ -70,16 +71,17 @@ type OutboundSendResponse struct {
 }
 
 type OutboundScheduleRequest struct {
-	ReservationID     string `json:"reservation_id"`
-	MailboxID         string `json:"mailbox_id"`
-	Recipient         string `json:"recipient"`
-	EncryptedMessage  string `json:"encrypted_message"`
-	SendTokenWrapped  string `json:"send_token_wrapped"`
-	OutboxSeq         int64  `json:"outbox_seq"`
-	EncryptionVersion int    `json:"encryption_version"`
-	AADVersion        int    `json:"aad_version"`
-	EncryptionIV      string `json:"encryption_iv"`
-	ScheduledAt       string `json:"scheduled_at"`
+	ReservationID     string   `json:"reservation_id"`
+	MailboxID         string   `json:"mailbox_id"`
+	Recipient         string   `json:"recipient"`
+	EncryptedMessage  string   `json:"encrypted_message"`
+	SendTokenWrapped  string   `json:"send_token_wrapped"`
+	OutboxSeq         int64    `json:"outbox_seq"`
+	EncryptionVersion int      `json:"encryption_version"`
+	AADVersion        int      `json:"aad_version"`
+	EncryptionIV      string   `json:"encryption_iv"`
+	ScheduledAt       string   `json:"scheduled_at"`
+	AttachmentIDs     []string `json:"attachment_ids,omitempty"`
 }
 
 type OutboundScheduleResponse struct {
@@ -377,6 +379,33 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to queue message", http.StatusInternalServerError)
 		return
 	}
+	if len(req.AttachmentIDs) > 0 {
+		// BUG-004 hardening: attachments.message_id stores the outbound
+		// delivery_id (text column, see 020_attachments.sql). There is no
+		// separate delivery_id column by design for V1; keep the identifier
+		// consistent between send and schedule paths. Validate UUID shape,
+		// scope to the same mailbox, and only link currently-unlinked rows
+		// so one message cannot hijack another message's attachments.
+		for _, id := range req.AttachmentIDs {
+			if _, err := uuid.Parse(id); err != nil {
+				http.Error(w, "attachment_ids must be UUIDs", http.StatusBadRequest)
+				return
+			}
+		}
+		// BUG-002: check the link result before consuming the reservation.
+		// A short count means an ID is unknown, belongs to another mailbox,
+		// or is already linked elsewhere; fail loud instead of queuing a
+		// message whose attachments silently stayed unlinked.
+		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, req.AttachmentIDs, req.MailboxID)
+		if linkErr != nil {
+			http.Error(w, "failed to link attachments", http.StatusInternalServerError)
+			return
+		}
+		if linkRes.RowsAffected() != int64(len(req.AttachmentIDs)) {
+			http.Error(w, "attachment not found, already linked, or not in this mailbox", http.StatusBadRequest)
+			return
+		}
+	}
 	_, err = tx.Exec(ctx, `UPDATE outbound_reservations SET status='consumed', delivery_id=$1 WHERE reservation_id=$2`, deliveryID, req.ReservationID)
 	if err != nil {
 		http.Error(w, "failed to consume reservation", http.StatusInternalServerError)
@@ -427,6 +456,7 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		EncryptionVersion: req.EncryptionVersion,
 		AADVersion:        req.AADVersion,
 		EncryptionIV:      req.EncryptionIV,
+		AttachmentIDs:     req.AttachmentIDs,
 	}
 	encryptedMsg, sendTokenBytes, encIV, errMsg, errStatus := validateOutboundEnvelope(sendReq)
 	if errStatus != 0 {
@@ -526,6 +556,27 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, "failed to schedule message", http.StatusInternalServerError)
 		return
+	}
+	// BUG-003: propagate attachment IDs on the schedule path, mirroring the
+	// send handler. Uses the same delivery_id-as-message_id convention (see
+	// note above) so scheduled messages list attachments consistently.
+	if len(req.AttachmentIDs) > 0 {
+		for _, id := range req.AttachmentIDs {
+			if _, err := uuid.Parse(id); err != nil {
+				http.Error(w, "attachment_ids must be UUIDs", http.StatusBadRequest)
+				return
+			}
+		}
+		// BUG-002: same strict link check as the send handler (see above).
+		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, req.AttachmentIDs, req.MailboxID)
+		if linkErr != nil {
+			http.Error(w, "failed to link attachments", http.StatusInternalServerError)
+			return
+		}
+		if linkRes.RowsAffected() != int64(len(req.AttachmentIDs)) {
+			http.Error(w, "attachment not found, already linked, or not in this mailbox", http.StatusBadRequest)
+			return
+		}
 	}
 	_, err = tx.Exec(ctx, `UPDATE outbound_reservations SET status='consumed', delivery_id=$1 WHERE reservation_id=$2`, deliveryID, req.ReservationID)
 	if err != nil {

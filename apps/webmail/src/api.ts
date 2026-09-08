@@ -77,6 +77,7 @@ export interface SendPayload {
   encryption_version: number;
   aad_version: number;
   encryption_iv: string;
+  attachment_ids?: string[];
 }
 
 export interface SchedulePayload extends SendPayload {

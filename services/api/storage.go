@@ -287,6 +287,7 @@ func storageMigrationCopyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	setStorageInternalAuth(req)
 	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
 	if err != nil {
 		_, _ = conn.Exec(ctx, `UPDATE storage_migrations SET status='failed', error_code='worker_unavailable', updated_at=now() WHERE id=$1`, migrationID)
@@ -402,6 +403,7 @@ func storageMigrationRetryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	setStorageInternalAuth(req)
 	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
 	if err != nil {
 		_, _ = conn.Exec(ctx, `UPDATE storage_migrations SET status='failed', error_code='worker_unavailable', updated_at=now() WHERE id=$1`, migrationID)
@@ -585,6 +587,36 @@ func storageWorkerURL() string {
 	return "http://storage-worker:8083"
 }
 
+// storageInternalKey loads the shared secret the API presents to
+// storage-worker as X-Internal-Key (SEC-002). Provisioned like other service
+// secrets: STORAGE_WORKER_INTERNAL_KEY or STORAGE_WORKER_INTERNAL_KEY_FILE
+// (default /run/secrets/storage_worker_internal_key, see
+// infra/docker-compose.yml). Empty when unconfigured (bare local runs, unit
+// tests); callers simply omit the header in that case.
+func storageInternalKey() string {
+	if v := strings.TrimSpace(os.Getenv("STORAGE_WORKER_INTERNAL_KEY")); v != "" {
+		return v
+	}
+	path := strings.TrimSpace(os.Getenv("STORAGE_WORKER_INTERNAL_KEY_FILE"))
+	if path == "" {
+		path = "/run/secrets/storage_worker_internal_key"
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// setStorageInternalAuth attaches the internal caller credential, if one is
+// configured. No-op when unconfigured so local dev without the secret file
+// keeps working.
+func setStorageInternalAuth(req *http.Request) {
+	if k := storageInternalKey(); k != "" {
+		req.Header.Set("X-Internal-Key", k)
+	}
+}
+
 // encryptStorageConfig sends plaintext config JSON to storage-worker for
 // DEK encryption. The API never sees the DEK.
 func encryptStorageConfig(ctx context.Context, configJSON string) (string, error) {
@@ -594,6 +626,7 @@ func encryptStorageConfig(ctx context.Context, configJSON string) (string, error
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	setStorageInternalAuth(req)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1095,6 +1128,7 @@ func storageConnectionTestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	testReq.Header.Set("Content-Type", "application/json")
+	setStorageInternalAuth(testReq)
 	testClient := &http.Client{Timeout: 15 * time.Second}
 	testResp, err := testClient.Do(testReq)
 	if err != nil {

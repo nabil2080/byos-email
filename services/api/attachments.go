@@ -103,6 +103,7 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 				retReq, err := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/retrieve", bytes.NewReader(retPayload))
 				if err == nil {
 					retReq.Header.Set("Content-Type", "application/json")
+					setStorageInternalAuth(retReq)
 					client := &http.Client{Timeout: 30 * time.Second}
 					retResp, err := client.Do(retReq)
 					if err == nil {
@@ -110,13 +111,22 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 						if retResp.StatusCode == http.StatusOK {
 							var retData struct {
 								Data []byte `json:"data"`
+								Size int64  `json:"size"`
 							}
-							if err := json.NewDecoder(retResp.Body).Decode(&retData); err == nil && len(retData.Data) > 0 {
+							// SEC-005: verify the returned bytes against DB
+							// metadata instead of serving any non-empty body.
+							// A size mismatch indicates misrouting or a
+							// storage bug; fail loud rather than serve bytes
+							// that do not belong to this attachment.
+							if err := json.NewDecoder(retResp.Body).Decode(&retData); err == nil && len(retData.Data) > 0 &&
+								int64(len(retData.Data)) == a.SizeBytes && retData.Size == a.SizeBytes {
 								w.Header().Set("Content-Type", a.ContentType)
 								w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", a.Filename))
 								w.Write(retData.Data)
 								return
 							}
+							http.Error(w, "attachment content verification failed", http.StatusBadGateway)
+							return
 						}
 					}
 				}
@@ -187,19 +197,22 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "attachment exceeds maximum size limit of 40 MB", http.StatusRequestEntityTooLarge)
 				return
 			}
-
-			fileBytes, err := io.ReadAll(file)
-			if err != nil {
-				http.Error(w, "failed to read uploaded file", http.StatusBadRequest)
-				return
-			}
-
-			// Validate Section 12 AES-GCM envelope before accepting. Plaintext
-			// uploads must be rejected and must not reach storage-worker.
-			if len(fileBytes) < 29 || fileBytes[0] != 0x01 {
+			if header.Size >= 0 && header.Size < 29 {
 				http.Error(w, "invalid encrypted attachment envelope", http.StatusBadRequest)
 				return
 			}
+
+			// Validate Section 12 AES-GCM envelope header (first 29 bytes) before accepting.
+			// Plaintext uploads must be rejected and must not reach storage-worker.
+			headerBytes := make([]byte, 29)
+			n, err := io.ReadFull(file, headerBytes)
+			if err != nil || n < 29 || headerBytes[0] != 0x01 {
+				http.Error(w, "invalid encrypted attachment envelope", http.StatusBadRequest)
+				return
+			}
+
+			// Reconstruct stream with header read back in
+			streamReader := io.MultiReader(bytes.NewReader(headerBytes), file)
 
 			messageID := strings.TrimSpace(r.FormValue("message_id"))
 			filename := filepath.Base(header.Filename)
@@ -215,26 +228,40 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 			attID := uuid.New().String()
 			storageKey := fmt.Sprintf("mailboxes/%s/attachments/%s/%s", mailboxID, attID, filename)
 
-			// Forward bytes to customer storage via storage-worker
-			storePayload, _ := json.Marshal(map[string]interface{}{
-				"object_key": storageKey,
-				"data":       fileBytes,
-				"mailbox_id": mailboxID,
-			})
-			storeReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/store", bytes.NewReader(storePayload))
-			if reqErr == nil {
-				storeReq.Header.Set("Content-Type", "application/json")
-				client := &http.Client{Timeout: 30 * time.Second}
-				storeResp, err := client.Do(storeReq)
-				if err != nil {
-					http.Error(w, "storage-worker unavailable", http.StatusBadGateway)
-					return
-				}
-				defer storeResp.Body.Close()
-				if storeResp.StatusCode != http.StatusOK {
-					http.Error(w, "failed to store encrypted attachment", http.StatusBadGateway)
-					return
-				}
+			// Forward bytes to customer storage via storage-worker streaming connection.
+			// Total stream size equals the original multipart file size (headerBytes
+			// were read back into streamReader), so ContentLength must be header.Size.
+			// BUG-004 note: Go populates multipart FileHeader.Size while parsing the
+			// form, but proxies/clients that yield an unknown size (Size < 0) are
+			// rejected here because downstream providers (e.g. GoogleDriveStorage)
+			// require an exact non-negative size.
+			if header.Size < 0 {
+				http.Error(w, "attachment size unknown, upload rejected", http.StatusBadRequest)
+				return
+			}
+			storeReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/store", streamReader)
+			if reqErr != nil {
+				// BUG-001: never create a DB row pointing at an object that was
+				// never sent; without a store request there is nothing to link.
+				http.Error(w, "failed to prepare storage request", http.StatusInternalServerError)
+				return
+			}
+			storeReq.Header.Set("Content-Type", "application/octet-stream")
+			storeReq.Header.Set("X-Object-Key", storageKey)
+			storeReq.Header.Set("X-Mailbox-ID", mailboxID)
+			setStorageInternalAuth(storeReq)
+			storeReq.ContentLength = header.Size
+
+			client := &http.Client{Timeout: 30 * time.Second}
+			storeResp, err := client.Do(storeReq)
+			if err != nil {
+				http.Error(w, "storage-worker unavailable", http.StatusBadGateway)
+				return
+			}
+			defer storeResp.Body.Close()
+			if storeResp.StatusCode != http.StatusOK {
+				http.Error(w, "failed to store encrypted attachment", http.StatusBadGateway)
+				return
 			}
 
 			var msgIDPtr *string
@@ -247,7 +274,7 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 				INSERT INTO attachments (id, mailbox_id, message_id, filename, content_type, size_bytes, storage_key, encrypted)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, true)
 				RETURNING created_at
-			`, attID, mailboxID, msgIDPtr, filename, cType, int64(len(fileBytes)), storageKey).Scan(&createdAt)
+			`, attID, mailboxID, msgIDPtr, filename, cType, header.Size, storageKey).Scan(&createdAt)
 			if err != nil {
 				http.Error(w, "failed to record attachment", http.StatusInternalServerError)
 				return
@@ -255,7 +282,7 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 
 			auditLog(ctx, conn, userOrgID, userID, "upload_attachment", "attachment", attID, map[string]interface{}{
 				"filename":   filename,
-				"size_bytes": len(fileBytes),
+				"size_bytes": header.Size,
 			})
 
 			w.Header().Set("Content-Type", "application/json")
@@ -266,7 +293,7 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 				MessageID:   messageID,
 				Filename:    filename,
 				ContentType: cType,
-				SizeBytes:   int64(len(fileBytes)),
+				SizeBytes:   header.Size,
 				Encrypted:   true,
 				CreatedAt:   createdAt,
 			})

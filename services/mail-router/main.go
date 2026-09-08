@@ -24,11 +24,31 @@ import (
 var ErrStorageDisconnected = errors.New("storage_disconnected")
 
 type Config struct {
-	DatabaseURL      string
-	Port             string
-	HealthPort       string
-	CryptoWorkerURL  string
-	StorageWorkerURL string
+	DatabaseURL        string
+	Port               string
+	HealthPort         string
+	CryptoWorkerURL    string
+	StorageWorkerURL   string
+	StorageInternalKey string
+}
+
+// loadStorageInternalKey reads the shared secret presented to storage-worker
+// as X-Internal-Key (same convention as services/api). Provisioned via
+// STORAGE_WORKER_INTERNAL_KEY or STORAGE_WORKER_INTERNAL_KEY_FILE
+// (default /run/secrets/storage_worker_internal_key).
+func loadStorageInternalKey() string {
+	if v := strings.TrimSpace(os.Getenv("STORAGE_WORKER_INTERNAL_KEY")); v != "" {
+		return v
+	}
+	path := strings.TrimSpace(os.Getenv("STORAGE_WORKER_INTERNAL_KEY_FILE"))
+	if path == "" {
+		path = "/run/secrets/storage_worker_internal_key"
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 type App struct {
@@ -105,11 +125,12 @@ type latestMessageResponse struct {
 
 func main() {
 	cfg := Config{
-		DatabaseURL:      envOrDefault("DATABASE_URL", "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"),
-		Port:             envOrDefault("MAIL_ROUTER_PORT", "8081"),
-		HealthPort:       envOrDefault("MAIL_ROUTER_HEALTH_PORT", "8082"),
-		CryptoWorkerURL:  strings.TrimRight(envOrDefault("CRYPTO_WORKER_URL", "http://localhost:8084"), "/"),
-		StorageWorkerURL: strings.TrimRight(envOrDefault("STORAGE_WORKER_URL", "http://localhost:8083"), "/"),
+		DatabaseURL:        envOrDefault("DATABASE_URL", "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"),
+		Port:               envOrDefault("MAIL_ROUTER_PORT", "8081"),
+		HealthPort:         envOrDefault("MAIL_ROUTER_HEALTH_PORT", "8082"),
+		CryptoWorkerURL:    strings.TrimRight(envOrDefault("CRYPTO_WORKER_URL", "http://localhost:8084"), "/"),
+		StorageWorkerURL:   strings.TrimRight(envOrDefault("STORAGE_WORKER_URL", "http://localhost:8083"), "/"),
+		StorageInternalKey: loadStorageInternalKey(),
 	}
 
 	ctx := context.Background()
@@ -303,7 +324,9 @@ func (a *App) storeCiphertext(ctx context.Context, objectKey string, ciphertext 
 		},
 	}
 	var resp map[string]string
-	if err := postJSON(ctx, a.httpClient, a.cfg.StorageWorkerURL+"/api/store", payload, &resp); err != nil {
+	if err := postJSON(ctx, a.httpClient, a.cfg.StorageWorkerURL+"/api/store", payload, &resp, map[string]string{
+		"X-Internal-Key": a.cfg.StorageInternalKey,
+	}); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "storage_disconnected") {
 			return ErrStorageDisconnected
 		}
@@ -322,7 +345,7 @@ func (a *App) encryptMessage(ctx context.Context, route mailboxRoute, messageSeq
 		MailboxSKVersion: route.MailboxSKVersion,
 	}
 	var resp cryptoEncryptResponse
-	if err := postJSON(ctx, a.httpClient, a.cfg.CryptoWorkerURL+"/v1/encrypt", payload, &resp); err != nil {
+	if err := postJSON(ctx, a.httpClient, a.cfg.CryptoWorkerURL+"/v1/encrypt", payload, &resp, nil); err != nil {
 		return cryptoEncryptResponse{}, fmt.Errorf("crypto-worker encrypt: %w", err)
 	}
 	if resp.Ciphertext == "" || resp.ContentKeyHPKEWrapped == "" || resp.EncryptionIV == "" || resp.BundleHash == "" {
@@ -372,7 +395,7 @@ func (a *App) latestMessageHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msg)
 }
 
-func postJSON(ctx context.Context, client *http.Client, url string, payload any, target any) error {
+func postJSON(ctx context.Context, client *http.Client, url string, payload any, target any, headers map[string]string) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -382,6 +405,11 @@ func postJSON(ctx context.Context, client *http.Client, url string, payload any,
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		if strings.TrimSpace(v) != "" {
+			req.Header.Set(k, v)
+		}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
