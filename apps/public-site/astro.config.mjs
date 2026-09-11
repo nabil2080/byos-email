@@ -5,7 +5,9 @@ export default defineConfig({
   vite: {
     plugins: [tailwindcss()],
     css: {
-      postcss: false,
+      postcss: {
+        plugins: [],
+      },
     },
   },
   server: {
