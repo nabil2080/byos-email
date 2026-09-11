@@ -96,6 +96,7 @@ const App: Component = () => {
   const [unlockMnemonic, setUnlockMnemonic] = createSignal("");
   const [unlocking, setUnlocking] = createSignal(false);
   const [unlockError, setUnlockError] = createSignal<string | null>(null);
+  const [storageErrorBanner, setStorageErrorBanner] = createSignal<string | null>(null);
 
   // Per-mailbox signature draft (device-local; see signature.ts).
   const [signatureText, setSignatureText] = createSignal("");
@@ -223,6 +224,7 @@ const App: Component = () => {
 
   async function loadMailboxData(mailboxId: string) {
     try {
+      setStorageErrorBanner(null);
       const [draftsList, messageList] = await Promise.all([
         fetchDrafts(mailboxId),
         fetchMessages(mailboxId),
@@ -284,6 +286,10 @@ const App: Component = () => {
       setMessages([...realMessages, ...draftMessages]);
     } catch (err) {
       console.warn("Error loading mailbox data:", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("503") || msg.includes("storage_disconnected") || msg.includes("storage disconnected")) {
+        setStorageErrorBanner("Mailbox storage is currently disconnected or unreachable. Inbound emails are held safely at the mail transfer agent and will deliver automatically once storage is reconnected.");
+      }
     }
   }
 
@@ -514,6 +520,10 @@ const App: Component = () => {
       }
     } catch (err) {
       console.error("Failed to open message:", err);
+      const msgStr = err instanceof Error ? err.message : String(err);
+      if (msgStr.includes("503") || msgStr.includes("storage_disconnected") || msgStr.includes("storage disconnected")) {
+        setStorageErrorBanner("Mailbox storage is currently disconnected or unreachable. Inbound emails are held safely at the mail transfer agent and will deliver automatically once storage is reconnected.");
+      }
       setDecryptedContent(
         `Failed to open message: ${err instanceof Error ? err.message : "unknown error"}`
       );
@@ -1195,6 +1205,17 @@ const App: Component = () => {
 
       {/* ── Middle: Message List ── */}
       <section class="w-96 flex-shrink-0 bg-white border-r border-slate-200 flex flex-col">
+        {/* Storage Disconnected / Outage Banner (Section 11) */}
+        <Show when={storageErrorBanner()}>
+          <div role="alert" class="p-3 bg-amber-50 border-b border-amber-200 text-xs text-amber-800 flex items-start justify-between gap-2">
+            <div class="flex items-start gap-1.5">
+              <span class="text-amber-600 font-bold">⚠️</span>
+              <span>{storageErrorBanner()}</span>
+            </div>
+            <button onClick={() => setStorageErrorBanner(null)} class="text-amber-700 hover:text-amber-900 font-semibold text-[10px]">✕</button>
+          </div>
+        </Show>
+
         {/* Search Header */}
         <div class="p-4 border-b border-slate-200 bg-slate-50">
           <div class="relative">

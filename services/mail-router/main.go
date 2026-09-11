@@ -604,7 +604,7 @@ func lookupMailboxRoute(ctx context.Context, tx pgx.Tx, domain, localPart string
 		}
 		return route, nil
 	}
-	// If not found, check if it is due to disconnected storage (explicit 503)
+	// If not found, check if it is due to disconnected or error storage (explicit 503 for MTA retry)
 	var scStatus string
 	err2 := tx.QueryRow(ctx, `
 		SELECT sc.status
@@ -615,7 +615,7 @@ func lookupMailboxRoute(ctx context.Context, tx pgx.Tx, domain, localPart string
 		WHERE lower(d.name) = lower($1)
 		  AND lower(m.local_part) = lower($2)
 		LIMIT 1`, domain, localPart).Scan(&scStatus)
-	if err2 == nil && scStatus == "deleted" {
+	if err2 == nil && (scStatus == "deleted" || scStatus == "error") {
 		return mailboxRoute{}, ErrStorageDisconnected
 	}
 	return mailboxRoute{}, fmt.Errorf("mailbox route not found for %s@%s: %w", localPart, domain, err)
