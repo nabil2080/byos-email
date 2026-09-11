@@ -1,1 +1,77 @@
 @import "tailwindcss";
+
+@layer base {
+  :root {
+    --cloud-dancer: #F0EEE9;
+    --mocha-mousse: #A47764;
+    --mocha-mousse-hover: #B88B77;
+    --mocha-mousse-light: #C49B89;
+    --mocha-mousse-dark: #825847;
+    --neutral-gray: #4A4A4A;
+    --neutral-gray-light: #6E6E6E;
+    --neutral-gray-dark: #333333;
+    --bg-dark: #12100F;
+    --surface-dark: #1A1817;
+    --surface-card: #23201E;
+    --border-dark: #383431;
+    --border-highlight: #5A534E;
+    --foreground: #F0EEE9;
+    --background: #12100F;
+  }
+
+  html {
+    background-color: var(--bg-dark);
+    color: var(--cloud-dancer);
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    scrollbar-gutter: stable;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--bg-dark);
+    color: var(--cloud-dancer);
+    overflow-x: hidden;
+  }
+
+  ::selection {
+    background-color: var(--mocha-mousse);
+    color: var(--cloud-dancer);
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #12100F;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #383431;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #A47764;
+  }
+}
+
+/* Subtle architectural grid */
+.bg-architectural-grid {
+  background-image: 
+    linear-gradient(to right, rgba(74, 74, 74, 0.12) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(74, 74, 74, 0.12) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Radial ambient lighting */
+.ambient-glow {
+  background: radial-gradient(circle 800px at 50% -100px, rgba(164, 119, 100, 0.15), transparent 70%);
+}
+
+.ambient-glow-bottom {
+  background: radial-gradient(circle 600px at 50% 100%, rgba(164, 119, 100, 0.12), transparent 70%);
+}
+
+.reveal-text {
+  text-shadow: 0 0 40px rgba(164, 119, 100, 0.2);
+}
+

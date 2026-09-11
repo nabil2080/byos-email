@@ -2,54 +2,543 @@
 import Layout from "../layouts/Layout.astro";
 ---
 
-<Layout title="Privacy-First Business Email">
+<Layout title="Privacy-First Business Email | Customer-Controlled Storage">
   {/* Hero Section */}
-  <section class="py-24 text-center px-6 max-w-4xl mx-auto">
-    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-950/80 border border-sky-800 text-sky-400 text-xs font-semibold mb-6">
-      <span>🔒</span> Customer-Controlled Persistent Storage
+  <section class="relative pt-20 pb-16 px-6 max-w-7xl mx-auto text-center ambient-glow">
+    {/* Badge */}
+    <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#1A1817] border border-[#A47764]/40 text-[#A47764] text-xs font-mono font-medium mb-8 shadow-sm">
+      <span class="h-1.5 w-1.5 rounded-full bg-[#A47764] animate-ping"></span>
+      <span>Zero Server Plaintext &bull; Customer-Controlled Object Storage</span>
     </div>
-    <h1 class="text-4xl sm:text-6xl font-extrabold text-white tracking-tight leading-tight">
+
+    {/* Hero Headline */}
+    <h1 class="text-4xl sm:text-6xl lg:text-7xl font-extrabold text-[#F0EEE9] tracking-tight leading-[1.1] max-w-4xl mx-auto">
       Normal Email on the Outside.<br />
-      <span class="text-sky-500">Your Storage</span> Underneath.
+      <span class="text-[#A47764]">Your Storage</span> Underneath.
     </h1>
-    <p class="mt-6 text-lg text-slate-300 leading-relaxed max-w-2xl mx-auto">
-      BYOS gives your company full business email capability—custom domains, desktop client support, and scheduled send—while keeping persistent encrypted mailbox storage under your control in S3, MinIO, or Google Drive.
+
+    {/* Subtitle */}
+    <p class="mt-6 text-base sm:text-xl text-[#C5BFB8] leading-relaxed max-w-2xl mx-auto font-normal">
+      Full corporate email capability &mdash; custom domains, desktop IMAP/SMTP bridge, and scheduled sending &mdash; with persistent encrypted mailbox storage under your exclusive control in AWS S3, MinIO, or Google Drive.
     </p>
+
+    {/* Action Buttons */}
     <div class="mt-10 flex flex-wrap items-center justify-center gap-4">
-      <a href="http://127.0.0.1:3000/register" class="rounded-xl bg-sky-600 px-6 py-3.5 text-base font-bold text-white shadow-lg hover:bg-sky-500 transition-all">
-        Start Free Trial
+      <a href="http://127.0.0.1:3000/register" class="rounded-xl bg-[#A47764] px-6 py-3.5 text-sm sm:text-base font-semibold text-[#F0EEE9] shadow-lg shadow-[#A47764]/20 hover:bg-[#B88B77] transition-all">
+        Launch Control Plane &rarr;
       </a>
-      <a href="/security" class="rounded-xl border border-slate-700 bg-slate-800/50 px-6 py-3.5 text-base font-medium text-slate-200 hover:bg-slate-800 transition-all">
-        Read Security Model &rarr;
+      <a href="#architecture" class="rounded-xl border border-[#4A4A4A] bg-[#1A1817] px-6 py-3.5 text-sm sm:text-base font-medium text-[#F0EEE9] hover:border-[#A47764] hover:bg-[#23201E] transition-all">
+        Explore Architecture
       </a>
+      <a href="/pricing" class="rounded-xl border border-[#383431] bg-transparent px-5 py-3.5 text-sm sm:text-base font-medium text-[#C5BFB8] hover:text-[#F0EEE9] transition-all">
+        View Pricing
+      </a>
+    </div>
+
+    {/* Security Highlights Pill Row */}
+    <div class="mt-12 flex flex-wrap items-center justify-center gap-6 text-xs font-mono text-[#6E6E6E]">
+      <div class="flex items-center gap-2">
+        <svg class="w-4 h-4 text-[#A47764]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+        <span>RFC 9180 HPKE Core</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <svg class="w-4 h-4 text-[#A47764]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+        <span>Direct S3 / MinIO Storage</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <svg class="w-4 h-4 text-[#A47764]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+        <span>Zero Server Plaintext at Rest</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <svg class="w-4 h-4 text-[#A47764]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        <span>Desktop IMAP / SMTP Bridge</span>
+      </div>
     </div>
   </section>
 
-  {/* Feature Grid */}
-  <section class="py-16 bg-slate-950 border-t border-slate-800 px-6">
-    <div class="max-w-7xl mx-auto">
-      <h2 class="text-2xl font-bold text-white text-center">Core Platform Architecture</h2>
-      <div class="mt-12 grid grid-cols-1 md:grid-cols-3 gap-8">
-        <div class="rounded-2xl border border-slate-800 bg-slate-900/50 p-8">
-          <div class="text-3xl mb-4">📦</div>
-          <h3 class="text-xl font-bold text-white">Bring Your Own Storage</h3>
-          <p class="mt-2 text-sm text-slate-400">
-            Store your encrypted email objects in your own AWS S3, Google Cloud Storage, MinIO, or Google Drive. We never hold your unencrypted data.
+  {/* Visual Element 1: High-Fidelity Webmail Client Mockup */}
+  <section class="py-12 px-6 max-w-7xl mx-auto">
+    <div class="rounded-2xl border border-[#4A4A4A] bg-[#1A1817] shadow-2xl overflow-hidden">
+      {/* Browser Chrome Header */}
+      <div class="px-4 py-3 bg-[#12100F] border-b border-[#383431] flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="w-3 h-3 rounded-full bg-[#383431]"></span>
+          <span class="w-3 h-3 rounded-full bg-[#383431]"></span>
+          <span class="w-3 h-3 rounded-full bg-[#383431]"></span>
+          <span class="ml-2 text-xs font-mono text-[#6E6E6E]">BYOS Secure Webmail</span>
+        </div>
+        <div class="flex items-center gap-2 bg-[#1A1817] px-4 py-1 rounded-md border border-[#383431] text-xs font-mono text-[#C5BFB8]">
+          <svg class="w-3.5 h-3.5 text-[#A47764]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+          <span>https://mail.acme-corp.com/inbox</span>
+        </div>
+        <div class="flex items-center gap-2 text-xs font-mono text-[#A47764] bg-[#23201E] px-2.5 py-1 rounded border border-[#383431]">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span>S3 Connected</span>
+        </div>
+      </div>
+
+      {/* Webmail 3-Pane Body */}
+      <div class="grid grid-cols-1 md:grid-cols-12 min-h-[460px] text-sm">
+        {/* Left Sidebar (3 cols) */}
+        <div class="md:col-span-3 border-r border-[#383431] bg-[#161413] p-4 flex flex-col justify-between">
+          <div>
+            <div class="flex items-center gap-3 pb-4 border-b border-[#383431]">
+              <div class="w-9 h-9 rounded-lg bg-[#A47764]/20 border border-[#A47764] flex items-center justify-center font-bold text-[#A47764]">
+                AC
+              </div>
+              <div class="overflow-hidden">
+                <div class="font-bold text-[#F0EEE9] truncate text-xs">Acme Corporation</div>
+                <div class="text-[11px] font-mono text-[#6E6E6E] truncate">alex@acme-corp.com</div>
+              </div>
+            </div>
+
+            <button class="mt-4 w-full rounded-lg bg-[#A47764] hover:bg-[#B88B77] text-[#F0EEE9] py-2 px-3 text-xs font-semibold flex items-center justify-center gap-2 transition-colors shadow-sm">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+              <span>Compose Encrypted</span>
+            </button>
+
+            <nav class="mt-6 space-y-1 text-xs">
+              <div class="flex items-center justify-between px-3 py-2 rounded-md bg-[#23201E] text-[#F0EEE9] font-medium border border-[#383431]">
+                <div class="flex items-center gap-2">
+                  <svg class="w-4 h-4 text-[#A47764]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/></svg>
+                  <span>Inbox</span>
+                </div>
+                <span class="bg-[#A47764] text-[#F0EEE9] px-1.5 py-0.5 rounded text-[10px] font-mono font-bold">14</span>
+              </div>
+              <div class="flex items-center justify-between px-3 py-2 rounded-md text-[#C5BFB8] hover:bg-[#1A1817]">
+                <div class="flex items-center gap-2">
+                  <svg class="w-4 h-4 text-[#6E6E6E]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+                  <span>Sent</span>
+                </div>
+                <span class="text-[#6E6E6E] font-mono text-[10px]">128</span>
+              </div>
+              <div class="flex items-center justify-between px-3 py-2 rounded-md text-[#C5BFB8] hover:bg-[#1A1817]">
+                <div class="flex items-center gap-2">
+                  <svg class="w-4 h-4 text-[#6E6E6E]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                  <span>Drafts</span>
+                </div>
+                <span class="text-[#6E6E6E] font-mono text-[10px]">3</span>
+              </div>
+              <div class="flex items-center justify-between px-3 py-2 rounded-md text-[#C5BFB8] hover:bg-[#1A1817]">
+                <div class="flex items-center gap-2">
+                  <svg class="w-4 h-4 text-[#6E6E6E]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
+                  <span>Encrypted Vault</span>
+                </div>
+              </div>
+            </nav>
+          </div>
+
+          {/* Mailbox Sovereignty Card */}
+          <div class="p-3 bg-[#1A1817] border border-[#383431] rounded-lg mt-6 text-[11px] font-mono text-[#6E6E6E] space-y-1.5">
+            <div class="text-[#A47764] font-semibold">Vault Security</div>
+            <div>Key: BIP39 Mnemonic</div>
+            <div>Crypto: WASM HPKE</div>
+            <div class="text-emerald-400">Target: AWS S3 us-east-1</div>
+          </div>
+        </div>
+
+        {/* Middle Message List (4 cols) */}
+        <div class="md:col-span-4 border-r border-[#383431] bg-[#181615] overflow-y-auto divide-y divide-[#383431]">
+          {/* Message Item 1 (Active) */}
+          <div class="p-3.5 bg-[#23201E] border-l-2 border-[#A47764] cursor-pointer">
+            <div class="flex items-center justify-between text-xs mb-1">
+              <span class="font-bold text-[#F0EEE9]">Sarah Chen (Partner Fund)</span>
+              <span class="font-mono text-[#A47764] text-[10px]">10:42 AM</span>
+            </div>
+            <div class="font-semibold text-xs text-[#F0EEE9] truncate">Series A Term Sheet & Key Verification</div>
+            <p class="text-[11px] text-[#C5BFB8] truncate mt-1">We have reviewed the BYOS cryptographic boundary report...</p>
+            <div class="mt-2 flex items-center gap-2">
+              <span class="bg-[#1A1817] text-[#A47764] border border-[#383431] text-[9px] font-mono px-1.5 py-0.5 rounded">🔒 HPKE Verified</span>
+              <span class="text-[#6E6E6E] text-[10px] font-mono">&bull; 1.4 MB S3</span>
+            </div>
+          </div>
+
+          {/* Message Item 2 */}
+          <div class="p-3.5 hover:bg-[#1C1A18] cursor-pointer transition-colors">
+            <div class="flex items-center justify-between text-xs mb-1">
+              <span class="font-medium text-[#C5BFB8]">Security Team &bull; Cloudflare</span>
+              <span class="font-mono text-[#6E6E6E] text-[10px]">Yesterday</span>
+            </div>
+            <div class="font-medium text-xs text-[#F0EEE9] truncate">DKIM & SPF Records Verified: acme-corp.com</div>
+            <p class="text-[11px] text-[#6E6E6E] truncate mt-1">Automated DNS verification completed successfully for selector...</p>
+          </div>
+
+          {/* Message Item 3 */}
+          <div class="p-3.5 hover:bg-[#1C1A18] cursor-pointer transition-colors">
+            <div class="flex items-center justify-between text-xs mb-1">
+              <span class="font-medium text-[#C5BFB8]">MinIO Storage Monitor</span>
+              <span class="font-mono text-[#6E6E6E] text-[10px]">Sep 10</span>
+            </div>
+            <div class="font-medium text-xs text-[#F0EEE9] truncate">Bucket Migration Complete: 4,821 Objects</div>
+            <p class="text-[11px] text-[#6E6E6E] truncate mt-1">Encrypted migration from MinIO test bucket to S3 production bucket...</p>
+          </div>
+        </div>
+
+        {/* Right Message Preview Pane (5 cols) */}
+        <div class="md:col-span-5 bg-[#1A1817] p-5 flex flex-col justify-between">
+          <div>
+            {/* Header */}
+            <div class="border-b border-[#383431] pb-4">
+              <div class="flex items-start justify-between gap-4">
+                <h3 class="font-bold text-base text-[#F0EEE9] leading-snug">Series A Term Sheet & Key Verification</h3>
+                <span class="bg-[#23201E] border border-[#A47764]/40 text-[#A47764] text-[10px] font-mono px-2 py-0.5 rounded">
+                  End-to-End
+                </span>
+              </div>
+              <div class="mt-2 text-xs text-[#C5BFB8]">
+                From: <span class="text-[#F0EEE9] font-medium">sarah.chen@partner-fund.com</span> &bull; To: <span class="text-[#F0EEE9]">alex@acme-corp.com</span>
+              </div>
+
+              {/* Security Verification Bar */}
+              <div class="mt-3 grid grid-cols-2 gap-2 text-[10px] font-mono">
+                <div class="bg-[#12100F] p-1.5 rounded border border-[#383431] flex items-center gap-1.5 text-emerald-400">
+                  <span>&check;</span>
+                  <span>DKIM: RSA-2048 Valid</span>
+                </div>
+                <div class="bg-[#12100F] p-1.5 rounded border border-[#383431] flex items-center gap-1.5 text-[#A47764]">
+                  <span>🔒</span>
+                  <span>RFC 9180 HPKE Open</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Email Body Content */}
+            <div class="mt-4 text-xs text-[#C5BFB8] leading-relaxed space-y-3">
+              <p>Hi Alex,</p>
+              <p>
+                Our legal and security compliance team has audited the BYOS mailbox architecture. We were impressed that our emails are encrypted directly with your team&apos;s public key before ever hitting disk, and that the encrypted blobs live in your own dedicated AWS S3 bucket.
+              </p>
+              <p>
+                Attached is the executed Series A Term Sheet. Please review and countersign via your encrypted webmail client.
+              </p>
+            </div>
+
+            {/* Attachment Box */}
+            <div class="mt-6 p-3 bg-[#23201E] rounded-lg border border-[#383431] flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded bg-[#1A1817] border border-[#383431] flex items-center justify-center text-[#A47764]">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                </div>
+                <div>
+                  <div class="font-medium text-xs text-[#F0EEE9]">Executed_Term_Sheet.pdf.enc</div>
+                  <div class="text-[10px] font-mono text-[#6E6E6E]">1.4 MB &bull; AES-256-GCM</div>
+                </div>
+              </div>
+              <button class="text-xs font-semibold text-[#A47764] hover:text-[#B88B77] px-2.5 py-1 rounded bg-[#1A1817] border border-[#383431]">
+                Decrypt &amp; Download
+              </button>
+            </div>
+          </div>
+
+          <div class="pt-4 border-t border-[#383431] text-[10px] font-mono text-[#6E6E6E] flex items-center justify-between">
+            <span>Storage Object: s3://acme-vault-east1/msg_018f91.enc</span>
+            <span>Decrypted in Browser WASM</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {/* Visual Element 2: The BYOS Pipeline Architecture (Interactive Diagram) */}
+  <section id="architecture" class="py-20 px-6 max-w-7xl mx-auto">
+    <div class="text-center max-w-3xl mx-auto">
+      <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#1A1817] border border-[#A47764]/30 text-[#A47764] text-xs font-mono mb-3">
+        <span>Section 0 &bull; Trust Boundary Specification</span>
+      </div>
+      <h2 class="text-3xl sm:text-5xl font-extrabold text-[#F0EEE9] tracking-tight">
+        How BYOS Protects Your Mailbox
+      </h2>
+      <p class="mt-4 text-sm sm:text-base text-[#C5BFB8]">
+        Every incoming and outgoing message passes through a strict trust boundary. The server never stores your email bodies in plaintext.
+      </p>
+    </div>
+
+    {/* Architectural Flow Diagram */}
+    <div class="mt-14 p-8 rounded-2xl border border-[#4A4A4A] bg-[#1A1817] relative overflow-hidden shadow-2xl">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-6 relative z-10">
+        {/* Step 1 */}
+        <div class="p-5 rounded-xl bg-[#23201E] border border-[#383431] flex flex-col justify-between">
+          <div>
+            <div class="text-[10px] font-mono text-[#A47764] font-bold">PHASE 01 &bull; INGEST</div>
+            <h4 class="mt-2 text-base font-bold text-[#F0EEE9]">Standard Inbound SMTP</h4>
+            <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+              Standard email protocol handoff from Gmail, Outlook, or external MX servers over TLS port 25.
+            </p>
+          </div>
+          <div class="mt-4 pt-3 border-t border-[#383431] text-[11px] font-mono text-[#6E6E6E]">
+            Postfix &bull; Rspamd Spam Filter
+          </div>
+        </div>
+
+        {/* Step 2 */}
+        <div class="p-5 rounded-xl bg-[#23201E] border border-[#A47764]/50 flex flex-col justify-between shadow-lg shadow-[#A47764]/5">
+          <div>
+            <div class="text-[10px] font-mono text-[#A47764] font-bold">PHASE 02 &bull; ENCRYPT</div>
+            <h4 class="mt-2 text-base font-bold text-[#F0EEE9]">Zero-Knowledge Encrypt</h4>
+            <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+              Transient mail router invokes the isolated crypto-worker to wrap the content key via HPKE (RFC 9180).
+            </p>
+          </div>
+          <div class="mt-4 pt-3 border-t border-[#383431] text-[11px] font-mono text-[#A47764]">
+            DHKEM(X25519) + AES-GCM
+          </div>
+        </div>
+
+        {/* Step 3 */}
+        <div class="p-5 rounded-xl bg-[#23201E] border border-emerald-500/40 flex flex-col justify-between">
+          <div>
+            <div class="text-[10px] font-mono text-emerald-400 font-bold">PHASE 03 &bull; PERSIST</div>
+            <h4 class="mt-2 text-base font-bold text-[#F0EEE9]">Customer Storage</h4>
+            <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+              Encrypted payload is written directly to your connected bucket. BYOS servers retain 0 customer bytes.
+            </p>
+          </div>
+          <div class="mt-4 pt-3 border-t border-[#383431] text-[11px] font-mono text-emerald-400">
+            AWS S3 &bull; MinIO &bull; Google Drive
+          </div>
+        </div>
+
+        {/* Step 4 */}
+        <div class="p-5 rounded-xl bg-[#23201E] border border-[#383431] flex flex-col justify-between">
+          <div>
+            <div class="text-[10px] font-mono text-[#A47764] font-bold">PHASE 04 &bull; READ</div>
+            <h4 class="mt-2 text-base font-bold text-[#F0EEE9]">Client Decryption</h4>
+            <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+              Your Webmail client (WASM) or desktop IMAP Bridge unwraps the mailbox private key on your device.
+            </p>
+          </div>
+          <div class="mt-4 pt-3 border-t border-[#383431] text-[11px] font-mono text-[#6E6E6E]">
+            Browser WASM &bull; byos-bridge
+          </div>
+        </div>
+      </div>
+
+      {/* Trust Boundary Banner */}
+      <div class="mt-8 p-4 rounded-xl bg-[#12100F] border border-[#A47764]/40 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs font-mono">
+        <div class="flex items-center gap-3">
+          <span class="text-[#A47764] text-lg font-bold">&bull;</span>
+          <span class="text-[#F0EEE9]">CRITICAL ARCHITECTURE INVARIANT:</span>
+          <span class="text-[#C5BFB8]">Server never holds unencrypted email bodies or customer master keys at rest.</span>
+        </div>
+        <a href="/security" class="text-[#A47764] hover:text-[#B88B77] font-semibold whitespace-nowrap">
+          Read Threat Model &rarr;
+        </a>
+      </div>
+    </div>
+  </section>
+
+  {/* Visual Element 3: Supported Storage Connectors Showcase */}
+  <section id="storage" class="py-16 px-6 max-w-7xl mx-auto">
+    <div class="text-center max-w-3xl mx-auto">
+      <h2 class="text-3xl sm:text-4xl font-extrabold text-[#F0EEE9] tracking-tight">
+        Connect Your Preferred Storage
+      </h2>
+      <p class="mt-3 text-sm sm:text-base text-[#C5BFB8]">
+        Plug in your existing cloud infrastructure or self-host your storage bucket on-premise.
+      </p>
+    </div>
+
+    <div class="mt-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* Amazon S3 */}
+      <div class="p-6 rounded-2xl border border-[#383431] bg-[#1A1817] hover:border-[#A47764] transition-all group">
+        <div class="w-12 h-12 rounded-xl bg-[#23201E] border border-[#383431] flex items-center justify-center text-[#A47764] group-hover:scale-105 transition-transform">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+        </div>
+        <h3 class="mt-4 text-lg font-bold text-[#F0EEE9]">Amazon S3</h3>
+        <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+          Standard, Glacier, and Intelligent-Tiering with least-privilege IAM credentials.
+        </p>
+        <div class="mt-4 text-[11px] font-mono text-[#A47764]">S3-Compatible Protocol</div>
+      </div>
+
+      {/* MinIO Self-Hosted */}
+      <div class="p-6 rounded-2xl border border-[#383431] bg-[#1A1817] hover:border-[#A47764] transition-all group">
+        <div class="w-12 h-12 rounded-xl bg-[#23201E] border border-[#383431] flex items-center justify-center text-[#A47764] group-hover:scale-105 transition-transform">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+        </div>
+        <h3 class="mt-4 text-lg font-bold text-[#F0EEE9]">MinIO On-Premise</h3>
+        <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+          Self-host on your own bare-metal or private cloud infrastructure for 100% data sovereignty.
+        </p>
+        <div class="mt-4 text-[11px] font-mono text-[#A47764]">Self-Hosted Sovereignty</div>
+      </div>
+
+      {/* Google Drive */}
+      <div class="p-6 rounded-2xl border border-[#383431] bg-[#1A1817] hover:border-[#A47764] transition-all group">
+        <div class="w-12 h-12 rounded-xl bg-[#23201E] border border-[#383431] flex items-center justify-center text-[#A47764] group-hover:scale-105 transition-transform">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
+        </div>
+        <h3 class="mt-4 text-lg font-bold text-[#F0EEE9]">Google Drive</h3>
+        <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+          Zero-config OAuth 2.0 integration. Keep your mailbox stored in your existing Google account.
+        </p>
+        <div class="mt-4 text-[11px] font-mono text-[#A47764]">OAuth 2.0 Direct Auth</div>
+      </div>
+
+      {/* Cloudflare R2 */}
+      <div class="p-6 rounded-2xl border border-[#383431] bg-[#1A1817] hover:border-[#A47764] transition-all group">
+        <div class="w-12 h-12 rounded-xl bg-[#23201E] border border-[#383431] flex items-center justify-center text-[#A47764] group-hover:scale-105 transition-transform">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+        </div>
+        <h3 class="mt-4 text-lg font-bold text-[#F0EEE9]">Cloudflare R2</h3>
+        <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+          Global edge object storage with zero egress fees and automated geographic distribution.
+        </p>
+        <div class="mt-4 text-[11px] font-mono text-[#A47764]">Zero Egress Fees</div>
+      </div>
+    </div>
+  </section>
+
+  {/* Visual Element 4: Feature Bento Grid */}
+  <section id="features" class="py-16 px-6 max-w-7xl mx-auto">
+    <div class="text-center max-w-3xl mx-auto">
+      <h2 class="text-3xl sm:text-4xl font-extrabold text-[#F0EEE9] tracking-tight">
+        Engineered for Absolute Sovereignty
+      </h2>
+      <p class="mt-3 text-sm sm:text-base text-[#C5BFB8]">
+        Every feature is designed to give you modern corporate email without compromising cryptographic integrity.
+      </p>
+    </div>
+
+    <div class="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6">
+      {/* Bento 1: Zero-Knowledge Crypto */}
+      <div class="md:col-span-2 p-8 rounded-2xl border border-[#383431] bg-[#1A1817] flex flex-col justify-between">
+        <div>
+          <div class="text-xs font-mono text-[#A47764] font-semibold">SECTION 12 &bull; CRYPTOGRAPHIC CORE</div>
+          <h3 class="mt-2 text-2xl font-bold text-[#F0EEE9]">Client-Side WebAssembly &amp; RFC 9180 HPKE</h3>
+          <p class="mt-3 text-sm text-[#C5BFB8] leading-relaxed max-w-xl">
+            Derived directly from a 24-word BIP39 mnemonic, your mailbox keys are unwrapped in-memory via high-performance Rust WASM. Even in the event of a total BYOS server database breach, attackers gain only encrypted ciphertext.
           </p>
         </div>
-        <div class="rounded-2xl border border-slate-800 bg-slate-900/50 p-8">
-          <div class="text-3xl mb-4">🔐</div>
-          <h3 class="text-xl font-bold text-white">Zero-Knowledge Crypto</h3>
-          <p class="mt-2 text-sm text-slate-400">
-            Client-side Rust/WASM core derives keys locally using BIP39 mnemonics and HPKE (RFC 9180). Mailbox private keys never leave your device unwrapped.
+        <div class="mt-6 p-4 rounded-xl bg-[#23201E] border border-[#383431] font-mono text-xs text-[#C5BFB8] overflow-x-auto">
+          <code>root_secret = HKDF-SHA256(bip39_seed, &quot;byos-v1-root&quot;) &rarr; (pk, sk)</code>
+        </div>
+      </div>
+
+      {/* Bento 2: Desktop Client Bridge */}
+      <div class="p-8 rounded-2xl border border-[#383431] bg-[#1A1817] flex flex-col justify-between">
+        <div>
+          <div class="text-xs font-mono text-[#A47764] font-semibold">SECTION 19 &bull; COMPATIBILITY</div>
+          <h3 class="mt-2 text-xl font-bold text-[#F0EEE9]">Desktop IMAP / SMTP Bridge</h3>
+          <p class="mt-3 text-xs text-[#C5BFB8] leading-relaxed">
+            Use your favorite desktop email app &mdash; Apple Mail, Microsoft Outlook, or Mozilla Thunderbird &mdash; via our lightweight local bridge running on <code>127.0.0.1:1143</code>.
           </p>
         </div>
-        <div class="rounded-2xl border border-slate-800 bg-slate-900/50 p-8">
-          <div class="text-3xl mb-4">⚡</div>
-          <h3 class="text-xl font-bold text-white">Normal Email Compatibility</h3>
-          <p class="mt-2 text-sm text-slate-400">
-            Send and receive mail seamlessly with Gmail, Outlook, Yahoo, and standard desktop client Bridge applications (IMAP/SMTP).
+        <div class="mt-6 text-xs font-mono text-emerald-400 bg-[#23201E] p-2.5 rounded border border-[#383431]">
+          &check; Outlook &bull; Thunderbird &bull; Apple Mail
+        </div>
+      </div>
+
+      {/* Bento 3: Privacy Search */}
+      <div class="p-8 rounded-2xl border border-[#383431] bg-[#1A1817] flex flex-col justify-between">
+        <div>
+          <div class="text-xs font-mono text-[#A47764] font-semibold">SECTION 16 &bull; PRIVACY</div>
+          <h3 class="mt-2 text-xl font-bold text-[#F0EEE9]">Blinded Local Search</h3>
+          <p class="mt-3 text-xs text-[#C5BFB8] leading-relaxed">
+            Search tokens are blinded client-side with HMAC-SHA256. The server indexes blind cryptographic tokens without ever knowing what words you search.
           </p>
+        </div>
+        <div class="mt-6 text-xs font-mono text-[#A47764] bg-[#23201E] p-2.5 rounded border border-[#383431]">
+          HMAC-SHA256 Blind Indexing
+        </div>
+      </div>
+
+      {/* Bento 4: Disaster Recovery & Exit CLI */}
+      <div class="md:col-span-2 p-8 rounded-2xl border border-[#383431] bg-[#1A1817] flex flex-col justify-between">
+        <div>
+          <div class="text-xs font-mono text-[#A47764] font-semibold">SECTION 23 &amp; 24 &bull; DATA SOVEREIGNTY</div>
+          <h3 class="mt-2 text-2xl font-bold text-[#F0EEE9]">Independent Disaster Recovery &amp; Exit CLI</h3>
+          <p class="mt-3 text-sm text-[#C5BFB8] leading-relaxed max-w-xl">
+            You are never held hostage. Run <code>byos-backup</code> to dump your relational structure with cryptographic SHA-256 validation, or use <code>byos-export</code> to export every raw object directly from your S3 bucket.
+          </p>
+        </div>
+        <div class="mt-6 p-4 rounded-xl bg-[#23201E] border border-[#383431] font-mono text-xs text-[#C5BFB8] overflow-x-auto">
+          <code>$ byos-backup verify --manifest=backup-2026.json [&check; 14 tables verified]</code>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {/* Visual Element 5: The Comparison Matrix (The Truth Table) */}
+  <section class="py-20 px-6 max-w-7xl mx-auto">
+    <div class="text-center max-w-3xl mx-auto">
+      <h2 class="text-3xl sm:text-4xl font-extrabold text-[#F0EEE9] tracking-tight">
+        The Truth Table
+      </h2>
+      <p class="mt-3 text-sm sm:text-base text-[#C5BFB8]">
+        How BYOS compares against Big Tech email providers and traditional encrypted mail.
+      </p>
+    </div>
+
+    <div class="mt-12 overflow-x-auto">
+      <table class="w-full text-left text-xs sm:text-sm border-collapse rounded-2xl overflow-hidden border border-[#383431]">
+        <thead>
+          <tr class="bg-[#23201E] text-[#F0EEE9] border-b border-[#383431]">
+            <th class="p-4 font-semibold">Capability</th>
+            <th class="p-4 font-bold text-[#A47764] bg-[#1E1B19]">BYOS Business Email</th>
+            <th class="p-4 font-medium text-[#C5BFB8]">Google Workspace</th>
+            <th class="p-4 font-medium text-[#C5BFB8]">Proton Mail</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-[#383431] bg-[#1A1817] text-[#C5BFB8]">
+          <tr>
+            <td class="p-4 font-medium text-[#F0EEE9]">Storage Ownership</td>
+            <td class="p-4 font-bold text-emerald-400 bg-[#1E1B19]">Your S3 / MinIO / Drive</td>
+            <td class="p-4 text-[#6E6E6E]">Google Cloud Only</td>
+            <td class="p-4 text-[#6E6E6E]">Vendor Datacenter Only</td>
+          </tr>
+          <tr>
+            <td class="p-4 font-medium text-[#F0EEE9]">Server Plaintext Access at Rest</td>
+            <td class="p-4 font-bold text-emerald-400 bg-[#1E1B19]">Zero (HPKE Encrypted)</td>
+            <td class="p-4 text-rose-400">Full Plaintext Access</td>
+            <td class="p-4 text-emerald-400">Encrypted at Rest</td>
+          </tr>
+          <tr>
+            <td class="p-4 font-medium text-[#F0EEE9]">Standard IMAP / SMTP Desktop Client</td>
+            <td class="p-4 font-bold text-[#F0EEE9] bg-[#1E1B19]">Native Bridge (Included)</td>
+            <td class="p-4">Native</td>
+            <td class="p-4 text-[#6E6E6E]">Requires Paid Bridge App</td>
+          </tr>
+          <tr>
+            <td class="p-4 font-medium text-[#F0EEE9]">Custom Domain Capacity Pricing</td>
+            <td class="p-4 font-bold text-[#F0EEE9] bg-[#1E1B19]">From $3/month (Solo)</td>
+            <td class="p-4 text-[#6E6E6E]">$7.20 / user / month</td>
+            <td class="p-4 text-[#6E6E6E]">$12.99 / user / month</td>
+          </tr>
+          <tr>
+            <td class="p-4 font-medium text-[#F0EEE9]">Independent Exit CLI &amp; Disaster Recovery</td>
+            <td class="p-4 font-bold text-emerald-400 bg-[#1E1B19]">Included (`byos-backup`)</td>
+            <td class="p-4 text-[#6E6E6E]">Google Takeout MBOX</td>
+            <td class="p-4 text-[#6E6E6E]">Manual Export Tool</td>
+          </tr>
+          <tr>
+            <td class="p-4 font-medium text-[#F0EEE9]">Offline Key Recovery Mnemonic</td>
+            <td class="p-4 font-bold text-emerald-400 bg-[#1E1B19]">24-Word BIP39 Seed</td>
+            <td class="p-4 text-[#6E6E6E]">N/A (Account Password)</td>
+            <td class="p-4 text-[#6E6E6E]">Recovery Phrase</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {/* Call-to-Action Banner */}
+  <section class="py-20 px-6 max-w-7xl mx-auto">
+    <div class="rounded-2xl border border-[#A47764]/40 bg-gradient-to-b from-[#23201E] to-[#1A1817] p-10 sm:p-16 text-center relative overflow-hidden shadow-2xl">
+      <div class="relative z-10 max-w-2xl mx-auto">
+        <h2 class="text-3xl sm:text-5xl font-extrabold text-[#F0EEE9] tracking-tight">
+          Ready to Reclaim Your Email Sovereignty?
+        </h2>
+        <p class="mt-4 text-base text-[#C5BFB8] leading-relaxed">
+          Connect your custom domain and S3 bucket in 5 minutes. No migration downtime, no vendor lock-in.
+        </p>
+        <div class="mt-8 flex flex-wrap items-center justify-center gap-4">
+          <a href="http://127.0.0.1:3000/register" class="rounded-xl bg-[#A47764] px-8 py-4 text-base font-bold text-[#F0EEE9] shadow-xl hover:bg-[#B88B77] transition-all hover:scale-[1.02]">
+            Start Free Trial &rarr;
+          </a>
+          <a href="/pricing" class="rounded-xl border border-[#4A4A4A] bg-[#1A1817] px-8 py-4 text-base font-semibold text-[#F0EEE9] hover:bg-[#23201E] transition-all">
+            Compare Plans
+          </a>
         </div>
       </div>
     </div>

@@ -2,30 +2,73 @@
 import Layout from "../layouts/Layout.astro";
 ---
 
-<Layout title="Privacy Policy">
-  <section class="py-20 px-6 max-w-4xl mx-auto">
-    <h1 class="text-4xl font-extrabold text-white">Privacy Policy</h1>
-    <p class="mt-4 text-slate-400">Effective Date: August 2026</p>
+<Layout title="Privacy Charter & Data Classification">
+  {/* Header */}
+  <section class="pt-20 pb-12 px-6 max-w-4xl mx-auto text-center ambient-glow">
+    <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#1A1817] border border-[#A47764]/40 text-[#A47764] text-xs font-mono font-medium mb-6">
+      <span>Zero-Knowledge Privacy Charter</span>
+    </div>
+    <h1 class="text-4xl sm:text-5xl font-extrabold text-[#F0EEE9] tracking-tight">
+      Privacy Policy &amp; Data Boundaries
+    </h1>
+    <p class="mt-4 text-sm sm:text-base text-[#C5BFB8]">
+      Effective Date: August 2026 &bull; Architecture Specification V5.3
+    </p>
+  </section>
 
-    <div class="mt-8 space-y-6 text-sm text-slate-300 leading-relaxed">
-      <p>
-        BYOS Business Email is designed from the ground up to minimize data collection and preserve customer ownership over mailbox content.
-      </p>
+  {/* Content */}
+  <section class="py-8 px-6 max-w-4xl mx-auto">
+    <div class="p-8 sm:p-12 rounded-2xl border border-[#383431] bg-[#1A1817] space-y-8 text-sm text-[#C5BFB8] leading-relaxed">
+      <div>
+        <h2 class="text-lg font-bold text-[#F0EEE9] flex items-center gap-2">
+          <span class="text-[#A47764]">1.</span> Customer-Controlled Persistent Storage
+        </h2>
+        <p class="mt-2">
+          Persistent email messages, attachments, draft contents, and address books are uploaded directly to the customer&apos;s designated storage bucket (AWS S3, Google Drive, MinIO, Cloudflare R2). Every persistent object is encrypted client-side using RFC 9180 HPKE and AES-256-GCM. BYOS servers hold zero persistent customer mail data in plaintext.
+        </p>
+      </div>
 
-      <h2 class="text-xl font-bold text-white mt-6">1. Storage Ownership</h2>
-      <p>
-        Persistent mailbox content (emails, attachments, drafts, contacts) is stored in persistent storage accounts provided and owned by you (the Customer). We do not maintain unencrypted copies of your mailbox contents.
-      </p>
+      <div class="pt-6 border-t border-[#383431]">
+        <h2 class="text-lg font-bold text-[#F0EEE9] flex items-center gap-2">
+          <span class="text-[#A47764]">2.</span> Inbound Transient Processing Window
+        </h2>
+        <p class="mt-2">
+          Inbound email arriving over SMTP port 25 from the internet is processed transiently in memory for spam filtering (Rspamd), virus checking, and RFC 9180 HPKE envelope encryption. Immediately upon successful delivery to the customer&apos;s storage bucket, transient in-memory buffers are wiped. Plaintext message bodies are never written to disk or the central relational database.
+        </p>
+      </div>
 
-      <h2 class="text-xl font-bold text-white mt-6">2. Transient Processing Window</h2>
-      <p>
-        Inbound internet SMTP email received for your domain is parsed, spam-checked via Rspamd, encrypted immediately, and uploaded to your connected storage. No plaintext email content is persisted on BYOS infrastructure.
-      </p>
+      <div class="pt-6 border-t border-[#383431]">
+        <h2 class="text-lg font-bold text-[#F0EEE9] flex items-center gap-2">
+          <span class="text-[#A47764]">3.</span> Privacy-Preserving Search Tokens
+        </h2>
+        <p class="mt-2">
+          When search indexing is enabled, keywords are blinded on the client device using HMAC-SHA256 derived from a client-held search key. The BYOS relational database stores only blind 256-bit hashes. The BYOS platform cannot correlate search queries to actual keywords or readable language.
+        </p>
+      </div>
 
-      <h2 class="text-xl font-bold text-white mt-6">3. Operational Metadata</h2>
-      <p>
-        To route mail and enforce rate limits, BYOS maintains operational metadata including email addresses, custom domain routing records, rate-limit counters, and audit logs.
-      </p>
+      <div class="pt-6 border-t border-[#383431]">
+        <h2 class="text-lg font-bold text-[#F0EEE9] flex items-center gap-2">
+          <span class="text-[#A47764]">4.</span> Operational Metadata Retention
+        </h2>
+        <p class="mt-2">
+          To maintain email delivery reliability and defend against denial-of-service or outbound spam abuse, BYOS retains operational metadata:
+        </p>
+        <ul class="mt-3 space-y-1.5 list-disc list-inside text-xs text-[#C5BFB8]">
+          <li>Account credentials (salted and stretched via Argon2id)</li>
+          <li>Verified custom domain routing records and DKIM public keys</li>
+          <li>Rate limiting counters in volatile Redis cache</li>
+          <li>Administrative audit logs for security revocations and employee terminations</li>
+        </ul>
+      </div>
+
+      <div class="pt-6 border-t border-[#383431]">
+        <h2 class="text-lg font-bold text-[#F0EEE9] flex items-center gap-2">
+          <span class="text-[#A47764]">5.</span> Zero Third-Party Tracking
+        </h2>
+        <p class="mt-2">
+          The BYOS website and web applications contain zero third-party advertising trackers, cross-site analytics beacons, or behavioral profiling scripts. All fonts and assets are served locally.
+        </p>
+      </div>
     </div>
   </section>
 </Layout>
