@@ -106,11 +106,7 @@ type OutboundPubkeyResponse struct {
 	OutboundDeliveryPK string `json:"outbound_delivery_pk"`
 }
 
-func outboundPubkeyHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func getOutboundDeliveryPK() string {
 	pk := os.Getenv("OUTBOUND_DELIVERY_PK_B64")
 	if pk == "" {
 		if b, err := os.ReadFile(os.Getenv("OUTBOUND_DELIVERY_PK_FILE")); err == nil {
@@ -119,6 +115,15 @@ func outboundPubkeyHandler(w http.ResponseWriter, r *http.Request) {
 			pk = strings.TrimSpace(string(b))
 		}
 	}
+	return pk
+}
+
+func outboundPubkeyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pk := getOutboundDeliveryPK()
 	if pk == "" {
 		http.Error(w, "outbound public key not configured", http.StatusInternalServerError)
 		return

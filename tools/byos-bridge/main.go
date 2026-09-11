@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -38,6 +39,7 @@ type bridgeMessage struct {
 	Recipients []string `json:"recipients"`
 	ReceivedAt string   `json:"received_at"`
 	SentAt     string   `json:"sent_at"`
+	Status     string   `json:"status"`
 }
 
 type bridgeMessageBody struct {
@@ -152,6 +154,129 @@ func authenticateWithAPI(cfg *BridgeConfig) bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusNoContent
+}
+
+func searchBridgeMessages(writer *bufio.Writer, tag, criteria string, cfg *BridgeConfig) {
+	messages, ok := fetchBridgeMessages(cfg)
+	if !ok {
+		writer.WriteString(fmt.Sprintf("%s NO mailbox metadata unavailable\r\n", tag))
+		return
+	}
+
+	matchedSeqs := make([]string, 0)
+	criteriaClean := strings.TrimSpace(criteria)
+	criteriaUpper := strings.ToUpper(criteriaClean)
+
+	if criteriaUpper == "" || criteriaUpper == "ALL" {
+		for _, m := range messages {
+			matchedSeqs = append(matchedSeqs, strconv.FormatInt(m.MessageSeq, 10))
+		}
+	} else {
+		tokens := strings.Fields(criteriaClean)
+		for _, m := range messages {
+			match := true
+			for i := 0; i < len(tokens); i++ {
+				token := strings.ToUpper(tokens[i])
+				if token == "ALL" {
+					continue
+				} else if token == "UNSEEN" {
+					if !strings.EqualFold(m.Status, "unseen") && !strings.EqualFold(m.Status, "unread") {
+						match = false
+						break
+					}
+				} else if token == "FROM" && i+1 < len(tokens) {
+					term := strings.Trim(strings.ToLower(tokens[i+1]), `"`)
+					if !strings.Contains(strings.ToLower(m.Sender), term) {
+						match = false
+						break
+					}
+					i++
+				} else if token == "TO" && i+1 < len(tokens) {
+					term := strings.Trim(strings.ToLower(tokens[i+1]), `"`)
+					toMatched := false
+					for _, r := range m.Recipients {
+						if strings.Contains(strings.ToLower(r), term) {
+							toMatched = true
+							break
+						}
+					}
+					if !toMatched {
+						match = false
+						break
+					}
+					i++
+				} else {
+					term := strings.Trim(strings.ToLower(tokens[i]), `"`)
+					senderMatch := strings.Contains(strings.ToLower(m.Sender), term)
+					recipMatch := false
+					for _, r := range m.Recipients {
+						if strings.Contains(strings.ToLower(r), term) {
+							recipMatch = true
+							break
+						}
+					}
+					if !senderMatch && !recipMatch {
+						match = false
+						break
+					}
+				}
+			}
+			if match {
+				matchedSeqs = append(matchedSeqs, strconv.FormatInt(m.MessageSeq, 10))
+			}
+		}
+	}
+
+	if len(matchedSeqs) > 0 {
+		writer.WriteString(fmt.Sprintf("* SEARCH %s\r\n", strings.Join(matchedSeqs, " ")))
+	} else {
+		writer.WriteString("* SEARCH\r\n")
+	}
+	writer.WriteString(fmt.Sprintf("%s OK SEARCH completed\r\n", tag))
+}
+
+func cleanAddress(addr string) string {
+	addr = strings.TrimSpace(addr)
+	upper := strings.ToUpper(addr)
+	if strings.HasPrefix(upper, "FROM:") {
+		addr = strings.TrimSpace(addr[5:])
+	} else if strings.HasPrefix(upper, "TO:") {
+		addr = strings.TrimSpace(addr[3:])
+	}
+	return strings.Trim(addr, "<> ")
+}
+
+func submitBridgeOutbound(cfg *BridgeConfig, from, to string, rawData []byte) error {
+	recipient := cleanAddress(to)
+	reqBody := struct {
+		MailboxID  string `json:"mailbox_id"`
+		Recipient  string `json:"recipient"`
+		RawMessage string `json:"raw_message"`
+	}{
+		MailboxID:  cfg.MailboxID,
+		Recipient:  recipient,
+		RawMessage: base64.StdEncoding.EncodeToString(rawData),
+	}
+	payloadBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, cfg.ApiURL+"/v1/bridge/outbound/send", bytes.NewReader(payloadBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-BYOS-Bridge-Token", cfg.Token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("api request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("api rejected message with status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func main() {
@@ -367,7 +492,11 @@ func handleIMAPConnection(conn net.Conn, cfg *BridgeConfig) {
 				writer.WriteString(fmt.Sprintf("%s NO authenticate first\r\n", tag))
 				break
 			}
-			writer.WriteString(fmt.Sprintf("%s NO message search proxy is not implemented\r\n", tag))
+			criteria := ""
+			if len(parts) > 2 {
+				criteria = strings.Join(parts[2:], " ")
+			}
+			searchBridgeMessages(writer, tag, criteria, cfg)
 		case "LOGOUT":
 			writer.WriteString("* BYE BYOS Bridge logging out\r\n")
 			writer.WriteString(fmt.Sprintf("%s OK LOGOUT completed\r\n", tag))
@@ -431,7 +560,13 @@ func handleSMTPConnection(conn net.Conn, cfg *BridgeConfig) {
 		if inData {
 			if strings.TrimRight(line, "\r\n") == "." {
 				inData = false
-				writer.WriteString("451 4.3.0 outbound encryption proxy is not available\r\n")
+				err := submitBridgeOutbound(cfg, from, to, dataBuffer.Bytes())
+				if err != nil {
+					log.Printf("[SMTP] outbound submission failed: %v", err)
+					writer.WriteString("451 4.3.0 message submission failed: " + err.Error() + "\r\n")
+				} else {
+					writer.WriteString("250 2.0.0 OK: message queued for delivery\r\n")
+				}
 				writer.Flush()
 				dataBuffer.Reset()
 				continue
@@ -462,7 +597,7 @@ func handleSMTPConnection(conn net.Conn, cfg *BridgeConfig) {
 				break
 			}
 			if len(parts) > 1 {
-				from = parts[1]
+				from = cleanAddress(parts[1])
 			}
 			writer.WriteString("250 2.1.0 Sender OK\r\n")
 		case "RCPT":
@@ -471,7 +606,7 @@ func handleSMTPConnection(conn net.Conn, cfg *BridgeConfig) {
 				break
 			}
 			if len(parts) > 1 {
-				to = parts[1]
+				to = cleanAddress(parts[1])
 			}
 			writer.WriteString("250 2.1.5 Recipient OK\r\n")
 		case "DATA":

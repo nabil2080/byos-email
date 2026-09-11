@@ -321,6 +321,7 @@ func main() {
 	http.HandleFunc("/v1/bridge/authenticate", withSecurityHeaders(withCORS(bridgeAuthenticateHandler)))
 	http.HandleFunc("/v1/bridge/messages", withSecurityHeaders(withCORS(bridgeMessagesHandler)))
 	http.HandleFunc("/v1/bridge/message-body", withSecurityHeaders(withCORS(bridgeMessageBodyHandler)))
+	http.HandleFunc("/v1/bridge/outbound/send", withSecurityHeaders(withCORS(bridgeOutboundSendHandler)))
 
 	http.HandleFunc("/v1/organizations/{org_id}/storage/connection", withSecurityHeaders(withCORS(storageConnectionHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/storage/connection/test", withSecurityHeaders(withCORS(storageConnectionTestHandler)))
@@ -335,6 +336,7 @@ func main() {
 	http.HandleFunc("/v1/organizations/{org_id}/domains/{domain_id}/verify", withSecurityHeaders(withCORS(domainVerifyHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}", withSecurityHeaders(withCORS(organizationGetHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/mailboxes", withSecurityHeaders(withCORS(mailboxesHandler)))
+	http.HandleFunc("/v1/organizations/{org_id}/mailboxes/{mailbox_id}/privacy-mode", withSecurityHeaders(withCORS(mailboxPrivacyModeHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/mailboxes/{mailbox_id}/recovery-material", withSecurityHeaders(withCORS(mailboxRecoveryMaterialHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/mailboxes/{mailbox_id}/rotate-root", withSecurityHeaders(withCORS(rootRotationHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/recovery-principals", withSecurityHeaders(withCORS(recoveryPrincipalsHandler)))

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -236,5 +237,171 @@ func TestBridgeFetchHeaderExact(t *testing.T) {
 		if !strings.Contains(string(literal), want) {
 			t.Fatalf("header literal missing %q: %q", want, literal)
 		}
+	}
+}
+
+func TestBridgeSearchAll(t *testing.T) {
+	msgs := `{"messages":[{"message_seq":1,"id":"mid-1","sender":"alice@x.y","recipients":["bob@x.y"],"received_at":"d"},{"message_seq":2,"id":"mid-2","sender":"charlie@x.y","recipients":["bob@x.y"],"received_at":"d"}]}`
+	srv := mockBridgeAPI(t, msgs, base64.StdEncoding.EncodeToString([]byte{0x01}))
+	defer srv.Close()
+	cfg := &BridgeConfig{ApiURL: srv.URL, MailboxID: "m", Token: "tok"}
+	s := startIMAPTestSession(t, cfg)
+	loginTestSession(t, s, "tok")
+
+	s.cmd("A SEARCH ALL")
+	if got := s.readLine(); got != "* SEARCH 1 2" {
+		t.Fatalf("SEARCH ALL untagged response: got %q, want %q", got, "* SEARCH 1 2")
+	}
+	if got := s.readLine(); got != "A OK SEARCH completed" {
+		t.Fatalf("SEARCH ALL tagged response: got %q", got)
+	}
+}
+
+func TestBridgeSearchFiltered(t *testing.T) {
+	msgs := `{"messages":[{"message_seq":1,"id":"mid-1","sender":"alice@x.y","recipients":["bob@x.y"],"received_at":"d"},{"message_seq":2,"id":"mid-2","sender":"carol@x.y","recipients":["dave@x.y"],"received_at":"d"}]}`
+	srv := mockBridgeAPI(t, msgs, base64.StdEncoding.EncodeToString([]byte{0x01}))
+	defer srv.Close()
+	cfg := &BridgeConfig{ApiURL: srv.URL, MailboxID: "m", Token: "tok"}
+	s := startIMAPTestSession(t, cfg)
+	loginTestSession(t, s, "tok")
+
+	s.cmd("A SEARCH FROM alice")
+	if got := s.readLine(); got != "* SEARCH 1" {
+		t.Fatalf("SEARCH FROM untagged response: got %q, want %q", got, "* SEARCH 1")
+	}
+	if got := s.readLine(); got != "A OK SEARCH completed" {
+		t.Fatalf("SEARCH FROM tagged response: got %q", got)
+	}
+
+	s.cmd("B SEARCH TO dave")
+	if got := s.readLine(); got != "* SEARCH 2" {
+		t.Fatalf("SEARCH TO untagged response: got %q, want %q", got, "* SEARCH 2")
+	}
+	if got := s.readLine(); got != "B OK SEARCH completed" {
+		t.Fatalf("SEARCH TO tagged response: got %q", got)
+	}
+
+	s.cmd("C SEARCH FROM nobody")
+	if got := s.readLine(); got != "* SEARCH" {
+		t.Fatalf("SEARCH no match untagged response: got %q, want %q", got, "* SEARCH")
+	}
+	if got := s.readLine(); got != "C OK SEARCH completed" {
+		t.Fatalf("SEARCH no match tagged response: got %q", got)
+	}
+}
+
+func TestBridgeSMTPSubmission(t *testing.T) {
+	var receivedSend bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/bridge/authenticate":
+			w.WriteHeader(http.StatusNoContent)
+		case "/v1/bridge/outbound/send":
+			if r.Header.Get("X-BYOS-Bridge-Token") != "secret-token" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			var req struct {
+				MailboxID  string `json:"mailbox_id"`
+				Recipient  string `json:"recipient"`
+				RawMessage string `json:"raw_message"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			if req.MailboxID != "box-1" || req.Recipient != "bob@example.com" || req.RawMessage == "" {
+				http.Error(w, "bad fields", http.StatusBadRequest)
+				return
+			}
+			receivedSend = true
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(`{"delivery_id":"del-123","status":"queued"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &BridgeConfig{
+		ApiURL:    srv.URL,
+		MailboxID: "box-1",
+		Token:     "secret-token",
+	}
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	go handleSMTPConnection(serverConn, cfg)
+
+	r := bufio.NewReader(clientConn)
+	w := bufio.NewWriter(clientConn)
+
+	readLine := func() string {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		return strings.TrimRight(line, "\r\n")
+	}
+	sendCmd := func(cmd string) {
+		w.WriteString(cmd + "\r\n")
+		w.Flush()
+	}
+
+	greeting := readLine()
+	if !strings.HasPrefix(greeting, "220 ") {
+		t.Fatalf("bad greeting: %q", greeting)
+	}
+
+	sendCmd("EHLO localhost")
+	for {
+		line := readLine()
+		if strings.HasPrefix(line, "250 ") {
+			break
+		}
+		if !strings.HasPrefix(line, "250-") {
+			t.Fatalf("bad ehlo response: %q", line)
+		}
+	}
+
+	// AUTH PLAIN: \0user\0secret-token
+	plainAuth := base64.StdEncoding.EncodeToString([]byte("\x00user\x00secret-token"))
+	sendCmd("AUTH PLAIN")
+	authPrompt := readLine()
+	if !strings.HasPrefix(authPrompt, "334") {
+		t.Fatalf("bad auth prompt: %q", authPrompt)
+	}
+	sendCmd(plainAuth)
+	authOK := readLine()
+	if !strings.HasPrefix(authOK, "235 ") {
+		t.Fatalf("bad auth response: %q", authOK)
+	}
+
+	sendCmd("MAIL FROM:<alice@example.com>")
+	mailResp := readLine()
+	if !strings.HasPrefix(mailResp, "250 ") {
+		t.Fatalf("bad mail resp: %q", mailResp)
+	}
+
+	sendCmd("RCPT TO:<bob@example.com>")
+	rcptResp := readLine()
+	if !strings.HasPrefix(rcptResp, "250 ") {
+		t.Fatalf("bad rcpt resp: %q", rcptResp)
+	}
+
+	sendCmd("DATA")
+	dataPrompt := readLine()
+	if !strings.HasPrefix(dataPrompt, "354 ") {
+		t.Fatalf("bad data prompt: %q", dataPrompt)
+	}
+
+	sendCmd("Subject: Hello Bridge\r\n\r\nBridge content\r\n.")
+	dataResp := readLine()
+	if !strings.HasPrefix(dataResp, "250 ") {
+		t.Fatalf("bad data response: %q", dataResp)
+	}
+
+	if !receivedSend {
+		t.Fatalf("expected /v1/bridge/outbound/send to have been called by bridge")
 	}
 }

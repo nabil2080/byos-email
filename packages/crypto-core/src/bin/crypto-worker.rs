@@ -6,7 +6,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use byos_crypto_core::{
-    canonical_bundle_hash, encrypt_message, hpke_seal, AAD_VERSION, ENCRYPTION_VERSION,
+    canonical_bundle_hash, encrypt_message, encrypt_outbound, hpke_seal, AAD_VERSION, ENCRYPTION_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::{env, net::SocketAddr};
@@ -35,6 +35,24 @@ struct EncryptResponse {
     aad_version: u8,
 }
 
+
+#[derive(Deserialize)]
+struct EncryptOutboundRequest {
+    outbound_delivery_pk: String,
+    mailbox_id: String,
+    outbox_seq: u64,
+    plaintext: String,
+}
+
+#[derive(Serialize)]
+struct EncryptOutboundResponse {
+    encrypted_message: String,
+    send_token_hpke_wrapped: String,
+    encryption_iv: String,
+    encryption_version: u32,
+    aad_version: u8,
+}
+
 #[derive(Serialize)]
 struct HealthResponse {
     status: &'static str,
@@ -54,6 +72,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/encrypt", post(encrypt))
+        .route("/v1/encrypt-outbound", post(encrypt_outbound_handler))
         .with_state(AppState);
 
     println!("BYOS crypto worker using Rust crypto core on {addr}");
@@ -107,6 +126,27 @@ async fn encrypt(
         content_key_hpke_wrapped: BASE64.encode(content_key_hpke_wrapped),
         encryption_iv: BASE64.encode(iv),
         bundle_hash: BASE64.encode(bundle_hash),
+        encryption_version: ENCRYPTION_VERSION,
+        aad_version: AAD_VERSION,
+    }))
+}
+
+
+async fn encrypt_outbound_handler(
+    State(_state): State<AppState>,
+    Json(request): Json<EncryptOutboundRequest>,
+) -> ApiResult<EncryptOutboundResponse> {
+    let pk = decode_fixed_32(&request.outbound_delivery_pk, "outbound_delivery_pk")?;
+    let mailbox_id = parse_mailbox_id(&request.mailbox_id)?;
+    let plaintext = decode(&request.plaintext, "plaintext")?;
+
+    let (ciphertext, send_token_wrapped, iv, _aad, _content_key) =
+        encrypt_outbound(&pk, &mailbox_id, request.outbox_seq, &plaintext).map_err(crypto_error)?;
+
+    Ok(Json(EncryptOutboundResponse {
+        encrypted_message: BASE64.encode(ciphertext),
+        send_token_hpke_wrapped: BASE64.encode(send_token_wrapped),
+        encryption_iv: BASE64.encode(iv),
         encryption_version: ENCRYPTION_VERSION,
         aad_version: AAD_VERSION,
     }))
