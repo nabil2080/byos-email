@@ -5,13 +5,13 @@ import Layout from "../layouts/Layout.astro";
 <Layout title="Documentation & Quickstart Guides">
   {/* Header */}
   <section class="pt-20 pb-12 px-6 max-w-7xl mx-auto text-center ambient-glow">
-    <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#1A1817] border border-[#A47764]/40 text-[#A47764] text-xs font-mono font-medium mb-6">
+    <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#EAE3DB] border border-[#A47764]/40 text-[#A47764] text-xs font-mono font-semibold mb-6 shadow-xs">
       <span>Developer &amp; Operator Guides</span>
     </div>
-    <h1 class="text-4xl sm:text-6xl font-extrabold text-[#F0EEE9] tracking-tight">
+    <h1 class="text-4xl sm:text-6xl font-extrabold text-[#242424] tracking-tight">
       BYOS Documentation Hub
     </h1>
-    <p class="mt-4 text-base sm:text-lg text-[#C5BFB8] max-w-2xl mx-auto">
+    <p class="mt-4 text-base sm:text-lg text-[#4A4A4A] max-w-2xl mx-auto">
       Complete deployment, configuration, and security guides for your self-sovereign email infrastructure.
     </p>
   </section>
@@ -20,92 +20,92 @@ import Layout from "../layouts/Layout.astro";
   <section class="py-8 px-6 max-w-7xl mx-auto">
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       {/* Guide 1: S3 / MinIO */}
-      <div class="p-6 rounded-2xl border border-[#383431] bg-[#1A1817] flex flex-col justify-between hover:border-[#A47764] transition-colors">
+      <div class="p-6 rounded-3xl border border-[#D1C4B8] bg-[#EAE3DB] flex flex-col justify-between hover:border-[#A47764] transition-colors shadow-xs">
         <div>
-          <div class="text-xs font-mono text-[#A47764] font-semibold">STORAGE SETUP</div>
-          <h3 class="mt-2 text-lg font-bold text-[#F0EEE9]">Amazon S3 &amp; MinIO Provisioning</h3>
-          <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+          <div class="text-xs font-mono text-[#A47764] font-bold">STORAGE SETUP</div>
+          <h3 class="mt-2 text-lg font-bold text-[#242424]">Amazon S3 &amp; MinIO Provisioning</h3>
+          <p class="mt-2 text-xs text-[#4A4A4A] leading-relaxed">
             Create least-privilege IAM policies, configure path-style or virtual-hosted endpoints, and verify bucket write latency.
           </p>
         </div>
-        <div class="mt-6 pt-4 border-t border-[#383431] flex items-center justify-between">
+        <div class="mt-6 pt-4 border-t border-[#D1C4B8] flex items-center justify-between">
           <span class="text-[11px] font-mono text-[#6E6E6E]">5 min read</span>
-          <a href="http://127.0.0.1:3000/dashboard/storage" class="text-xs font-semibold text-[#A47764] hover:text-[#B88B77]">Configure Storage &rarr;</a>
+          <a href="http://127.0.0.1:3000/dashboard/storage" class="text-xs font-bold text-[#A47764] hover:text-[#8E6250]">Configure Storage &rarr;</a>
         </div>
       </div>
 
       {/* Guide 2: Google Drive */}
-      <div class="p-6 rounded-2xl border border-[#383431] bg-[#1A1817] flex flex-col justify-between hover:border-[#A47764] transition-colors">
+      <div class="p-6 rounded-3xl border border-[#D1C4B8] bg-[#EAE3DB] flex flex-col justify-between hover:border-[#A47764] transition-colors shadow-xs">
         <div>
-          <div class="text-xs font-mono text-[#A47764] font-semibold">STORAGE SETUP</div>
-          <h3 class="mt-2 text-lg font-bold text-[#F0EEE9]">Google Drive OAuth Authorization</h3>
-          <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+          <div class="text-xs font-mono text-[#A47764] font-bold">STORAGE SETUP</div>
+          <h3 class="mt-2 text-lg font-bold text-[#242424]">Google Drive OAuth Authorization</h3>
+          <p class="mt-2 text-xs text-[#4A4A4A] leading-relaxed">
             Authorize BYOS via OAuth 2.0 to store encrypted ciphertext directly in your enterprise Google Drive workspace.
           </p>
         </div>
-        <div class="mt-6 pt-4 border-t border-[#383431] flex items-center justify-between">
+        <div class="mt-6 pt-4 border-t border-[#D1C4B8] flex items-center justify-between">
           <span class="text-[11px] font-mono text-[#6E6E6E]">3 min read</span>
-          <a href="http://127.0.0.1:3000/dashboard/storage" class="text-xs font-semibold text-[#A47764] hover:text-[#B88B77]">Connect Drive &rarr;</a>
+          <a href="http://127.0.0.1:3000/dashboard/storage" class="text-xs font-bold text-[#A47764] hover:text-[#8E6250]">Connect Drive &rarr;</a>
         </div>
       </div>
 
       {/* Guide 3: Custom Domains */}
-      <div class="p-6 rounded-2xl border border-[#383431] bg-[#1A1817] flex flex-col justify-between hover:border-[#A47764] transition-colors">
+      <div class="p-6 rounded-3xl border border-[#D1C4B8] bg-[#EAE3DB] flex flex-col justify-between hover:border-[#A47764] transition-colors shadow-xs">
         <div>
-          <div class="text-xs font-mono text-[#A47764] font-semibold">DNS &amp; DELIVERABILITY</div>
-          <h3 class="mt-2 text-lg font-bold text-[#F0EEE9]">Custom Domain &amp; DKIM/SPF Setup</h3>
-          <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+          <div class="text-xs font-mono text-[#A47764] font-bold">DNS &amp; DELIVERABILITY</div>
+          <h3 class="mt-2 text-lg font-bold text-[#242424]">Custom Domain &amp; DKIM/SPF Setup</h3>
+          <p class="mt-2 text-xs text-[#4A4A4A] leading-relaxed">
             Configure MX records, SPF policies, 2048-bit DKIM TXT records, and DMARC enforcement for 10/10 deliverability.
           </p>
         </div>
-        <div class="mt-6 pt-4 border-t border-[#383431] flex items-center justify-between">
+        <div class="mt-6 pt-4 border-t border-[#D1C4B8] flex items-center justify-between">
           <span class="text-[11px] font-mono text-[#6E6E6E]">4 min read</span>
-          <a href="http://127.0.0.1:3000/dashboard/domains" class="text-xs font-semibold text-[#A47764] hover:text-[#B88B77]">Manage Domains &rarr;</a>
+          <a href="http://127.0.0.1:3000/dashboard/domains" class="text-xs font-bold text-[#A47764] hover:text-[#8E6250]">Manage Domains &rarr;</a>
         </div>
       </div>
 
       {/* Guide 4: Desktop Bridge */}
-      <div class="p-6 rounded-2xl border border-[#383431] bg-[#1A1817] flex flex-col justify-between hover:border-[#A47764] transition-colors">
+      <div class="p-6 rounded-3xl border border-[#D1C4B8] bg-[#EAE3DB] flex flex-col justify-between hover:border-[#A47764] transition-colors shadow-xs">
         <div>
-          <div class="text-xs font-mono text-[#A47764] font-semibold">CLIENT INTEGRATION</div>
-          <h3 class="mt-2 text-lg font-bold text-[#F0EEE9]">Desktop Bridge (Thunderbird / Outlook)</h3>
-          <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+          <div class="text-xs font-mono text-[#A47764] font-bold">CLIENT INTEGRATION</div>
+          <h3 class="mt-2 text-lg font-bold text-[#242424]">Desktop Bridge (Thunderbird / Outlook)</h3>
+          <p class="mt-2 text-xs text-[#4A4A4A] leading-relaxed">
             Run the local BYOS Bridge daemon to connect native IMAP/SMTP clients with local cryptographic decryption.
           </p>
         </div>
-        <div class="mt-6 pt-4 border-t border-[#383431] flex items-center justify-between">
+        <div class="mt-6 pt-4 border-t border-[#D1C4B8] flex items-center justify-between">
           <span class="text-[11px] font-mono text-[#6E6E6E]">Local Daemon</span>
-          <a href="http://127.0.0.1:3000/dashboard/settings" class="text-xs font-semibold text-[#A47764] hover:text-[#B88B77]">Download Bridge &rarr;</a>
+          <a href="http://127.0.0.1:3000/dashboard/settings" class="text-xs font-bold text-[#A47764] hover:text-[#8E6250]">Download Bridge &rarr;</a>
         </div>
       </div>
 
       {/* Guide 5: Backup CLI */}
-      <div class="p-6 rounded-2xl border border-[#383431] bg-[#1A1817] flex flex-col justify-between hover:border-[#A47764] transition-colors">
+      <div class="p-6 rounded-3xl border border-[#D1C4B8] bg-[#EAE3DB] flex flex-col justify-between hover:border-[#A47764] transition-colors shadow-xs">
         <div>
-          <div class="text-xs font-mono text-[#A47764] font-semibold">DISASTER RECOVERY</div>
-          <h3 class="mt-2 text-lg font-bold text-[#F0EEE9]">Backup &amp; Restore with `byos-backup`</h3>
-          <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+          <div class="text-xs font-mono text-[#A47764] font-bold">DISASTER RECOVERY</div>
+          <h3 class="mt-2 text-lg font-bold text-[#242424]">Backup &amp; Restore with `byos-backup`</h3>
+          <p class="mt-2 text-xs text-[#4A4A4A] leading-relaxed">
             Perform verifiable full or selective restores across 14 relational tables with SHA-256 manifest integrity.
           </p>
         </div>
-        <div class="mt-6 pt-4 border-t border-[#383431] flex items-center justify-between">
+        <div class="mt-6 pt-4 border-t border-[#D1C4B8] flex items-center justify-between">
           <span class="text-[11px] font-mono text-[#6E6E6E]">CLI Reference</span>
-          <a href="/security" class="text-xs font-semibold text-[#A47764] hover:text-[#B88B77]">View CLI Spec &rarr;</a>
+          <a href="/security" class="text-xs font-bold text-[#A47764] hover:text-[#8E6250]">View CLI Spec &rarr;</a>
         </div>
       </div>
 
       {/* Guide 6: Emergency Recovery */}
-      <div class="p-6 rounded-2xl border border-[#383431] bg-[#1A1817] flex flex-col justify-between hover:border-[#A47764] transition-colors">
+      <div class="p-6 rounded-3xl border border-[#D1C4B8] bg-[#EAE3DB] flex flex-col justify-between hover:border-[#A47764] transition-colors shadow-xs">
         <div>
-          <div class="text-xs font-mono text-[#A47764] font-semibold">EMERGENCY RUNBOOK</div>
-          <h3 class="mt-2 text-lg font-bold text-[#F0EEE9]">Root Rotation &amp; Account Recovery</h3>
-          <p class="mt-2 text-xs text-[#C5BFB8] leading-relaxed">
+          <div class="text-xs font-mono text-[#A47764] font-bold">EMERGENCY RUNBOOK</div>
+          <h3 class="mt-2 text-lg font-bold text-[#242424]">Root Rotation &amp; Account Recovery</h3>
+          <p class="mt-2 text-xs text-[#4A4A4A] leading-relaxed">
             Step-by-step instructions for rotating root secrets after device theft and recovering mailboxes using your BIP39 mnemonic.
           </p>
         </div>
-        <div class="mt-6 pt-4 border-t border-[#383431] flex items-center justify-between">
+        <div class="mt-6 pt-4 border-t border-[#D1C4B8] flex items-center justify-between">
           <span class="text-[11px] font-mono text-[#6E6E6E]">Critical Ops</span>
-          <a href="/security" class="text-xs font-semibold text-[#A47764] hover:text-[#B88B77]">Read Runbook &rarr;</a>
+          <a href="/security" class="text-xs font-bold text-[#A47764] hover:text-[#8E6250]">Read Runbook &rarr;</a>
         </div>
       </div>
     </div>
@@ -113,15 +113,15 @@ import Layout from "../layouts/Layout.astro";
 
   {/* DNS Records Reference Box */}
   <section class="py-12 px-6 max-w-7xl mx-auto">
-    <div class="p-8 rounded-2xl border border-[#4A4A4A] bg-[#1A1817]">
-      <h3 class="text-lg font-bold text-[#F0EEE9]">Standard DNS Configuration Reference</h3>
-      <p class="mt-1 text-xs text-[#C5BFB8]">Add these records to your Cloudflare or domain registrar DNS zone:</p>
+    <div class="p-8 sm:p-10 rounded-3xl border border-[#D1C4B8] bg-[#E5DDD5]">
+      <h3 class="text-lg font-bold text-[#242424]">Standard DNS Configuration Reference</h3>
+      <p class="mt-1 text-xs text-[#4A4A4A]">Add these records to your Cloudflare or domain registrar DNS zone:</p>
 
-      <div class="mt-6 font-mono text-xs overflow-x-auto bg-[#12100F] p-5 rounded-xl border border-[#383431] space-y-2 text-[#C5BFB8]">
-        <div><span class="text-[#A47764]">MX</span>   @   mail.yourdomain.com   Priority: 10</div>
-        <div><span class="text-[#A47764]">TXT</span>  @   &quot;v=spf1 mx ~all&quot;</div>
-        <div><span class="text-[#A47764]">TXT</span>  byos._domainkey.yourdomain.com   &quot;v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQE...&quot;</div>
-        <div><span class="text-[#A47764]">TXT</span>  _dmarc.yourdomain.com   &quot;v=DMARC1; p=reject; sp=reject; adkim=s; aspf=s;&quot;</div>
+      <div class="mt-6 font-mono text-xs overflow-x-auto bg-[#F0EEE9] p-5 rounded-2xl border border-[#D1C4B8] space-y-2 text-[#242424] shadow-xs">
+        <div><span class="text-[#A47764] font-bold">MX</span>   @   mail.yourdomain.com   Priority: 10</div>
+        <div><span class="text-[#A47764] font-bold">TXT</span>  @   &quot;v=spf1 mx ~all&quot;</div>
+        <div><span class="text-[#A47764] font-bold">TXT</span>  byos._domainkey.yourdomain.com   &quot;v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQE...&quot;</div>
+        <div><span class="text-[#A47764] font-bold">TXT</span>  _dmarc.yourdomain.com   &quot;v=DMARC1; p=reject; sp=reject; adkim=s; aspf=s;&quot;</div>
       </div>
     </div>
   </section>
