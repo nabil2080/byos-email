@@ -35,7 +35,7 @@ func mailboxRecoveryMaterialHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "******localhost:5432/byos?sslmode=disable"
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
 	}
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
