@@ -24,6 +24,8 @@ import {
   prepareOutbound,
   sendOutbound,
   scheduleOutbound,
+  searchMailboxTokens,
+  indexSearchToken,
   UserMe,
   Mailbox,
   DraftMessage,
@@ -38,6 +40,9 @@ import {
   decryptDraftEnvelope,
   encryptContactEnvelope,
   decryptContactEnvelope,
+  deriveSearchKeyFromMnemonic,
+  computeSearchToken,
+  extractKeywords,
   ContactPlaintext,
 } from "./message_crypto";
 import { loadSignature, saveSignature, applySignature } from "./signature";
@@ -84,6 +89,9 @@ const App: Component = () => {
   // Mailbox key custody: in-memory only, derived per unlock from the recovery
   // phrase. Cleared on mailbox switch and lock. Never persisted or logged.
   const [mailboxKey, setMailboxKey] = createSignal<Uint8Array | null>(null);
+  const [searchKey, setSearchKey] = createSignal<string | null>(null);
+  const [serverMatchedMsgIds, setServerMatchedMsgIds] = createSignal<string[]>([]);
+  const [isSearchingTokens, setIsSearchingTokens] = createSignal(false);
   const [unlockedBoxId, setUnlockedBoxId] = createSignal<string | null>(null);
   const [unlockMnemonic, setUnlockMnemonic] = createSignal("");
   const [unlocking, setUnlocking] = createSignal(false);
@@ -281,6 +289,8 @@ const App: Component = () => {
 
   function lockMailbox() {
     setMailboxKey(null);
+    setSearchKey(null);
+    setServerMatchedMsgIds([]);
     setUnlockedBoxId(null);
     setUnlockMnemonic("");
     setUnlockError(null);
@@ -311,7 +321,9 @@ const App: Component = () => {
       const detail = await fetchMailboxDetail(box.id);
       const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
       const key = unlockMailboxKey(wasm, words, box.id, detail.mailbox_sk_wrapped);
+      const sKey = deriveSearchKeyFromMnemonic(wasm, words);
       setMailboxKey(key);
+      setSearchKey(sKey);
       setUnlockedBoxId(box.id);
       setUnlockMnemonic("");
       await loadMailboxData(box.id);
@@ -324,18 +336,58 @@ const App: Component = () => {
   }
 
   const filteredMessages = () => {
+    const q = searchQuery().toLowerCase().trim();
+    const matchedIds = new Set(serverMatchedMsgIds());
     return messages().filter((m) => {
       const matchFolder = m.folder === currentFolder();
-      const q = searchQuery().toLowerCase().trim();
       if (!q) return matchFolder;
-      return (
-        matchFolder &&
-        (m.sender.toLowerCase().includes(q) ||
-          m.subject.toLowerCase().includes(q) ||
-          m.snippet.toLowerCase().includes(q))
-      );
+      const localMatch =
+        m.sender.toLowerCase().includes(q) ||
+        m.subject.toLowerCase().includes(q) ||
+        m.snippet.toLowerCase().includes(q);
+      const serverTokenMatch = matchedIds.has(m.id) || (m.messageId ? matchedIds.has(m.messageId) : false);
+      return matchFolder && (localMatch || serverTokenMatch);
     });
   };
+
+  createEffect(() => {
+    const q = searchQuery().trim();
+    const sKey = searchKey();
+    const box = selectedMailbox();
+    if (!q || !sKey || !box) {
+      setServerMatchedMsgIds([]);
+      return;
+    }
+    const keywords = extractKeywords(q);
+    if (keywords.length === 0) {
+      setServerMatchedMsgIds([]);
+      return;
+    }
+    let cancelled = false;
+    setIsSearchingTokens(true);
+    (async () => {
+      try {
+        const matched = new Set<string>();
+        for (const kw of keywords) {
+          const tokenHex = await computeSearchToken(sKey, kw);
+          if (cancelled) return;
+          const ids = await searchMailboxTokens(box.id, tokenHex);
+          if (cancelled) return;
+          for (const id of ids) matched.add(id);
+        }
+        if (!cancelled) {
+          setServerMatchedMsgIds(Array.from(matched));
+        }
+      } catch (err) {
+        console.error("Token search error:", err);
+      } finally {
+        if (!cancelled) setIsSearchingTokens(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
 
   async function handleDownloadAttachment(att: AttachmentItem) {
     const box = selectedMailbox();
@@ -442,6 +494,24 @@ const App: Component = () => {
       });
       setDecryptedContent(plaintext);
       setMessagePlaintext(plaintext);
+
+      // Asynchronously index search tokens for this message under search_key (Section 16).
+      // Only HMAC-SHA256 tokens reach the server; plaintext terms never leave the browser.
+      const sKey = searchKey();
+      if (sKey) {
+        const textToIndex = `${msg.subject} ${plaintext}`;
+        const keywords = extractKeywords(textToIndex);
+        (async () => {
+          for (const kw of keywords) {
+            try {
+              const tokenHex = await computeSearchToken(sKey, kw);
+              await indexSearchToken(box.id, msg.id, tokenHex);
+            } catch {
+              // Non-blocking indexing
+            }
+          }
+        })();
+      }
     } catch (err) {
       console.error("Failed to open message:", err);
       setDecryptedContent(

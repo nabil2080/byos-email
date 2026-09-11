@@ -181,3 +181,38 @@ export function decryptContactEnvelope(
     notes: typeof parsed.notes === "string" ? parsed.notes : "",
   };
 }
+
+/** Derive the 32-byte mailbox search key (hex) from the recovery phrase.
+    The recovery phrase and derived search key never leave the browser. */
+export function deriveSearchKeyFromMnemonic(wasm: typeof WasmCore, mnemonic: string): string {
+  const rootHex = wasm.wasm_recover_root_secret(mnemonic.trim());
+  return wasm.wasm_derive_search_key(rootHex);
+}
+
+/** Compute HMAC-SHA256 search token (hex) for a normalized keyword term (Section 16).
+    Search key and search terms never leave the client. */
+export async function computeSearchToken(searchKeyHex: string, term: string): Promise<string> {
+  const normalized = term.trim().toLowerCase();
+  if (!normalized) return "";
+  const keyBytes = hexToBytes(searchKeyHex);
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(normalized));
+  return bytesToHex(new Uint8Array(sig));
+}
+
+/** Extract unique keywords from text for search token generation. */
+export function extractKeywords(text: string): string[] {
+  const words = text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter((w) => w.length >= 2 && w.length <= 64);
+  return Array.from(new Set(words));
+}

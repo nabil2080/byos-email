@@ -386,3 +386,21 @@ export async function scheduleOutbound(payload: SchedulePayload): Promise<{ deli
     body: JSON.stringify(payload),
   });
 }
+
+export interface SearchTokensResponse {
+  message_ids: string[];
+}
+
+export async function searchMailboxTokens(mailboxId: string, tokenHex: string): Promise<string[]> {
+  const res = await apiRequest<SearchTokensResponse>(
+    `/v1/mailboxes/${mailboxId}/search?token=${encodeURIComponent(tokenHex)}`
+  );
+  return res.message_ids || [];
+}
+
+export async function indexSearchToken(mailboxId: string, messageId: string, tokenHex: string): Promise<void> {
+  return apiRequest<void>(`/v1/mailboxes/${mailboxId}/search`, {
+    method: "POST",
+    body: JSON.stringify({ message_id: messageId, token: tokenHex }),
+  });
+}
