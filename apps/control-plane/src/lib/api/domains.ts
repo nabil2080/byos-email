@@ -4,11 +4,23 @@
  * Never exposes credentials, ciphertext, or DEK.
  */
 
+export interface DnsRecord {
+  type: string;
+  name: string;
+  value: string;
+  priority?: number;
+  status?: string;
+}
+
 export interface Domain {
   id: string;
   name: string;
   is_verified: boolean;
   verified?: boolean;
+  verification_token?: string;
+  dkim_selector?: string;
+  dkim_public_key?: string;
+  dns_records?: DnsRecord[];
 }
 
 function getAuthHeader(): Record<string, string> {
@@ -45,6 +57,10 @@ export async function listDomains(orgId: string): Promise<Domain[]> {
     name: d.name,
     is_verified: (d as unknown as { is_verified: boolean }).is_verified ?? d.verified ?? false,
     verified: (d as unknown as { is_verified: boolean }).is_verified ?? d.verified ?? false,
+    verification_token: d.verification_token,
+    dkim_selector: d.dkim_selector,
+    dkim_public_key: d.dkim_public_key,
+    dns_records: d.dns_records,
   }));
 }
 

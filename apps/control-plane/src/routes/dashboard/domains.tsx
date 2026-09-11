@@ -8,6 +8,7 @@ const DomainsPage: Component = () => {
   const [banner, setBanner] = createSignal<{ kind: "success" | "error"; text: string } | null>(null);
   const [isCreating, setIsCreating] = createSignal(false);
   const [verifyingId, setVerifyingId] = createSignal<string | null>(null);
+  const [expandedDomainId, setExpandedDomainId] = createSignal<string | null>(null);
 
   const [domains, { refetch }] = createResource(
     () => orgId,
@@ -115,21 +116,64 @@ const DomainsPage: Component = () => {
             <ul class="mt-3 space-y-2">
               <For each={domains() ?? []}>
                 {(d) => (
-                  <li class="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
-                    <div class="flex flex-col">
-                      <span class="text-sm font-medium text-slate-900">{d.name}</span>
-                      <span class={`text-xs ${d.is_verified || d.verified ? "text-emerald-600" : "text-amber-600"}`}>
-                        {d.is_verified || d.verified ? "Verified" : "Pending verification"}
-                      </span>
+                  <li class="flex flex-col rounded-md border border-slate-200 p-3">
+                    <div class="flex items-center justify-between">
+                      <div class="flex flex-col">
+                        <span class="text-sm font-medium text-slate-900">{d.name}</span>
+                        <span class={`text-xs ${d.is_verified || d.verified ? "text-emerald-600" : "text-amber-600"}`}>
+                          {d.is_verified || d.verified ? "Verified" : "Pending verification"}
+                        </span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <Show when={!d.is_verified && !d.verified && (d.dns_records ?? []).length > 0}>
+                          <button
+                            type="button"
+                            onClick={() => setExpandedDomainId(expandedDomainId() === d.id ? null : d.id)}
+                            class="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            {expandedDomainId() === d.id ? "Hide DNS Records" : "View DNS Records"}
+                          </button>
+                        </Show>
+                        <Show when={!d.is_verified && !d.verified}>
+                          <button
+                            onClick={() => handleVerify(d.id)}
+                            disabled={verifyingId() === d.id}
+                            class="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+                          >
+                            {verifyingId() === d.id ? "Verifying…" : "Verify"}
+                          </button>
+                        </Show>
+                      </div>
                     </div>
-                    <Show when={!d.is_verified && !d.verified}>
-                      <button
-                        onClick={() => handleVerify(d.id)}
-                        disabled={verifyingId() === d.id}
-                        class="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
-                      >
-                        {verifyingId() === d.id ? "Verifying…" : "Verify"}
-                      </button>
+
+                    <Show when={expandedDomainId() === d.id && (d.dns_records ?? []).length > 0}>
+                      <div class="mt-3 border-t border-slate-100 pt-3 text-xs">
+                        <p class="mb-2 font-medium text-slate-700">Add the following DNS records to your domain provider:</p>
+                        <div class="overflow-x-auto">
+                          <table class="min-w-full divide-y divide-slate-200">
+                            <thead class="bg-slate-50">
+                              <tr>
+                                <th class="px-2 py-1 text-left font-semibold text-slate-600">Type</th>
+                                <th class="px-2 py-1 text-left font-semibold text-slate-600">Host / Name</th>
+                                <th class="px-2 py-1 text-left font-semibold text-slate-600">Value</th>
+                                <th class="px-2 py-1 text-left font-semibold text-slate-600">Priority</th>
+                              </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100 font-mono text-[11px]">
+                              <For each={d.dns_records ?? []}>
+                                {(r) => (
+                                  <tr>
+                                    <td class="whitespace-nowrap px-2 py-1.5 font-bold text-sky-700">{r.type}</td>
+                                    <td class="whitespace-nowrap px-2 py-1.5 text-slate-800 select-all">{r.name}</td>
+                                    <td class="max-w-xs truncate px-2 py-1.5 text-slate-600 select-all" title={r.value}>{r.value}</td>
+                                    <td class="whitespace-nowrap px-2 py-1.5 text-slate-500">{r.priority ?? "-"}</td>
+                                  </tr>
+                                )}
+                              </For>
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
                     </Show>
                   </li>
                 )}
