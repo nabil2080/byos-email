@@ -739,7 +739,7 @@ func (w *StorageWorker) getStorageForConnection(ctx context.Context, connectionI
 	if err != nil {
 		return w.defaultStorage, w.defaultBucket, err
 	}
-	if status == "deleted" {
+	if status == "deleted" || status == "error" {
 		return nil, "", ErrStorageDisconnected
 	}
 	var config map[string]interface{}

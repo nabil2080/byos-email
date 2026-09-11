@@ -107,8 +107,8 @@ async fn check_and_incr_rate(
     let mut conn = match rc.get_async_connection().await {
         Ok(c) => c,
         Err(e) => {
-            warn!("redis connect failed (fail open): {}", e);
-            return (true, 0, "".to_string());
+            warn!("redis connect failed (fail closed): {}", e);
+            return (false, 30, "rate limiter unavailable".to_string());
         }
     };
     let now: i64 = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
@@ -153,11 +153,11 @@ async fn check_and_incr_rate(
         }
         Ok(v) => {
             warn!("rate lua unexpected result {:?}", v);
-            (true, 0, "".to_string())
+            (false, 30, "rate limiter invalid response".to_string())
         }
         Err(e) => {
-            warn!("rate lua error (fail open): {}", e);
-            (true, 0, "".to_string())
+            warn!("rate lua error (fail closed): {}", e);
+            (false, 30, "rate limiter script error".to_string())
         }
     }
 }
@@ -449,8 +449,8 @@ async fn poll_scheduled(client: &Client, redis_client: Option<&redis::Client>) -
                 (oid, mplan, oplan)
             },
             _ => {
-                warn!("rate check: mailbox {} not found, skipping rate check (fail open)", mailbox_id);
-                (String::new(), "solo".to_string(), "solo".to_string())
+                warn!("rate check: mailbox {} not found, failing closed", mailbox_id);
+                continue;
             }
         };
         if !org_id.is_empty() {
@@ -599,7 +599,7 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
         // Recipient count check (per-message limit)
         let rcpt_count = count_recipients(&plaintext);
         // Lookup plan for recipients limit
-        let (mailbox_plan, _org_id) = match client.query_opt("SELECT plan, org_id::text FROM mailboxes WHERE id=$1", &[&Uuid::parse_str(&mailbox_id).unwrap()]).await {
+        let (mailbox_plan, org_id) = match client.query_opt("SELECT plan, org_id::text FROM mailboxes WHERE id=$1", &[&Uuid::parse_str(&mailbox_id).unwrap()]).await {
             Ok(Some(r)) => {
                 let p: String = r.get(0);
                 let oid: String = r.get(1);
@@ -613,6 +613,22 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
             client.execute("UPDATE outbound_queue SET status='bounced', failed_at=now(), attempts=attempts+1 WHERE id=$1", &[&Uuid::parse_str(&id).unwrap()]).await?;
             client.execute("INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_message) VALUES ($1,'outbound',$2,$3,$4,'bounced',$5)", &[&Uuid::parse_str(&delivery_id).unwrap(), &Uuid::parse_str(&mailbox_id).unwrap(), &Uuid::parse_str(&domain_id).unwrap(), &recipient, &"too many recipients"]).await?;
             continue;
+        }
+
+        if !org_id.is_empty() {
+            let org_plan = client.query_opt("SELECT plan FROM organizations WHERE id=$1", &[&Uuid::parse_str(&org_id).unwrap()]).await.ok().and_then(|opt| opt.map(|rr| rr.get(0))).unwrap_or_else(|| mailbox_plan.clone());
+            let rc_opt = redis_client.cloned();
+            let (ok, retry, failed) = check_and_incr_rate(&rc_opt, &mailbox_id, &org_id, &mailbox_plan, &org_plan).await;
+            if !ok {
+                warn!("outbound delivery {} deferred due to rate limit (failed {}, retry {}s)", delivery_id, failed, retry);
+                let retry_secs = retry.max(5);
+                let next_attempt = SystemTime::now() + Duration::from_secs(retry_secs as u64);
+                client.execute(
+                    "UPDATE outbound_queue SET next_attempt_at=$2, last_attempt_at=now() WHERE id=$1",
+                    &[&Uuid::parse_str(&id).unwrap(), &next_attempt],
+                ).await?;
+                continue;
+            }
         }
 
         // DKIM: lookup authoritative domain via mailbox.domain_id (least-privilege narrow columns)
