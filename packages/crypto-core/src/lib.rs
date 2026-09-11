@@ -11,14 +11,14 @@ use hpke::{
     Deserializable, OpModeR, OpModeS, Serializable,
 };
 use rsa::{
-    pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey, LineEnding},
-    pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey},
+    pkcs1::LineEnding,
+    pkcs8::{EncodePrivateKey, EncodePublicKey},
     RsaPrivateKey, RsaPublicKey,
 };
 use rsa::signature::{RandomizedSigner as _, SignatureEncoding as _, Signer as _};
 use sha2::{Digest, Sha256};
-use ed25519_dalek::{VerifyingKey, Signature};
 use x25519_dalek::{PublicKey, StaticSecret};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
 // =============================================
 // Constants
@@ -608,11 +608,11 @@ impl OutboundDeliveryKeypair {
     }
 
     pub fn public_key_b64(&self) -> String {
-        base64::encode(self.public_key)
+        BASE64.encode(self.public_key)
     }
 
     pub fn private_key_b64(&self) -> String {
-        base64::encode(self.private_key)
+        BASE64.encode(self.private_key)
     }
 }
 
@@ -691,7 +691,7 @@ pub fn decrypt_dkim_private_key(
 /// Derive DEK from environment variable (for V1 lab, uses a fixed derivation).
 /// In production, BYOS_DEK should be a 32-byte base64-encoded key.
 pub fn derive_dek(dek_b64: &str) -> Result<[u8; 32], CryptoError> {
-    let bytes = base64::decode(dek_b64).map_err(|_| CryptoError::InvalidFormat)?;
+    let bytes = BASE64.decode(dek_b64).map_err(|_| CryptoError::InvalidFormat)?;
     if bytes.len() != 32 {
         return Err(CryptoError::InvalidFormat);
     }
@@ -1122,8 +1122,8 @@ pub fn wasm_hpke_open(
 pub fn wasm_generate_outbound_keypair() -> Result<String, JsValue> {
     let (sk, pk) = generate_outbound_delivery_keypair();
     let result = serde_json::json!({
-        "private_key": base64::encode(sk),
-        "public_key": base64::encode(pk),
+        "private_key": BASE64.encode(sk),
+        "public_key": BASE64.encode(pk),
     });
     Ok(result.to_string())
 }
@@ -1135,7 +1135,7 @@ pub fn wasm_encrypt_outbound(
     message_seq: u64,
     plaintext_b64: &str,
 ) -> Result<String, JsValue> {
-    let pk = base64::decode(outbound_delivery_pk_b64)
+    let pk = BASE64.decode(outbound_delivery_pk_b64)
         .map_err(|e| JsValue::from_str(&e.to_string()))?
         .try_into()
         .map_err(|_| JsValue::from_str("public key must be 32 bytes"))?;
@@ -1143,7 +1143,7 @@ pub fn wasm_encrypt_outbound(
         .map_err(|e| JsValue::from_str(&e))?
         .try_into()
         .map_err(|_| JsValue::from_str("mailbox_id must be 16 bytes"))?;
-    let plaintext = base64::decode(plaintext_b64)
+    let plaintext = BASE64.decode(plaintext_b64)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     let (ciphertext, send_token_wrapped, iv, aad, content_key) =
@@ -1151,11 +1151,11 @@ pub fn wasm_encrypt_outbound(
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     let result = serde_json::json!({
-        "ciphertext": base64::encode(ciphertext),
-        "send_token_wrapped": base64::encode(send_token_wrapped),
-        "iv": base64::encode(iv),
-        "aad": base64::encode(aad),
-        "content_key": base64::encode(content_key),
+        "ciphertext": BASE64.encode(ciphertext),
+        "send_token_wrapped": BASE64.encode(send_token_wrapped),
+        "iv": BASE64.encode(iv),
+        "aad": BASE64.encode(aad),
+        "content_key": BASE64.encode(content_key),
     });
     Ok(result.to_string())
 }
@@ -1168,23 +1168,23 @@ pub fn wasm_decrypt_outbound(
     message_seq: u64,
     ciphertext_b64: &str,
 ) -> Result<String, JsValue> {
-    let sk = base64::decode(outbound_delivery_sk_b64)
+    let sk = BASE64.decode(outbound_delivery_sk_b64)
         .map_err(|e| JsValue::from_str(&e.to_string()))?
         .try_into()
         .map_err(|_| JsValue::from_str("private key must be 32 bytes"))?;
-    let wrapped = base64::decode(send_token_wrapped_b64)
+    let wrapped = BASE64.decode(send_token_wrapped_b64)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let mailbox_id = hex_decode(mailbox_id_hex)
         .map_err(|e| JsValue::from_str(&e))?
         .try_into()
         .map_err(|_| JsValue::from_str("mailbox_id must be 16 bytes"))?;
-    let ciphertext = base64::decode(ciphertext_b64)
+    let ciphertext = BASE64.decode(ciphertext_b64)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     let plaintext = decrypt_outbound(&sk, &wrapped, &mailbox_id, message_seq, &ciphertext)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-    Ok(base64::encode(plaintext))
+    Ok(BASE64.encode(plaintext))
 }
 
 // =============================================
@@ -1679,7 +1679,7 @@ mod tests {
     fn test_dkim_verify_fails_on_body_tamper() {
         let kp = DkimKeypair::generate("byos").unwrap();
         let msg = b"From: a@byos.local\r\nTo: b@byos.local\r\nSubject: t\r\n\r\nOriginal\r\n";
-        let mut signed = dkim_sign(&kp.private_key_pem, "byos", "byos.local", msg).unwrap();
+        let signed = dkim_sign(&kp.private_key_pem, "byos", "byos.local", msg).unwrap();
         // Tamper body
         let tampered = String::from_utf8(signed.clone()).unwrap().replace("Original", "Tampered");
         assert!(!verify_dkim_signature(tampered.as_bytes(), &kp.public_key_pem));
@@ -1713,7 +1713,7 @@ mod tests {
         // Ensure no PEM header leaks
         assert!(!enc.windows(27).any(|w| w == b"-----BEGIN PRIVATE KEY-----"));
         // Also base64 enc should not contain PEM
-        let b64 = base64::encode(&enc);
+        let b64 = BASE64.encode(&enc);
         assert!(!b64.contains("BEGIN"));
     }
 
