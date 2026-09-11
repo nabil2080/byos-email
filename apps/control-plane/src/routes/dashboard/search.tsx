@@ -1,15 +1,52 @@
 import { Component, createSignal, For, Show } from "solid-js";
 import { searchMailbox, indexSearchToken } from "../../lib/api/search";
 
-async function computeTokenHex(term: string): Promise<string> {
-  const enc = new TextEncoder().encode(term.trim().toLowerCase());
-  const hashBuffer = await crypto.subtle.digest("SHA-256", enc);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
+  const clean = hex.trim();
+  if (clean.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(clean)) {
+    throw new Error("Invalid hex string");
+  }
+  const out = new Uint8Array(new ArrayBuffer(clean.length / 2));
+  for (let i = 0; i < clean.length; i += 2) {
+    out[i / 2] = parseInt(clean.substring(i, i + 2), 16);
+  }
+  return out;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Frozen §14 keyed tokens: search_key = HKDF(root_secret,
+// "byos-search-key-v1") via WASM, then HMAC-SHA256(search_key, term) via
+// WebCrypto. The mnemonic, root secret, and search key never leave this
+// browser — only the 32-byte token reaches the server.
+async function computeTokenHex(term: string, mnemonic: string): Promise<string> {
+  const phrase = mnemonic.trim();
+  if (!phrase) {
+    throw new Error("Recovery phrase is required to derive the mailbox search key.");
+  }
+  const normalized = term.trim().toLowerCase();
+  if (!normalized) {
+    throw new Error("Search term is empty.");
+  }
+  const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
+  const rootHex: string = wasm.wasm_recover_root_secret(phrase);
+  const searchKeyHex: string = wasm.wasm_derive_search_key(rootHex);
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    hexToBytes(searchKeyHex),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(normalized));
+  return bytesToHex(new Uint8Array(sig));
 }
 
 const SearchPage: Component = () => {
   const [mailboxId, setMailboxId] = createSignal("");
+  const [mnemonic, setMnemonic] = createSignal("");
   const [query, setQuery] = createSignal("");
   const [results, setResults] = createSignal<string[] | null>(null);
   const [searching, setSearching] = createSignal(false);
@@ -32,7 +69,7 @@ const SearchPage: Component = () => {
 
     setSearching(true);
     try {
-      const tokenHex = await computeTokenHex(query());
+      const tokenHex = await computeTokenHex(query(), mnemonic());
       const msgIds = await searchMailbox(mailboxId().trim(), tokenHex);
       setResults(msgIds);
     } catch (err) {
@@ -53,7 +90,7 @@ const SearchPage: Component = () => {
 
     setIndexing(true);
     try {
-      const tokenHex = await computeTokenHex(indexTerm());
+      const tokenHex = await computeTokenHex(indexTerm(), mnemonic());
       await indexSearchToken(mailboxId().trim(), indexMsgId().trim(), tokenHex);
       setIndexSuccess(`Token for term "${indexTerm()}" successfully indexed for message ${indexMsgId().trim()}`);
       setIndexMsgId("");
@@ -69,7 +106,9 @@ const SearchPage: Component = () => {
     <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <h1 class="text-2xl font-semibold text-slate-900">Encrypted Local Search</h1>
       <p class="mt-1 text-sm text-slate-500">
-        Privacy-preserving search (Section 16). Search terms are hashed into keyed tokens locally in your browser before querying the server. Plaintext terms never reach the server.
+        Privacy-preserving search (Section 16). Tokens are HMAC-SHA-256 under a mailbox search key
+        derived locally from your recovery phrase (HKDF, frozen §14). Plaintext terms, the phrase,
+        and all keys never leave this browser — the server sees only opaque 32-byte tokens.
       </p>
 
       <Show when={error()}>
@@ -90,6 +129,20 @@ const SearchPage: Component = () => {
             onInput={(e) => setMailboxId(e.currentTarget.value)}
           />
         </label>
+        <label class="mt-4 block">
+          <span class="text-sm font-medium text-slate-700">Mailbox recovery phrase</span>
+          <input
+            type="password"
+            autocomplete="off"
+            class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+            placeholder="24-word recovery phrase (never leaves this browser)"
+            value={mnemonic()}
+            onInput={(e) => setMnemonic(e.currentTarget.value)}
+          />
+        </label>
+        <p class="mt-2 text-xs text-slate-500">
+          The phrase derives the mailbox search key locally. It is never stored, transmitted, or logged.
+        </p>
       </div>
 
       {/* Search Section */}
@@ -106,7 +159,7 @@ const SearchPage: Component = () => {
           />
           <button
             type="submit"
-            disabled={searching() || !mailboxId().trim() || !query().trim()}
+            disabled={searching() || !mailboxId().trim() || !mnemonic().trim() || !query().trim()}
             class="rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
           >
             {searching() ? "Searching…" : "Search"}
@@ -177,7 +230,7 @@ const SearchPage: Component = () => {
           </div>
           <button
             type="submit"
-            disabled={indexing() || !mailboxId().trim() || !indexMsgId().trim() || !indexTerm().trim()}
+            disabled={indexing() || !mailboxId().trim() || !mnemonic().trim() || !indexMsgId().trim() || !indexTerm().trim()}
             class="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-900 disabled:opacity-50"
           >
             {indexing() ? "Indexing…" : "Index Search Token"}
@@ -186,7 +239,9 @@ const SearchPage: Component = () => {
       </div>
 
       <p class="mt-6 text-xs text-slate-500">
-        Accepted V1 Privacy Leakage: Server can observe token equality across searches, result count, and access patterns. Server cannot recover plaintext search terms.
+        Accepted V1 Privacy Leakage: tokens are mailbox-keyed, so the server can observe token
+        equality within this mailbox, result counts, and access patterns — but not across mailboxes,
+        and it cannot recover plaintext search terms.
       </p>
     </div>
   );

@@ -13,9 +13,35 @@ Tests: SMTP -> inbound-bridge -> Rspamd -> mail-router -> crypto-worker -> MinIO
 param(
     [string]$SmtpHost = "localhost",
     [int]$SmtpPort = 25,
-    [string]$MailboxAddress = "local@byos.local",
-    [string]$MailboxId = "0cb877dc-4206-4408-8709-1eac14129d6a"
+    [string]$MailboxAddress = "e2email@e2e-inbound-byos.local",
+    [string]$MailboxId = "e1000000-0000-4000-8000-00000000000b"
 )
+
+Write-Host "=== BYOS Step 3 E2E Inbound Slice Test ===" -ForegroundColor Cyan
+
+# Fixture: dedicated org/domain/mailbox/storage mapping. The old script assumed
+# a seeded `local@byos.local` mailbox from a previous lab incarnation; nothing
+# guarantees it here, so this suite owns its fixtures (idempotent reruns).
+$E2EOrg = "e1000000-0000-4000-8000-000000000001"
+$E2EUser = "e1000000-0000-4000-8000-000000000002"
+$E2EDomain = "e1000000-0000-4000-8000-00000000000a"
+$E2EStorage = "e1000000-0000-4000-8000-00000000000c"
+$E2ERoot = "e1000000-0000-4000-8000-00000000000d"
+function Exec-Sql($sql) {
+  $out = docker exec byos-postgres psql -U byos -d byos -t -A -c $sql 2>$null
+  if ($null -eq $out) { return "" }
+  return ($out | Out-String).Trim()
+}
+Exec-Sql "INSERT INTO organizations (id, name, org_recovery_pk, plan) VALUES ('$E2EOrg', 'e2einbound', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=','base64'), 'team') ON CONFLICT (id) DO NOTHING;" | Out-Null
+Exec-Sql "INSERT INTO users (id, org_id, email, password_hash, display_name, is_active, role) VALUES ('$E2EUser', '$E2EOrg', 'e2einbound@byos.local', 'x', 'e2e', true, 'owner') ON CONFLICT (id) DO NOTHING;" | Out-Null
+Exec-Sql "INSERT INTO domains (id, org_id, name, is_verified) VALUES ('$E2EDomain', '$E2EOrg', 'e2e-inbound-byos.local', true) ON CONFLICT (id) DO UPDATE SET is_verified=true;" | Out-Null
+Exec-Sql "INSERT INTO storage_connections (id, org_id, provider, provider_type, bucket_name, endpoint, config, encrypted, status, credentials_enc, is_active) VALUES ('$E2EStorage', '$E2EOrg', 'minio', 'minio', 'byos-mailbox', 'minio:9000', '{}'::jsonb, true, 'active', '\x00', true) ON CONFLICT (id) DO UPDATE SET status='active';" | Out-Null
+Exec-Sql "INSERT INTO root_secrets (id, root_secret_wrapped) VALUES ('$E2ERoot', decode('AA==','base64')) ON CONFLICT (id) DO NOTHING;" | Out-Null
+Exec-Sql "INSERT INTO mailboxes (id, org_id, user_id, domain_id, local_part, mode, root_secret_id, mailbox_sk_wrapped, mailbox_pk, is_active) VALUES ('$MailboxId', '$E2EOrg', '$E2EUser', '$E2EDomain', 'e2email', 'org_managed', '$E2ERoot', decode('AA==','base64'), decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=','base64'), true) ON CONFLICT (id) DO NOTHING;" | Out-Null
+Exec-Sql "INSERT INTO mailbox_storage (mailbox_id, storage_connection_id, object_prefix, status) VALUES ('$MailboxId', '$E2EStorage', 'mailboxes/$MailboxId', 'active') ON CONFLICT (mailbox_id) DO UPDATE SET storage_connection_id='$E2EStorage', status='active';" | Out-Null
+$routeCheck = Exec-Sql "SELECT m.local_part || '@' || d.name FROM mailboxes m JOIN domains d ON d.id=m.domain_id WHERE m.id='$MailboxId';"
+if ($routeCheck -ne $MailboxAddress) { Write-Error "Fixture route mismatch: $routeCheck vs $MailboxAddress"; exit 1 }
+Write-Host "  Fixture route OK: $routeCheck" -ForegroundColor Green
 
 Write-Host "=== BYOS Step 3 E2E Inbound Slice Test ===" -ForegroundColor Cyan
 
@@ -30,9 +56,11 @@ Write-Host "  Private key: $privateKeyB64 (kept client-side)"
 # 2. Seed mailbox with public key
 Write-Host "`n[2/7] Seeding mailbox in PostgreSQL..." -ForegroundColor Yellow
 $updateSql = @"
-UPDATE mailboxes SET mailbox_pk = decode('$publicKeyB64', 'base64') WHERE local_part = 'local';
+UPDATE mailboxes SET mailbox_pk = decode('$publicKeyB64', 'base64') WHERE id = '$MailboxId';
 "@
 docker exec byos-postgres psql -U byos -d byos -c $updateSql | Out-Null
+$pkCheck = Exec-Sql "SELECT encode(mailbox_pk,'base64') FROM mailboxes WHERE id='$MailboxId';"
+if ($pkCheck -ne $publicKeyB64) { Write-Error "Mailbox public key seeding failed"; exit 1 }
 Write-Host "  Mailbox updated with new public key"
 
 # 3. Send test email via SMTP

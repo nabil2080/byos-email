@@ -45,6 +45,10 @@ Write-Host "=== Domain & Mailbox API Tests ===" -ForegroundColor Cyan
 # Setup: Create org, user, domain, and active storage for mailbox provisioning
 Write-Host "`n[1/10] Setup organization, domain, and active storage..." -ForegroundColor Yellow
 Exec-Sql "INSERT INTO organizations (id, name, org_recovery_pk) VALUES ('$org', 'apitest', '\x00') ON CONFLICT DO NOTHING;" | Out-Null
+# Fixture org needs headroom above solo quotas: the suite creates 2 domains
+# and 2 mailboxes via API (quota enforcement landed after this suite was
+# written; solo allows 1+1). Team plan changes no behavior under test.
+Exec-Sql "UPDATE organizations SET plan='team' WHERE id='$org';" | Out-Null
 Exec-Sql "INSERT INTO users (id, org_id, email, password_hash) VALUES ('$user', '$org', 'api@byos.local', 'hash') ON CONFLICT DO NOTHING;" | Out-Null
 Exec-Sql "INSERT INTO domains (id, org_id, name, is_verified) VALUES ('$domainId', '$org', '$domainName', true) ON CONFLICT DO NOTHING;" | Out-Null
 # Ensure org has valid 32-byte recovery pk via WASM (required for HPKE seal)

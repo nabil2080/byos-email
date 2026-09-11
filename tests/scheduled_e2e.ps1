@@ -1,45 +1,112 @@
 #!/usr/bin/env pwsh
-<# Scheduled Sending E2E: prepare -> encrypt -> schedule -> worker promote -> DKIM -> postfix
-   plus cancellation test
-#>
+<# Scheduled Sending E2E: fixtures -> session -> prepare -> encrypt -> schedule
+   -> idempotent retry -> worker promote (no decrypt) -> DKIM -> postfix ->
+   delivered, plus cancellation and hardening checks. Every step asserts;
+   exit 1 on any unexpected status. #>
 param(
-  [string]$ApiUrl = "http://localhost:8080",
-  [string]$MailboxId = "0cb877dc-4206-4408-8709-1eac14129d6a",
-  [string]$UserId = "6ee985a3-cb80-466b-98f3-ac78472a8fe6"
+  [string]$ApiUrl = "http://localhost:8080"
 )
+
+$ErrorActionPreference = "Stop"
+$OrgId = "0e000000-0000-4000-8000-000000000011"
+$UserId = "0e000000-0000-4000-8000-000000000012"
+$DomainId = "0e000000-0000-4000-8000-000000000013"
+$StorageId = "0e000000-0000-4000-8000-000000000014"
+$DomainName = "schede2e-byos.local"
+$TestEmail = "schede2e@byos.local"
+$TestPass = "TestPass123!"
+$TestPassHash = '$argon2id$v=19$m=65536,t=3,p=2$jHtCEZRDha7z7FIHjhvwHw$qB316rOdX328N6CrEoSaQyjQpP0LIW5nrraDNcH/Zk0'
 
 Write-Host "=== Scheduled Sending E2E Test ===" -ForegroundColor Cyan
 
-$actualUser = docker exec byos-postgres psql -U byos -d byos -t -A -c "SELECT user_id::text FROM mailboxes WHERE id='$MailboxId'" 2>$null
-if ($actualUser) { $UserId = $actualUser.Trim() }
-Write-Host "Using UserId: $UserId MailboxId: $MailboxId"
+function Exec-Sql($sql) {
+  $out = docker exec byos-postgres psql -U byos -d byos -t -A -c $sql 2>$null
+  if ($null -eq $out) { return "" }
+  return ($out | Out-String).Trim()
+}
 
-$headers = @{ "X-User-Id" = $UserId }
+function Api-Req($method, $url, $session, $body) {
+  $params = @{ Uri=$url; Method=$method; TimeoutSec=15; ContentType="application/json"; WebSession=$session }
+  if ($body) { $params.Body = $body }
+  try {
+    $r = Invoke-WebRequest @params
+    return @{ code=[int]$r.StatusCode; body=$r.Content }
+  } catch {
+    $code = 0
+    try { $code = [int]$_.Exception.Response.StatusCode.Value__ } catch {}
+    $msg = $_.ErrorDetails.Message
+    if (-not $msg) { $msg = $_.Exception.Message }
+    return @{ code=$code; body=$msg }
+  }
+}
 
-# 1. Get pubkey
+function Assert-Code($res, $want, $what) {
+  if ($res.code -ne $want) { Write-Error "${what}: want ${want} got $($res.code) body: $($res.body)"; exit 1 }
+  Write-Host "  PASS: ${what} (${want})" -ForegroundColor Green
+}
+
+function Wait-ForDb($sql, $want, $tries, $label) {
+  for ($i = 0; $i -lt $tries; $i++) {
+    Start-Sleep -Seconds 5
+    $got = Exec-Sql $sql
+    if ($got -eq $want) { Write-Host "  PASS: ${label} (${want})" -ForegroundColor Green; return $got }
+  }
+  Write-Error "${label}: want ${want} got ${got}"; exit 1
+}
+
+# [0] Fixtures
+Write-Host "`n[0/7] Fixtures..." -ForegroundColor Yellow
+Exec-Sql "INSERT INTO organizations (id, name, org_recovery_pk, plan) VALUES ('$OrgId', 'schede2e', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=','base64'), 'team') ON CONFLICT (id) DO UPDATE SET plan='team';" | Out-Null
+Exec-Sql "INSERT INTO users (id, org_id, email, password_hash, display_name, is_active, role) VALUES ('$UserId', '$OrgId', '$TestEmail', '$TestPassHash', 'schede2e', true, 'owner') ON CONFLICT (id) DO UPDATE SET password_hash='$TestPassHash', is_active=true;" | Out-Null
+Exec-Sql "INSERT INTO domains (id, org_id, name, is_verified) VALUES ('$DomainId', '$OrgId', '$DomainName', true) ON CONFLICT (id) DO UPDATE SET is_verified=true;" | Out-Null
+Exec-Sql "INSERT INTO storage_connections (id, org_id, provider, provider_type, bucket_name, endpoint, config, encrypted, status, credentials_enc, is_active) VALUES ('$StorageId', '$OrgId', 'minio', 'minio', 'byos-mailbox', 'minio:9000', '{}'::jsonb, true, 'active', '\x00', true) ON CONFLICT (id) DO UPDATE SET status='active';" | Out-Null
+# Real org recovery key (HPKE seal rejects degenerate keys)
+$orgPkHex = node -e "const w=require('C:\\Users\\PC\\AppData\\Local\\Temp\\opencode\\wasm-node\\byos_crypto_core.js'); const kp=JSON.parse(w.wasm_generate_keypair()); console.log(kp.public_key)" 2>$null
+if ($orgPkHex) { Exec-Sql "UPDATE organizations SET org_recovery_pk=decode('$($orgPkHex.Trim())','hex') WHERE id='$OrgId';" | Out-Null }
+# DKIM material for the fixture domain (lab-dev fixture shared with outbound_e2e).
+(Get-Content "F:\Codex\byos-email\tests\outbound_dkim_fixture.sql" -Raw) -replace "oute2e-byos.local", $DomainName | docker exec -i byos-postgres psql -U byos -d byos 2>&1 | Out-Null
+
+$session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+$loginBody = @{ email=$TestEmail; password=$TestPass } | ConvertTo-Json -Compress
+try {
+  $lr = Invoke-WebRequest -Uri "$ApiUrl/v1/auth/login" -Method Post -Body $loginBody -ContentType "application/json" -TimeoutSec 15 -WebSession $session
+  if ([int]$lr.StatusCode -ne 200) { Write-Error "login failed"; exit 1 }
+} catch { Write-Error "login failed: $_"; exit 1 }
+Write-Host "  PASS: login 200 + session cookie" -ForegroundColor Green
+
+$MailboxId = [guid]::NewGuid().ToString()
+$LocalPart = "schede2ebox-$(Get-Random)"
+$payloadJson = node "C:\Users\PC\AppData\Local\Temp\opencode\gen_mailbox_payload.js" $OrgId $DomainId $LocalPart $MailboxId 2>$null
+if (-not $payloadJson) { Write-Error "WASM payload generation failed"; exit 1 }
+$resMb = Api-Req POST "$ApiUrl/v1/organizations/$OrgId/mailboxes" $session $payloadJson
+Assert-Code $resMb 201 "mailbox create"
+
+# [1] Pubkey
 Write-Host "`n[1/7] GET /v1/outbound/pubkey" -ForegroundColor Yellow
 $pubkeyResp = Invoke-RestMethod -Uri "$ApiUrl/v1/outbound/pubkey" -Method Get
 $pkB64 = $pubkeyResp.outbound_delivery_pk
-Write-Host "  PK: $($pkB64.Substring(0,20))..."
 if (-not $pkB64) { Write-Error "No pubkey"; exit 1 }
+Write-Host "  PASS: pubkey present" -ForegroundColor Green
 
-# 2. Prepare for scheduled (outbox_seq allocation via prepare)
-Write-Host "`n[2/7] POST /v1/outbound/prepare (for schedule)" -ForegroundColor Yellow
+# [2] Prepare
+Write-Host "`n[2/7] POST /v1/outbound/prepare" -ForegroundColor Yellow
 $prepBody = @{ mailbox_id = $MailboxId } | ConvertTo-Json -Compress
-$prep = Invoke-RestMethod -Uri "$ApiUrl/v1/outbound/prepare" -Method Post -Headers $headers -Body $prepBody -ContentType "application/json"
-Write-Host "  reservation_id: $($prep.reservation_id) outbox_seq: $($prep.outbox_seq)"
+$prepRes = Api-Req POST "$ApiUrl/v1/outbound/prepare" $session $prepBody
+Assert-Code $prepRes 201 "prepare"
+$prep = ConvertFrom-Json $prepRes.body
+if (-not $prep.reservation_id -or -not $prep.outbox_seq) { Write-Error "prepare missing fields"; exit 1 }
 
-# 3. Encrypt
+# [3] Encrypt
 Write-Host "`n[3/7] Encrypt outbound via crypto-client" -ForegroundColor Yellow
 $plaintext = "From: noreply@byos.local`nTo: test@example.com`nSubject: Scheduled Test`n`nHello scheduled V5.3"
 $plaB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($plaintext))
 $encOut = & "F:\Codex\byos-email\target\debug\byos-crypto-client.exe" encrypt-outbound $pkB64 $MailboxId $prep.outbox_seq $plaB64 | ConvertFrom-Json
-Write-Host "  ciphertext: $($encOut.ciphertext.Substring(0,30))... wrapped: $($encOut.wrapped.Substring(0,30))... iv: $($encOut.iv)"
+if (-not $encOut.ciphertext -or -not $encOut.wrapped -or -not $encOut.iv) { Write-Error "encrypt-outbound incomplete"; exit 1 }
+Write-Host "  PASS: envelope built" -ForegroundColor Green
 
-# 4. Schedule for ~15 seconds in future
+# [4] Schedule ~20s out (past the 5s minimum with clock margin)
 Write-Host "`n[4/7] POST /v1/outbound/schedule" -ForegroundColor Yellow
-$scheduledAt = (Get-Date).ToUniversalTime().AddSeconds(15).ToString("o")
-Write-Host "  scheduled_at: $scheduledAt"
+$scheduledAt = (Get-Date).ToUniversalTime().AddSeconds(20).ToString("o")
 $schedBody = @{
   reservation_id = $prep.reservation_id
   mailbox_id = $MailboxId
@@ -52,59 +119,35 @@ $schedBody = @{
   encryption_iv = $encOut.iv
   scheduled_at = $scheduledAt
 } | ConvertTo-Json -Compress
-
-$schedResp = Invoke-RestMethod -Uri "$ApiUrl/v1/outbound/schedule" -Method Post -Headers $headers -Body $schedBody -ContentType "application/json"
-Write-Host "  delivery_id: $($schedResp.delivery_id) status: $($schedResp.status) scheduled_at: $($schedResp.scheduled_at)"
-$deliveryId = $schedResp.delivery_id
+$schedRes = Api-Req POST "$ApiUrl/v1/outbound/schedule" $session $schedBody
+Assert-Code $schedRes 201 "schedule"
+$deliveryId = (ConvertFrom-Json $schedRes.body).delivery_id
 if (-not $deliveryId) { Write-Error "No delivery_id from schedule"; exit 1 }
+$s0 = Exec-Sql "SELECT status FROM scheduled_messages WHERE delivery_id='$deliveryId'"
+if ($s0 -ne "pending") { Write-Error "Expected pending, got $s0"; exit 1 }
+Write-Host "  PASS: scheduled pending" -ForegroundColor Green
 
-# Verify scheduled_messages pending
-$schedStatus = docker exec byos-postgres psql -U byos -d byos -t -A -c "SELECT status FROM scheduled_messages WHERE delivery_id='$deliveryId'" 2>$null
-$schedStatus = $schedStatus.Trim()
-Write-Host "  scheduled_messages status: $schedStatus"
-if ($schedStatus -ne "pending") { Write-Error "Expected pending, got $schedStatus"; exit 1 }
+# [4b] Idempotent retry returns the same delivery_id
+$schedRes2 = Api-Req POST "$ApiUrl/v1/outbound/schedule" $session $schedBody
+if ($schedRes2.code -ne 200 -and $schedRes2.code -ne 201) { Write-Error "schedule retry failed: $($schedRes2.code)"; exit 1 }
+if ((ConvertFrom-Json $schedRes2.body).delivery_id -ne $deliveryId) { Write-Error "Schedule idempotency failed"; exit 1 }
+Write-Host "  PASS: idempotent (same delivery_id)" -ForegroundColor Green
 
-# Idempotency: retry same reservation should return same delivery_id
-Write-Host "`n[4b] Retry same reservation (idempotent schedule)" -ForegroundColor Yellow
-$schedResp2 = Invoke-RestMethod -Uri "$ApiUrl/v1/outbound/schedule" -Method Post -Headers $headers -Body $schedBody -ContentType "application/json" -ErrorAction SilentlyContinue
-if ($schedResp2 -and $schedResp2.delivery_id -ne $deliveryId) { Write-Error "Schedule idempotency failed"; exit 1 }
-Write-Host "  PASS: idempotent (same delivery_id)"
+# [5] Scheduler promotes without decrypting; worker delivers via postfix
+Wait-ForDb "SELECT status FROM scheduled_messages WHERE delivery_id='$deliveryId'" "executed" 12 "scheduled promoted to executed"
+Wait-ForDb "SELECT status FROM outbound_queue WHERE delivery_id='$deliveryId'" "delivered" 24 "queue delivered"
+$logStatus = Exec-Sql "SELECT status FROM delivery_log WHERE delivery_id='$deliveryId' ORDER BY created_at DESC LIMIT 1"
+if ($logStatus -ne "delivered") { Write-Error "delivery_log missing delivered row: $logStatus"; exit 1 }
+Write-Host "  PASS: delivered via postfix (dkim signed)" -ForegroundColor Green
+$encLen = Exec-Sql "SELECT length(encrypted_message) FROM outbound_queue WHERE delivery_id='$deliveryId'"
+Write-Host "  encrypted_message length in queue: $encLen"
 
-# 5. Wait for scheduler (poll 5s) to promote
-Write-Host "`n[5/7] Wait for scheduler promotion (20s)" -ForegroundColor Yellow
-Start-Sleep -Seconds 20
-$schedStatus2 = docker exec byos-postgres psql -U byos -d byos -t -A -c "SELECT status FROM scheduled_messages WHERE delivery_id='$deliveryId'" 2>$null
-$schedStatus2 = $schedStatus2.Trim()
-Write-Host "  scheduled_messages after wait: $schedStatus2"
-if ($schedStatus2 -ne "executed") { Write-Error "Expected executed after scheduler, got $schedStatus2"; exit 1 }
-Write-Host "  PASS: scheduled promoted to executed"
-
-# Check outbound_queue exists and was delivered
-$queueStatus = docker exec byos-postgres psql -U byos -d byos -t -A -c "SELECT status FROM outbound_queue WHERE delivery_id='$deliveryId'" 2>$null
-$queueStatus = $queueStatus.Trim()
-Write-Host "  outbound_queue status: $queueStatus"
-# Wait a bit more for worker to deliver via postfix
-Start-Sleep -Seconds 8
-$queueStatus2 = docker exec byos-postgres psql -U byos -d byos -t -A -c "SELECT status FROM outbound_queue WHERE delivery_id='$deliveryId'" 2>$null
-$queueStatus2 = $queueStatus2.Trim()
-Write-Host "  outbound_queue after delivery: $queueStatus2"
-$logStatus = docker exec byos-postgres psql -U byos -d byos -t -A -c "SELECT status FROM delivery_log WHERE delivery_id='$deliveryId' ORDER BY created_at DESC LIMIT 1" 2>$null
-$logStatus = $logStatus.Trim()
-Write-Host "  delivery_log status: $logStatus"
-if ($queueStatus2 -ne "delivered" -and $logStatus -ne "delivered") {
-  Write-Host "  WARN: not yet delivered, checking worker logs"
-  docker logs byos-outbound-worker --tail 50
-  # Allow bounced due to not found? For test@example.com postfix accepts (byos.local routing), should be delivered
-}
-if ($logStatus -eq "delivered" -or $queueStatus2 -eq "delivered") { Write-Host "  PASS: delivered via postfix (dkim signed)" -ForegroundColor Green } else { Write-Error "Scheduled E2E not delivered"; exit 1 }
-
-# Verify worker promoted without decryption? Check that outbound_queue has copy of encrypted payload (no plaintext)
-$encCheck = docker exec byos-postgres psql -U byos -d byos -t -A -c "SELECT length(encrypted_message) FROM outbound_queue WHERE delivery_id='$deliveryId'" 2>$null
-Write-Host "  encrypted_message length in queue: $($encCheck.Trim())"
-
-# 6. Cancellation test: schedule far future then cancel
+# [6] Cancellation: schedule far future, cancel with both ids, never promoted
 Write-Host "`n[6/7] Cancellation test" -ForegroundColor Yellow
-$prep2 = Invoke-RestMethod -Uri "$ApiUrl/v1/outbound/prepare" -Method Post -Headers $headers -Body $prepBody -ContentType "application/json"
+$prepBody2 = @{ mailbox_id = $MailboxId } | ConvertTo-Json -Compress
+$prepRes2 = Api-Req POST "$ApiUrl/v1/outbound/prepare" $session $prepBody2
+Assert-Code $prepRes2 201 "second prepare"
+$prep2 = ConvertFrom-Json $prepRes2.body
 $encOut2 = & "F:\Codex\byos-email\target\debug\byos-crypto-client.exe" encrypt-outbound $pkB64 $MailboxId $prep2.outbox_seq $plaB64 | ConvertFrom-Json
 $farAt = (Get-Date).ToUniversalTime().AddMinutes(10).ToString("o")
 $schedBody2 = @{
@@ -119,40 +162,28 @@ $schedBody2 = @{
   encryption_iv = $encOut2.iv
   scheduled_at = $farAt
 } | ConvertTo-Json -Compress
-$schedResp3 = Invoke-RestMethod -Uri "$ApiUrl/v1/outbound/schedule" -Method Post -Headers $headers -Body $schedBody2 -ContentType "application/json"
-$deliveryId2 = $schedResp3.delivery_id
-Write-Host "  scheduled far future delivery_id: $deliveryId2 at $farAt"
+$schedRes3 = Api-Req POST "$ApiUrl/v1/outbound/schedule" $session $schedBody2
+Assert-Code $schedRes3 201 "far-future schedule"
+$deliveryId2 = (ConvertFrom-Json $schedRes3.body).delivery_id
+$cancelBody = @{ delivery_id = $deliveryId2; reservation_id = $prep2.reservation_id } | ConvertTo-Json -Compress
+$cancelRes = Api-Req POST "$ApiUrl/v1/outbound/scheduled/cancel" $session $cancelBody
+Assert-Code $cancelRes 200 "cancel"
+if ((ConvertFrom-Json $cancelRes.body).status -ne "cancelled") { Write-Error "cancel status wrong"; exit 1 }
+$cs = Exec-Sql "SELECT status FROM scheduled_messages WHERE delivery_id='$deliveryId2'"
+if ($cs -ne "cancelled") { Write-Error "Expected cancelled, got $cs"; exit 1 }
+Write-Host "  PASS: cancellation works" -ForegroundColor Green
+Write-Host "  Waiting 15s to ensure not promoted..."
+Start-Sleep -Seconds 15
+$qc = Exec-Sql "SELECT COUNT(*) FROM outbound_queue WHERE delivery_id='$deliveryId2'"
+if ($qc -ne "0") { Write-Error "Cancelled message was incorrectly promoted"; exit 1 }
+Write-Host "  PASS: cancelled not promoted" -ForegroundColor Green
 
-# Cancel it
-$cancelBody = @{ delivery_id = $deliveryId2 } | ConvertTo-Json -Compress
-$cancelResp = Invoke-RestMethod -Uri "$ApiUrl/v1/outbound/scheduled/cancel" -Method Post -Headers $headers -Body $cancelBody -ContentType "application/json"
-Write-Host "  cancel response: $($cancelResp.status) for $($cancelResp.delivery_id)"
-if ($cancelResp.status -ne "cancelled") { Write-Error "Cancel failed"; exit 1 }
-$cancelStatus = docker exec byos-postgres psql -U byos -d byos -t -A -c "SELECT status FROM scheduled_messages WHERE delivery_id='$deliveryId2'" 2>$null
-$cancelStatus = $cancelStatus.Trim()
-Write-Host "  scheduled status after cancel: $cancelStatus"
-if ($cancelStatus -ne "cancelled") { Write-Error "Expected cancelled"; exit 1 }
-Write-Host "  PASS: cancellation works"
-
-# Ensure cancelled not promoted after wait
-Write-Host "  Waiting 8s to ensure not promoted..."
-Start-Sleep -Seconds 8
-$afterCancelQueue = docker exec byos-postgres psql -U byos -d byos -t -A -c "SELECT COUNT(*) FROM outbound_queue WHERE delivery_id='$deliveryId2'" 2>$null
-$afterCancelQueue = $afterCancelQueue.Trim()
-Write-Host "  outbound_queue rows for cancelled: $afterCancelQueue"
-if ($afterCancelQueue -ne "0") { Write-Error "Cancelled message was incorrectly promoted"; exit 1 }
-Write-Host "  PASS: cancelled not promoted"
-
-# 7. Hardening checks for new endpoints
-Write-Host "`n[7/7] Hardening: new endpoints 60/min and 4MB" -ForegroundColor Yellow
-# 60/min already tested via previous, just check MaxBytes still 4MB for schedule
-try {
-  $big = "A" * (5 * 1024 * 1024)
-  $bigBody = @{ reservation_id = $prep2.reservation_id; mailbox_id = $MailboxId; recipient = "test@example.com"; encrypted_message = $big; send_token_wrapped = $encOut2.wrapped; outbox_seq = $prep2.outbox_seq; encryption_version = 1; aad_version = 1; encryption_iv = $encOut2.iv; scheduled_at = $farAt } | ConvertTo-Json -Compress
-  Invoke-RestMethod -Uri "$ApiUrl/v1/outbound/schedule" -Method Post -Headers $headers -Body $bigBody -ContentType "application/json" -ErrorAction Stop | Out-Null
-  Write-Error "Expected 413 for oversized schedule"
-} catch {
-  if ($_.Exception.Response.StatusCode -eq 413) { Write-Host "  PASS: oversized schedule -> 413" } else { Write-Host "  oversized schedule response: $($_.Exception.Message)" }
-}
+# [7] Hardening: oversized schedule -> 413
+Write-Host "`n[7/7] Hardening: 4MB cap" -ForegroundColor Yellow
+$big = "A" * (5 * 1024 * 1024)
+$bigBody = @{ reservation_id = $prep2.reservation_id; mailbox_id = $MailboxId; recipient = "test@example.com"; encrypted_message = $big; send_token_wrapped = $encOut2.wrapped; outbox_seq = $prep2.outbox_seq; encryption_version = 1; aad_version = 1; encryption_iv = $encOut2.iv; scheduled_at = $farAt } | ConvertTo-Json -Compress
+$bigRes = Api-Req POST "$ApiUrl/v1/outbound/schedule" $session $bigBody
+if ($bigRes.code -ne 413) { Write-Error "Expected 413, got $($bigRes.code)"; exit 1 }
+Write-Host "  PASS: oversized schedule -> 413" -ForegroundColor Green
 
 Write-Host "`n=== SCHEDULED E2E TEST COMPLETE ===" -ForegroundColor Green

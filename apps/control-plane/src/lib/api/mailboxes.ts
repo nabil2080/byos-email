@@ -144,11 +144,55 @@ export async function createMailbox(orgId: string, localPart: string, domainId: 
   }
 }
 
+export interface RootRotationResult {
+  mailbox_id: string;
+  root_secret_id: string;
+  version: number;
+}
+
+/**
+ * Rotate a mailbox recovery root (Section 15). Root-only: the mailbox key is
+ * untouched, so existing messages keep decrypting. For private mailboxes the
+ * wrap is omitted (server stores NULL); for org-managed pass the new HPKE
+ * sealed wrap. The caller must re-enroll the recovery verifier afterwards —
+ * it derives from the old root.
+ */
+export async function rotateRoot(
+  orgId: string,
+  mailboxId: string,
+  rootSecretWrappedHex?: string
+): Promise<RootRotationResult> {
+  return request<RootRotationResult>(
+    `/v1/organizations/${orgId}/mailboxes/${mailboxId}/rotate-root`,
+    {
+      method: "POST",
+      body: JSON.stringify(rootSecretWrappedHex ? { root_secret_wrapped: rootSecretWrappedHex } : {}),
+    }
+  );
+}
+
 export async function createAlias(mailboxId: string, alias: string): Promise<Alias> {
   return request<Alias>(`/v1/mailboxes/${mailboxId}/aliases`, {
     method: "POST",
     body: JSON.stringify({ alias }),
   });
+}
+
+/**
+ * Fetch the organization's PUBLIC recovery key (base64 → hex) for HPKE
+ * sealing. Public material only; never handles secrets.
+ */
+export async function fetchOrgRecoveryPkHex(orgId: string): Promise<string> {
+  const orgData = await request<{ id: string; name: string; org_recovery_pk: string }>(
+    `/v1/organizations/${orgId}`,
+    { method: "GET" }
+  );
+  const b64: string = orgData.org_recovery_pk;
+  if (!b64 || b64.length < 10) throw new Error("organization recovery key not available");
+  const bin = atob(b64);
+  const hex = Array.from(bin, (c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join("");
+  if (hex.length !== 64) throw new Error("invalid org recovery pk");
+  return hex;
 }
 
 export async function listAliases(mailboxId: string): Promise<Alias[]> {

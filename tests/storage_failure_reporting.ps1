@@ -61,6 +61,10 @@ function Exec-Sql($sql) {
 Write-Host "=== Storage Failure Reporting: Setup ==="
 # Create org/user/domain/mailbox for isolated test
 Exec-Sql "INSERT INTO organizations (id, name, org_recovery_pk) VALUES ('$org', 'failtest', '\x00') ON CONFLICT DO NOTHING;" | Out-Null
+# Fixture org needs headroom above solo quotas: setup seeds a mailbox row
+# directly, so API-created mailboxes would 402 under solo (quota enforcement
+# landed after this suite was written). Team plan changes nothing under test.
+Exec-Sql "UPDATE organizations SET plan='team' WHERE id='$org';" | Out-Null
 Exec-Sql "INSERT INTO users (id, org_id, email, password_hash) VALUES ('$user', '$org', 'failtest@byos.local', 'hash') ON CONFLICT DO NOTHING;" | Out-Null
 Exec-Sql "INSERT INTO domains (id, org_id, name, is_verified) VALUES ('$domainId', '$org', '$domainName', true) ON CONFLICT DO NOTHING;" | Out-Null
 # Ensure org has valid 32-byte recovery pk via WASM (required for HPKE seal)

@@ -102,11 +102,24 @@ func domainsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Quota check: enforce plan domain limits
+		// Quota check: enforce plan domain limits. Serialized under the org
+		// row lock so concurrent creates cannot jointly overrun the limit
+		// (check-then-insert race).
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			http.Error(w, "Failed to begin transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback(ctx)
+		var orgExists string
+		if err := tx.QueryRow(ctx, `SELECT id::text FROM organizations WHERE id=$1 FOR UPDATE`, orgID).Scan(&orgExists); err != nil {
+			http.Error(w, "organization not found", http.StatusNotFound)
+			return
+		}
 		var usedDomains int
-		_ = conn.QueryRow(ctx, `SELECT count(*) FROM domains WHERE org_id=$1`, orgID).Scan(&usedDomains)
+		_ = tx.QueryRow(ctx, `SELECT count(*) FROM domains WHERE org_id=$1`, orgID).Scan(&usedDomains)
 		var currentPlan string
-		err = conn.QueryRow(ctx, `SELECT plan FROM organizations WHERE id=$1`, orgID).Scan(&currentPlan)
+		err = tx.QueryRow(ctx, `SELECT plan FROM organizations WHERE id=$1`, orgID).Scan(&currentPlan)
 		if err != nil || currentPlan == "" {
 			currentPlan = "solo"
 		}
@@ -127,13 +140,17 @@ func domainsHandler(w http.ResponseWriter, r *http.Request) {
 
 		var newID string
 		var verified bool
-		err = conn.QueryRow(ctx, `INSERT INTO domains (org_id, name) VALUES ($1, $2) RETURNING id::text, is_verified`, orgID, name).Scan(&newID, &verified)
+		err = tx.QueryRow(ctx, `INSERT INTO domains (org_id, name) VALUES ($1, $2) RETURNING id::text, is_verified`, orgID, name).Scan(&newID, &verified)
 		if err != nil {
 			if isUniqueViolation(err) {
 				http.Error(w, "domain already exists", http.StatusConflict)
 				return
 			}
 			http.Error(w, "failed to create domain", http.StatusInternalServerError)
+			return
+		}
+		if err := tx.Commit(ctx); err != nil {
+			http.Error(w, "failed to commit", http.StatusInternalServerError)
 			return
 		}
 		auditLog(ctx, conn, orgID, userID, "domain_create", "domain", newID, map[string]interface{}{"name": name})

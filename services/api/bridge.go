@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -40,6 +41,8 @@ type BridgeMessageResponse struct {
 	SentAt     *time.Time `json:"sent_at,omitempty"`
 	Status     string     `json:"status"`
 }
+
+type BridgeMessageBodyResponse = MessageBodyResponse
 
 func bridgeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -92,6 +95,64 @@ func bridgeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"messages": messages})
+}
+
+func bridgeMessageBodyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mailboxID := r.URL.Query().Get("mailbox_id")
+	messageID := r.URL.Query().Get("message_id")
+	token := r.Header.Get("X-BYOS-Bridge-Token")
+	if _, err := uuid.Parse(mailboxID); err != nil || token == "" {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	if _, err := uuid.Parse(messageID); err != nil {
+		http.Error(w, "invalid message_id UUID", http.StatusBadRequest)
+		return
+	}
+	hash := sha256.Sum256([]byte(token))
+	conn, err := pgx.Connect(r.Context(), bridgeDatabaseURL())
+	if err != nil {
+		http.Error(w, "authentication unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer conn.Close(r.Context())
+	var credentialID string
+	if err := conn.QueryRow(r.Context(), `SELECT id::text FROM bridge_credentials WHERE mailbox_id=$1 AND token_hash=$2 AND revoked_at IS NULL`, mailboxID, hash[:]).Scan(&credentialID); err != nil {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	if _, err := conn.Exec(r.Context(), `UPDATE bridge_credentials SET last_used_at=now() WHERE id=$1`, credentialID); err != nil {
+		http.Error(w, "authentication unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	body, err := loadEncryptedMessageBody(r.Context(), conn, mailboxID, messageID)
+	if err != nil {
+		var loadErr *messageBodyLoadError
+		if errors.As(err, &loadErr) {
+			http.Error(w, loadErr.msg, loadErr.status)
+			return
+		}
+		http.Error(w, "message not found", http.StatusNotFound)
+		return
+	}
+
+	response := BridgeMessageBodyResponse{
+		EncryptedBody:         body.EncryptedBody,
+		ContentKeyHPKEWrapped: body.ContentKeyHPKEWrapped,
+		EncryptionIV:          body.EncryptionIV,
+		AADVersion:            body.AADVersion,
+		BundleHash:            body.BundleHash,
+		EncryptionVersion:     body.EncryptionVersion,
+		MessageSeq:            body.MessageSeq,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func bridgeDatabaseURL() string {

@@ -37,7 +37,7 @@ try { docker exec byos-redis redis-cli FLUSHALL 2>$null | Out-Null } catch {}
 # Setup: Register new user for test org (session auth)
 $testEmail = "sess-$(Get-Random)@byos.local"
 $testPass = "TestPass123!"
-$regBody = @{ email=$testEmail; password=$testPass } | ConvertTo-Json -Compress
+$regBody = @{ email=$testEmail; password=$testPass; org_recovery_pk=("11" * 32) } | ConvertTo-Json -Compress
 $regRes = Test-Req POST "$baseApi/v1/auth/register" @{} $regBody $null
 if ($regRes.code -ne 201) { Write-Host "FAIL register $($regRes.code) $($regRes.body)" -ForegroundColor Red; exit 1 }
 $regData = $regRes.body | ConvertFrom-Json

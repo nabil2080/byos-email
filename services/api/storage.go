@@ -26,6 +26,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -63,7 +64,7 @@ func googleDriveAuthorizeHandler(w http.ResponseWriter, r *http.Request) {
 	state := uuid.NewString()
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "******localhost:5432/byos?sslmode=disable"
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
@@ -114,7 +115,7 @@ func googleDriveCallbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "******localhost:5432/byos?sslmode=disable"
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -234,7 +235,7 @@ func storageMigrationCopyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "******localhost:5432/byos?sslmode=disable"
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
@@ -329,7 +330,7 @@ func storageMigrationRetryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "******localhost:5432/byos?sslmode=disable"
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
@@ -449,7 +450,7 @@ func storageMigrationStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "******localhost:5432/byos?sslmode=disable"
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
@@ -585,6 +586,48 @@ func storageWorkerURL() string {
 		return u
 	}
 	return "http://storage-worker:8083"
+}
+
+// storageRetrieveResponse mirrors the storage-worker /api/retrieve wire
+// schema (services/storage-worker/main.go RetrieveResponse). The worker
+// marshals Go []byte as a base64 StdEncoding JSON string, so Data arrives as
+// a single base64-encoded string plus the raw Size. Keep Data as string here
+// so the transport encoding stays explicit: one base64 decode to raw bytes,
+// one base64 encode to the client. Never base64-encode the string itself.
+type storageRetrieveResponse struct {
+	Data string `json:"data"`
+	Size int64  `json:"size"`
+}
+
+// decodeStorageRetrieveBody decodes a storage-worker retrieve body exactly
+// once: JSON -> base64 string -> raw bytes. It rejects empty payloads,
+// invalid base64, and size mismatches (misrouting/storage bug) instead of
+// serving corrupt bytes.
+func decodeStorageRetrieveBody(r io.Reader) ([]byte, int64, error) {
+	var rr storageRetrieveResponse
+	// Raw objects are capped at 40 MB server-side (~54 MB base64 + JSON
+	// overhead); cap the wire body well above that to avoid OOM.
+	if err := json.NewDecoder(io.LimitReader(r, 64<<20)).Decode(&rr); err != nil {
+		return nil, 0, fmt.Errorf("decode retrieve json: %w", err)
+	}
+	if rr.Data == "" {
+		return nil, 0, fmt.Errorf("empty data in storage response")
+	}
+	raw, err := base64.StdEncoding.DecodeString(rr.Data)
+	if err != nil {
+		return nil, 0, fmt.Errorf("invalid base64 data in storage response: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, 0, fmt.Errorf("empty data in storage response")
+	}
+	if rr.Size != 0 && rr.Size != int64(len(raw)) {
+		return nil, 0, fmt.Errorf("size mismatch in storage response: header %d != data %d", rr.Size, len(raw))
+	}
+	size := rr.Size
+	if size == 0 {
+		size = int64(len(raw))
+	}
+	return raw, size, nil
 }
 
 // storageInternalKey loads the shared secret the API presents to
@@ -747,7 +790,7 @@ func storageMigrationPreflightHandler(w http.ResponseWriter, r *http.Request) {
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "******localhost:5432/byos?sslmode=disable"
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()

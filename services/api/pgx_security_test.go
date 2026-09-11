@@ -150,7 +150,6 @@ func TestParameterizedRoundTrip(t *testing.T) {
 		`$tag$; drop table rt; --`,
 		`it's a "quoted" value`,
 		`$1 $2 $99`,
-		"null byte \x00 inside",
 		"unicode: \u2028 \u00a0 \U0001f600",
 	}
 	for _, v := range tricky {
@@ -164,5 +163,13 @@ func TestParameterizedRoundTrip(t *testing.T) {
 		if got != v {
 			t.Fatalf("round-trip mismatch: got %q want %q", got, v)
 		}
+	}
+	// A null byte is not representable in PostgreSQL text at all (SQLSTATE
+	// 22021) — the driver must surface a clean error, never silent
+	// truncation or a connection break.
+	if _, err := conn.Exec(ctx, `INSERT INTO rt(v) VALUES ($1)`, "null byte \x00 inside"); err == nil {
+		t.Fatal("expected null byte insert to fail")
+	} else if !strings.Contains(err.Error(), "invalid byte sequence") {
+		t.Fatalf("unexpected null byte error: %v", err)
 	}
 }

@@ -459,7 +459,20 @@ async fn poll_scheduled(client: &Client, redis_client: Option<&redis::Client>) -
             let (ok, retry, _failed) = check_and_incr_rate(&rc_opt, &mailbox_id, &org_id, &mailbox_plan, &org_plan).await;
             if !ok {
                 let sched_uuid = Uuid::parse_str(&id).unwrap();
-                let _ = client.execute("UPDATE scheduled_messages SET retry_after = now() + ($2 * interval '1 second') WHERE id=$1", &[&sched_uuid, &(retry as i32)]).await;
+                // Compute the timestamp client-side: binding an integer into
+                // `$N * interval` makes Postgres infer Float8 for the param
+                // and reject the INT4 Rust binding (silent deferral loss).
+                let retry_at =
+                    SystemTime::now() + Duration::from_secs(retry.max(0) as u64);
+                if let Err(e) = client
+                    .execute(
+                        "UPDATE scheduled_messages SET retry_after = $2 WHERE id=$1",
+                        &[&sched_uuid, &retry_at],
+                    )
+                    .await
+                {
+                    warn!("scheduled {} retry_after update failed: {:?}", delivery_id, e);
+                }
                 info!("scheduled {} deferred retry_after {}s due to rate limit", delivery_id, retry);
                 continue;
             }

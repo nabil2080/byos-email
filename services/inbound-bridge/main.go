@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -19,10 +20,33 @@ import (
 )
 
 type Config struct {
-	ListenAddr   string
-	HealthAddr   string
-	RouterURL    string
-	RspamdURL    string
+	ListenAddr           string
+	HealthAddr           string
+	RouterURL            string
+	RspamdURL            string
+	MailRouterInternalKey string
+}
+
+func loadMailRouterInternalKey() string {
+	if v := strings.TrimSpace(os.Getenv("MAIL_ROUTER_INTERNAL_KEY")); v != "" {
+		return v
+	}
+	path := strings.TrimSpace(os.Getenv("MAIL_ROUTER_INTERNAL_KEY_FILE"))
+	if path == "" {
+		path = "/run/secrets/mail_router_internal_key"
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func isExpectedInternalKey(got, expected string) bool {
+	if expected == "" || got == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
 }
 
 type App struct {
@@ -63,10 +87,11 @@ type Session struct {
 
 func main() {
 	cfg := Config{
-		ListenAddr: envOrDefault("INBOUND_LISTEN", ":25"),
-		HealthAddr: envOrDefault("INBOUND_HEALTH_LISTEN", ":8085"),
-		RouterURL:  strings.TrimRight(envOrDefault("MAIL_ROUTER_URL", "http://localhost:8081"), "/"),
-		RspamdURL:  strings.TrimRight(envOrDefault("RSPAMD_URL", "http://localhost:11334"), "/"),
+		ListenAddr:           envOrDefault("INBOUND_LISTEN", ":25"),
+		HealthAddr:           envOrDefault("INBOUND_HEALTH_LISTEN", ":8085"),
+		RouterURL:            strings.TrimRight(envOrDefault("MAIL_ROUTER_URL", "http://localhost:8081"), "/"),
+		RspamdURL:            strings.TrimRight(envOrDefault("RSPAMD_URL", "http://localhost:11334"), "/"),
+		MailRouterInternalKey: loadMailRouterInternalKey(),
 	}
 	app := &App{cfg: cfg, httpClient: &http.Client{Timeout: 30 * time.Second}}
 
@@ -160,6 +185,9 @@ func (s *Session) Data(r io.Reader) error {
 		return fmt.Errorf("build router request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if s.app.cfg.MailRouterInternalKey != "" {
+		req.Header.Set("X-Internal-Key", s.app.cfg.MailRouterInternalKey)
+	}
 	resp, err := s.app.httpClient.Do(req)
 	if err != nil {
 		log.Printf("router request failed: %v", err)

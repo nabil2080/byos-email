@@ -49,7 +49,25 @@ func isAdmin(userID, orgID string, conn *pgx.Conn) bool {
 }
 
 func isMember(userID, orgID string, conn *pgx.Conn) bool {
-	return hasRole(userID, orgID, "member", conn)
+	var role string
+	err := conn.QueryRow(context.Background(), `SELECT role FROM users WHERE id=$1 AND org_id=$2 AND is_active=true`, userID, orgID).Scan(&role)
+	if err != nil {
+		return false
+	}
+	return roleRank(role) >= 1
+}
+
+func roleRank(role string) int {
+	switch role {
+	case "owner":
+		return 3
+	case "admin":
+		return 2
+	case "member":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func checkAuth(ctx context.Context, w http.ResponseWriter, r *http.Request, allowedRoles ...string) bool {
@@ -72,38 +90,40 @@ func checkAuth(ctx context.Context, w http.ResponseWriter, r *http.Request, allo
 	}
 	defer conn.Close(c)
 
-	// Fetch user's organization from the database
-	var orgID string
-	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&orgID)
+	// Fetch user's organization and role from the database
+	var orgID, actualRole string
+	err = conn.QueryRow(ctx, `SELECT org_id::text, role FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&orgID, &actualRole)
 	if err != nil {
 		http.Error(w, "user not found or not a member of any organization", http.StatusForbidden)
 		return false
 	}
 
-	// User must be authenticated for this organization
 	if !isAuthenticatedForOrg(userID, orgID, conn) {
 		http.Error(w, "user not a member of this organization", http.StatusForbidden)
 		return false
 	}
 
-	// Check if user has one of the allowed roles
-	var hasAllowedRole bool
-	for _, allowed := range allowedRoles {
-		if isOwner(userID, orgID, conn) {
-			hasAllowedRole = true
-			break
-		}
-		if isAdmin(userID, orgID, conn) && !isOwner(userID, orgID, conn) {
-			hasAllowedRole = true
-			break
-		}
-		if isMember(userID, orgID, conn) && (allowed == "member" || allowed == "admin" || allowed == "owner") {
-			hasAllowedRole = true
-			break
-		}
+	if len(allowedRoles) == 0 {
+		http.Error(w, "insufficient role for this operation", http.StatusForbidden)
+		return false
 	}
 
-	if !hasAllowedRole {
+	actualRank := roleRank(actualRole)
+	// Higher role satisfies lower requirement: owner(3) >= admin(2) >= member(1).
+	// Endpoint must declare the minimum required rank. If allowedRoles contains
+	// "member", everyone passes; if it contains "admin", admin and owner pass.
+	requiredRank := 100
+	for _, allowed := range allowedRoles {
+		if r := roleRank(allowed); r != 0 && r < requiredRank {
+			requiredRank = r
+		}
+	}
+	if requiredRank == 100 {
+		http.Error(w, "insufficient role for this operation", http.StatusForbidden)
+		return false
+	}
+
+	if actualRank < requiredRank {
 		http.Error(w, "insufficient role for this operation", http.StatusForbidden)
 		return false
 	}
@@ -312,10 +332,15 @@ func terminateUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark user as inactive
-	_, err = conn.Exec(ctx, `UPDATE users SET is_active=false WHERE id=$1`, req.TargetUserID)
+	// Mark user as inactive. The update is scoped to the actor's org so one
+	// organization's owner cannot terminate another organization's users.
+	res, err := conn.Exec(ctx, `UPDATE users SET is_active=false WHERE id=$1 AND org_id=$2`, req.TargetUserID, orgID)
 	if err != nil {
 		http.Error(w, "failed to terminate user", http.StatusInternalServerError)
+		return
+	}
+	if res.RowsAffected() == 0 {
+		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
 	// Audit termination

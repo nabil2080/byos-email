@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -165,15 +166,16 @@ func TestAttachmentEncryptedUploadAccepted(t *testing.T) {
 	}
 
 	var receivedDownstreamBytes []byte
+	var receivedObjectKey, receivedMailboxID, receivedContentType string
 	mockStorageWorker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/store" && r.Method == http.MethodPost {
-			var body struct {
-				ObjectKey string `json:"object_key"`
-				Data      []byte `json:"data"`
-				MailboxID string `json:"mailbox_id"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-				receivedDownstreamBytes = body.Data
+			// The API streams raw ciphertext (octet-stream + object headers),
+			// never JSON. Assert the real contract, not the legacy JSON shape.
+			receivedContentType = r.Header.Get("Content-Type")
+			receivedObjectKey = r.Header.Get("X-Object-Key")
+			receivedMailboxID = r.Header.Get("X-Mailbox-ID")
+			if body, err := io.ReadAll(r.Body); err == nil {
+				receivedDownstreamBytes = body
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -205,6 +207,15 @@ func TestAttachmentEncryptedUploadAccepted(t *testing.T) {
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("upload status = %d, want 201 Created. Body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.HasPrefix(receivedContentType, "application/octet-stream") {
+		t.Fatalf("downstream content type = %q, want application/octet-stream", receivedContentType)
+	}
+	if receivedMailboxID != mailboxID {
+		t.Fatalf("downstream mailbox = %q, want %q", receivedMailboxID, mailboxID)
+	}
+	if !strings.HasPrefix(receivedObjectKey, "mailboxes/"+mailboxID+"/attachments/") {
+		t.Fatalf("downstream object key = %q, want mailbox-scoped prefix", receivedObjectKey)
 	}
 	if !bytes.Equal(receivedDownstreamBytes, encryptedBytes) {
 		t.Fatalf("stored bytes must equal submitted encrypted bytes; got %v want %v", receivedDownstreamBytes, encryptedBytes)

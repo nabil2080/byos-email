@@ -51,7 +51,7 @@ func storageHealthInterval() time.Duration {
 func runStorageHealthCheck() {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "******localhost:5432/byos?sslmode=disable"
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

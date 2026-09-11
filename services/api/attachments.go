@@ -109,20 +109,20 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 					if err == nil {
 						defer retResp.Body.Close()
 						if retResp.StatusCode == http.StatusOK {
-							var retData struct {
-								Data []byte `json:"data"`
-								Size int64  `json:"size"`
-							}
+							// Storage-worker Data is a base64 StdEncoding JSON
+							// string (see storageRetrieveResponse): decode
+							// exactly once to raw bytes, then serve raw.
 							// SEC-005: verify the returned bytes against DB
 							// metadata instead of serving any non-empty body.
 							// A size mismatch indicates misrouting or a
 							// storage bug; fail loud rather than serve bytes
 							// that do not belong to this attachment.
-							if err := json.NewDecoder(retResp.Body).Decode(&retData); err == nil && len(retData.Data) > 0 &&
-								int64(len(retData.Data)) == a.SizeBytes && retData.Size == a.SizeBytes {
+							rawData, reportedSize, decodeErr := decodeStorageRetrieveBody(retResp.Body)
+							if decodeErr == nil && len(rawData) > 0 &&
+								int64(len(rawData)) == a.SizeBytes && reportedSize == a.SizeBytes {
 								w.Header().Set("Content-Type", a.ContentType)
 								w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", a.Filename))
-								w.Write(retData.Data)
+								w.Write(rawData)
 								return
 							}
 							http.Error(w, "attachment content verification failed", http.StatusBadGateway)
@@ -309,13 +309,58 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "attachment_id required in URL path", http.StatusBadRequest)
 			return
 		}
-		res, err := conn.Exec(ctx, `DELETE FROM attachments WHERE id=$1 AND mailbox_id=$2`, attachmentID, mailboxID)
+		// Load the row first: we need the storage key for object deletion,
+		// and linked attachments (part of a sent/scheduled message record)
+		// must not be destroyed out from under that record.
+		var storageKey string
+		var linkedTo *string
+		err = conn.QueryRow(ctx, `SELECT storage_key, message_id FROM attachments WHERE id=$1 AND mailbox_id=$2`, attachmentID, mailboxID).Scan(&storageKey, &linkedTo)
+		if err != nil {
+			http.Error(w, "attachment not found", http.StatusNotFound)
+			return
+		}
+		if linkedTo != nil {
+			http.Error(w, "attachment is linked to a message and cannot be deleted", http.StatusConflict)
+			return
+		}
+		// Delete the stored object BEFORE the row: the worker delete is
+		// idempotent (missing objects succeed), so a retry after a partial
+		// failure converges instead of stranding an orphaned blob. If the
+		// object delete fails, the row is kept and the client can retry.
+		delPayload, _ := json.Marshal(map[string]string{
+			"object_key": storageKey,
+			"mailbox_id": mailboxID,
+		})
+		delReq, err := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/delete", bytes.NewReader(delPayload))
+		if err != nil {
+			http.Error(w, "failed to prepare storage request", http.StatusInternalServerError)
+			return
+		}
+		delReq.Header.Set("Content-Type", "application/json")
+		setStorageInternalAuth(delReq)
+		delResp, err := (&http.Client{Timeout: 30 * time.Second}).Do(delReq)
+		if err != nil {
+			http.Error(w, "storage-worker unavailable", http.StatusBadGateway)
+			return
+		}
+		defer delResp.Body.Close()
+		if delResp.StatusCode == http.StatusServiceUnavailable {
+			http.Error(w, "storage disconnected", http.StatusServiceUnavailable)
+			return
+		}
+		if delResp.StatusCode != http.StatusOK {
+			http.Error(w, "failed to delete stored object", http.StatusBadGateway)
+			return
+		}
+		res, err := conn.Exec(ctx, `DELETE FROM attachments WHERE id=$1 AND mailbox_id=$2 AND message_id IS NULL`, attachmentID, mailboxID)
 		if err != nil {
 			http.Error(w, "failed to delete attachment", http.StatusInternalServerError)
 			return
 		}
 		if res.RowsAffected() == 0 {
-			http.Error(w, "attachment not found", http.StatusNotFound)
+			// Either vanished or was linked by a concurrent send after the
+			// pre-check; both are reported without claiming deletion.
+			http.Error(w, "attachment not found or linked to a message", http.StatusConflict)
 			return
 		}
 

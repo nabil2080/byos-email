@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,35 @@ func loadStorageInternalKey() string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+func loadMailRouterInternalKey() string {
+	if v := strings.TrimSpace(os.Getenv("MAIL_ROUTER_INTERNAL_KEY")); v != "" {
+		return v
+	}
+	path := strings.TrimSpace(os.Getenv("MAIL_ROUTER_INTERNAL_KEY_FILE"))
+	if path == "" {
+		path = "/run/secrets/mail_router_internal_key"
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func requireMailRouterInternalKey(w http.ResponseWriter, r *http.Request) bool {
+	expected := loadMailRouterInternalKey()
+	if expected == "" {
+		http.Error(w, "mail-router internal auth not configured", http.StatusServiceUnavailable)
+		return false
+	}
+	got := strings.TrimSpace(r.Header.Get("X-Internal-Key"))
+	if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 type App struct {
@@ -154,6 +184,19 @@ func main() {
 	mux.HandleFunc("/v1/inbound", app.inboundHandler)
 	mux.HandleFunc("/v1/messages/latest", app.latestMessageHandler)
 
+	// HealthPort is exposed separately (compose publishes only the main
+	// port mapping; the health listener must actually exist for it).
+	if cfg.HealthPort != "" && cfg.HealthPort != cfg.Port {
+		healthMux := http.NewServeMux()
+		healthMux.HandleFunc("/health", app.healthHandler)
+		go func() {
+			log.Printf("mail-router health on :%s", cfg.HealthPort)
+			if err := http.ListenAndServe(":"+cfg.HealthPort, healthMux); err != nil {
+				log.Printf("health listener failed: %v", err)
+			}
+		}()
+	}
+
 	log.Printf("mail-router listening on :%s", cfg.Port)
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, mux))
 }
@@ -171,6 +214,9 @@ func (a *App) healthHandler(w http.ResponseWriter, r *http.Request) {
 func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !requireMailRouterInternalKey(w, r) {
 		return
 	}
 

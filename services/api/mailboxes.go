@@ -275,11 +275,25 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			http.Error(w, "Failed to begin transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback(ctx)
+		// Serialize per-org creation: the org row lock makes the quota
+		// check below atomic with the inserts, so concurrent creates cannot
+		// jointly overrun the plan limit (check-then-insert race).
+		var orgExists string
+		if err := tx.QueryRow(ctx, `SELECT id::text FROM organizations WHERE id=$1 FOR UPDATE`, orgID).Scan(&orgExists); err != nil {
+			http.Error(w, "organization not found", http.StatusNotFound)
+			return
+		}
 		// Quota check: enforce plan mailbox limits
 		var usedMailboxes int
-		_ = conn.QueryRow(ctx, `SELECT count(*) FROM mailboxes WHERE org_id=$1 AND is_active=true`, orgID).Scan(&usedMailboxes)
+		_ = tx.QueryRow(ctx, `SELECT count(*) FROM mailboxes WHERE org_id=$1 AND is_active=true`, orgID).Scan(&usedMailboxes)
 		var currentPlan string
-		err = conn.QueryRow(ctx, `SELECT plan FROM organizations WHERE id=$1`, orgID).Scan(&currentPlan)
+		err = tx.QueryRow(ctx, `SELECT plan FROM organizations WHERE id=$1`, orgID).Scan(&currentPlan)
 		if err != nil || currentPlan == "" {
 			currentPlan = "solo"
 		}
@@ -301,19 +315,13 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 		// Mailbox creation requires an active storage connection; never fall
 		// back to a default. Deleted/error connections do not qualify.
 		var storageConnID string
-		err = conn.QueryRow(ctx, `SELECT id::text FROM storage_connections WHERE org_id=$1 AND status='active' LIMIT 1`, orgID).Scan(&storageConnID)
+		err = tx.QueryRow(ctx, `SELECT id::text FROM storage_connections WHERE org_id=$1 AND status='active' LIMIT 1`, orgID).Scan(&storageConnID)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(map[string]string{"error": "storage_disconnected"})
 			return
 		}
-		tx, err := conn.Begin(ctx)
-		if err != nil {
-			http.Error(w, "Failed to begin transaction", http.StatusInternalServerError)
-			return
-		}
-		defer tx.Rollback(ctx)
 		var rootSecretID string
 		err = tx.QueryRow(ctx, `INSERT INTO root_secrets (root_secret_wrapped) VALUES ($1) RETURNING id::text`, rootWrapped).Scan(&rootSecretID)
 		if err != nil {
@@ -545,11 +553,24 @@ func mailboxAliasesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Quota check: enforce aliases per mailbox limit
+		// Quota check: enforce aliases per mailbox limit. Serialized under
+		// the mailbox row lock so concurrent creates cannot jointly overrun
+		// the limit (check-then-insert race).
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			http.Error(w, "Failed to begin transaction", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback(ctx)
+		var mailboxExists string
+		if err := tx.QueryRow(ctx, `SELECT id::text FROM mailboxes WHERE id=$1 FOR UPDATE`, mailboxID).Scan(&mailboxExists); err != nil {
+			http.Error(w, "mailbox not found", http.StatusNotFound)
+			return
+		}
 		var usedAliases int
-		_ = conn.QueryRow(ctx, `SELECT count(*) FROM aliases WHERE mailbox_id=$1 AND is_active=true`, mailboxID).Scan(&usedAliases)
+		_ = tx.QueryRow(ctx, `SELECT count(*) FROM aliases WHERE mailbox_id=$1 AND is_active=true`, mailboxID).Scan(&usedAliases)
 		var currentPlan string
-		err = conn.QueryRow(ctx, `SELECT plan FROM organizations WHERE id=$1`, mailboxOrgID).Scan(&currentPlan)
+		err = tx.QueryRow(ctx, `SELECT plan FROM organizations WHERE id=$1`, mailboxOrgID).Scan(&currentPlan)
 		if err != nil || currentPlan == "" {
 			currentPlan = "solo"
 		}
@@ -569,13 +590,17 @@ func mailboxAliasesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var newAliasID string
-		err = conn.QueryRow(ctx, `INSERT INTO aliases (mailbox_id, local_part, domain_id) VALUES ($1, $2, $3) RETURNING id::text`, mailboxID, aliasLocal, aliasDomainID).Scan(&newAliasID)
+		err = tx.QueryRow(ctx, `INSERT INTO aliases (mailbox_id, local_part, domain_id) VALUES ($1, $2, $3) RETURNING id::text`, mailboxID, aliasLocal, aliasDomainID).Scan(&newAliasID)
 		if err != nil {
 			if isUniqueViolation(err) {
 				http.Error(w, "alias already exists", http.StatusConflict)
 				return
 			}
 			http.Error(w, "failed to create alias", http.StatusInternalServerError)
+			return
+		}
+		if err := tx.Commit(ctx); err != nil {
+			http.Error(w, "failed to commit", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

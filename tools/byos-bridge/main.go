@@ -33,10 +33,20 @@ type BridgeConfig struct {
 
 type bridgeMessage struct {
 	MessageSeq int64    `json:"message_seq"`
+	ID         string   `json:"id"`
 	Sender     string   `json:"sender"`
 	Recipients []string `json:"recipients"`
 	ReceivedAt string   `json:"received_at"`
 	SentAt     string   `json:"sent_at"`
+}
+
+type bridgeMessageBody struct {
+	EncryptedBody         string `json:"encrypted_body"`
+	ContentKeyHPKEWrapped string `json:"content_key_hpke_wrapped"`
+	EncryptionIV          string `json:"encryption_iv"`
+	AADVersion            int    `json:"aad_version"`
+	BundleHash            string `json:"bundle_hash"`
+	EncryptionVersion     int    `json:"encryption_version"`
 }
 
 func fetchBridgeMessages(cfg *BridgeConfig) ([]bridgeMessage, bool) {
@@ -62,6 +72,27 @@ func fetchBridgeMessages(cfg *BridgeConfig) ([]bridgeMessage, bool) {
 	return payload.Messages, true
 }
 
+func fetchBridgeMessageBody(cfg *BridgeConfig, messageID string) (*bridgeMessageBody, bool) {
+	req, err := http.NewRequest(http.MethodGet, cfg.ApiURL+"/v1/bridge/message-body?mailbox_id="+cfg.MailboxID+"&message_id="+messageID, nil)
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("X-BYOS-Bridge-Token", cfg.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	var body bridgeMessageBody
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, false
+	}
+	return &body, true
+}
+
 func fetchBridgeMessageCount(cfg *BridgeConfig) (int, bool) {
 	messages, ok := fetchBridgeMessages(cfg)
 	return len(messages), ok
@@ -74,7 +105,37 @@ func writeHeaderFetch(writer *bufio.Writer, tag string, message bridgeMessage) {
 	}
 	headers := fmt.Sprintf("From: %s\r\nTo: %s\r\nDate: %s\r\nMessage-ID: <%d.%d@byos.local>\r\n\r\n",
 		message.Sender, strings.Join(message.Recipients, ", "), date, message.MessageSeq, message.MessageSeq)
-	writer.WriteString(fmt.Sprintf("* %d FETCH (UID %d BODY[HEADER] {%d}\r\n%s)\r\n", message.MessageSeq, message.MessageSeq, len(headers), headers))
+	headerBytes := []byte(headers)
+	writer.WriteString(fmt.Sprintf("* %d FETCH (UID %d BODY[HEADER] {%d}\r\n", message.MessageSeq, message.MessageSeq, len(headerBytes)))
+	writer.Write(headerBytes)
+	writer.WriteString(")\r\n")
+	writer.WriteString(fmt.Sprintf("%s OK FETCH completed\r\n", tag))
+}
+
+func writeBodyFetch(writer *bufio.Writer, tag string, message bridgeMessage, cfg *BridgeConfig) {
+	bodyData, ok := fetchBridgeMessageBody(cfg, message.ID)
+	if !ok {
+		writer.WriteString(fmt.Sprintf("%s NO failed to retrieve encrypted message body\r\n", tag))
+		return
+	}
+
+	encryptedBytes, err := base64.StdEncoding.DecodeString(bodyData.EncryptedBody)
+	if err != nil {
+		writer.WriteString(fmt.Sprintf("%s NO invalid encrypted body encoding\r\n", tag))
+		return
+	}
+
+	headers := fmt.Sprintf("From: %s\r\nTo: %s\r\nDate: %s\r\nMessage-ID: <%d.%d@byos.local>\r\nMIME-Version: 1.0\r\nContent-Type: application/octet-stream\r\nContent-Transfer-Encoding: base64\r\nX-BYOS-Encrypted: true\r\n\r\n",
+		message.Sender, strings.Join(message.Recipients, ", "), message.ReceivedAt, message.MessageSeq, message.MessageSeq)
+	headerBytes := []byte(headers)
+	encodedBody := base64.StdEncoding.EncodeToString(encryptedBytes)
+	bodyBytes := []byte(encodedBody)
+	totalLen := len(headerBytes) + len(bodyBytes)
+
+	writer.WriteString(fmt.Sprintf("* %d FETCH (UID %d BODY[] {%d}\r\n", message.MessageSeq, message.MessageSeq, totalLen))
+	writer.Write(headerBytes)
+	writer.Write(bodyBytes)
+	writer.WriteString(")\r\n")
 	writer.WriteString(fmt.Sprintf("%s OK FETCH completed\r\n", tag))
 }
 
@@ -233,16 +294,33 @@ func handleIMAPConnection(conn net.Conn, cfg *BridgeConfig) {
 				writer.WriteString(fmt.Sprintf("%s NO authenticate first\r\n", tag))
 				break
 			}
-			if len(parts) < 3 || !strings.Contains(strings.ToUpper(parts[2]), "HEADER") {
-				writer.WriteString(fmt.Sprintf("%s NO encrypted message body retrieval is not implemented\r\n", tag))
+			if len(parts) < 4 {
+				writer.WriteString(fmt.Sprintf("%s BAD invalid FETCH command\r\n", tag))
 				break
 			}
-			sequence := strings.Fields(parts[2])[0]
+			sequenceFields := strings.Fields(parts[2])
+			if len(sequenceFields) == 0 {
+				writer.WriteString(fmt.Sprintf("%s BAD invalid FETCH command\r\n", tag))
+				break
+			}
+			sequence := sequenceFields[0]
+			// Only single message sequence numbers are supported. Ranges and
+			// sets (1:5, 1,2, *) must be rejected explicitly: fmt.Sscan would
+			// silently parse a prefix ("1:5" -> 1) and claim OK while serving
+			// a subset of what the client requested.
+			if strings.ContainsAny(sequence, ":,*") {
+				writer.WriteString(fmt.Sprintf("%s BAD only single message sequence fetch is supported\r\n", tag))
+				break
+			}
 			var requested int64
 			if _, err := fmt.Sscan(sequence, &requested); err != nil {
 				writer.WriteString(fmt.Sprintf("%s BAD invalid message sequence\r\n", tag))
 				break
 			}
+			// IMAP shape is "tag FETCH <seq> <item>": the data item lives in
+			// parts[3:], not parts[2]. Reading the item from parts[2] (the
+			// sequence) made every wire FETCH fall through to NO.
+			fetchItem := strings.ToUpper(strings.Join(parts[3:], " "))
 			messages, ok := fetchBridgeMessages(cfg)
 			if !ok {
 				writer.WriteString(fmt.Sprintf("%s NO mailbox metadata unavailable\r\n", tag))
@@ -251,7 +329,13 @@ func handleIMAPConnection(conn net.Conn, cfg *BridgeConfig) {
 			found := false
 			for _, message := range messages {
 				if message.MessageSeq == requested {
-					writeHeaderFetch(writer, tag, message)
+					if strings.Contains(fetchItem, "HEADER") {
+						writeHeaderFetch(writer, tag, message)
+					} else if strings.Contains(fetchItem, "BODY") || strings.Contains(fetchItem, "RFC822") {
+						writeBodyFetch(writer, tag, message, cfg)
+					} else {
+						writer.WriteString(fmt.Sprintf("%s NO only HEADER and BODY fetch are supported\r\n", tag))
+					}
 					found = true
 					break
 				}
@@ -290,7 +374,11 @@ func handleIMAPConnection(conn net.Conn, cfg *BridgeConfig) {
 			writer.Flush()
 			return
 		default:
-			writer.WriteString(fmt.Sprintf("%s OK %s completed\r\n", tag, cmd))
+			// Never claim OK for unimplemented commands (e.g. UID FETCH,
+			// STORE, IDLE). A fake OK would make clients believe an
+			// operation succeeded while nothing happened. BAD lets them
+			// degrade or report honestly.
+			writer.WriteString(fmt.Sprintf("%s BAD unknown command\r\n", tag))
 		}
 		writer.Flush()
 	}

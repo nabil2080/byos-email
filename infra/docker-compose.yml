@@ -139,8 +139,10 @@ services:
       CRYPTO_WORKER_URL: "http://crypto-worker:8084"
       STORAGE_WORKER_URL: "http://storage-worker:8083"
       STORAGE_WORKER_INTERNAL_KEY_FILE: /run/secrets/storage_worker_internal_key
+      MAIL_ROUTER_INTERNAL_KEY_FILE: /run/secrets/mail_router_internal_key
     secrets:
       - storage_worker_internal_key
+      - mail_router_internal_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -213,6 +215,9 @@ services:
       INBOUND_HEALTH_LISTEN: ":8085"
       MAIL_ROUTER_URL: "http://mail-router:8081"
       RSPAMD_URL: "http://rspamd:11333"
+      MAIL_ROUTER_INTERNAL_KEY_FILE: /run/secrets/mail_router_internal_key
+    secrets:
+      - mail_router_internal_key
     depends_on:
       mail-router:
         condition: service_started
@@ -265,6 +270,8 @@ secrets:
     file: ./secrets/storage_dek.b64
   storage_worker_internal_key:
     file: ./secrets/storage_worker_internal_key.txt
+  mail_router_internal_key:
+    file: ./secrets/mail_router_internal_key.txt
 
 volumes:
   postgres-data:

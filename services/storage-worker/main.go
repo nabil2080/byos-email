@@ -141,7 +141,12 @@ func (g *GoogleDriveStorage) PutObject(ctx context.Context, bucket, key string, 
 }
 
 func (g *GoogleDriveStorage) find(ctx context.Context, key string) (string, int64, error) {
-	q := "trashed = false and appProperties has { key = 'byos_object_key' and value = '" + strings.ReplaceAll(key, "'", "\\'") + "' }"
+	if strings.ContainsAny(key, "\n\r\"") {
+		return "", 0, fmt.Errorf("invalid object key characters")
+	}
+	escaped := strings.ReplaceAll(key, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "'", "\\'")
+	q := "trashed = false and appProperties has { key = 'byos_object_key' and value = '" + escaped + "' }"
 	endpoint := "https://www.googleapis.com/drive/v3/files?fields=files(id,size,appProperties)&pageSize=10&q=" + url.QueryEscape(q)
 	resp, err := g.request(ctx, http.MethodGet, endpoint, nil, "")
 	if err != nil {

@@ -52,7 +52,9 @@ $testPass = "TestPass123!"
 $wrongPass = "WrongPass123!"
 
 Write-Host "`n[1] Registration -> 201" -ForegroundColor Yellow
-$body = @{ email=$testEmail; password=$testPass } | ConvertTo-Json -Compress
+# org_recovery_pk is required by the API (32-byte hex org recovery public key)
+$orgRecoveryPk = "11" * 32
+$body = @{ email=$testEmail; password=$testPass; org_recovery_pk=$orgRecoveryPk } | ConvertTo-Json -Compress
 $res = Test-Req POST "$baseApi/v1/auth/register" @{} $body $null
 Write-Host "register $($res.code) $($res.body)"
 if ($res.code -ne 201) { Write-Host "FAIL" -ForegroundColor Red; exit 1 }
@@ -146,7 +148,7 @@ Write-Host "`n[11] Login rate limit -> 429" -ForegroundColor Yellow
 $rateEmail = "ratelimit-$(Get-Random)@byos.local"
 $ratePass = "RatePass123!"
 # Register rate user first
-$rateReg = @{ email=$rateEmail; password=$ratePass } | ConvertTo-Json -Compress
+$rateReg = @{ email=$rateEmail; password=$ratePass; org_recovery_pk=$orgRecoveryPk } | ConvertTo-Json -Compress
 Test-Req POST "$baseApi/v1/auth/register" @{} $rateReg $null | Out-Null
 # Now 6 rapid wrong password attempts (limit 5/min)
 $rateFail = 0
@@ -176,7 +178,7 @@ Write-Host "`n[13] Org isolation: user A cannot access org B" -ForegroundColor Y
 # Create second user in different org
 $secondEmail = "org2-$(Get-Random)@byos.local"
 $secondPass = "SecondPass123!"
-$secondRegBody = @{ email=$secondEmail; password=$secondPass } | ConvertTo-Json -Compress
+$secondRegBody = @{ email=$secondEmail; password=$secondPass; org_recovery_pk=$orgRecoveryPk } | ConvertTo-Json -Compress
 $secondReg = Test-Req POST "$baseApi/v1/auth/register" @{} $secondRegBody $null
 if ($secondReg.code -ne 201) { Write-Host "FAIL second register" -ForegroundColor Red; exit 1 }
 $secondData = $secondReg.body | ConvertFrom-Json

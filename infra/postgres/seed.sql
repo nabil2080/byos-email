@@ -1,4 +1,7 @@
--- Seed data for dev test mailbox
+-- Seed data for dev test mailbox — LAB-ONLY deterministic test key
+-- (dummy decode('AAAA...') is explicit test key, not production DKIM)
+-- Real labs should generate via `go run tools/gen_dkim` or `cargo run`
+-- and store encrypted with DEK; production must never use this dummy.
 INSERT INTO organizations (id, name, org_recovery_pk) VALUES ('eaee2269-f0b9-4a15-bf99-785285f8d543', 'Test Org', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64')) ON CONFLICT (id) DO NOTHING;
 INSERT INTO users (id, org_id, email, display_name, password_hash, is_active) VALUES ('6ee985a3-cb80-466b-98f3-ac78472a8fe6', 'eaee2269-f0b9-4a15-bf99-785285f8d543', 'test@byos.local', 'Test User', '$2a$10$dummyhashdummyhashdummyhashdummyhashdummyhas', true) ON CONFLICT (id) DO NOTHING;
 INSERT INTO domains (id, org_id, name, is_verified, dkim_selector, dkim_private_key_enc, dkim_public_key) VALUES ('ca1fbf8e-9561-4dc2-8657-dc1ceeee7800', 'eaee2269-f0b9-4a15-bf99-785285f8d543', 'byos.local', true, 'byos', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'), 'v=DKIM1; k=rsa; p=dummy') ON CONFLICT (id) DO NOTHING;
