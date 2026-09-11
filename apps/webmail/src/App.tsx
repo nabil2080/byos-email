@@ -1,12 +1,25 @@
 import { Component, createSignal, createEffect, onMount, For, Show } from "solid-js";
 import {
   fetchCurrentUser,
+  login,
+  logout,
   fetchMailboxes,
+  fetchMailboxDetail,
   fetchDrafts,
   createDraft,
+  updateDraft,
   deleteDraft,
   fetchAttachments,
+  downloadAndDecryptAttachment,
+  downloadAttachmentForDisplay,
+  uploadEncryptedAttachment,
+  fetchContacts,
+  createContact,
+  updateContact,
+  deleteContact,
+  deleteAttachment,
   fetchMessages,
+  fetchMessageBody,
   fetchOutboundPubkey,
   prepareOutbound,
   sendOutbound,
@@ -15,13 +28,26 @@ import {
   Mailbox,
   DraftMessage,
   AttachmentItem,
+  ContactItem,
   MessageMetadata,
 } from "./api";
+import {
+  unlockMailboxKey,
+  decryptMessageEnvelope,
+  encryptDraftEnvelope,
+  decryptDraftEnvelope,
+  encryptContactEnvelope,
+  decryptContactEnvelope,
+  ContactPlaintext,
+} from "./message_crypto";
+import { loadSignature, saveSignature, applySignature } from "./signature";
 
 type Folder = "inbox" | "sent" | "drafts" | "archive" | "spam" | "trash";
 
 interface DisplayMessage {
   id: string;
+  messageSeq?: number;
+  version?: number;
   folder: Folder;
   sender: string;
   recipient: string;
@@ -32,6 +58,7 @@ interface DisplayMessage {
   read: boolean;
   starred: boolean;
   isRealApi?: boolean;
+  messageId?: string; // For attachment filtering
 }
 
 const App: Component = () => {
@@ -45,8 +72,40 @@ const App: Component = () => {
   const [composeOpen, setComposeOpen] = createSignal(false);
   const [isDecrypting, setIsDecrypting] = createSignal(false);
   const [decryptedContent, setDecryptedContent] = createSignal<string | null>(null);
+  // Plaintext available for editing. Set ONLY on successful decrypt — the
+  // Edit action must never load a locked/error placeholder into compose.
+  const [editablePlaintext, setEditablePlaintext] = createSignal<string | null>(null);
+  // Message plaintext for reply/forward quoting. Same discipline: success-only.
+  const [messagePlaintext, setMessagePlaintext] = createSignal<string | null>(null);
   const [isLoading, setIsLoading] = createSignal(true);
-  const [attachments, setAttachments] = createSignal<AttachmentItem[]>([]);
+  const [messageAttachments, setMessageAttachments] = createSignal<AttachmentItem[]>([]);
+  const [downloadingAttachment, setDownloadingAttachment] = createSignal<string | null>(null);
+
+  // Mailbox key custody: in-memory only, derived per unlock from the recovery
+  // phrase. Cleared on mailbox switch and lock. Never persisted or logged.
+  const [mailboxKey, setMailboxKey] = createSignal<Uint8Array | null>(null);
+  const [unlockedBoxId, setUnlockedBoxId] = createSignal<string | null>(null);
+  const [unlockMnemonic, setUnlockMnemonic] = createSignal("");
+  const [unlocking, setUnlocking] = createSignal(false);
+  const [unlockError, setUnlockError] = createSignal<string | null>(null);
+
+  // Per-mailbox signature draft (device-local; see signature.ts).
+  const [signatureText, setSignatureText] = createSignal("");
+  const [signatureSaved, setSignatureSaved] = createSignal(false);
+
+  function refreshSignature(boxId: string | null) {
+    setSignatureText(boxId ? loadSignature(boxId) : "");
+    setSignatureSaved(false);
+  }
+
+  function handleSaveSignature() {
+    const box = selectedMailbox();
+    if (!box) return;
+    saveSignature(box.id, signatureText());
+    setSignatureText(loadSignature(box.id));
+    setSignatureSaved(true);
+    setTimeout(() => setSignatureSaved(false), 2000);
+  }
 
   // Compose Form signals
   const [composeTo, setComposeTo] = createSignal("");
@@ -56,19 +115,48 @@ const App: Component = () => {
   const [composeStatus, setComposeStatus] = createSignal<string | null>(null);
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
   const [composeAttachments, setComposeAttachments] = createSignal<AttachmentItem[]>([]);
+  // When set, saving updates this draft (optimistic version) instead of creating.
+  const [editingDraft, setEditingDraft] = createSignal<{ id: string; version: number } | null>(null);
+
+  // Login form state. The password lives in a signal only while typing and is
+  // cleared on every submit attempt, success or failure.
+  const [loginEmail, setLoginEmail] = createSignal("");
+  const [loginPassword, setLoginPassword] = createSignal("");
+  const [loginBusy, setLoginBusy] = createSignal(false);
+  const [loginError, setLoginError] = createSignal<string | null>(null);
+
+  // Contacts manager state. Plaintext contacts live only in memory while the
+  // mailbox is unlocked; the server stores opaque envelopes exclusively.
+  interface DisplayContact extends ContactPlaintext {
+    id: string;
+    version: number;
+  }
+  const [contactsOpen, setContactsOpen] = createSignal(false);
+  const [contacts, setContacts] = createSignal<DisplayContact[]>([]);
+  const [contactsLoading, setContactsLoading] = createSignal(false);
+  const [contactsError, setContactsError] = createSignal<string | null>(null);
+  const [editingContact, setEditingContact] = createSignal<DisplayContact | null>(null);
+  const [contactName, setContactName] = createSignal("");
+  const [contactEmail, setContactEmail] = createSignal("");
+  const [contactNotes, setContactNotes] = createSignal("");
+
+  async function bootstrapSession(user: UserMe) {
+    setCurrentUser(user);
+    const boxes = await fetchMailboxes(user.org_id);
+    setMailboxes(boxes);
+    if (boxes.length > 0) {
+      setSelectedMailbox(boxes[0]);
+      refreshSignature(boxes[0].id);
+      await loadMailboxData(boxes[0].id);
+    }
+  }
 
   onMount(async () => {
     setIsLoading(true);
     try {
       const user = await fetchCurrentUser();
       if (user) {
-        setCurrentUser(user);
-        const boxes = await fetchMailboxes(user.org_id);
-        setMailboxes(boxes);
-        if (boxes.length > 0) {
-          setSelectedMailbox(boxes[0]);
-          await loadMailboxData(boxes[0].id);
-        }
+        await bootstrapSession(user);
       }
     } catch (err) {
       console.warn("Failed loading user/mailbox data on mount:", err);
@@ -77,17 +165,65 @@ const App: Component = () => {
     }
   });
 
+  async function handleLogin(e: Event) {
+    e.preventDefault();
+    const email = loginEmail().trim();
+    const password = loginPassword();
+    if (!email || !password) {
+      setLoginError("Enter your email and password.");
+      return;
+    }
+    setLoginBusy(true);
+    setLoginError(null);
+    try {
+      await login(email, password);
+      setLoginPassword("");
+      setIsLoading(true);
+      const user = await fetchCurrentUser();
+      if (!user) throw new Error("Session was not established.");
+      await bootstrapSession(user);
+    } catch (err) {
+      // The server answers wrong/unknown credentials with the same generic
+      // 401, so this message cannot leak which half was wrong.
+      setLoginError("Invalid email or password.");
+    } finally {
+      setLoginPassword("");
+      setLoginBusy(false);
+      setIsLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    // Revoke server-side best-effort, then always tear down local state: a
+    // failed request must never leave a signed-in UI (shared-machine threat).
+    try {
+      await logout();
+    } catch (err) {
+      console.warn("Server logout failed, clearing local session anyway:", err);
+    }
+    lockMailbox();
+    setComposeOpen(false);
+    clearComposeForm();
+    setCurrentUser(null);
+    setMailboxes([]);
+    setSelectedMailbox(null);
+    setMessages([]);
+    refreshSignature(null);
+    setLoginPassword("");
+    setLoginError(null);
+  }
+
   async function loadMailboxData(mailboxId: string) {
     try {
-      const [draftsList, attList, messageList] = await Promise.all([
+      const [draftsList, messageList] = await Promise.all([
         fetchDrafts(mailboxId),
-        fetchAttachments(mailboxId),
         fetchMessages(mailboxId),
       ]);
-      setAttachments(attList);
 
       const realMessages: DisplayMessage[] = messageList.map((m: MessageMetadata) => ({
         id: m.id,
+        messageId: m.id, // For attachment filtering
+        messageSeq: m.message_seq,
         folder: m.direction === "sent" ? "sent" : "inbox",
         sender: m.sender,
         recipient: m.recipients.join(", "),
@@ -99,23 +235,91 @@ const App: Component = () => {
         starred: false,
         isRealApi: true,
       }));
-      const draftMessages: DisplayMessage[] = draftsList.map((d: DraftMessage) => ({
-        id: d.id,
-        folder: "drafts",
-        sender: currentUser()?.email || "me@byos.local",
-        recipient: d.recipient || "(no recipient)",
-        subject: d.subject || "(no subject)",
-        snippet: d.encrypted_envelope ? d.encrypted_envelope.slice(0, 40) + "…" : "Draft payload…",
-        encryptedBody: d.encrypted_envelope || "Encrypted draft envelope",
-        date: new Date(d.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        read: true,
-        starred: false,
-        isRealApi: true,
-      }));
+      const key = mailboxKey();
+      const keyBoxId = unlockedBoxId();
+      let wasm: typeof import("./generated/crypto-core/byos_crypto_core.js") | null = null;
+      if (key && keyBoxId === mailboxId) {
+        try {
+          wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+        } catch {
+          wasm = null;
+        }
+      }
+      const draftMessages: DisplayMessage[] = draftsList.map((d: DraftMessage) => {
+        let snippet = "Encrypted draft — unlock mailbox to preview.";
+        if (key && wasm && keyBoxId === mailboxId && d.encrypted_envelope) {
+          try {
+            const text = decryptDraftEnvelope(wasm, key, mailboxId, d.encrypted_envelope);
+            snippet = text.slice(0, 80) + (text.length > 80 ? "…" : "");
+          } catch {
+            snippet = "Encrypted draft (decryption failed).";
+          }
+        } else if (!d.encrypted_envelope) {
+          snippet = "Draft payload…";
+        }
+        return {
+          id: d.id,
+          version: d.version,
+          folder: "drafts",
+          sender: currentUser()?.email || "me@byos.local",
+          recipient: d.recipient || "(no recipient)",
+          subject: d.subject || "(no subject)",
+          snippet,
+          encryptedBody: d.encrypted_envelope || "Encrypted draft envelope",
+          date: new Date(d.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          read: true,
+          starred: false,
+          isRealApi: true,
+        };
+      });
 
       setMessages([...realMessages, ...draftMessages]);
     } catch (err) {
       console.warn("Error loading mailbox data:", err);
+    }
+  }
+
+  function lockMailbox() {
+    setMailboxKey(null);
+    setUnlockedBoxId(null);
+    setUnlockMnemonic("");
+    setUnlockError(null);
+    setSelectedMsg(null);
+    setDecryptedContent(null);
+    setEditablePlaintext(null);
+    setMessagePlaintext(null);
+    setEditingDraft(null);
+    setContacts([]);
+    setContactsOpen(false);
+    setEditingContact(null);
+    setContactName("");
+    setContactEmail("");
+    setContactNotes("");
+    setContactsError(null);
+  }
+
+  async function handleUnlock() {
+    const box = selectedMailbox();
+    const words = unlockMnemonic().trim();
+    if (!box || !words) {
+      setUnlockError("Select a mailbox and enter its recovery phrase.");
+      return;
+    }
+    setUnlocking(true);
+    setUnlockError(null);
+    try {
+      const detail = await fetchMailboxDetail(box.id);
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      const key = unlockMailboxKey(wasm, words, box.id, detail.mailbox_sk_wrapped);
+      setMailboxKey(key);
+      setUnlockedBoxId(box.id);
+      setUnlockMnemonic("");
+      await loadMailboxData(box.id);
+    } catch (err) {
+      lockMailbox();
+      setUnlockError(err instanceof Error ? err.message : "Unlock failed.");
+    } finally {
+      setUnlocking(false);
     }
   }
 
@@ -133,38 +337,283 @@ const App: Component = () => {
     });
   };
 
+  async function handleDownloadAttachment(att: AttachmentItem) {
+    const box = selectedMailbox();
+    if (!box) return;
+
+    setDownloadingAttachment(att.id);
+    try {
+      const key = mailboxKey();
+      if (key && unlockedBoxId() === box.id) {
+        // Decrypt locally with the unlocked mailbox key.
+        const decrypted = await downloadAndDecryptAttachment(box.id, att.id, key);
+        const url = URL.createObjectURL(decrypted);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = att.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return;
+      }
+      const { encryptedBlob } = await downloadAttachmentForDisplay(box.id, att.id);
+      // Locked: hand over the still-encrypted bytes explicitly marked as such.
+      const url = URL.createObjectURL(encryptedBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = att.filename + ".encrypted";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      alert(
+        `Attachment downloaded as encrypted file (${att.filename}.encrypted).\n\n` +
+        `Unlock the mailbox with the recovery phrase to download decrypted files.`
+      );
+    } catch (err) {
+      console.error("Failed to download attachment:", err);
+      alert(`Failed to download attachment: ${err instanceof Error ? err.message : "unknown error"}`);
+    } finally {
+      setDownloadingAttachment(null);
+    }
+  }
+
   async function openMessage(msg: DisplayMessage) {
     setSelectedMsg(msg);
     setIsDecrypting(true);
     setDecryptedContent(null);
+    setEditablePlaintext(null);
+    setMessagePlaintext(null);
+    setMessageAttachments([]);
 
     // Mark as read
     setMessages((prev) =>
       prev.map((m) => (m.id === msg.id ? { ...m, read: true } : m))
     );
 
-    // Message bodies require a real client-side storage fetch and mailbox-key
-    // decryption flow. Never render opaque storage references as plaintext.
-    setDecryptedContent("Message content is encrypted and cannot be displayed until client-side key and storage retrieval are configured.");
-    setIsDecrypting(false);
+    const box = selectedMailbox();
+    if (!box) {
+      setDecryptedContent("No mailbox selected.");
+      setIsDecrypting(false);
+      return;
+    }
+
+    try {
+      // Drafts live outside message_metadata: decrypt the stored envelope
+      // directly instead of fetching a message body (which would 404).
+      if (msg.folder === "drafts") {
+        const key = mailboxKey();
+        if (!key || unlockedBoxId() !== box.id) {
+          setDecryptedContent("Mailbox is locked. Unlock with the recovery phrase to read this draft.");
+          return;
+        }
+        const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+        const plaintext = decryptDraftEnvelope(wasm, key, box.id, msg.encryptedBody);
+        setDecryptedContent(plaintext);
+        setEditablePlaintext(plaintext);
+        return;
+      }
+      const body = await fetchMessageBody(box.id, msg.id);
+
+      // Fetch attachments for this message - use stable msg.id with fallback for legacy messageId
+      const allAttachments = await fetchAttachments(box.id);
+      const targetId = msg.messageId ?? msg.id;
+      const msgAttachments = allAttachments.filter((a) => {
+        const attMessageId = a.message_id ?? (a as unknown as { messageId?: string }).messageId;
+        return attMessageId != null && attMessageId !== "" && attMessageId === targetId;
+      });
+      setMessageAttachments(msgAttachments);
+
+      // Decrypt locally when unlocked. The key, phrase, and plaintext never
+      // leave the browser; failures show a generic message, never key material.
+      const key = mailboxKey();
+      if (!key || unlockedBoxId() !== box.id || msg.messageSeq === undefined) {
+        setDecryptedContent("Mailbox is locked. Unlock with the recovery phrase to decrypt this message.");
+        return;
+      }
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      const plaintext = decryptMessageEnvelope(wasm, key, box.id, {
+        message_seq: msg.messageSeq,
+        encryption_version: body.encryption_version,
+        encrypted_body: body.encrypted_body,
+        content_key_hpke_wrapped: body.content_key_hpke_wrapped,
+      });
+      setDecryptedContent(plaintext);
+      setMessagePlaintext(plaintext);
+    } catch (err) {
+      console.error("Failed to open message:", err);
+      setDecryptedContent(
+        `Failed to open message: ${err instanceof Error ? err.message : "unknown error"}`
+      );
+    } finally {
+      setIsDecrypting(false);
+    }
   }
 
   async function handleAttachmentSelected(e: Event) {
     const input = e.target as HTMLInputElement;
-    // SEC-001: attachment uploads are disabled until a real per-mailbox key
-    // source exists. A previous prototype encrypted with a constant
-    // hard-coded key, which provides no security. Block here so no
-    // ciphertext created under a known key can reach storage.
-    input.value = ""; // reset
-    setErrorMessage(
-      "Attachment uploads are disabled in this build: mailbox encryption key exchange is not configured yet."
-    );
-    setComposeStatus(null);
-    return;
+    const box = selectedMailbox();
+    const key = mailboxKey();
+    // Attachments must be encrypted with the real per-mailbox key before
+    // transit. Without an unlocked mailbox there is no key, so refuse —
+    // never fall back to a constant or fabricated key.
+    if (!box || !key || unlockedBoxId() !== box.id) {
+      input.value = ""; // reset
+      setErrorMessage(
+        "Unlock the mailbox to attach files: attachments must be client-encrypted."
+      );
+      setComposeStatus(null);
+      return;
+    }
+    const file = input.files?.[0];
+    input.value = ""; // reset; the encrypted upload below carries the bytes
+    if (!file) return;
+    if (file.size > 40 * 1024 * 1024) {
+      setErrorMessage("Attachment exceeds the 40 MB V1 budget.");
+      return;
+    }
+    setComposeStatus("Encrypting attachment…");
+    try {
+      const uploaded = await uploadEncryptedAttachment(box.id, file, key);
+      setComposeAttachments((prev) => [...prev, uploaded]);
+      setComposeStatus(null);
+    } catch (err) {
+      setErrorMessage(
+        `Failed to upload attachment: ${err instanceof Error ? err.message : "unknown error"}`
+      );
+      setComposeStatus(null);
+    }
   }
 
   function removeComposeAttachment(id: string) {
+    const box = selectedMailbox();
+    const target = composeAttachments().find((a) => a.id === id);
+    // Server-persisted uploads must be destroyed row+object, not merely
+    // detached — otherwise every removed file lingers as an orphaned blob.
+    // On failure the item stays attached (and stays linked at send) with an
+    // error, so removal is never silently half-done.
+    if (box && target) {
+      deleteAttachment(box.id, id)
+        .then(() => setComposeAttachments((prev) => prev.filter((a) => a.id !== id)))
+        .catch((err) => {
+          setErrorMessage(
+            `Failed to delete attachment (kept attached): ${err instanceof Error ? err.message : "unknown error"}`
+          );
+        });
+      return;
+    }
     setComposeAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  async function openContacts() {
+    const box = selectedMailbox();
+    const key = mailboxKey();
+    if (!box || !key || unlockedBoxId() !== box.id) {
+      setContactsError("Unlock the mailbox to manage contacts: entries are client-encrypted.");
+      setContacts([]);
+      setContactsOpen(true);
+      return;
+    }
+    setContactsOpen(true);
+    setContactsLoading(true);
+    setContactsError(null);
+    try {
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      const items = await fetchContacts(box.id);
+      const shown: DisplayContact[] = [];
+      for (const c of items) {
+        try {
+          const pt = decryptContactEnvelope(wasm, key, box.id, c.encrypted_envelope);
+          shown.push({ id: c.id, version: c.version, ...pt });
+        } catch {
+          // One corrupt entry must not hide the rest; surface it explicitly.
+          shown.push({ id: c.id, version: c.version, name: "( undecryptable entry )", email: "", notes: "" });
+        }
+      }
+      setContacts(shown);
+    } catch (err) {
+      setContactsError(`Failed to load contacts: ${err instanceof Error ? err.message : "unknown error"}`);
+      setContacts([]);
+    } finally {
+      setContactsLoading(false);
+    }
+  }
+
+  function startEditContact(c: DisplayContact | null) {
+    if (c && c.name.startsWith("( undecryptable")) return;
+    setEditingContact(c);
+    setContactName(c?.name ?? "");
+    setContactEmail(c?.email ?? "");
+    setContactNotes(c?.notes ?? "");
+    setContactsError(null);
+  }
+
+  async function handleSaveContact() {
+    const box = selectedMailbox();
+    const key = mailboxKey();
+    if (!box || !key || unlockedBoxId() !== box.id) {
+      setContactsError("Unlock the mailbox to save contacts.");
+      return;
+    }
+    const name = contactName().trim();
+    const email = contactEmail().trim();
+    const notes = contactNotes().trim();
+    if (!name) {
+      setContactsError("Contact name is required.");
+      return;
+    }
+    if (!email.includes("@")) {
+      setContactsError("Contact email must contain @.");
+      return;
+    }
+    setContactsError(null);
+    try {
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      const envelope = encryptContactEnvelope(wasm, key, box.id, { name, email, notes });
+      const editing = editingContact();
+      if (editing) {
+        try {
+          const updated = await updateContact(box.id, editing.id, {
+            encrypted_envelope: envelope,
+            version: editing.version,
+          });
+          setContacts((prev) =>
+            prev.map((c) =>
+              c.id === editing.id ? { ...c, name, email, notes, version: updated.version } : c
+            )
+          );
+        } catch (err: any) {
+          if (err?.status === 409) {
+            setContactsError("This contact changed elsewhere. Reload to get the latest version.");
+            await openContacts();
+          } else {
+            throw err;
+          }
+          return;
+        }
+      } else {
+        const created = await createContact(box.id, { encrypted_envelope: envelope });
+        setContacts((prev) => [{ id: created.id, version: created.version, name, email, notes }, ...prev]);
+      }
+      startEditContact(null);
+    } catch (err) {
+      setContactsError(`Failed to save contact: ${err instanceof Error ? err.message : "unknown error"}`);
+    }
+  }
+
+  async function handleDeleteContact(id: string) {
+    const box = selectedMailbox();
+    if (!box) return;
+    if (!window.confirm("Delete this contact? This cannot be undone.")) return;
+    try {
+      await deleteContact(box.id, id);
+      setContacts((prev) => prev.filter((c) => c.id !== id));
+      if (editingContact()?.id === id) startEditContact(null);
+    } catch (err) {
+      setContactsError(`Failed to delete contact: ${err instanceof Error ? err.message : "unknown error"}`);
+    }
   }
 
   function clearComposeForm() {
@@ -173,6 +622,67 @@ const App: Component = () => {
     setComposeBody("");
     setScheduledTime("");
     setComposeAttachments([]);
+    setEditingDraft(null);
+  }
+
+  function startEditDraft(msg: DisplayMessage, plaintext: string) {
+    setComposeTo(msg.recipient === "(no recipient)" ? "" : msg.recipient);
+    setComposeSubject(msg.subject === "(no subject)" ? "" : msg.subject);
+    setComposeBody(plaintext);
+    setScheduledTime("");
+    setComposeAttachments([]);
+    setEditingDraft({ id: msg.id, version: msg.version ?? 1 });
+    setComposeOpen(true);
+  }
+
+  // NOTE: no Reply All — the send API accepts exactly one recipient per
+  // message, so a multi-recipient reply-all would either silently drop
+  // recipients or submit a malformed bundle. Single reply + forward only.
+  function withSubjectPrefix(subject: string, prefix: "Re:" | "Fwd:"): string {
+    const clean = subject === "(Encrypted message)" ? "" : subject;
+    if (new RegExp(`^${prefix}\\s`, "i").test(clean)) return clean;
+    return clean ? `${prefix} ${clean}` : prefix;
+  }
+
+  function quoteOriginal(msg: DisplayMessage, plaintext: string): string {
+    const quoted = plaintext
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+    return `\n\n--- On ${msg.date}, ${msg.sender} wrote: ---\n${quoted}`;
+  }
+
+  function startReply(msg: DisplayMessage) {
+    const plaintext = messagePlaintext();
+    if (plaintext === null) return;
+    setComposeTo(msg.sender);
+    setComposeSubject(withSubjectPrefix(msg.subject, "Re:"));
+    setComposeBody(quoteOriginal(msg, plaintext));
+    setScheduledTime("");
+    setComposeAttachments([]);
+    setEditingDraft(null);
+    setComposeOpen(true);
+  }
+
+  function startForward(msg: DisplayMessage) {
+    const plaintext = messagePlaintext();
+    if (plaintext === null) return;
+    // Body-only forward in V1: the original's attachments are separate
+    // storage objects and are not re-attached. Say so when there are any,
+    // instead of dropping them silently.
+    const attachNote =
+      messageAttachments().length > 0
+        ? `\n[Note: ${messageAttachments().length} original attachment(s) not carried by forwarding in V1.]\n`
+        : "";
+    setComposeTo("");
+    setComposeSubject(withSubjectPrefix(msg.subject, "Fwd:"));
+    setComposeBody(
+      `${attachNote}\n--- Forwarded message from ${msg.sender} (${msg.date}) ---\n${plaintext}`
+    );
+    setScheduledTime("");
+    setComposeAttachments([]);
+    setEditingDraft(null);
+    setComposeOpen(true);
   }
 
   async function handleSend(e: Event) {
@@ -198,13 +708,14 @@ const App: Component = () => {
       ]);
       const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
       const mailboxIdHex = box.id.replace(/-/g, "");
+      const signedBody = applySignature(body, loadSignature(box.id));
       const plaintext = [
         `To: ${to}`,
         `Subject: ${subject}`,
         "Content-Type: text/plain; charset=utf-8",
         "MIME-Version: 1.0",
         "",
-        body,
+        signedBody,
       ].join("\r\n");
       const plaintextB64 = bytesToBase64(new TextEncoder().encode(plaintext));
       const encrypted = JSON.parse(
@@ -272,22 +783,76 @@ const App: Component = () => {
     const box = selectedMailbox();
     if (!box) return;
 
+    // Draft bodies are ciphertext-only server-side. Refuse to submit anything
+    // the client has not actually encrypted: no plaintext envelope may reach
+    // the drafts API.
+    const key = mailboxKey();
+    if (!key || unlockedBoxId() !== box.id) {
+      setErrorMessage("Unlock the mailbox to save drafts: draft bodies must be client-encrypted.");
+      setComposeStatus(null);
+      return;
+    }
+
     setComposeStatus("Saving draft to mailbox storage…");
     try {
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      const envelope = encryptDraftEnvelope(wasm, key, box.id, body);
+      const editing = editingDraft();
+      if (editing) {
+        try {
+          const updated = await updateDraft(box.id, editing.id, {
+            recipient: to,
+            subject: subject || "Untitled Draft",
+            encrypted_envelope: envelope,
+            version: editing.version,
+          });
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === editing.id
+                ? {
+                    ...m,
+                    recipient: to || "(no recipient)",
+                    subject: subject || "(no subject)",
+                    snippet: body.slice(0, 80) + (body.length > 80 ? "…" : ""),
+                    encryptedBody: envelope,
+                    version: updated.version,
+                    date: "Just now",
+                  }
+                : m
+            )
+          );
+        } catch (err: any) {
+          if (err?.status === 409) {
+            setErrorMessage(
+              "This draft changed elsewhere (version conflict). Reload the mailbox to get the latest version, then re-apply your edits."
+            );
+            if (box) await loadMailboxData(box.id);
+          } else {
+            throw err;
+          }
+          setComposeStatus(null);
+          return;
+        }
+        setComposeOpen(false);
+        clearComposeForm();
+        setComposeStatus(null);
+        return;
+      }
       const created = await createDraft(box.id, {
         recipient: to,
         subject: subject || "Untitled Draft",
-        encrypted_envelope: body,
+        encrypted_envelope: envelope,
       });
 
       const draftDisplay: DisplayMessage = {
         id: created.id,
+        version: created.version,
         folder: "drafts",
         sender: currentUser()?.email || "me@byos.local",
         recipient: to || "(no recipient)",
         subject: subject || "Untitled Draft",
-        snippet: body.slice(0, 40) + "…",
-        encryptedBody: body,
+        snippet: body.slice(0, 80) + (body.length > 80 ? "…" : ""),
+        encryptedBody: envelope,
         date: "Just now",
         read: true,
         starred: false,
@@ -309,6 +874,10 @@ const App: Component = () => {
         await deleteDraft(selectedMailbox()!.id, msg.id);
       } catch (err) {
         console.warn("deleteDraft error:", err);
+      }
+      if (editingDraft()?.id === msg.id) {
+        setComposeOpen(false);
+        clearComposeForm();
       }
     }
     setMessages((prev) =>
@@ -336,6 +905,55 @@ const App: Component = () => {
   };
 
   return (
+    <Show
+      when={currentUser() !== null || isLoading()}
+      fallback={
+        <div class="flex h-screen w-screen items-center justify-center bg-slate-100 p-4">
+          <div class="w-full max-w-sm rounded-xl bg-white shadow-xl border border-slate-200 p-8">
+            <div class="flex items-center gap-2">
+              <span class="text-xl font-bold tracking-wider">BYOS</span>
+              <span class="text-xs bg-sky-600 text-white px-2 py-0.5 rounded font-mono">Webmail</span>
+            </div>
+            <p class="mt-2 text-sm text-slate-500">Sign in to access your encrypted mailbox.</p>
+            <Show when={loginError()}>
+              <div role="alert" class="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
+                {loginError()}
+              </div>
+            </Show>
+            <form onSubmit={handleLogin} class="mt-4 space-y-3">
+              <input
+                type="email"
+                autocomplete="username"
+                placeholder="you@example.com"
+                value={loginEmail()}
+                onInput={(e) => setLoginEmail(e.currentTarget.value)}
+                disabled={loginBusy()}
+                class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+              <input
+                type="password"
+                autocomplete="current-password"
+                placeholder="Password"
+                value={loginPassword()}
+                onInput={(e) => setLoginPassword(e.currentTarget.value)}
+                disabled={loginBusy()}
+                class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+              <button
+                type="submit"
+                disabled={loginBusy() || !loginEmail().trim() || !loginPassword()}
+                class="w-full rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
+              >
+                {loginBusy() ? "Signing in…" : "Sign in"}
+              </button>
+            </form>
+            <p class="mt-4 text-[11px] text-slate-400">
+              Passwords verify server-side only. Mailbox decryption additionally requires unlocking with a recovery phrase.
+            </p>
+          </div>
+        </div>
+      }
+    >
     <div class="flex h-screen w-screen overflow-hidden bg-slate-100 text-slate-900 font-sans">
       {/* ── Left Navigation Sidebar ── */}
       <aside class="w-64 flex-shrink-0 bg-slate-900 text-slate-300 flex flex-col border-r border-slate-800">
@@ -355,7 +973,9 @@ const App: Component = () => {
               onChange={(e) => {
                 const box = mailboxes().find((m) => m.id === e.currentTarget.value);
                 if (box) {
+                  lockMailbox();
                   setSelectedMailbox(box);
+                  refreshSignature(box.id);
                   loadMailboxData(box.id);
                 }
               }}
@@ -373,12 +993,89 @@ const App: Component = () => {
           <button
             onClick={() => {
               setComposeAttachments([]);
+              setEditingDraft(null);
               setComposeOpen(true);
             }}
             class="w-full rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-sky-500 transition-all flex items-center justify-center gap-2"
           >
             <span>✏️</span> Compose Email
           </button>
+          <button
+            onClick={openContacts}
+            class="mt-2 w-full rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
+          >
+            <span>👥</span> Contacts
+          </button>
+        </div>
+
+        {/* Mailbox Unlock */}
+        <div class="px-4 pb-3">
+          <Show
+            when={mailboxKey() && unlockedBoxId() === selectedMailbox()?.id}
+            fallback={
+              <div>
+                <label class="block text-[11px] text-slate-500 uppercase tracking-wider mb-1">
+                  Mailbox locked
+                </label>
+                <input
+                  type="password"
+                  autocomplete="off"
+                  placeholder="Recovery phrase to unlock"
+                  value={unlockMnemonic()}
+                  onInput={(e) => setUnlockMnemonic(e.currentTarget.value)}
+                  disabled={unlocking()}
+                  class="w-full bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1.5 focus:outline-none mb-2"
+                />
+                <button
+                  onClick={handleUnlock}
+                  disabled={unlocking() || !unlockMnemonic().trim() || !selectedMailbox()}
+                  class="w-full rounded bg-emerald-700 px-2 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+                >
+                  {unlocking() ? "Unlocking…" : "🔓 Unlock mailbox"}
+                </button>
+                <Show when={unlockError()}>
+                  <div class="mt-2 text-[11px] text-red-400">{unlockError()}</div>
+                </Show>
+                <div class="mt-2 text-[11px] text-slate-500">
+                  Unlock decrypts messages, drafts, and attachments locally. The phrase never leaves this browser.
+                </div>
+              </div>
+            }
+          >
+            <div>
+              <div class="text-[11px] text-emerald-400 font-medium">🔓 Mailbox unlocked</div>
+              <button
+                onClick={lockMailbox}
+                class="mt-2 w-full rounded border border-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800"
+              >
+                Lock mailbox
+              </button>
+            </div>
+          </Show>
+        </div>
+
+        {/* Mailbox Signature (device-local) */}
+        <div class="px-4 pb-3">
+          <label class="block text-[11px] text-slate-500 uppercase tracking-wider mb-1">
+            Signature
+          </label>
+          <textarea
+            rows={3}
+            placeholder="Name&#10;Title · Company&#10;Phone"
+            value={signatureText()}
+            onInput={(e) => { setSignatureText(e.currentTarget.value); setSignatureSaved(false); }}
+            class="w-full bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1.5 focus:outline-none"
+          />
+          <button
+            onClick={handleSaveSignature}
+            disabled={!selectedMailbox()}
+            class="mt-1 w-full rounded border border-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+          >
+            {signatureSaved() ? "Saved!" : "Save signature"}
+          </button>
+          <div class="mt-1 text-[11px] text-slate-500">
+            Appended to sent mail. Stored only in this browser, per mailbox.
+          </div>
         </div>
 
         {/* Folders List */}
@@ -408,10 +1105,21 @@ const App: Component = () => {
 
         {/* Security Footer */}
         <div class="p-4 border-t border-slate-800 text-xs text-slate-500 space-y-1">
-          <div class="flex items-center gap-1.5 text-emerald-400 font-medium">
-            <span>🔒</span> WASM Local Decryption Active
+          <div class="flex items-center gap-1.5 font-medium">
+            <Show
+              when={mailboxKey() && unlockedBoxId() === selectedMailbox()?.id}
+              fallback={<><span>🔒</span><span class="text-slate-400">Mailbox locked — metadata only</span></>}
+            >
+              <span>🔓</span><span class="text-emerald-400">Mailbox unlocked — local decryption</span>
+            </Show>
           </div>
           <div class="truncate">User: {currentUser()?.email || "Guest Session"}</div>
+          <button
+            onClick={handleLogout}
+            class="mt-1 w-full rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+          >
+            Sign out
+          </button>
         </div>
       </aside>
 
@@ -422,7 +1130,7 @@ const App: Component = () => {
           <div class="relative">
             <input
               type="text"
-              placeholder="Search messages (privacy tokens)…"
+              placeholder="Filter messages…"
               value={searchQuery()}
               onInput={(e) => setSearchQuery(e.currentTarget.value)}
               class="w-full rounded-md border border-slate-300 bg-white pl-9 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -487,12 +1195,49 @@ const App: Component = () => {
                 <div class="flex items-start justify-between">
                   <h1 class="text-xl font-bold text-slate-900">{msg().subject}</h1>
                   <div class="flex gap-2">
-                    <button
-                      onClick={() => handleDeleteMessage(msg())}
-                      class="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                    {/* Server-side delete exists only for drafts; other
+                        folders triage locally. */}
+                    <Show when={msg().folder === "drafts"}>
+                      <button
+                        onClick={() => handleDeleteMessage(msg())}
+                        class="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                      >
+                        Delete
+                      </button>
+                    </Show>
+                    {/* Drafts decrypt locally when unlocked; editing reloads
+                        the plaintext into compose and saves via versioned PUT. */}
+                    <Show
+                      when={
+                        msg().folder === "drafts" &&
+                        mailboxKey() &&
+                        unlockedBoxId() === selectedMailbox()?.id &&
+                        editablePlaintext() !== null
+                      }
                     >
-                      Delete
-                    </button>
+                      <button
+                        onClick={() => startEditDraft(msg(), editablePlaintext() as string)}
+                        class="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                      >
+                        Edit
+                      </button>
+                    </Show>
+                    {/* Reply/Forward need decrypted plaintext; they submit
+                        through the same encrypted send path as compose. */}
+                    <Show when={msg().folder !== "drafts" && messagePlaintext() !== null}>
+                      <button
+                        onClick={() => startReply(msg())}
+                        class="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                      >
+                        Reply
+                      </button>
+                      <button
+                        onClick={() => startForward(msg())}
+                        class="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                      >
+                        Forward
+                      </button>
+                    </Show>
                   </div>
                 </div>
                 <div class="mt-3 flex items-center gap-4 text-xs text-slate-600">
@@ -505,7 +1250,12 @@ const App: Component = () => {
               {/* Encrypted Envelope Banner */}
               <div class="px-6 py-2 bg-slate-900 text-slate-300 text-xs font-mono flex items-center justify-between">
                 <span>Payload: AES-256-GCM Sovereign Storage</span>
-                <span class="text-emerald-400">Client-Side Decrypted</span>
+                <Show
+                  when={mailboxKey() && unlockedBoxId() === selectedMailbox()?.id}
+                  fallback={<span class="text-amber-400">Locked — showing metadata only</span>}
+                >
+                  <span class="text-emerald-400">Client-Side Decrypted</span>
+                </Show>
               </div>
 
               {/* Decrypted Body Reader */}
@@ -517,6 +1267,39 @@ const App: Component = () => {
                 </Show>
                 <Show when={!isDecrypting() && decryptedContent()}>
                   {decryptedContent()}
+                </Show>
+
+                {/* Attachments Section */}
+                <Show when={messageAttachments().length > 0}>
+                  <div class="mt-6 pt-6 border-t border-slate-200">
+                    <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
+                      Attachments ({messageAttachments().length})
+                    </h3>
+                    <div class="space-y-2">
+                      <For each={messageAttachments()}>
+                        {(att) => (
+                          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+                            <div class="flex items-center gap-3">
+                              <span class="text-lg">📎</span>
+                              <div>
+                                <div class="text-sm font-medium text-slate-700">{att.filename}</div>
+                                <div class="text-xs text-slate-500">
+                                  {Math.round(att.size_bytes / 1024)} KB • {att.content_type}
+                                </div>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleDownloadAttachment(att)}
+                              disabled={downloadingAttachment() === att.id}
+                              class="rounded border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {downloadingAttachment() === att.id ? "Downloading..." : "Download"}
+                            </button>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </div>
                 </Show>
               </div>
             </div>
@@ -530,7 +1313,7 @@ const App: Component = () => {
           <div class="w-full max-w-xl rounded-xl bg-white shadow-2xl overflow-hidden flex flex-col border border-slate-200">
             <div class="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
               <h3 class="font-semibold text-sm flex items-center gap-2">
-                <span>✏️</span> New Encrypted Message
+                <span>✏️</span> {editingDraft() ? "Edit Encrypted Draft" : "New Encrypted Message"}
               </h3>
               <button onClick={() => { setComposeOpen(false); clearComposeForm(); setComposeStatus(null); }} class="text-slate-400 hover:text-white text-lg">
                 ✕
@@ -643,7 +1426,7 @@ const App: Component = () => {
                   onClick={handleSaveDraft}
                   class="rounded-md border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
                 >
-                  Save Draft
+                  {editingDraft() ? `Update Draft (v${editingDraft()!.version})` : "Save Draft"}
                 </button>
                 <div class="flex items-center gap-2">
                   <button
@@ -665,7 +1448,106 @@ const App: Component = () => {
           </div>
         </div>
       </Show>
+
+      {/* ── Contacts Modal ── */}
+      <Show when={contactsOpen()}>
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
+          <div class="w-full max-w-xl rounded-xl bg-white shadow-2xl overflow-hidden flex flex-col border border-slate-200 max-h-[85vh]">
+            <div class="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+              <h3 class="font-semibold text-sm flex items-center gap-2">
+                <span>👥</span> Contacts (client-encrypted)
+              </h3>
+              <button onClick={() => { setContactsOpen(false); startEditContact(null); setContactsError(null); }} class="text-slate-400 hover:text-white text-lg">
+                ✕
+              </button>
+            </div>
+            <div class="p-6 space-y-4 overflow-y-auto">
+              <Show when={contactsError()}>
+                <div class="rounded-md bg-red-50 p-3 text-xs text-red-700">{contactsError()}</div>
+              </Show>
+              <Show when={contactsLoading()}>
+                <div class="text-xs text-slate-500 animate-pulse font-mono">Decrypting contacts locally…</div>
+              </Show>
+              <Show when={!contactsLoading() && contacts().length === 0 && !contactsError()}>
+                <div class="text-sm text-slate-400">No contacts yet. Entries are encrypted in your browser before upload.</div>
+              </Show>
+              <For each={contacts()}>
+                {(c) => (
+                  <div class="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+                    <div class="min-w-0">
+                      <div class="text-sm font-medium text-slate-800 truncate">{c.name}</div>
+                      <div class="text-xs text-slate-500 truncate">{c.email}</div>
+                      <Show when={c.notes}>
+                        <div class="text-xs text-slate-400 truncate">{c.notes}</div>
+                      </Show>
+                    </div>
+                    <div class="flex gap-2 flex-shrink-0 ml-3">
+                      <button
+                        onClick={() => startEditContact(c)}
+                        class="rounded border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleDeleteContact(c.id)}
+                        class="rounded border border-slate-300 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </For>
+              <div class="pt-2 border-t border-slate-200">
+                <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                  {editingContact() ? "Edit contact" : "New contact"}
+                </h4>
+                <div class="space-y-2">
+                  <input
+                    type="text"
+                    placeholder="Name"
+                    value={contactName()}
+                    onInput={(e) => setContactName(e.currentTarget.value)}
+                    class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
+                  <input
+                    type="text"
+                    placeholder="email@example.com"
+                    value={contactEmail()}
+                    onInput={(e) => setContactEmail(e.currentTarget.value)}
+                    class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Notes (optional)"
+                    value={contactNotes()}
+                    onInput={(e) => setContactNotes(e.currentTarget.value)}
+                    class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
+                  <div class="flex gap-2">
+                    <button
+                      onClick={handleSaveContact}
+                      class="rounded-md bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500"
+                    >
+                      {editingContact() ? "Update contact" : "Add contact"}
+                    </button>
+                    <Show when={editingContact()}>
+                      <button
+                        onClick={() => startEditContact(null)}
+                        class="rounded-md border border-slate-300 px-4 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                      >
+                        Cancel
+                      </button>
+                    </Show>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Show>
     </div>
+    </Show>
   );
 };
 

@@ -1,4 +1,4 @@
-import { encryptAttachmentBytes } from "./attachment_crypto";
+import { encryptAttachmentBytes, decryptAttachmentBytes } from "./attachment_crypto";
 
 export interface UserMe {
   user_id: string;
@@ -39,6 +39,7 @@ export interface AttachmentItem {
 export interface MessageMetadata {
   id: string;
   mailbox_id: string;
+  message_seq: number;
   direction: "received" | "sent";
   sender: string;
   recipients: string[];
@@ -53,6 +54,24 @@ export interface MessageMetadata {
   status: "received" | "sent" | "draft";
   has_attachments: boolean;
   attachment_count: number;
+}
+
+export interface MessageBodyResponse {
+  encrypted_body: string;
+  content_key_hpke_wrapped: string;
+  encryption_iv: string;
+  aad_version: number;
+  bundle_hash: string;
+  encryption_version: number;
+  message_seq: number;
+}
+
+export interface MailboxDetail {
+  mailbox_id: string;
+  mode: string;
+  mailbox_pk: string;
+  mailbox_sk_wrapped: string;
+  mailbox_sk_version: number;
 }
 
 export interface PrepareResponse {
@@ -120,6 +139,27 @@ export async function fetchCurrentUser(): Promise<UserMe | null> {
   }
 }
 
+export interface LoginResponse {
+  id: string;
+  email: string;
+  org_id: string;
+}
+
+/** Password login. The session travels in an HttpOnly cookie set by the
+    server; the password itself is never stored — cleared after the request. */
+export async function login(email: string, password: string): Promise<LoginResponse> {
+  return apiRequest<LoginResponse>("/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+/** Server-side session revocation. Callers must still clear local state even
+    when this throws (network failure must not keep a signed-in UI alive). */
+export async function logout(): Promise<void> {
+  await apiRequest<void>("/v1/auth/logout", { method: "POST" });
+}
+
 export async function fetchMailboxes(orgId: string): Promise<Mailbox[]> {
   try {
     const res = await apiRequest<{ mailboxes: Mailbox[] }>(`/v1/organizations/${orgId}/mailboxes`);
@@ -156,6 +196,63 @@ export async function deleteDraft(mailboxId: string, draftId: string): Promise<v
   });
 }
 
+export async function updateDraft(
+  mailboxId: string,
+  draftId: string,
+  payload: { subject: string; recipient: string; encrypted_envelope: string; version: number }
+): Promise<DraftMessage> {
+  return apiRequest<DraftMessage>(`/v1/mailboxes/${mailboxId}/drafts/${draftId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export interface ContactItem {
+  id: string;
+  mailbox_id: string;
+  encrypted_envelope: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchContacts(mailboxId: string): Promise<ContactItem[]> {
+  try {
+    const res = await apiRequest<{ contacts: ContactItem[] }>(`/v1/mailboxes/${mailboxId}/contacts`);
+    return res.contacts || [];
+  } catch (err) {
+    console.warn("fetchContacts error:", err);
+    return [];
+  }
+}
+
+export async function createContact(
+  mailboxId: string,
+  payload: { encrypted_envelope: string }
+): Promise<ContactItem> {
+  return apiRequest<ContactItem>(`/v1/mailboxes/${mailboxId}/contacts`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateContact(
+  mailboxId: string,
+  contactId: string,
+  payload: { encrypted_envelope: string; version: number }
+): Promise<ContactItem> {
+  return apiRequest<ContactItem>(`/v1/mailboxes/${mailboxId}/contacts/${contactId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteContact(mailboxId: string, contactId: string): Promise<void> {
+  return apiRequest<void>(`/v1/mailboxes/${mailboxId}/contacts/${contactId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function fetchAttachments(mailboxId: string): Promise<AttachmentItem[]> {
   try {
     const res = await apiRequest<{ attachments: AttachmentItem[] }>(`/v1/mailboxes/${mailboxId}/attachments`);
@@ -166,9 +263,17 @@ export async function fetchAttachments(mailboxId: string): Promise<AttachmentIte
   }
 }
 
+export async function fetchMailboxDetail(mailboxId: string): Promise<MailboxDetail> {
+  return apiRequest<MailboxDetail>(`/v1/mailboxes/${mailboxId}`);
+}
+
 export async function fetchMessages(mailboxId: string): Promise<MessageMetadata[]> {
   const res = await apiRequest<{ messages: MessageMetadata[] }>(`/v1/mailboxes/${mailboxId}/messages`);
   return res.messages || [];
+}
+
+export async function fetchMessageBody(mailboxId: string, messageId: string): Promise<MessageBodyResponse> {
+  return apiRequest<MessageBodyResponse>(`/v1/mailboxes/${mailboxId}/messages/${messageId}/body`);
 }
 
 export async function uploadEncryptedAttachment(
@@ -202,6 +307,55 @@ export async function uploadEncryptedAttachment(
   }
 
   return (await response.json()) as AttachmentItem;
+}
+
+export async function downloadAttachment(mailboxId: string, attachmentId: string): Promise<Blob> {
+  const response = await fetch(`${apiBase()}/v1/mailboxes/${mailboxId}/attachments/${attachmentId}?download=true`, {
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || `Failed to download attachment: status ${response.status}`);
+  }
+
+  return await response.blob();
+}
+
+export async function downloadAndDecryptAttachment(
+  mailboxId: string,
+  attachmentId: string,
+  mailboxKey: Uint8Array
+): Promise<Blob> {
+  const encryptedBlob = await downloadAttachment(mailboxId, attachmentId);
+  const encryptedBytes = new Uint8Array(await encryptedBlob.arrayBuffer());
+
+  // Decrypt client-side using Section 12 WASM primitive.
+  // slice() copies into an exact-size ArrayBuffer-backed view so the Blob
+  // can never alias bytes outside the decrypted range.
+  const decryptedBytes = decryptAttachmentBytes(encryptedBytes, mailboxKey);
+
+  return new Blob([decryptedBytes.slice().buffer as ArrayBuffer], { type: encryptedBlob.type });
+}
+
+// TODO: This function will be used when mailbox key management is implemented
+// For now, attachments are downloaded as encrypted blobs and displayed with
+// a message that client-side decryption requires mailbox private key
+export async function downloadAttachmentForDisplay(mailboxId: string, attachmentId: string): Promise<{
+  encryptedBlob: Blob;
+  requiresDecryption: boolean;
+}> {
+  const encryptedBlob = await downloadAttachment(mailboxId, attachmentId);
+  return {
+    encryptedBlob,
+    requiresDecryption: true, // Will be false when mailbox key is available
+  };
+}
+
+export async function deleteAttachment(mailboxId: string, attachmentId: string): Promise<void> {
+  return apiRequest<void>(`/v1/mailboxes/${mailboxId}/attachments/${attachmentId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function prepareOutbound(mailboxId: string): Promise<PrepareResponse> {
