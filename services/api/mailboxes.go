@@ -615,3 +615,173 @@ func mailboxAliasesHandler(w http.ResponseWriter, r *http.Request) {
 
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
+
+func mailboxPrivacyModeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	orgID := r.PathValue("org_id")
+	mailboxID := r.PathValue("mailbox_id")
+	if orgID == "" || mailboxID == "" {
+		http.Error(w, "organization ID and mailbox ID required", http.StatusBadRequest)
+		return
+	}
+	if _, err := uuid.Parse(orgID); err != nil {
+		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
+		return
+	}
+	if _, err := uuid.Parse(mailboxID); err != nil {
+		http.Error(w, "mailbox ID must be UUID", http.StatusBadRequest)
+		return
+	}
+
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
+		return
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	// Verify caller belongs to organization and is active
+	var memberID string
+	err = conn.QueryRow(ctx, `SELECT id::text FROM users WHERE id=$1 AND org_id=$2 AND is_active=true`, userID, orgID).Scan(&memberID)
+	if err != nil {
+		http.Error(w, "not authorized for this organization", http.StatusForbidden)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req struct {
+		Mode              string `json:"mode"`
+		RootSecretWrapped string `json:"root_secret_wrapped,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	targetMode := strings.TrimSpace(req.Mode)
+	if targetMode != "org_managed" && targetMode != "private" {
+		http.Error(w, "invalid mode: must be 'org_managed' or 'private'", http.StatusBadRequest)
+		return
+	}
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		http.Error(w, "failed to begin transaction", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var currentMode string
+	var rootSecretID *string
+	err = tx.QueryRow(ctx, `
+		SELECT mode, root_secret_id::text 
+		FROM mailboxes 
+		WHERE id=$1 AND org_id=$2 AND is_active=true FOR UPDATE`, mailboxID, orgID).Scan(&currentMode, &rootSecretID)
+	if err != nil {
+		http.Error(w, "mailbox not found", http.StatusNotFound)
+		return
+	}
+
+	if currentMode == targetMode {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":     "unchanged",
+			"mailbox_id": mailboxID,
+			"mode":       targetMode,
+		})
+		return
+	}
+
+	if targetMode == "org_managed" {
+		// Private -> Org Managed: Requires wrapped root secret for org recovery key
+		if req.RootSecretWrapped == "" {
+			http.Error(w, "root_secret_wrapped required when migrating to org_managed mode", http.StatusBadRequest)
+			return
+		}
+		rootWrapped, err := hexDecodeString(strings.TrimSpace(req.RootSecretWrapped))
+		if err != nil || len(rootWrapped) != 81 {
+			http.Error(w, "invalid root_secret_wrapped: must be 81 bytes (162 hex characters)", http.StatusBadRequest)
+			return
+		}
+
+		// Verify organization recovery key is configured
+		var recPk []byte
+		err = tx.QueryRow(ctx, `SELECT org_recovery_pk FROM organizations WHERE id=$1`, orgID).Scan(&recPk)
+		if err != nil || len(recPk) != 32 {
+			http.Error(w, "organization recovery key not available", http.StatusBadRequest)
+			return
+		}
+
+		if rootSecretID != nil && *rootSecretID != "" {
+			_, err = tx.Exec(ctx, `UPDATE root_secrets SET root_secret_wrapped=$1, revoked_at=NULL WHERE id=$2`, rootWrapped, *rootSecretID)
+		} else {
+			var newRootID string
+			err = tx.QueryRow(ctx, `INSERT INTO root_secrets (root_secret_wrapped) VALUES ($1) RETURNING id::text`, rootWrapped).Scan(&newRootID)
+			if err == nil {
+				_, err = tx.Exec(ctx, `UPDATE mailboxes SET root_secret_id=$1 WHERE id=$2`, newRootID, mailboxID)
+			}
+		}
+		if err != nil {
+			http.Error(w, "failed to update root secret", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = tx.Exec(ctx, `UPDATE mailboxes SET mode='org_managed' WHERE id=$1`, mailboxID)
+		if err != nil {
+			http.Error(w, "failed to update mailbox mode", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Org Managed -> Private: Sever org recovery link, revoke wrapped root secret
+		if req.RootSecretWrapped != "" {
+			http.Error(w, "root_secret_wrapped must be omitted when migrating to private mode", http.StatusBadRequest)
+			return
+		}
+
+		if rootSecretID != nil && *rootSecretID != "" {
+			_, err = tx.Exec(ctx, `UPDATE root_secrets SET root_secret_wrapped=NULL, revoked_at=now() WHERE id=$1`, *rootSecretID)
+			if err != nil {
+				http.Error(w, "failed to revoke root secret", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		_, err = tx.Exec(ctx, `UPDATE mailboxes SET mode='private' WHERE id=$1`, mailboxID)
+		if err != nil {
+			http.Error(w, "failed to update mailbox mode", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		http.Error(w, "failed to commit transaction", http.StatusInternalServerError)
+		return
+	}
+
+	auditLog(ctx, conn, orgID, userID, "migrate_mailbox_privacy_mode", "mailbox", mailboxID, map[string]interface{}{
+		"from_mode": currentMode,
+		"to_mode":   targetMode,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     "migrated",
+		"mailbox_id": mailboxID,
+		"mode":       targetMode,
+	})
+}
+
