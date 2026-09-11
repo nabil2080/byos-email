@@ -43,6 +43,9 @@ argon2 = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # RSA/DKIM: use rsa crate for key generation and DKIM signing (pem enables pkcs1/pkcs8 PEM encoding)
+# RUSTSEC-2023-0071 Marvin Attack: rsa 0.9.10 has no patched version as of 2026-04-25 (rustsec.org).
+# Mitigation applied in src/lib.rs: dkim_sign uses SigningKey::sign_with_rng(&mut OsRng) to enable RSA blinding.
+# If rsa 0.10+ stable is released with constant-time fix, upgrade via `cargo update -p rsa`.
 rsa = { version = "0.9", features = ["pem"] }
 # WASM support
 wasm-bindgen = "0.2"

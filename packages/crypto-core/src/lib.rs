@@ -15,7 +15,7 @@ use rsa::{
     pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey},
     RsaPrivateKey, RsaPublicKey,
 };
-use rsa::signature::{SignatureEncoding as _, Signer as _};
+use rsa::signature::{RandomizedSigner as _, SignatureEncoding as _, Signer as _};
 use sha2::{Digest, Sha256};
 use ed25519_dalek::{VerifyingKey, Signature};
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -103,12 +103,14 @@ pub fn derive_recovery_auth_seed(root_secret: &[u8; 32]) -> [u8; 32] {
 }
 
 /// Derive recovery-auth public key from root_secret (deterministic).
-/// The 32-byte seed IS the Ed25519 private key; the public key is derived from it.
+/// Returns the Ed25519 verifying key for the seed-derived signing key.
+/// WARNING: this must never return the seed itself — the seed is private
+/// key material. (A prior revision returned the seed here; it had no
+/// callers and is fixed by this implementation.)
 pub fn derive_recovery_auth_public_key(root_secret: &[u8; 32]) -> [u8; 32] {
     let seed = derive_recovery_auth_seed(root_secret);
-    // The 32-byte seed becomes the Ed25519 private key.
-    // The public key derivation is handled by the caller verifying with the pk.
-    seed
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    signing_key.verifying_key().to_bytes()
 }
 
 /// Sign a recovery message using the deterministic Ed25519 key derived from root_secret.
@@ -127,6 +129,68 @@ pub fn verify_recovery_message(pk: &[u8; 32], message: &[u8], signature: &[u8; 6
         .map_err(|_| CryptoError::InvalidFormat)?;
     let sig = ed25519_dalek::Signature::from_bytes(signature);
     verifying_key.verify(message, &sig).map_err(|_| CryptoError::InvalidFormat)
+}
+
+// =============================================
+// Recovery-principal passphrase wrapping (Section 15)
+// =============================================
+//
+// Frozen parameters (Section 12 gate resolution): Argon2id v19 with the SAME
+// cost profile as server password hashing (m=65536 KiB, t=3, p=2) — one
+// canonical parameter set across the codebase, no second thing to audit.
+// The derived 32-byte key wraps the org recovery secret with AES-256-GCM
+// under a dedicated AAD; the server stores only the envelope.
+// Passphrases must be 8+ characters (checked here, not just in UI).
+
+/// Canonical recovery-principal KDF parameters (frozen).
+pub const RECOVERY_KDF_MEMORY_KIB: u32 = 65536;
+/// Canonical recovery-principal KDF passes (frozen).
+pub const RECOVERY_KDF_TIME: u32 = 3;
+/// Canonical recovery-principal KDF parallelism (frozen).
+pub const RECOVERY_KDF_PARALLELISM: u32 = 2;
+/// Minimum passphrase length for principal enrollment (frozen policy).
+pub const RECOVERY_PASSPHRASE_MIN_LEN: usize = 8;
+/// AAD binding passphrase-wrapped recovery material to its purpose.
+pub const RECOVERY_PRINCIPAL_AAD: &[u8] = b"byos-recovery-principal-v1";
+
+/// Derive the 32-byte wrapping key for a recovery principal.
+pub fn derive_recovery_principal_key(passphrase: &str, salt: &[u8; 16]) -> Result<[u8; 32], CryptoError> {
+    if passphrase.len() < RECOVERY_PASSPHRASE_MIN_LEN {
+        return Err(CryptoError::InvalidFormat);
+    }
+    let params = argon2::Params::new(
+        RECOVERY_KDF_MEMORY_KIB,
+        RECOVERY_KDF_TIME,
+        RECOVERY_KDF_PARALLELISM,
+        Some(32),
+    )
+    .map_err(|_| CryptoError::InvalidFormat)?;
+    let ctx = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+    let mut key = [0u8; 32];
+    ctx.hash_password_into(passphrase.as_bytes(), salt, &mut key)
+        .map_err(|_| CryptoError::InvalidFormat)?;
+    Ok(key)
+}
+
+/// Wrap an org recovery secret under a passphrase (enrollment).
+pub fn wrap_recovery_principal_key(
+    passphrase: &str,
+    salt: &[u8; 16],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let key = derive_recovery_principal_key(passphrase, salt)?;
+    aes_gcm_encrypt(&key, plaintext, RECOVERY_PRINCIPAL_AAD)
+}
+
+/// Unwrap with a passphrase (recovery ceremony). Wrong passphrase, wrong
+/// salt, or tampering fails closed.
+pub fn unwrap_recovery_principal_key(
+    passphrase: &str,
+    salt: &[u8; 16],
+    envelope: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let key = derive_recovery_principal_key(passphrase, salt)?;
+    aes_gcm_decrypt(&key, envelope, RECOVERY_PRINCIPAL_AAD)
 }
 
 // =============================================
@@ -825,8 +889,11 @@ pub fn dkim_sign(
     // Build signing input
     let signing_input = canonical_headers.join("\r\n") + "\r\n";
 
-    // Sign (PKCS#1 v1.5 + SHA-256 is deterministic, no RNG needed)
-    let signature = signing_key.sign(signing_input.as_bytes());
+    // Sign with RSA blinding (RUSTSEC-2023-0071 Marvin Attack mitigation).
+    // rsa crate docs: if rng is Some, RSA blinding is used to avoid timing side-channel.
+    // Using sign_with_rng enables blinding; signature bytes remain deterministic.
+    let mut rng = rsa::rand_core::OsRng;
+    let signature = signing_key.sign_with_rng(&mut rng, signing_input.as_bytes());
     let signature_b64 = BASE64.encode(signature.to_bytes());
 
     // Complete DKIM-Signature header
@@ -864,11 +931,99 @@ pub fn wasm_generate_mnemonic() -> Result<String, JsValue> {
     generate_mnemonic().map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Build canonical AES-GCM AAD for the browser (hex in/out).
+/// aad = mailbox_id(16) || message_seq(8 BE) || encryption_version(4 BE) || aad_version(1).
+/// Client-side AAD MUST come from this export — frozen §13.3 forbids a
+/// separate TypeScript AAD implementation.
+#[wasm_bindgen]
+pub fn wasm_canonical_aad(
+    mailbox_id_hex: &str,
+    message_seq: u64,
+    encryption_version: u32,
+) -> Result<String, JsValue> {
+    let mailbox_id: [u8; 16] = hex_decode(mailbox_id_hex)
+        .map_err(|e| JsValue::from_str(&e))?
+        .try_into()
+        .map_err(|_| JsValue::from_str("mailbox_id must be 16 bytes"))?;
+    Ok(hex_encode(&canonical_aad(
+        &mailbox_id,
+        message_seq,
+        encryption_version,
+    )))
+}
+
+/// Derive the mailbox search_key from a root_secret (both hex).
+/// search_key = HKDF-SHA256(salt="byos-search-key-v1", ikm=root_secret).
+/// The caller HMACs normalized search terms with this key locally; the key
+/// itself never leaves the browser.
+#[wasm_bindgen]
+pub fn wasm_derive_search_key(root_secret_hex: &str) -> Result<String, JsValue> {
+    let key = hex_decode_32(root_secret_hex).map_err(|e| JsValue::from_str(&e))?;
+    Ok(hex_encode(&derive_search_key(&key)))
+}
+
 #[wasm_bindgen]
 pub fn wasm_recover_root_secret(mnemonic: &str) -> Result<String, JsValue> {
     recover_root_secret(mnemonic)
         .map(|rs| hex_encode(&rs))
         .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Derive the recovery-auth Ed25519 public key from a root secret (hex).
+/// Only the public key leaves this function; the seed and signing key are
+/// transient. Enrollment uploads exactly this value as recovery_auth_pk.
+#[wasm_bindgen]
+pub fn wasm_recovery_auth_pk_from_root(root_secret_hex: &str) -> Result<String, JsValue> {
+    let root = hex_decode_32(root_secret_hex).map_err(|e| JsValue::from_str(&e))?;
+    Ok(hex_encode(&derive_recovery_auth_public_key(&root)))
+}
+
+/// Sign a recovery challenge message with the root-derived Ed25519 key.
+/// message_hex is the hex-encoded canonical challenge message; returns the
+/// 64-byte signature as hex. The signing key never leaves WASM memory.
+#[wasm_bindgen]
+pub fn wasm_recovery_auth_sign(root_secret_hex: &str, message_hex: &str) -> Result<String, JsValue> {
+    let root = hex_decode_32(root_secret_hex).map_err(|e| JsValue::from_str(&e))?;
+    let message = hex_decode(message_hex).map_err(|e| JsValue::from_str(&e))?;
+    let sig = sign_recovery_message(&root, &message).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(hex_encode(&sig))
+}
+
+/// Wrap an org recovery secret under a principal passphrase (hex in/out).
+/// Salt must be exactly 16 bytes (hex). Freezes no parameters client-side:
+/// cost profile is fixed in-core (see RECOVERY_KDF_* constants).
+#[wasm_bindgen]
+pub fn wasm_passphrase_wrap_key(
+    passphrase: &str,
+    salt_hex: &str,
+    plaintext_hex: &str,
+) -> Result<String, JsValue> {
+    let salt_bytes = hex_decode(salt_hex).map_err(|e| JsValue::from_str(&e))?;
+    let salt: [u8; 16] = salt_bytes
+        .try_into()
+        .map_err(|_| JsValue::from_str("salt must be 16 bytes"))?;
+    let plaintext = hex_decode(plaintext_hex).map_err(|e| JsValue::from_str(&e))?;
+    let envelope = wrap_recovery_principal_key(passphrase, &salt, &plaintext)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(hex_encode(&envelope))
+}
+
+/// Unwrap with a principal passphrase (hex in/out). Fails closed on wrong
+/// passphrase, wrong salt, or tampering.
+#[wasm_bindgen]
+pub fn wasm_passphrase_unwrap_key(
+    passphrase: &str,
+    salt_hex: &str,
+    envelope_hex: &str,
+) -> Result<String, JsValue> {
+    let salt_bytes = hex_decode(salt_hex).map_err(|e| JsValue::from_str(&e))?;
+    let salt: [u8; 16] = salt_bytes
+        .try_into()
+        .map_err(|_| JsValue::from_str("salt must be 16 bytes"))?;
+    let envelope = hex_decode(envelope_hex).map_err(|e| JsValue::from_str(&e))?;
+    let plaintext = unwrap_recovery_principal_key(passphrase, &salt, &envelope)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(hex_encode(&plaintext))
 }
 
 #[wasm_bindgen]
@@ -1092,6 +1247,20 @@ mod tests {
         assert_ne!(search_key, root_secret);
     }
 
+    // NOTE: #[wasm_bindgen] shims abort outside a WASM runtime, so the
+    // wrapper itself is verified through the rebuilt bindings + browser
+    // smoke path. This test covers the wrapper's exact logic
+    // (hex_decode_32 -> derive_search_key -> hex_encode) natively.
+    #[test]
+    fn test_wasm_derive_search_key_logic() {
+        let root = [7u8; 32];
+        let key = hex_decode_32(&hex_encode(&root)).expect("valid 32-byte hex");
+        assert_eq!(hex_encode(&derive_search_key(&key)), hex_encode(&derive_search_key(&root)));
+        // Negative: malformed hex and wrong length are rejected, not panicked.
+        assert!(hex_decode_32("zzzz").is_err());
+        assert!(hex_decode_32(&hex_encode(&[0u8; 16])).is_err());
+    }
+
     #[test]
     fn test_mnemonic_roundtrip() {
         let mnemonic = generate_mnemonic().unwrap();
@@ -1099,6 +1268,87 @@ mod tests {
         let root_secret = derive_root_secret(&entropy);
         let recovered = recover_root_secret(&mnemonic).unwrap();
         assert_eq!(root_secret, recovered);
+    }
+
+    #[test]
+    fn test_recovery_principal_passphrase_roundtrip() {
+        let seed = [3u8; 16];
+        let secret = b"org-recovery-secret-material";
+        let env = wrap_recovery_principal_key("correct horse battery staple", &seed, secret).unwrap();
+        // Envelope carries the canonical version byte.
+        assert!(!env.is_empty() && env[0] == 0x01);
+        let back =
+            unwrap_recovery_principal_key("correct horse battery staple", &seed, &env).unwrap();
+        assert_eq!(back, secret);
+    }
+
+    #[test]
+    fn test_recovery_principal_passphrase_negative() {
+        let seed = [3u8; 16];
+        let other = [4u8; 16];
+        let env = wrap_recovery_principal_key("correct horse battery staple", &seed, b"sk").unwrap();
+        // Wrong passphrase fails.
+        assert!(unwrap_recovery_principal_key("wrong passphrase here!!", &seed, &env).is_err());
+        // Wrong salt fails.
+        assert!(unwrap_recovery_principal_key("correct horse battery staple", &other, &env).is_err());
+        // Tampered envelope fails.
+        let mut tampered = env.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        assert!(unwrap_recovery_principal_key("correct horse battery staple", &seed, &tampered).is_err());
+        // Short passphrase rejected at wrap time.
+        assert!(wrap_recovery_principal_key("short", &seed, b"sk").is_err());
+    }
+
+    #[test]
+    fn test_recovery_principal_kdf_params_frozen() {
+        // The frozen cost profile must match server password hashing so there
+        // is exactly one Argon2id parameter set to audit.
+        assert_eq!(RECOVERY_KDF_MEMORY_KIB, 65536);
+        assert_eq!(RECOVERY_KDF_TIME, 3);
+        assert_eq!(RECOVERY_KDF_PARALLELISM, 2);
+        assert_eq!(RECOVERY_PASSPHRASE_MIN_LEN, 8);
+        // Distinct salts derive distinct keys (no salt reuse equivalence).
+        let k1 = derive_recovery_principal_key("same passphrase!!", &[1u8; 16]).unwrap();
+        let k2 = derive_recovery_principal_key("same passphrase!!", &[2u8; 16]).unwrap();
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn test_recovery_auth_pk_is_public_not_seed() {
+        // Regression: derive_recovery_auth_public_key must return the
+        // Ed25519 verifying key, never the private seed. A prior revision
+        // returned the seed itself under this name.
+        let root = [9u8; 32];
+        let seed = derive_recovery_auth_seed(&root);
+        let pk = derive_recovery_auth_public_key(&root);
+        assert_ne!(pk, seed, "public key must differ from private seed");
+        // The pk must verify signatures made by the seed-derived signer.
+        let msg = b"byos-recovery-v1:challenge:test";
+        let sig = sign_recovery_message(&root, msg).unwrap();
+        assert_eq!(sig.len(), 64);
+        let mut sig_arr = [0u8; 64];
+        sig_arr.copy_from_slice(&sig);
+        verify_recovery_message(&pk, msg, &sig_arr).expect("valid signature verifies");
+    }
+
+    #[test]
+    fn test_recovery_auth_sign_verify_negative() {
+        let root = [9u8; 32];
+        let other = [10u8; 32];
+        let pk = derive_recovery_auth_public_key(&root);
+        let msg = b"byos-recovery-v1:challenge:abc";
+        let sig = sign_recovery_message(&root, msg).unwrap();
+        let mut sig_arr = [0u8; 64];
+        sig_arr.copy_from_slice(&sig);
+        // Tampered message must fail.
+        assert!(verify_recovery_message(&pk, b"byos-recovery-v1:challenge:abd", &sig_arr).is_err());
+        // Wrong key must fail.
+        let wrong_pk = derive_recovery_auth_public_key(&other);
+        assert!(verify_recovery_message(&wrong_pk, msg, &sig_arr).is_err());
+        // Flipped signature bit must fail.
+        sig_arr[0] ^= 0x01;
+        assert!(verify_recovery_message(&pk, msg, &sig_arr).is_err());
     }
 
     #[test]
@@ -1173,6 +1423,22 @@ mod tests {
     }
 
     #[test]
+    fn test_wasm_canonical_aad_wire_shape() {
+        // Hand-computed 29-byte vector: mailbox 0x00..0x0f, seq 1, version 1.
+        // mailbox(16) || seq u64BE || version u32BE || aad_version(1).
+        // NOTE: the wasm shim aborts outside a WASM runtime, so this covers
+        // the wrapper's exact logic natively; the shim itself is covered by
+        // the Node bindings smoke path.
+        let mailbox_id: [u8; 16] = core::array::from_fn(|i| i as u8);
+        let aad = canonical_aad(&mailbox_id, 1, 1);
+        assert_eq!(
+            hex_encode(&aad),
+            "000102030405060708090a0b0c0d0e0f00000000000000010000000101"
+        );
+        assert_eq!(aad.len(), 29);
+    }
+
+    #[test]
     fn test_hpke_wrapped_roundtrip() {
         let hw = HpkeWrapped {
             version: HPKE_VERSION,
@@ -1193,6 +1459,35 @@ mod tests {
         let wrapped = hpke_seal(&public_key, &[7u8; 32], aad).unwrap();
         let opened = hpke_open(&secret_key, &wrapped, aad).unwrap();
         assert_eq!(opened, [7u8; 32]);
+    }
+
+    #[test]
+    fn test_webmail_client_decrypt_chain() {
+        // Mirrors exactly what webmail message_crypto.decryptMessageEnvelope
+        // does: canonical AAD -> HPKE-open content key -> AES-GCM decrypt.
+        // Server side (crypto-worker encrypt path) on the left, client on
+        // the right; fixed AAD inputs, fresh random keys/envelope.
+        let mailbox_id: [u8; 16] = core::array::from_fn(|i| i as u8);
+        let message_seq: u64 = 7;
+        let plaintext = b"Hello, sovereign mailbox.";
+
+        // Server: fresh content key, canonical AAD, seal + encrypt.
+        let (mailbox_sk, mailbox_pk) = generate_x25519_keypair();
+        let (content_key, envelope, _, aad) =
+            encrypt_message(&mailbox_id, message_seq, plaintext).unwrap();
+        let wrapped = hpke_seal(&mailbox_pk, &content_key, &aad).unwrap();
+
+        // Client: rebuild AAD from (mailbox_id, seq, version) only.
+        let client_aad = canonical_aad(&mailbox_id, message_seq, ENCRYPTION_VERSION);
+        assert_eq!(client_aad.to_vec(), aad);
+        // Client: open content key with mailbox_sk, then decrypt.
+        let opened_vec = hpke_open(&mailbox_sk, &wrapped, &client_aad).unwrap();
+        let opened: [u8; 32] = opened_vec.as_slice().try_into().expect("content key is 32 bytes");
+        let recovered = decrypt_message(&opened, &envelope, &client_aad).unwrap();
+        assert_eq!(recovered, plaintext);
+        // Wrong seq AAD must fail closed (authenticity binds the sequence).
+        let wrong_aad = canonical_aad(&mailbox_id, message_seq + 1, ENCRYPTION_VERSION);
+        assert!(decrypt_message(&opened, &envelope, &wrong_aad).is_err());
     }
 
     #[test]
@@ -1420,5 +1715,35 @@ mod tests {
         // Also base64 enc should not contain PEM
         let b64 = base64::encode(&enc);
         assert!(!b64.contains("BEGIN"));
+    }
+
+    // Regression for RUSTSEC-2023-0071 Marvin Attack mitigation:
+    // Positive: blinded dkim_sign still produces a verifiable signature.
+    #[test]
+    fn test_dkim_sign_blinded_positive_still_verifies() {
+        let kp = DkimKeypair::generate("byos").unwrap();
+        let msg = b"From: alice@byos.local\r\nTo: bob@byos.local\r\nSubject: regression-positive\r\nDate: Thu, 01 Jan 2026 00:00:00 +0000\r\nMessage-ID: <reg-positive@byos.local>\r\n\r\nRegression body\r\n";
+        let signed = dkim_sign(&kp.private_key_pem, "byos", "byos.local", msg).unwrap();
+        assert!(verify_dkim_signature(&signed, &kp.public_key_pem), "blinded DKIM signature must verify");
+    }
+
+    // Negative: dkim_sign must reject invalid PEM (unsafe behavior blocked) and must not verify with wrong key or tampered body.
+    #[test]
+    fn test_dkim_sign_negative_invalid_pem_and_tamper_blocked() {
+        // Invalid PEM rejected
+        let bad_pem = "-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----";
+        let msg = b"From: a@byos.local\r\nTo: b@byos.local\r\nSubject: x\r\n\r\nBody\r\n";
+        assert!(dkim_sign(bad_pem, "byos", "byos.local", msg).is_err(), "invalid PEM must be rejected");
+
+        // Wrong key must not verify (negative)
+        let kp1 = DkimKeypair::generate("byos").unwrap();
+        let kp2 = DkimKeypair::generate("byos").unwrap();
+        let signed = dkim_sign(&kp1.private_key_pem, "byos", "byos.local", msg).unwrap();
+        assert!(!verify_dkim_signature(&signed, &kp2.public_key_pem), "wrong key must fail verification");
+
+        // Tampered header must not verify
+        let mut tampered = String::from_utf8(signed).unwrap();
+        tampered = tampered.replacen("Subject: x", "Subject: y", 1);
+        assert!(!verify_dkim_signature(tampered.as_bytes(), &kp1.public_key_pem), "tampered header must fail verification");
     }
 }

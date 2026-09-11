@@ -61,6 +61,37 @@ export function wasm_aes_gcm_encrypt(key_hex, plaintext_hex, aad_hex) {
 }
 
 /**
+ * Build canonical AES-GCM AAD for the browser (hex in/out).
+ * aad = mailbox_id(16) || message_seq(8 BE) || encryption_version(4 BE) || aad_version(1).
+ * Client-side AAD MUST come from this export — frozen §13.3 forbids a
+ * separate TypeScript AAD implementation.
+ * @param {string} mailbox_id_hex
+ * @param {bigint} message_seq
+ * @param {number} encryption_version
+ * @returns {string}
+ */
+export function wasm_canonical_aad(mailbox_id_hex, message_seq, encryption_version) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(mailbox_id_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasm_canonical_aad(ptr0, len0, message_seq, encryption_version);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * @param {string} outbound_delivery_sk_b64
  * @param {string} send_token_wrapped_b64
  * @param {string} mailbox_id_hex
@@ -106,6 +137,35 @@ export function wasm_derive_root_secret(entropy_hex) {
         const ptr0 = passStringToWasm0(entropy_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasm_derive_root_secret(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Derive the mailbox search_key from a root_secret (both hex).
+ * search_key = HKDF-SHA256(salt="byos-search-key-v1", ikm=root_secret).
+ * The caller HMACs normalized search terms with this key locally; the key
+ * itself never leaves the browser.
+ * @param {string} root_secret_hex
+ * @returns {string}
+ */
+export function wasm_derive_search_key(root_secret_hex) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(root_secret_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasm_derive_search_key(ptr0, len0);
         var ptr2 = ret[0];
         var len2 = ret[1];
         if (ret[3]) {
@@ -281,6 +341,73 @@ export function wasm_hpke_seal(recipient_pk_hex, plaintext_hex, aad_hex) {
 }
 
 /**
+ * Unwrap with a principal passphrase (hex in/out). Fails closed on wrong
+ * passphrase, wrong salt, or tampering.
+ * @param {string} passphrase
+ * @param {string} salt_hex
+ * @param {string} envelope_hex
+ * @returns {string}
+ */
+export function wasm_passphrase_unwrap_key(passphrase, salt_hex, envelope_hex) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passStringToWasm0(passphrase, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(salt_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(envelope_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.wasm_passphrase_unwrap_key(ptr0, len0, ptr1, len1, ptr2, len2);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
+        if (ret[3]) {
+            ptr4 = 0; len4 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
+ * Wrap an org recovery secret under a principal passphrase (hex in/out).
+ * Salt must be exactly 16 bytes (hex). Freezes no parameters client-side:
+ * cost profile is fixed in-core (see RECOVERY_KDF_* constants).
+ * @param {string} passphrase
+ * @param {string} salt_hex
+ * @param {string} plaintext_hex
+ * @returns {string}
+ */
+export function wasm_passphrase_wrap_key(passphrase, salt_hex, plaintext_hex) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passStringToWasm0(passphrase, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(salt_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(plaintext_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.wasm_passphrase_wrap_key(ptr0, len0, ptr1, len1, ptr2, len2);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
+        if (ret[3]) {
+            ptr4 = 0; len4 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
  * @param {string} mnemonic
  * @returns {string}
  */
@@ -302,6 +429,65 @@ export function wasm_recover_root_secret(mnemonic) {
         return getStringFromWasm0(ptr2, len2);
     } finally {
         wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Derive the recovery-auth Ed25519 public key from a root secret (hex).
+ * Only the public key leaves this function; the seed and signing key are
+ * transient. Enrollment uploads exactly this value as recovery_auth_pk.
+ * @param {string} root_secret_hex
+ * @returns {string}
+ */
+export function wasm_recovery_auth_pk_from_root(root_secret_hex) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(root_secret_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasm_recovery_auth_pk_from_root(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Sign a recovery challenge message with the root-derived Ed25519 key.
+ * message_hex is the hex-encoded canonical challenge message; returns the
+ * 64-byte signature as hex. The signing key never leaves WASM memory.
+ * @param {string} root_secret_hex
+ * @param {string} message_hex
+ * @returns {string}
+ */
+export function wasm_recovery_auth_sign(root_secret_hex, message_hex) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(root_secret_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(message_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.wasm_recovery_auth_sign(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
     }
 }
 
