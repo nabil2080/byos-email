@@ -30,7 +30,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/mail"
 	"os"
 	"strconv"
 	"strings"
@@ -204,12 +206,59 @@ func outboundPrepareHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// maxRecipientsPerMessage defines the V1 ceiling to prevent bulk spam / relay abuse (Section 8).
+const maxRecipientsPerMessage = 50
+
+func validateRecipients(recipientStr string) ([]string, error) {
+	clean := strings.TrimSpace(recipientStr)
+	if clean == "" {
+		return nil, fmt.Errorf("recipient required")
+	}
+	// Anti-injection: reject control characters, newlines, or carriage returns (Section 8 / 21)
+	if strings.ContainsAny(clean, "\r\n\x00") {
+		return nil, fmt.Errorf("recipient contains invalid control characters")
+	}
+	// Split on comma or semicolon
+	rawList := strings.FieldsFunc(clean, func(r rune) bool {
+		return r == ',' || r == ';'
+	})
+	if len(rawList) == 0 {
+		return nil, fmt.Errorf("recipient required")
+	}
+	if len(rawList) > maxRecipientsPerMessage {
+		return nil, fmt.Errorf("recipient count exceeds maximum limit of %d (Section 8)", maxRecipientsPerMessage)
+	}
+	recipients := make([]string, 0, len(rawList))
+	for _, raw := range rawList {
+		addr := strings.TrimSpace(raw)
+		if addr == "" {
+			continue
+		}
+		parsed, err := mail.ParseAddress(addr)
+		if err != nil || parsed.Address == "" || !strings.Contains(parsed.Address, "@") {
+			return nil, fmt.Errorf("invalid recipient email address: %s", addr)
+		}
+		parts := strings.Split(parsed.Address, "@")
+		if len(parts) != 2 || len(parts[0]) == 0 || len(parts[1]) < 3 || !strings.Contains(parts[1], ".") {
+			return nil, fmt.Errorf("invalid recipient email domain: %s", addr)
+		}
+		recipients = append(recipients, parsed.Address)
+	}
+	if len(recipients) == 0 {
+		return nil, fmt.Errorf("recipient required")
+	}
+	return recipients, nil
+}
+
 // validateOutboundEnvelope checks structural fields only: envelope format,
 // iv==nonce, HPKE wrapper format, versions. Cryptographic AAD verification
 // happens in outbound-worker (HPKE-Open + AES-GCM-Decrypt).
 func validateOutboundEnvelope(req OutboundSendRequest) (encryptedMsg, sendToken, iv []byte, errMsg string, status int) {
 	if req.ReservationID == "" || req.MailboxID == "" || req.Recipient == "" || req.EncryptedMessage == "" || req.SendTokenWrapped == "" {
 		return nil, nil, nil, "Missing required fields (reservation_id, mailbox_id, recipient, encrypted_message, send_token_wrapped)", http.StatusBadRequest
+	}
+	if _, err := validateRecipients(req.Recipient); err != nil {
+		return nil, nil, nil, err.Error(), http.StatusBadRequest
 	}
 	if req.OutboxSeq == 0 {
 		return nil, nil, nil, "outbox_seq required", http.StatusBadRequest
