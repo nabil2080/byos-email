@@ -30,7 +30,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/redis/go-redis/v9"
 )
 
 func verifyEd25519Signature(pk []byte, message []byte, signatureB64 string) bool {
@@ -65,18 +64,27 @@ func recoveryRateLimited(w http.ResponseWriter, r *http.Request, scope string) b
 	}
 	ip = strings.TrimSpace(strings.Split(ip, ":")[0])
 	ctx := context.Background()
-	cnt, err := redisClient.Get(ctx, "auth:recovery:"+scope+":"+ip).Int()
-	if err != nil && err != redis.Nil {
+	key := "auth:recovery:" + scope + ":" + ip
+
+	// Atomic check + increment via rateLuaScript (5 attempts per 60s window)
+	keys := []string{key}
+	args := []interface{}{5, 60} // limit: 5, TTL: 60s
+	res, err := redisClient.Eval(ctx, rateLuaScript, keys, args...).Result()
+	if err != nil {
 		http.Error(w, "recovery service unavailable", http.StatusServiceUnavailable)
 		return true
 	}
-	if cnt >= 5 {
+	arr, ok := res.([]interface{})
+	if !ok || len(arr) == 0 {
+		http.Error(w, "recovery service unavailable", http.StatusServiceUnavailable)
+		return true
+	}
+	code, _ := arr[0].(int64)
+	if code != 1 {
 		w.Header().Set("Retry-After", "60")
 		http.Error(w, "too many attempts, try later", http.StatusTooManyRequests)
 		return true
 	}
-	redisClient.Incr(ctx, "auth:recovery:"+scope+":"+ip)
-	redisClient.Expire(ctx, "auth:recovery:"+scope+":"+ip, time.Minute)
 	return false
 }
 

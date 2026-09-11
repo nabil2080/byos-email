@@ -45,7 +45,10 @@ func isOwner(userID, orgID string, conn *pgx.Conn) bool {
 }
 
 func isAdmin(userID, orgID string, conn *pgx.Conn) bool {
-	return hasRole(userID, orgID, "admin", conn) || isOwner(userID, orgID, conn)
+	var count int
+	err := conn.QueryRow(context.Background(),
+		`SELECT count(*) FROM users WHERE id=$1 AND org_id=$2 AND role IN ('admin', 'owner') AND is_active=true`, userID, orgID).Scan(&count)
+	return err == nil && count > 0
 }
 
 func isMember(userID, orgID string, conn *pgx.Conn) bool {
