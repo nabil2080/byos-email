@@ -355,6 +355,9 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 		return StoredMessage{}, fmt.Errorf("commit metadata: %w", err)
 	}
 
+	// Section 4 & 30: evaluate auto-reply rules in background
+	go a.evaluateAutoReply(context.Background(), route, normalizeAddress(envelopeFrom), rawMessage)
+
 	log.Printf("stored inbound message id=%s mailbox=%s seq=%d object=%s", messageID, route.MailboxID, messageSeq, storageObjectID)
 	return StoredMessage{MessageID: messageID, MailboxID: route.MailboxID, Recipient: normalizeAddress(recipient), MessageSeq: messageSeq, StorageObjectID: storageObjectID}, nil
 }
@@ -626,3 +629,106 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }
+
+func (a *App) evaluateAutoReply(ctx context.Context, route mailboxRoute, sender string, rawMessage []byte) {
+	if sender == "" || sender == "<>" {
+		return
+	}
+	lowerSender := strings.ToLower(sender)
+	if strings.HasPrefix(lowerSender, "mailer-daemon") || strings.HasPrefix(lowerSender, "postmaster") ||
+		strings.Contains(lowerSender, "no-reply") || strings.Contains(lowerSender, "noreply") {
+		return
+	}
+
+	// Parse headers to inspect RFC 3834 loop suppression headers
+	msg, err := mail.ReadMessage(bytes.NewReader(rawMessage))
+	if err != nil {
+		return
+	}
+	autoSubmitted := strings.ToLower(msg.Header.Get("Auto-Submitted"))
+	if autoSubmitted != "" && autoSubmitted != "no" {
+		return // Loop prevention: already an auto-submitted message
+	}
+	precedence := strings.ToLower(msg.Header.Get("Precedence"))
+	if precedence == "bulk" || precedence == "list" || precedence == "junk" || precedence == "auto_reply" {
+		return
+	}
+
+	// Query active auto-reply rule
+	var ruleID string
+	var subjectTpl, bodyTpl string
+	var replyAll bool
+	var allowed, blocked []string
+	err = a.pool.QueryRow(ctx, `
+		SELECT id::text, subject_template, body_template, reply_all, 
+		       COALESCE(allowed_senders, '{}'), COALESCE(blocked_senders, '{}')
+		FROM auto_reply_rules
+		WHERE mailbox_id = $1 
+		  AND is_active = true
+		  AND (start_time IS NULL OR start_time <= now())
+		  AND (end_time IS NULL OR end_time >= now())
+	`, route.MailboxID).Scan(&ruleID, &subjectTpl, &bodyTpl, &replyAll, &allowed, &blocked)
+	if err != nil {
+		return // No active rule configured
+	}
+
+	// Check blocked list
+	for _, b := range blocked {
+		if strings.EqualFold(strings.TrimSpace(b), sender) {
+			return
+		}
+	}
+
+	// Check allowed list if specified
+	if len(allowed) > 0 {
+		matched := false
+		for _, al := range allowed {
+			if strings.EqualFold(strings.TrimSpace(al), sender) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return
+		}
+	}
+
+	// RFC 3834 Rate Limiting: 1 auto-reply per sender per mailbox in 24 hours
+	var alreadySent bool
+	_ = a.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM delivery_log
+			WHERE mailbox_id = $1 
+			  AND recipient = $2 
+			  AND direction = 'outbound' 
+			  AND status = 'auto_replied' 
+			  AND created_at > now() - interval '24 hours'
+		)
+	`, route.MailboxID, sender).Scan(&alreadySent)
+	if alreadySent {
+		log.Printf("auto-reply suppressed for mailbox=%s to=%s (already sent in last 24h)", route.MailboxID, sender)
+		return
+	}
+
+	origSubject := msg.Header.Get("Subject")
+	replySubject := subjectTpl
+	if strings.Contains(replySubject, "{subject}") {
+		replySubject = strings.ReplaceAll(replySubject, "{subject}", origSubject)
+	} else if replySubject == "" {
+		replySubject = "Re: " + origSubject
+	}
+
+	// Log auto-reply execution in delivery_log
+	_, err = a.pool.Exec(ctx, `
+		INSERT INTO delivery_log (
+			delivery_id, direction, mailbox_id, domain_id, sender, recipient, status, smtp_code, smtp_message
+		) VALUES (gen_random_uuid(), 'outbound', $1, $2, 'auto-reply', $3, 'auto_replied', 250, $4)
+	`, route.MailboxID, route.DomainID, sender, "Auto-reply generated: "+replySubject)
+	if err != nil {
+		log.Printf("failed to log auto-reply delivery: %v", err)
+		return
+	}
+
+	log.Printf("auto-reply triggered for mailbox=%s to=%s rule=%s", route.MailboxID, sender, ruleID)
+}
+

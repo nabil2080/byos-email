@@ -353,6 +353,7 @@ func main() {
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/bridge/credentials/{credential_id}", withSecurityHeaders(withCORS(bridgeCredentialsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/attachments", withSecurityHeaders(withCORS(attachmentsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/attachments/{attachment_id}", withSecurityHeaders(withCORS(attachmentsHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/auto-reply", withSecurityHeaders(withCORS(autoReplyHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/billing", withSecurityHeaders(withCORS(billingHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/billing/plan", withSecurityHeaders(withCORS(billingHandler)))
 	log.Printf("BYOS API service starting on port %s", port)
