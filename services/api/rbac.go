@@ -359,6 +359,16 @@ func terminateUserHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("failed to revoke sessions for terminated user %s: %v", req.TargetUserID, err)
 	}
+	// Revoke all bridge credentials for the terminated user's mailboxes (Section 1).
+	_, err = conn.Exec(ctx, `UPDATE bridge_credentials SET revoked_at=now() WHERE mailbox_id IN (SELECT id FROM mailboxes WHERE user_id=$1) AND revoked_at IS NULL`, req.TargetUserID)
+	if err != nil {
+		log.Printf("failed to revoke bridge credentials for terminated user %s: %v", req.TargetUserID, err)
+	}
+	// Revoke all device-mailbox access for devices owned by the terminated user (Section 1).
+	_, err = conn.Exec(ctx, `UPDATE device_mailbox_access SET is_active=false, revoked_at=now() WHERE device_id IN (SELECT id FROM devices WHERE user_id=$1) AND is_active=true`, req.TargetUserID)
+	if err != nil {
+		log.Printf("failed to revoke device access for terminated user %s: %v", req.TargetUserID, err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"id": req.TargetUserID})
 }

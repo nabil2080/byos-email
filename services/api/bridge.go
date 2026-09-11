@@ -63,7 +63,16 @@ func bridgeMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(r.Context())
 	var credentialID string
-	if err := conn.QueryRow(r.Context(), `SELECT id::text FROM bridge_credentials WHERE mailbox_id=$1 AND token_hash=$2 AND revoked_at IS NULL`, mailboxID, hash[:]).Scan(&credentialID); err != nil {
+	if err := conn.QueryRow(r.Context(), `
+		SELECT b.id::text 
+		FROM bridge_credentials b
+		JOIN mailboxes m ON m.id = b.mailbox_id
+		LEFT JOIN users u ON u.id = m.user_id
+		WHERE b.mailbox_id=$1 
+		  AND b.token_hash=$2 
+		  AND b.revoked_at IS NULL 
+		  AND m.is_active=true 
+		  AND (u.is_active IS NULL OR u.is_active=true)`, mailboxID, hash[:]).Scan(&credentialID); err != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -121,7 +130,16 @@ func bridgeMessageBodyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(r.Context())
 	var credentialID string
-	if err := conn.QueryRow(r.Context(), `SELECT id::text FROM bridge_credentials WHERE mailbox_id=$1 AND token_hash=$2 AND revoked_at IS NULL`, mailboxID, hash[:]).Scan(&credentialID); err != nil {
+	if err := conn.QueryRow(r.Context(), `
+		SELECT b.id::text 
+		FROM bridge_credentials b
+		JOIN mailboxes m ON m.id = b.mailbox_id
+		LEFT JOIN users u ON u.id = m.user_id
+		WHERE b.mailbox_id=$1 
+		  AND b.token_hash=$2 
+		  AND b.revoked_at IS NULL 
+		  AND m.is_active=true 
+		  AND (u.is_active IS NULL OR u.is_active=true)`, mailboxID, hash[:]).Scan(&credentialID); err != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -186,7 +204,16 @@ func bridgeAuthenticateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 	var credentialID string
-	if err := conn.QueryRow(ctx, `SELECT id::text FROM bridge_credentials WHERE mailbox_id=$1 AND token_hash=$2 AND revoked_at IS NULL`, req.MailboxID, hash[:]).Scan(&credentialID); err != nil {
+	if err := conn.QueryRow(ctx, `
+		SELECT b.id::text 
+		FROM bridge_credentials b
+		JOIN mailboxes m ON m.id = b.mailbox_id
+		LEFT JOIN users u ON u.id = m.user_id
+		WHERE b.mailbox_id=$1 
+		  AND b.token_hash=$2 
+		  AND b.revoked_at IS NULL 
+		  AND m.is_active=true 
+		  AND (u.is_active IS NULL OR u.is_active=true)`, req.MailboxID, hash[:]).Scan(&credentialID); err != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
