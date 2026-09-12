@@ -360,9 +360,22 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	auditLog(ctx, conn, orgID, userID, "login", "user", userID, map[string]interface{}{"email": email})
+	var role, plan string
+	_ = conn.QueryRow(ctx, `
+		SELECT COALESCE(u.role, 'member'), COALESCE(o.plan, 'solo')
+		FROM users u
+		LEFT JOIN organizations o ON o.id = u.org_id
+		WHERE u.id=$1`, userID).Scan(&role, &plan)
 	setSessionCookie(w, token, expires)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"id": userID, "email": email, "org_id": orgID})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":              userID,
+		"email":           email,
+		"org_id":          orgID,
+		"organization_id": orgID,
+		"role":            role,
+		"plan":            plan,
+	})
 }
 
 func meHandler(w http.ResponseWriter, r *http.Request) {
@@ -386,15 +399,27 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
-	var id, email, orgID, displayName string
+	var id, email, orgID, displayName, role, plan string
 	var isActive bool
-	err = conn.QueryRow(ctx, `SELECT id::text, email, org_id::text, COALESCE(display_name,''), is_active FROM users WHERE id=$1`, userID).Scan(&id, &email, &orgID, &displayName, &isActive)
+	err = conn.QueryRow(ctx, `
+		SELECT u.id::text, u.email, u.org_id::text, COALESCE(u.display_name,''), COALESCE(u.role, 'member'), u.is_active, COALESCE(o.plan, 'solo')
+		FROM users u
+		LEFT JOIN organizations o ON o.id = u.org_id
+		WHERE u.id=$1`, userID).Scan(&id, &email, &orgID, &displayName, &role, &isActive, &plan)
 	if err != nil || !isActive {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"id": id, "email": email, "org_id": orgID, "display_name": displayName})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":              id,
+		"email":           email,
+		"org_id":          orgID,
+		"organization_id": orgID,
+		"display_name":    displayName,
+		"role":            role,
+		"plan":            plan,
+	})
 }
 
 func logoutHandler(w http.ResponseWriter, r *http.Request) {

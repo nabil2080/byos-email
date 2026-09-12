@@ -226,19 +226,9 @@ func verifyDomainDNS(ctx context.Context, domainName, token string) bool {
 }
 
 func domainsHandler(w http.ResponseWriter, r *http.Request) {
-	orgID := r.PathValue("org_id")
-	if orgID == "" {
-		http.Error(w, "organization ID required", http.StatusBadRequest)
-		return
-	}
-	if _, err := uuid.Parse(orgID); err != nil {
-		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
-		return
-	}
-
 	userID, ok := getAuthenticatedUserID(r)
 	if !ok {
-		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
+		http.Error(w, "missing or invalid authentication", http.StatusUnauthorized)
 		return
 	}
 
@@ -253,6 +243,18 @@ func domainsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
+
+	orgID := r.PathValue("org_id")
+	if orgID == "" {
+		err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&orgID)
+		if err != nil || orgID == "" {
+			http.Error(w, "organization not found for authenticated user", http.StatusNotFound)
+			return
+		}
+	} else if _, err := uuid.Parse(orgID); err != nil {
+		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
+		return
+	}
 
 	var memberID string
 	err = conn.QueryRow(ctx, `SELECT id::text FROM users WHERE id=$1 AND org_id=$2 AND is_active=true`, userID, orgID).Scan(&memberID)
@@ -413,24 +415,22 @@ func domainVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	orgID := r.PathValue("org_id")
-	domainID := r.PathValue("domain_id")
-	if orgID == "" || domainID == "" {
-		http.Error(w, "organization and domain ID required", http.StatusBadRequest)
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "missing or invalid authentication", http.StatusUnauthorized)
 		return
 	}
-	if _, err := uuid.Parse(orgID); err != nil {
-		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
+
+	domainID := r.PathValue("domain_id")
+	if domainID == "" {
+		domainID = r.PathValue("id")
+	}
+	if domainID == "" {
+		http.Error(w, "domain ID required", http.StatusBadRequest)
 		return
 	}
 	if _, err := uuid.Parse(domainID); err != nil {
 		http.Error(w, "domain ID must be UUID", http.StatusBadRequest)
-		return
-	}
-
-	userID, ok := getAuthenticatedUserID(r)
-	if !ok {
-		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
 		return
 	}
 
@@ -445,6 +445,19 @@ func domainVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
+
+	orgID := r.PathValue("org_id")
+	if orgID == "" {
+		_ = conn.QueryRow(ctx, `SELECT org_id::text FROM domains WHERE id=$1`, domainID).Scan(&orgID)
+	}
+	if orgID == "" {
+		http.Error(w, "domain not found", http.StatusNotFound)
+		return
+	}
+	if _, err := uuid.Parse(orgID); err != nil {
+		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
+		return
+	}
 
 	var memberID string
 	err = conn.QueryRow(ctx, `SELECT id::text FROM users WHERE id=$1 AND org_id=$2 AND is_active=true`, userID, orgID).Scan(&memberID)

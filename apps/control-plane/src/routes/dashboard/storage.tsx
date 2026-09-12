@@ -1,6 +1,7 @@
 import { Component, createResource, createSignal, Show } from "solid-js";
 import StorageCard from "../../components/storage/StorageCard";
 import ConnectStorageDialog from "../../components/storage/ConnectStorageDialog";
+import { useOrg } from "../../context/OrgContext";
 import {
   getStorageConnection,
   createStorageConnection,
@@ -13,13 +14,8 @@ import {
   type StorageProvider,
 } from "../../lib/api/storage";
 
-// In a real app orgId/userId come from auth context
-function useOrgId(): string {
-  return (document.querySelector('meta[name="org-id"]') as HTMLMetaElement)?.content || "";
-}
-
 export const StoragePage: Component = () => {
-  const orgId = useOrgId();
+  const org = useOrg();
   const [dialogOpen, setDialogOpen] = createSignal(false);
   const [dialogMode, setDialogMode] = createSignal<"create" | "replace">("create");
   const [banner, setBanner] = createSignal<{ kind: "success" | "error"; text: string } | null>(null);
@@ -29,15 +25,18 @@ export const StoragePage: Component = () => {
   const [migration, setMigration] = createSignal<StorageMigrationStatus | null>(null);
   const [isMigrationBusy, setIsMigrationBusy] = createSignal(false);
 
-  const [connection, { refetch }] = createResource(() => orgId, async (id) => {
-    if (!id) return null;
-    try {
-      return await getStorageConnection(id);
-    } catch (e) {
-      if (e instanceof Error && e.message.includes("404")) return null;
-      throw e;
+  const [connection, { refetch }] = createResource(
+    () => org.orgId,
+    async (id) => {
+      if (!id) return null;
+      try {
+        return await getStorageConnection(id);
+      } catch (e: any) {
+        if (e instanceof Error && e.message.includes("404")) return null;
+        throw e;
+      }
     }
-  });
+  );
 
   function openCreate() {
     setDialogMode("create");
@@ -49,42 +48,40 @@ export const StoragePage: Component = () => {
   }
 
   async function handleSubmit(provider: StorageProvider, config: Record<string, unknown>) {
-    if (!orgId) throw new Error("Missing organization");
+    if (!org.orgId) throw new Error("Missing organization");
     if (dialogMode() === "create") {
-      await createStorageConnection(orgId, { provider, config });
-      setBanner({ kind: "success", text: "Storage configuration saved — encrypted." });
+      await createStorageConnection(org.orgId, { provider, config });
+      setBanner({ kind: "success", text: "Storage configuration saved and encrypted." });
     } else {
-      await updateStorageConnection(orgId, { provider, config });
-      setBanner({ kind: "success", text: "Storage configuration saved — encrypted." });
+      await updateStorageConnection(org.orgId, { provider, config });
+      setBanner({ kind: "success", text: "Storage configuration updated and re-encrypted." });
     }
     await refetch();
     setTimeout(() => setBanner(null), 5000);
   }
 
   async function handleTest() {
-    if (!orgId) return;
+    if (!org.orgId) return;
     setIsTesting(true);
-    // Clear previous banner, announce testing via aria-busy on button
     setBanner(null);
     try {
-      const result = await testStorageConnection(orgId);
+      const result = await testStorageConnection(org.orgId);
       await refetch();
       if (result.code === "verified") {
-        setBanner({ kind: "success", text: "Connection verified." });
+        setBanner({ kind: "success", text: "Storage connection verified successfully." });
       } else if (result.code === "authentication_failed") {
         setBanner({ kind: "error", text: "Authentication failed – check access key and secret key." });
       } else if (result.code === "provider_unavailable") {
-        setBanner({ kind: "error", text: "Provider unavailable – check endpoint and bucket." });
+        setBanner({ kind: "error", text: "Provider unavailable – check endpoint and bucket name." });
       } else if (result.code === "configuration_error") {
         setBanner({ kind: "error", text: "Configuration error – check provider settings." });
       } else {
         setBanner({ kind: "error", text: "Storage service temporarily unavailable." });
       }
       setTimeout(() => setBanner(null), 6000);
-    } catch (e) {
+    } catch (e: any) {
       const msg = e instanceof Error ? e.message : "";
-      // Preserve structured 409
-      if (msg.includes("configuration_changed") || (e as unknown as { status?: number }).status === 409) {
+      if (msg.includes("configuration_changed") || e?.status === 409) {
         setBanner({ kind: "error", text: "Storage configuration changed while the test was running. Please test again." });
       } else if (msg.includes("403")) {
         setBanner({ kind: "error", text: "You don't have permission to test this storage connection." });
@@ -101,13 +98,13 @@ export const StoragePage: Component = () => {
   }
 
   async function handleDisconnect() {
-    if (!orgId) return;
+    if (!org.orgId) return;
     setIsDisconnecting(true);
     try {
-      await deleteStorageConnection(orgId);
+      await deleteStorageConnection(org.orgId);
       await refetch();
       setBanner({ kind: "success", text: "Storage disconnected." });
-    } catch (e) {
+    } catch (e: any) {
       const msg = e instanceof Error ? e.message : "";
       if (msg.includes("403")) {
         setBanner({ kind: "error", text: "You don't have permission to disconnect storage." });
@@ -116,17 +113,16 @@ export const StoragePage: Component = () => {
       } else {
         setBanner({ kind: "error", text: "Failed to disconnect storage." });
       }
-
     } finally {
       setIsDisconnecting(false);
     }
   }
 
   async function handleMigrationStatus() {
-    if (!orgId || !migrationId().trim()) return;
+    if (!org.orgId || !migrationId().trim()) return;
     setIsMigrationBusy(true);
     try {
-      setMigration(await getStorageMigrationStatus(orgId, migrationId().trim()));
+      setMigration(await getStorageMigrationStatus(org.orgId, migrationId().trim()));
       setBanner(null);
     } catch {
       setMigration(null);
@@ -137,10 +133,10 @@ export const StoragePage: Component = () => {
   }
 
   async function handleMigrationRetry() {
-    if (!orgId || !migrationId().trim()) return;
+    if (!org.orgId || !migrationId().trim()) return;
     setIsMigrationBusy(true);
     try {
-      const result = await retryStorageMigration(orgId, migrationId().trim());
+      const result = await retryStorageMigration(org.orgId, migrationId().trim());
       setMigration(result);
       setBanner({ kind: "success", text: "Migration retry started." });
     } catch {
@@ -151,11 +147,13 @@ export const StoragePage: Component = () => {
   }
 
   return (
-    <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div class="mb-6">
-        <h1 class="text-2xl font-semibold text-slate-900">Storage</h1>
-        <p class="mt-1 text-sm text-slate-500">
-          S3-compatible storage for your organization. Credentials are encrypted and never displayed again.
+    <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      <div class="mb-8">
+        <h1 class="text-2xl font-bold tracking-tight text-[#3C3D3E]">
+          Self-Sovereign Storage
+        </h1>
+        <p class="mt-1 text-sm text-[#6F7173]">
+          Connect your S3-compatible or MinIO object bucket. All email bodies and attachments are encrypted at rest with client-side keys before upload.
         </p>
       </div>
 
@@ -163,25 +161,30 @@ export const StoragePage: Component = () => {
         {(b) => (
           <div
             role="alert"
-            aria-live="polite"
-            class={`mb-4 rounded-md p-3 text-sm ${b().kind === "success" ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700"}`}
+            class={`mb-6 rounded-xl p-4 text-xs border ${
+              b().kind === "success"
+                ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                : "bg-red-50 text-red-800 border-red-200"
+            }`}
           >
             {b().text}
           </div>
         )}
       </Show>
 
-      <StorageCard
-        connection={connection() ?? null}
-        loading={connection.loading}
-        error={connection.error ? "Unable to reach the BYOS API." : undefined}
-        onConnect={openCreate}
-        onReplace={openReplace}
-        onTest={handleTest}
-        isTesting={isTesting()}
-        onDisconnect={handleDisconnect}
-        isDisconnecting={isDisconnecting()}
-      />
+      <div class="rounded-2xl border border-[#E2DFD8] bg-white p-6 shadow-xs mb-8">
+        <StorageCard
+          connection={connection() ?? null}
+          loading={connection.loading}
+          error={connection.error ? "Unable to reach the BYOS API." : undefined}
+          onConnect={openCreate}
+          onReplace={openReplace}
+          onTest={handleTest}
+          isTesting={isTesting()}
+          onDisconnect={handleDisconnect}
+          isDisconnecting={isDisconnecting()}
+        />
+      </div>
 
       <ConnectStorageDialog
         open={dialogOpen()}
@@ -190,29 +193,48 @@ export const StoragePage: Component = () => {
         onSubmit={handleSubmit}
       />
 
-      <section class="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm" aria-labelledby="migration-heading">
-        <h2 id="migration-heading" class="text-sm font-medium text-slate-900">Storage migration recovery</h2>
-        <p class="mt-1 text-xs text-slate-500">Enter a migration ID to inspect progress or retry a failed copy. Encrypted credentials remain server-side.</p>
-        <div class="mt-3 flex gap-2">
-          <input class="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Migration ID" value={migrationId()} onInput={(event) => setMigrationId(event.currentTarget.value)} />
-          <button class="rounded-md border border-slate-300 px-3 py-2 text-sm disabled:opacity-50" disabled={isMigrationBusy() || !migrationId().trim()} onClick={handleMigrationStatus}>Check</button>
+      <section class="rounded-2xl border border-[#E2DFD8] bg-white p-6 shadow-xs">
+        <h2 class="text-sm font-bold text-[#3C3D3E]">Storage Migration Recovery</h2>
+        <p class="mt-1 text-xs text-[#6F7173]">
+          Enter a background migration ID to inspect synchronization progress or retry an object cutover.
+        </p>
+        <div class="mt-4 flex gap-2">
+          <input
+            class="min-w-0 flex-1 rounded-lg border border-[#E2DFD8] bg-white px-3 py-2 text-xs text-[#3C3D3E] placeholder-[#6F7173]/50 focus:border-[#9E725F] focus:outline-none"
+            placeholder="Migration UUID"
+            value={migrationId()}
+            onInput={(e) => setMigrationId(e.currentTarget.value)}
+          />
+          <button
+            class="rounded-lg border border-[#E2DFD8] bg-white px-4 py-2 text-xs font-semibold text-[#3C3D3E] hover:bg-[#F0EEE9] disabled:opacity-50 transition-colors"
+            disabled={isMigrationBusy() || !migrationId().trim()}
+            onClick={handleMigrationStatus}
+          >
+            Check Progress
+          </button>
         </div>
         <Show when={migration()}>
           {(current) => (
-            <div class="mt-3 rounded-md bg-slate-50 p-3 text-sm text-slate-700">
-              <div>Status: <strong>{current().status}</strong> · objects: {current().objects} · retries: {current().retry_count}</div>
-              <Show when={current().error_code}><div class="mt-1 text-xs text-red-700">Error: {current().error_code}</div></Show>
+            <div class="mt-4 rounded-xl bg-[#F0EEE9]/50 border border-[#E2DFD8] p-4 text-xs text-[#3C3D3E]">
+              <div>
+                Status: <strong class="capitalize font-bold text-[#9E725F]">{current().status}</strong> · Objects: {current().objects} · Retries: {current().retry_count}
+              </div>
+              <Show when={current().error_code}>
+                <div class="mt-1 text-xs text-red-700">Error: {current().error_code}</div>
+              </Show>
               <Show when={current().status === "failed"}>
-                <button class="mt-3 rounded-md bg-sky-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={isMigrationBusy()} onClick={handleMigrationRetry}>Retry migration</button>
+                <button
+                  class="mt-3 rounded-lg bg-[#9E725F] px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-[#865E4D] disabled:opacity-50 transition-colors"
+                  disabled={isMigrationBusy()}
+                  onClick={handleMigrationRetry}
+                >
+                  Retry Migration
+                </button>
               </Show>
             </div>
           )}
         </Show>
       </section>
-
-      <p class="mt-6 text-xs text-slate-400">
-        Use Test connection to verify provider connectivity. Configuration is encrypted immediately on save.
-      </p>
     </div>
   );
 };

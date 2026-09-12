@@ -18,6 +18,9 @@ func withCORS(h http.HandlerFunc) http.HandlerFunc {
 		// Same-origin via Vite proxy requires no CORS. Only allow credentialed
 		// CORS if Origin is in the explicit allowlist.
 		allowed := os.Getenv("BYOS_ALLOWED_ORIGINS")
+		if allowed == "" {
+			allowed = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
+		}
 		if origin != "" && allowed != "" {
 			for _, a := range strings.Split(allowed, ",") {
 				if strings.TrimSpace(a) == origin {

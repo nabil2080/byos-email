@@ -334,6 +334,8 @@ func main() {
 	http.HandleFunc("/v1/organizations/{org_id}/storage/migration/{migration_id}/cutover", withSecurityHeaders(withCORS(storageMigrationCutoverHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/domains", withSecurityHeaders(withCORS(domainsHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/domains/{domain_id}/verify", withSecurityHeaders(withCORS(domainVerifyHandler)))
+	http.HandleFunc("/v1/domains", withSecurityHeaders(withCORS(domainsHandler)))
+	http.HandleFunc("/v1/domains/{domain_id}/verify", withSecurityHeaders(withCORS(domainVerifyHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}", withSecurityHeaders(withCORS(organizationGetHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/mailboxes", withSecurityHeaders(withCORS(mailboxesHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/mailboxes/{mailbox_id}/privacy-mode", withSecurityHeaders(withCORS(mailboxPrivacyModeHandler)))

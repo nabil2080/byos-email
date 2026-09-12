@@ -2,7 +2,21 @@ function apiBase(): string {
   return (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_BASE || "";
 }
 
-export async function register(email: string, password: string, orgRecoveryPk: string): Promise<{ id: string; email: string; org_id: string; org_name: string }> {
+export interface AuthSessionResponse {
+  id: string;
+  email: string;
+  org_id: string;
+  organization_id?: string;
+  display_name?: string;
+  role?: "owner" | "admin" | "member";
+  plan?: string;
+}
+
+export async function register(
+  email: string,
+  password: string,
+  orgRecoveryPk: string
+): Promise<{ id: string; email: string; org_id: string; org_name: string }> {
   const res = await fetch(`${apiBase()}/v1/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -18,7 +32,7 @@ export async function register(email: string, password: string, orgRecoveryPk: s
   return (await res.json()) as { id: string; email: string; org_id: string; org_name: string };
 }
 
-export async function login(email: string, password: string): Promise<{ id: string; email: string; org_id: string }> {
+export async function login(email: string, password: string): Promise<AuthSessionResponse> {
   const res = await fetch(`${apiBase()}/v1/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -31,7 +45,7 @@ export async function login(email: string, password: string): Promise<{ id: stri
     err.status = res.status;
     throw err;
   }
-  return (await res.json()) as { id: string; email: string; org_id: string };
+  return (await res.json()) as AuthSessionResponse;
 }
 
 export async function logout(): Promise<void> {
@@ -47,7 +61,7 @@ export async function logout(): Promise<void> {
   }
 }
 
-export async function me(): Promise<{ id: string; email: string; org_id: string; display_name: string }> {
+export async function me(): Promise<AuthSessionResponse> {
   const res = await fetch(`${apiBase()}/v1/auth/me`, { credentials: "include" });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -55,5 +69,5 @@ export async function me(): Promise<{ id: string; email: string; org_id: string;
     err.status = res.status;
     throw err;
   }
-  return (await res.json()) as { id: string; email: string; org_id: string; display_name: string };
+  return (await res.json()) as AuthSessionResponse;
 }

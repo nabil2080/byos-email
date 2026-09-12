@@ -1,5 +1,6 @@
 import { Component, createResource, createSignal, For, Show } from "solid-js";
 import { getMembers, changeMemberRole, terminateUser, OrgMember, MemberRole } from "../../lib/api/members";
+import { useOrg } from "../../context/OrgContext";
 
 const ROLE_LABELS: Record<MemberRole, string> = {
   owner: "Owner",
@@ -8,9 +9,10 @@ const ROLE_LABELS: Record<MemberRole, string> = {
 };
 
 const MembersPage: Component = () => {
+  const org = useOrg();
   const [members, { refetch }] = createResource<OrgMember[]>(() => getMembers());
   const [banner, setBanner] = createSignal<{ type: "ok" | "err"; msg: string } | null>(null);
-  const [busy, setBusy] = createSignal<string | null>(null); // target user id being actioned
+  const [busy, setBusy] = createSignal<string | null>(null);
 
   function showBanner(type: "ok" | "err", msg: string) {
     setBanner({ type, msg });
@@ -24,7 +26,7 @@ const MembersPage: Component = () => {
       await changeMemberRole(member.id, newRole);
       await refetch();
       showBanner("ok", `${member.email} is now ${ROLE_LABELS[newRole]}.`);
-    } catch (e) {
+    } catch (e: any) {
       showBanner("err", e instanceof Error ? e.message : "Failed to change role.");
     } finally {
       setBusy(null);
@@ -34,7 +36,7 @@ const MembersPage: Component = () => {
   async function handleTerminate(member: OrgMember) {
     if (busy()) return;
     const reason = prompt(
-      `Terminate ${member.email}? This disables their account and revokes all sessions immediately.\n\nEnter a reason (required):`
+      `Terminate ${member.email}? This disables their account and revokes all sessions immediately.\n\nEnter reason:`
     );
     if (!reason?.trim()) return;
     setBusy(member.id);
@@ -42,7 +44,7 @@ const MembersPage: Component = () => {
       await terminateUser(member.id, reason.trim());
       await refetch();
       showBanner("ok", `${member.email} has been terminated.`);
-    } catch (e) {
+    } catch (e: any) {
       showBanner("err", e instanceof Error ? e.message : "Failed to terminate user.");
     } finally {
       setBusy(null);
@@ -50,22 +52,22 @@ const MembersPage: Component = () => {
   }
 
   return (
-    <div class="mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      <div class="flex items-center justify-between">
-        <div>
-          <h1 class="text-2xl font-semibold text-slate-900">Organization Members</h1>
-          <p class="mt-1 text-sm text-slate-500">
-            Manage who has access to your organization. Owners can change roles and terminate members.
-          </p>
-        </div>
+    <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      <div class="mb-8">
+        <h1 class="text-2xl font-bold tracking-tight text-[#3C3D3E]">
+          Organization Members & Access Control
+        </h1>
+        <p class="mt-1 text-sm text-[#6F7173]">
+          Manage organizational members, elevate administrators, and revoke account credentials.
+        </p>
       </div>
 
       <Show when={banner()}>
         {(b) => (
           <div
             role="alert"
-            class={`mt-4 rounded-md p-3 text-sm ${
-              b().type === "ok" ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700"
+            class={`mb-6 rounded-xl p-4 text-xs border ${
+              b().type === "ok" ? "bg-emerald-50 text-emerald-800 border-emerald-200" : "bg-red-50 text-red-800 border-red-200"
             }`}
           >
             {b().msg}
@@ -73,97 +75,114 @@ const MembersPage: Component = () => {
         )}
       </Show>
 
-      <div class="mt-6 rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <div class="rounded-2xl border border-[#E2DFD8] bg-white shadow-xs overflow-hidden">
+        <div class="p-6 border-b border-[#E2DFD8] flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-bold uppercase tracking-wider text-[#6F7173]">
+              Active Members
+            </span>
+            <span class="rounded-full bg-[#F0EEE9] px-2 py-0.5 font-mono text-[11px] font-bold text-[#3C3D3E]">
+              {(members() || []).length}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => refetch()}
+            class="text-xs text-[#9E725F] hover:text-[#865E4D] font-medium hover:underline flex items-center gap-1"
+          >
+            <span>↻</span> Refresh
+          </button>
+        </div>
+
         <Show when={members.loading}>
-          <div class="p-6 text-sm text-slate-500 animate-pulse">Loading members…</div>
+          <div class="p-8 text-center text-xs text-[#6F7173]">Loading organization members…</div>
         </Show>
+
         <Show when={members.error}>
-          <div class="p-6 text-sm text-red-700">
+          <div class="p-8 text-center text-xs text-red-700">
             {members.error instanceof Error ? members.error.message : "Failed to load members."}
           </div>
         </Show>
+
         <Show when={members() && !members.loading}>
-          <table class="min-w-full divide-y divide-slate-200 text-sm">
-            <thead class="bg-slate-50">
-              <tr>
-                <th class="px-6 py-3 text-left font-medium text-slate-500 uppercase tracking-wider">Member</th>
-                <th class="px-6 py-3 text-left font-medium text-slate-500 uppercase tracking-wider">Role</th>
-                <th class="px-6 py-3 text-left font-medium text-slate-500 uppercase tracking-wider">Status</th>
-                <th class="px-6 py-3 text-right font-medium text-slate-500 uppercase tracking-wider">Actions</th>
-              </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-slate-100">
-              <For each={members()}>
-                {(member) => (
-                  <tr class={member.is_active ? "" : "opacity-50"}>
-                    <td class="px-6 py-4">
-                      <div class="font-medium text-slate-900">{member.email}</div>
-                      <Show when={member.display_name}>
-                        <div class="text-xs text-slate-500">{member.display_name}</div>
-                      </Show>
-                    </td>
-                    <td class="px-6 py-4">
-                      <span
-                        class={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                          member.role === "owner"
-                            ? "bg-amber-100 text-amber-800"
-                            : member.role === "admin"
-                            ? "bg-sky-100 text-sky-800"
-                            : "bg-slate-100 text-slate-700"
-                        }`}
-                      >
-                        {ROLE_LABELS[member.role]}
-                      </span>
-                    </td>
-                    <td class="px-6 py-4">
-                      <span
-                        class={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                          member.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
-                        }`}
-                      >
-                        {member.is_active ? "Active" : "Terminated"}
-                      </span>
-                    </td>
-                    <td class="px-6 py-4 text-right space-x-2">
-                      <Show when={member.is_active && member.role !== "owner"}>
-                        <select
-                          aria-label={`Change role for ${member.email}`}
-                          disabled={!!busy()}
-                          class="rounded border border-slate-300 text-xs px-2 py-1 disabled:opacity-50"
-                          onChange={(e) => {
-                            const val = e.currentTarget.value as MemberRole;
-                            if (val) handleRoleChange(member, val);
-                            e.currentTarget.value = "";
-                          }}
+          <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-[#E2DFD8]">
+              <thead class="bg-[#F0EEE9]/60 font-semibold text-[#6F7173] text-xs">
+                <tr>
+                  <th class="px-6 py-3 text-left">User Identity</th>
+                  <th class="px-6 py-3 text-left">Access Role</th>
+                  <th class="px-6 py-3 text-left">Account Status</th>
+                  <th class="px-6 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-[#E2DFD8] bg-white text-xs text-[#3C3D3E]">
+                <For each={members()}>
+                  {(member) => (
+                    <tr class={`hover:bg-[#F0EEE9]/30 transition-colors ${member.is_active ? "" : "opacity-50"}`}>
+                      <td class="px-6 py-3.5">
+                        <div class="font-medium text-[#3C3D3E]">{member.email}</div>
+                        <Show when={member.display_name}>
+                          <div class="text-[11px] text-[#6F7173]">{member.display_name}</div>
+                        </Show>
+                      </td>
+                      <td class="px-6 py-3.5">
+                        <span
+                          class={`inline-flex items-center rounded-full px-2.5 py-0.5 font-mono text-[10px] font-bold uppercase ${
+                            member.role === "owner"
+                              ? "bg-[#F3ECE8] text-[#9E725F]"
+                              : member.role === "admin"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-[#F0EEE9] text-[#6F7173]"
+                          }`}
                         >
-                          <option value="">Change role…</option>
-                          <option value="admin">→ Admin</option>
-                          <option value="member">→ Member</option>
-                          <option value="owner">→ Owner</option>
-                        </select>
-                        <button
-                          disabled={!!busy()}
-                          onClick={() => handleTerminate(member)}
-                          class="rounded border border-red-300 text-xs px-3 py-1 text-red-700 hover:bg-red-50 disabled:opacity-50"
+                          {ROLE_LABELS[member.role]}
+                        </span>
+                      </td>
+                      <td class="px-6 py-3.5">
+                        <span
+                          class={`inline-flex items-center gap-1 font-semibold text-[11px] ${
+                            member.is_active ? "text-emerald-700" : "text-[#6F7173]"
+                          }`}
                         >
-                          {busy() === member.id ? "…" : "Terminate"}
-                        </button>
-                      </Show>
-                    </td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-          <Show when={members()?.length === 0}>
-            <div class="p-6 text-sm text-slate-500">No members found.</div>
-          </Show>
+                          <span class={`w-1.5 h-1.5 rounded-full ${member.is_active ? "bg-emerald-500" : "bg-[#6F7173]"}`}></span>
+                          {member.is_active ? "Active" : "Terminated"}
+                        </span>
+                      </td>
+                      <td class="px-6 py-3.5 text-right space-x-2">
+                        <Show when={member.is_active && member.role !== "owner" && org.isOwner}>
+                          <select
+                            aria-label={`Change role for ${member.email}`}
+                            disabled={!!busy()}
+                            class="rounded-lg border border-[#E2DFD8] bg-white text-xs px-2.5 py-1 text-[#3C3D3E] focus:border-[#9E725F] focus:outline-none"
+                            onChange={(e) => {
+                              const val = e.currentTarget.value as MemberRole;
+                              if (val) handleRoleChange(member, val);
+                              e.currentTarget.value = "";
+                            }}
+                          >
+                            <option value="">Role…</option>
+                            <option value="admin">→ Admin</option>
+                            <option value="member">→ Member</option>
+                            <option value="owner">→ Owner</option>
+                          </select>
+                          <button
+                            disabled={!!busy()}
+                            onClick={() => handleTerminate(member)}
+                            class="rounded-lg border border-red-200 bg-red-50/50 text-xs px-2.5 py-1 font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50 transition-colors"
+                          >
+                            {busy() === member.id ? "…" : "Terminate"}
+                          </button>
+                        </Show>
+                      </td>
+                    </tr>
+                  )}
+                </For>
+              </tbody>
+            </table>
+          </div>
         </Show>
       </div>
-
-      <p class="mt-4 text-xs text-slate-500">
-        Only owners can change roles or terminate members. Termination is immediate and irrevocable via this interface — it disables the account and revokes all active sessions.
-      </p>
     </div>
   );
 };
