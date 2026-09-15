@@ -3387,7 +3387,18 @@ const App: Component = () => {
               <FiltersTab mailbox={selectedMailbox()!} />
             </Show>
             <Show when={activeSettingsTab() === "security" && selectedMailbox()}>
-              <SecurityTab mailbox={selectedMailbox()!} currentUser={currentUser()} />
+              <SecurityTab mailbox={selectedMailbox()!} currentUser={currentUser()} onReactivateSuccess={() => {
+                const box = selectedMailbox();
+                if (box) {
+                  const updatedBox = { ...box, previous_wrapped_sk_user: undefined };
+                  setSelectedMailbox(updatedBox as any);
+                  setMailboxes(mailboxes().map(m => m.id === box.id ? (updatedBox as any) : m));
+                }
+                const user = currentUser();
+                if (user) {
+                  setCurrentUser({ ...user, previous_wrapped_sk_user: undefined });
+                }
+              }} />
             </Show>
           </SettingsLayout>
         }

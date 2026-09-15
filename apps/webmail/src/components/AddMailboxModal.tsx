@@ -63,7 +63,11 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
           const tempToken = res.token || sessionStorage.getItem("byos_active_session_token");
 
           // We need to import reactivateHistoricalKeys or use fetch directly since we need the new token
-          await fetch(`/v1/mailboxes/${res.mailbox_id}/reactivate-keys`, {
+          const apiBase = () => {
+            const el = document.querySelector('meta[name="api-base"]');
+            return el ? el.getAttribute("content") : "http://127.0.0.1:8080";
+          };
+          const reactivateRes = await fetch(`${apiBase()}/v1/mailboxes/${res.mailbox_id}/reactivate-keys`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -75,6 +79,11 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
               mailbox_pk: kp.public_key,
             })
           });
+
+          if (!reactivateRes.ok) {
+            const errText = await reactivateRes.text().catch(() => "");
+            throw new Error(errText || `Failed to repair mailbox: status ${reactivateRes.status}`);
+          }
 
           // Set skHex from the newly generated secret key
           skHex = kp.secret_key;
