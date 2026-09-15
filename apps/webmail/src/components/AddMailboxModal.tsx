@@ -1,5 +1,5 @@
 import { Component, createSignal, Show } from "solid-js";
-import { ConnectedAccount, login } from "../api";
+import { ConnectedAccount, login, apiBase } from "../api";
 import { autoUnwrapMailboxKey } from "../message_crypto";
 
 interface AddMailboxModalProps {
@@ -63,10 +63,6 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
           const tempToken = res.token || sessionStorage.getItem("byos_active_session_token");
 
           // We need to import reactivateHistoricalKeys or use fetch directly since we need the new token
-          const apiBase = () => {
-            const el = document.querySelector('meta[name="api-base"]');
-            return el ? el.getAttribute("content") : "http://127.0.0.1:8080";
-          };
           const reactivateRes = await fetch(`${apiBase()}/v1/mailboxes/${res.mailbox_id}/reactivate-keys`, {
             method: "POST",
             headers: {
@@ -90,6 +86,7 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
           searchKeyHex = wasm.wasm_derive_search_key(skHex);
         } catch (healErr) {
           console.warn("Self-healing mailbox key failed:", healErr);
+          throw new Error("Failed to initialize cryptographic keys for the newly connected mailbox.");
         }
       }
 
