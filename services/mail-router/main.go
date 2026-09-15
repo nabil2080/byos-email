@@ -230,6 +230,10 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "recipients and raw_message_b64 are required", http.StatusBadRequest)
 		return
 	}
+	if len(req.Recipients) > 50 {
+		http.Error(w, "too many recipients (max 50)", http.StatusBadRequest)
+		return
+	}
 
 	rawMessage, err := base64.StdEncoding.DecodeString(req.RawMessageB64)
 	if err != nil {
@@ -247,37 +251,50 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stored := make([]StoredMessage, len(req.Recipients))
-	g, gCtx := errgroup.WithContext(r.Context())
+	errs := make([]error, len(req.Recipients))
+	var g errgroup.Group
+	g.SetLimit(10)
 
 	// Ensure we preserve the first error exactly as the sequential loop would have returned
 	// but we don't abort immediately on the first error necessarily, errgroup handles that.
 	for i, recipient := range req.Recipients {
 		i, recipient := i, recipient
 		g.Go(func() error {
-			result, err := a.processRecipient(gCtx, req.EnvelopeFrom, recipient, rawMessage, deliveryIdentity, normalizedRecipients)
+			result, err := a.processRecipient(r.Context(), req.EnvelopeFrom, recipient, rawMessage, deliveryIdentity, normalizedRecipients)
 			if err != nil {
-				return fmt.Errorf("process recipient %q: %w", recipient, err)
+				errs[i] = fmt.Errorf("process recipient %q: %w", recipient, err)
+				return nil
 			}
 			stored[i] = result
 			return nil
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		if errors.Is(err, ErrStorageDisconnected) || strings.Contains(strings.ToLower(err.Error()), "storage_disconnected") {
+	_ = g.Wait()
+
+	var firstErr error
+	for _, err := range errs {
+		if err != nil {
+			firstErr = err
+			break
+		}
+	}
+
+	if firstErr != nil {
+		if errors.Is(firstErr, ErrStorageDisconnected) || strings.Contains(strings.ToLower(firstErr.Error()), "storage_disconnected") {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(map[string]string{"status": "error", "code": "storage_disconnected", "message": "Mailbox storage is currently unavailable. Please reconnect storage."})
 			return
 		}
-		log.Printf("%v", err)
+		log.Printf("%v", firstErr)
 		// Try to extract the original error message for the HTTP response to maintain compatibility
 		// Since we wrapped it, let's just return err.Error() but it might have "process recipient ...:" prefix.
 		// For safety and compatibility, we'll unwrap it or just return it.
 		// Actually the previous code returned err.Error() directly.
 		// Let's get the underlying error if possible.
-		unwrapped := err
-		if unwrappedInner := errors.Unwrap(err); unwrappedInner != nil {
+		unwrapped := firstErr
+		if unwrappedInner := errors.Unwrap(firstErr); unwrappedInner != nil {
 			unwrapped = unwrappedInner
 		}
 		http.Error(w, unwrapped.Error(), http.StatusBadGateway)
@@ -305,6 +322,30 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 		return StoredMessage{}, err
 	}
 
+	// Serialize processing for this mailbox/identity to prevent duplicate delivery race condition
+	// Note: deliveryIdentity[:] is converted to hex string to safely pass into pgx as text for hashtext()
+	_, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))", route.MailboxID, fmt.Sprintf("%x", deliveryIdentity[:]))
+	if err != nil {
+		return StoredMessage{}, fmt.Errorf("acquire duplicate detection lock: %w", err)
+	}
+
+	var messageID string
+	var storageObjectID string
+	// Check for duplicate delivery_identity before processing (V5.3 deduplication)
+	err = tx.QueryRow(ctx, `
+		SELECT id, storage_object_id
+		FROM message_metadata
+		WHERE mailbox_id = $1 AND delivery_identity = $2`,
+		route.MailboxID, deliveryIdentity[:],
+	).Scan(&messageID, &storageObjectID)
+	if err == nil {
+		// Duplicate delivery_identity found - return existing message without re-encrypting/storing
+		log.Printf("duplicate delivery detected for mailbox=%s delivery_identity=%x", route.MailboxID, deliveryIdentity[:])
+		return StoredMessage{MessageID: messageID, MailboxID: route.MailboxID, Recipient: normalizeAddress(recipient), MessageSeq: 0, StorageObjectID: storageObjectID}, nil
+	} else if err.Error() != "no rows in result set" {
+		return StoredMessage{}, fmt.Errorf("check duplicate delivery: %w", err)
+	}
+
 	var messageSeq int64
 	if err := tx.QueryRow(ctx, "SELECT nextval('mailbox_message_seq')").Scan(&messageSeq); err != nil {
 		return StoredMessage{}, fmt.Errorf("allocate message sequence: %w", err)
@@ -314,7 +355,7 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 	if objectPrefix == "" {
 		objectPrefix = fmt.Sprintf("mailboxes/%s", route.MailboxID)
 	}
-	storageObjectID := fmt.Sprintf("%s/%020d.eml.enc", objectPrefix, messageSeq)
+	storageObjectID = fmt.Sprintf("%s/%020d.eml.enc", objectPrefix, messageSeq)
 
 	cryptoResp, err := a.encryptMessage(ctx, route, messageSeq, storageObjectID, rawMessage)
 	if err != nil {
@@ -340,22 +381,6 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 
 	if err := a.storeCiphertext(ctx, storageObjectID, ciphertext, route.MailboxID, messageSeq); err != nil {
 		return StoredMessage{}, err
-	}
-
-	var messageID string
-	// Check for duplicate delivery_identity before inserting (V5.3 deduplication)
-	err = tx.QueryRow(ctx, `
-		SELECT id, storage_object_id
-		FROM message_metadata
-		WHERE mailbox_id = $1 AND delivery_identity = $2`,
-		route.MailboxID, deliveryIdentity[:],
-	).Scan(&messageID, &storageObjectID)
-	if err == nil {
-		// Duplicate delivery_identity found - return existing message
-		log.Printf("duplicate delivery detected for mailbox=%s delivery_identity=%x", route.MailboxID, deliveryIdentity[:])
-		return StoredMessage{MessageID: messageID, MailboxID: route.MailboxID, Recipient: normalizeAddress(recipient), MessageSeq: 0, StorageObjectID: storageObjectID}, nil
-	} else if err.Error() != "no rows in result set" {
-		return StoredMessage{}, fmt.Errorf("check duplicate delivery: %w", err)
 	}
 
 	// No duplicate - insert new message
