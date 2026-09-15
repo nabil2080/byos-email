@@ -10,13 +10,15 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"net/smtp"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 type Config struct {
@@ -236,42 +238,33 @@ func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Co
 }
 
 func decryptForDelivery(ctx context.Context, msg OutboundMessage, sk string) ([]byte, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "byos-crypto-client", "decrypt-outbound-json")
+
 	reqBody, err := json.Marshal(map[string]interface{}{
-		"outbound_delivery_sk": sk,
-		"send_token_wrapped":   base64.StdEncoding.EncodeToString(msg.SendTokenHPKEWrapped),
-		"mailbox_id":           msg.MailboxID,
-		"message_seq":          msg.OutboxSeq,
-		"ciphertext":           base64.StdEncoding.EncodeToString(msg.EncryptedMessage),
+		"outbound_sk_b64": sk,
+		"wrapped_b64":     base64.StdEncoding.EncodeToString(msg.SendTokenHPKEWrapped),
+		"mailbox_id":      msg.MailboxID,
+		"outbox_seq":      msg.OutboxSeq,
+		"ciphertext_b64":  base64.StdEncoding.EncodeToString(msg.EncryptedMessage),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("json marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://crypto-worker:8084/v1/outbound/decrypt", bytes.NewBuffer(reqBody))
+	cmd.Stdin = bytes.NewReader(reqBody)
+
+	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("new request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http do: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("crypto-worker error: status %d", resp.StatusCode)
+		if exitError, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("crypto-client failed: %s", string(exitError.Stderr))
+		}
+		return nil, fmt.Errorf("crypto-client exec: %w", err)
 	}
 
-	var resBody struct {
-		Plaintext string `json:"plaintext"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&resBody); err != nil {
-		return nil, fmt.Errorf("json decode response: %w", err)
-	}
-
-	plaintext, err := base64.StdEncoding.DecodeString(resBody.Plaintext)
+	plaintext, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
 	if err != nil {
 		return nil, fmt.Errorf("base64 decode plaintext: %w", err)
 	}

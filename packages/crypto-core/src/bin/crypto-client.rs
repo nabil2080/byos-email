@@ -21,7 +21,8 @@ fn run() -> Result<(), String> {
         Some("decrypt") => decrypt(&args[1..]),
         Some("encrypt-outbound") => encrypt_outbound_cli(&args[1..]),
         Some("decrypt-outbound") => decrypt_outbound_cli(&args[1..]),
-        _ => Err("usage: byos-crypto-client generate | generate-dkim <selector> | decrypt <mailbox-id> <message-seq> <secret-key-b64> <wrapped-key-b64> <ciphertext-b64> | encrypt-outbound <outbound-pk-b64> <mailbox-id> <outbox-seq> <plaintext-b64> | decrypt-outbound <outbound-sk-b64> <mailbox-id> <outbox-seq> <wrapped-b64> <ciphertext-b64>".to_owned()),
+        Some("decrypt-outbound-json") => decrypt_outbound_json_cli(),
+        _ => Err("usage: byos-crypto-client generate | generate-dkim <selector> | decrypt <mailbox-id> <message-seq> <secret-key-b64> <wrapped-key-b64> <ciphertext-b64> | encrypt-outbound <outbound-pk-b64> <mailbox-id> <outbox-seq> <plaintext-b64> | decrypt-outbound <outbound-sk-b64> <mailbox-id> <outbox-seq> <wrapped-b64> <ciphertext-b64> | decrypt-outbound-json".to_owned()),
     }
 }
 
@@ -108,6 +109,39 @@ fn encrypt_outbound_cli(args: &[String]) -> Result<(), String> {
             "aad": BASE64.encode(aad),
         })
     );
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+struct DecryptOutboundJsonRequest {
+    outbound_sk_b64: String,
+    mailbox_id: String,
+    outbox_seq: u64,
+    wrapped_b64: String,
+    ciphertext_b64: String,
+}
+
+fn decrypt_outbound_json_cli() -> Result<(), String> {
+    use std::io::Read;
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input).map_err(|e| format!("read stdin: {}", e))?;
+
+    let req: DecryptOutboundJsonRequest = serde_json::from_str(&input)
+        .map_err(|e| format!("parse json: {}", e))?;
+
+    let sk: [u8; 32] = decode(&req.outbound_sk_b64, "outbound-sk")?
+        .try_into()
+        .map_err(|_| "outbound-sk must decode to 32 bytes".to_owned())?;
+    let mailbox_id = Uuid::parse_str(&req.mailbox_id)
+        .map_err(|_| "mailbox-id must be a UUID".to_owned())?
+        .into_bytes();
+    let wrapped = decode(&req.wrapped_b64, "wrapped")?;
+    let ciphertext = decode(&req.ciphertext_b64, "ciphertext")?;
+
+    let plaintext = decrypt_outbound(&sk, &wrapped, &mailbox_id, req.outbox_seq, &ciphertext)
+        .map_err(|e| e.to_string())?;
+
+    println!("{}", BASE64.encode(plaintext));
     Ok(())
 }
 
