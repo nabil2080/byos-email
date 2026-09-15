@@ -1,4 +1,5 @@
 import { Component, createSignal, Show, For, onMount, onCleanup } from "solid-js";
+import DOMPurify from "dompurify";
 import { DisplayMessage } from "./MessageList";
 import { AttachmentItem, MailboxFolder, MailboxLabel } from "../api";
 import { ProfileAvatar } from "./ProfileAvatar";
@@ -865,7 +866,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               when={/<[a-z][\s\S]*>/i.test(props.decryptedContent || "")}
               fallback={props.decryptedContent}
             >
-              <div innerHTML={trackerInfo().sanitized} />
+              <div innerHTML={DOMPurify.sanitize(trackerInfo().sanitized)} />
             </Show>
           </Show>
 
