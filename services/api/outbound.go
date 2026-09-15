@@ -434,7 +434,7 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(req.AttachmentIDs) > 0 {
-		// BUG-004 hardening: attachments.message_id stores the outbound
+		// Note: attachments.message_id stores the outbound
 		// delivery_id (text column, see 020_attachments.sql). There is no
 		// separate delivery_id column by design for V1; keep the identifier
 		// consistent between send and schedule paths. Validate UUID shape,

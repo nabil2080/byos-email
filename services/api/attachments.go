@@ -231,7 +231,7 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 			// Forward bytes to customer storage via storage-worker streaming connection.
 			// Total stream size equals the original multipart file size (headerBytes
 			// were read back into streamReader), so ContentLength must be header.Size.
-			// BUG-004 note: Go populates multipart FileHeader.Size while parsing the
+			// Note: Go populates multipart FileHeader.Size while parsing the
 			// form, but proxies/clients that yield an unknown size (Size < 0) are
 			// rejected here because downstream providers (e.g. GoogleDriveStorage)
 			// require an exact non-negative size.
