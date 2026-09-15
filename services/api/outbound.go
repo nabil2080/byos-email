@@ -434,7 +434,7 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(req.AttachmentIDs) > 0 {
-		// BUG-004 hardening: attachments.message_id stores the outbound
+		// Note: attachments.message_id stores the outbound
 		// delivery_id (text column, see 020_attachments.sql). There is no
 		// separate delivery_id column by design for V1; keep the identifier
 		// consistent between send and schedule paths. Validate UUID shape,
@@ -452,10 +452,12 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		// message whose attachments silently stayed unlinked.
 		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, req.AttachmentIDs, req.MailboxID)
 		if linkErr != nil {
+			_ = tx.Rollback(ctx)
 			http.Error(w, "failed to link attachments", http.StatusInternalServerError)
 			return
 		}
 		if linkRes.RowsAffected() != int64(len(req.AttachmentIDs)) {
+			_ = tx.Rollback(ctx)
 			http.Error(w, "attachment not found, already linked, or not in this mailbox", http.StatusBadRequest)
 			return
 		}
@@ -624,10 +626,12 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		// BUG-002: same strict link check as the send handler (see above).
 		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, req.AttachmentIDs, req.MailboxID)
 		if linkErr != nil {
+			_ = tx.Rollback(ctx)
 			http.Error(w, "failed to link attachments", http.StatusInternalServerError)
 			return
 		}
 		if linkRes.RowsAffected() != int64(len(req.AttachmentIDs)) {
+			_ = tx.Rollback(ctx)
 			http.Error(w, "attachment not found, already linked, or not in this mailbox", http.StatusBadRequest)
 			return
 		}

@@ -33,9 +33,12 @@ export function base64ToBytes(b64: string): Uint8Array {
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
+  const CHUNK_SIZE = 0x8000;
+  const chars: string[] = [];
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    chars.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK_SIZE) as unknown as number[]));
+  }
+  return btoa(chars.join(""));
 }
 
 /** Derive the in-memory mailbox key. Throws with safe messages on bad input. */

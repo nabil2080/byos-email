@@ -585,9 +585,12 @@ pub fn decrypt_outbound(
     // HPKE-Open to recover content_key (send_token)
     let content_key = hpke_open(outbound_delivery_sk, send_token_wrapped, &aad)?;
 
+    let content_key_32: [u8; 32] = content_key
+        .try_into()
+        .map_err(|_| CryptoError::InvalidFormat)?;
+
     // Decrypt message
-    let key: [u8; 32] = content_key.try_into().map_err(|_| CryptoError::InvalidFormat)?;
-    aes_gcm_decrypt(&key, ciphertext, &aad)
+    aes_gcm_decrypt(&content_key_32, ciphertext, &aad)
 }
 
 /// Outbound delivery key pair type for serialization

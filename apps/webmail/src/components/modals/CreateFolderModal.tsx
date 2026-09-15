@@ -85,7 +85,7 @@ export const CreateFolderModal: Component<CreateFolderModalProps> = (props) => {
               </div>
             </Show>
 
-            {/* Helper Description matching Proton Mail */}
+            {/* Helper Description  */}
             <p class="text-xs text-[#6F7173] dark:text-[#A1A1AA] leading-relaxed">
               Name your new folder and select the parent folder you want to put it in. If you do not select a parent folder, this new folder will be created as a top level folder.
             </p>

@@ -82,7 +82,7 @@ func createTestOrgAndUsers(t *testing.T, db *sql.DB) (orgID, ownerID, adminID, m
 }
 
 // createSession creates a session for the given user and returns the session token.
-func createSession(t *testing.T, db *sql.DB, userID string) string {
+func createTestSession(t *testing.T, db *sql.DB, userID string) string {
 	t.Helper()
 	token, tokenHash := generateSessionToken()
 	expires := time.Now().Add(30 * 24 * time.Hour)
@@ -102,7 +102,7 @@ func TestMemberCannotChangeRole(t *testing.T) {
 	_, _, _, memberID := createTestOrgAndUsers(t, db)
 
 	// Login as member and get session token
-	memberToken := createSession(t, db, memberID)
+	memberToken := createTestSession(t, db, memberID)
 
 	// Create request as member trying to change another member's role
 	req := httptest.NewRequest(http.MethodPatch, "/v1/auth/change-member-role", bytes.NewReader([]byte(`{"target_user_id":"test","new_role":"admin"}`)))
@@ -134,7 +134,7 @@ func TestOwnerCannotSelfDemote(t *testing.T) {
 	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
 
 	// Login as owner and get session token
-	ownerToken := createSession(t, db, ownerID)
+	ownerToken := createTestSession(t, db, ownerID)
 
 	// Create request as owner trying to demote themselves
 	req := httptest.NewRequest(http.MethodPatch, "/v1/auth/change-member-role", bytes.NewReader([]byte(`{"target_user_id":"`+ownerID+`","new_role":"admin"}`)))
@@ -166,7 +166,7 @@ func TestOwnerCannotSelfTerminate(t *testing.T) {
 	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
 
 	// Login as owner and get session token
-	ownerToken := createSession(t, db, ownerID)
+	ownerToken := createTestSession(t, db, ownerID)
 
 	// Create request as owner trying to terminate themselves
 	req := httptest.NewRequest(http.MethodDelete, "/v1/auth/terminate-user", bytes.NewReader([]byte(`{"target_user_id":"`+ownerID+`","reason":"test"}`)))
@@ -199,7 +199,7 @@ func TestAdminCannotChangeRole(t *testing.T) {
 	_, _, adminID, _ := createTestOrgAndUsers(t, db)
 
 	// Login as admin and get session token
-	adminToken := createSession(t, db, adminID)
+	adminToken := createTestSession(t, db, adminID)
 
 	// Create request as admin trying to change member's role
 	req := httptest.NewRequest(http.MethodPatch, "/v1/auth/change-member-role", bytes.NewReader([]byte(`{"target_user_id":"test","new_role":"member"}`)))
@@ -231,7 +231,7 @@ func TestAdminCannotTerminate(t *testing.T) {
 	_, _, adminID, _ := createTestOrgAndUsers(t, db)
 
 	// Login as admin and get session token
-	adminToken := createSession(t, db, adminID)
+	adminToken := createTestSession(t, db, adminID)
 
 	// Create request as admin trying to terminate a member
 	req := httptest.NewRequest(http.MethodDelete, "/v1/auth/terminate-user", bytes.NewReader([]byte(`{"target_user_id":"test","reason":"test"}`)))
@@ -261,7 +261,7 @@ func TestMemberCannotTerminate(t *testing.T) {
 	_, _, _, memberID := createTestOrgAndUsers(t, db)
 
 	// Login as member and get session token
-	memberToken := createSession(t, db, memberID)
+	memberToken := createTestSession(t, db, memberID)
 
 	// Create request as member trying to terminate another user
 	req := httptest.NewRequest(http.MethodDelete, "/v1/auth/terminate-user", bytes.NewReader([]byte(`{"target_user_id":"test","reason":"test"}`)))

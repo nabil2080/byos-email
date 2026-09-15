@@ -15,8 +15,11 @@ import (
 	"net/smtp"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 type Config struct {
@@ -143,6 +146,14 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 
 	log.Printf("processing %d outbound messages", len(messages))
 
+	sk := envOrDefault("OUTBOUND_DELIVERY_SK_B64", "")
+	if sk == "" {
+		if b, err := os.ReadFile("/run/secrets/outbound_delivery_sk"); err == nil {
+			sk = string(b)
+		}
+	}
+	sk = strings.TrimSpace(sk)
+
 	for _, msg := range messages {
 		if !msg.OutboxSeq.Valid {
 			log.Printf("deliver failed id=%s delivery_id=%s: missing outbox_seq", msg.ID, msg.DeliveryID)
@@ -187,12 +198,29 @@ func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Co
 	}
 	// plaintext is full RFC5322 message (already contains From/To/Subject/MIME, DKIM will be added before this)
 	// For envelope, derive sender from mailbox (lookup) or use plaintext From header fallback.
-	// For now, use envelope-from as empty or extract via simple parse; Postfix permit_mynetworks allows empty.
-	envelopeFrom := "" // TODO: lookup mailbox address for MAIL FROM
-	// Try to extract From header for envelope
-	if idx := findHeader(plaintext, "From:"); idx >= 0 {
-		// keep empty for now; don't fail on parse
-		_ = idx
+	envelopeFrom := ""
+	var localPart, domainName string
+	err = tx.QueryRowContext(ctx,
+		`SELECT m.local_part, d.name
+		 FROM mailboxes m
+		 JOIN domains d ON m.domain_id = d.id
+		 WHERE m.id = $1`, msg.MailboxID).Scan(&localPart, &domainName)
+
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("mailbox lookup: %w", err)
+	}
+
+	if err == nil {
+		if strings.ContainsAny(localPart, "<>\t\n\r ") || strings.ContainsAny(domainName, "<>\t\n\r ") {
+			return fmt.Errorf("invalid characters in mailbox address")
+		}
+		envelopeFrom = fmt.Sprintf("%s@%s", localPart, domainName)
+	} else {
+		// Try to extract From header for envelope as fallback
+		if idx := findHeader(plaintext, "From:"); idx >= 0 {
+			// keep empty for now; don't fail on parse
+			_ = idx
+		}
 	}
 
 	host, _, err := net.SplitHostPort(cfg.PostfixAddr)
@@ -306,6 +334,7 @@ func decryptForDelivery(ctx context.Context, msg OutboundMessage) ([]byte, error
 	plaintext, err := base64.StdEncoding.DecodeString(respData.Plaintext)
 	if err != nil {
 		return nil, fmt.Errorf("decode plaintext base64: %w", err)
+
 	}
 
 	return plaintext, nil
