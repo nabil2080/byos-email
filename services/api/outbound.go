@@ -452,10 +452,12 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		// message whose attachments silently stayed unlinked.
 		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, req.AttachmentIDs, req.MailboxID)
 		if linkErr != nil {
+			_ = tx.Rollback(ctx)
 			http.Error(w, "failed to link attachments", http.StatusInternalServerError)
 			return
 		}
 		if linkRes.RowsAffected() != int64(len(req.AttachmentIDs)) {
+			_ = tx.Rollback(ctx)
 			http.Error(w, "attachment not found, already linked, or not in this mailbox", http.StatusBadRequest)
 			return
 		}
@@ -624,10 +626,12 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		// BUG-002: same strict link check as the send handler (see above).
 		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, req.AttachmentIDs, req.MailboxID)
 		if linkErr != nil {
+			_ = tx.Rollback(ctx)
 			http.Error(w, "failed to link attachments", http.StatusInternalServerError)
 			return
 		}
 		if linkRes.RowsAffected() != int64(len(req.AttachmentIDs)) {
+			_ = tx.Rollback(ctx)
 			http.Error(w, "attachment not found, already linked, or not in this mailbox", http.StatusBadRequest)
 			return
 		}
