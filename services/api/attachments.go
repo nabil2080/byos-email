@@ -241,7 +241,7 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			storeReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/store", streamReader)
 			if reqErr != nil {
-				// BUG-001: never create a DB row pointing at an object that was
+				// Never create a DB row pointing at an object that was
 				// never sent; without a store request there is nothing to link.
 				http.Error(w, "failed to prepare storage request", http.StatusInternalServerError)
 				return
