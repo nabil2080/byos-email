@@ -10,6 +10,7 @@ import (
 	"net/smtp"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -179,7 +180,15 @@ func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Co
 		 FROM mailboxes m
 		 JOIN domains d ON m.domain_id = d.id
 		 WHERE m.id = $1`, msg.MailboxID).Scan(&localPart, &domainName)
+
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("mailbox lookup: %w", err)
+	}
+
 	if err == nil {
+		if strings.ContainsAny(localPart, "<>\t\n\r ") || strings.ContainsAny(domainName, "<>\t\n\r ") {
+			return fmt.Errorf("invalid characters in mailbox address")
+		}
 		envelopeFrom = fmt.Sprintf("%s@%s", localPart, domainName)
 	} else {
 		// Try to extract From header for envelope as fallback
