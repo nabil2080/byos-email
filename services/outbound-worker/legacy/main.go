@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/smtp"
 	"os"
 	"os/exec"
@@ -22,10 +24,10 @@ import (
 )
 
 type Config struct {
-	ListenAddr       string
-	DatabaseURL      string
-	PostfixAddr      string
-	PollInterval     time.Duration
+	ListenAddr   string
+	DatabaseURL  string
+	PostfixAddr  string
+	PollInterval time.Duration
 }
 
 func loadConfig() Config {
@@ -38,9 +40,9 @@ func loadConfig() Config {
 		}
 	}
 	return Config{
-		ListenAddr:  envOrDefault("OUTBOUND_WORKER_ADDR", ":8085"),
-		DatabaseURL: envOrDefault("DATABASE_URL", "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"),
-		PostfixAddr: envOrDefault("POSTFIX_ADDR", "localhost:25"),
+		ListenAddr:   envOrDefault("OUTBOUND_WORKER_ADDR", ":8085"),
+		DatabaseURL:  envOrDefault("DATABASE_URL", "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"),
+		PostfixAddr:  envOrDefault("POSTFIX_ADDR", "localhost:25"),
 		PollInterval: interval,
 	}
 }
@@ -53,17 +55,17 @@ func envOrDefault(key, def string) string {
 }
 
 type OutboundMessage struct {
-	ID                      string // uuid
-	DeliveryID              string // uuid
-	MailboxID               string // uuid
-	DomainID                string // uuid
-	Recipient               string
-	EncryptedMessage        []byte
-	SendTokenHPKEWrapped    []byte
-	Status                  string
-	Attempts                int
-	ExpiresAt               time.Time
-	OutboxSeq               uint64
+	ID                   string // uuid
+	DeliveryID           string // uuid
+	MailboxID            string // uuid
+	DomainID             string // uuid
+	Recipient            string
+	EncryptedMessage     []byte
+	SendTokenHPKEWrapped []byte
+	OutboxSeq            sql.NullInt64
+	Status               string
+	Attempts             int
+	ExpiresAt            time.Time
 }
 
 func main() {
@@ -117,7 +119,7 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id::text, delivery_id::text, mailbox_id::text, domain_id::text, recipient,
-		        encrypted_message, send_token_hpke_wrapped, status, attempts, expires_at, outbox_seq
+		        encrypted_message, send_token_hpke_wrapped, outbox_seq, status, attempts, expires_at
 		 FROM outbound_queue
 		 WHERE status = 'pending' AND next_attempt_at <= now() AND expires_at > now()
 		 ORDER BY next_attempt_at ASC
@@ -132,7 +134,7 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 	for rows.Next() {
 		var msg OutboundMessage
 		if err := rows.Scan(&msg.ID, &msg.DeliveryID, &msg.MailboxID, &msg.DomainID, &msg.Recipient,
-			&msg.EncryptedMessage, &msg.SendTokenHPKEWrapped, &msg.Status, &msg.Attempts, &msg.ExpiresAt, &msg.OutboxSeq); err != nil {
+			&msg.EncryptedMessage, &msg.SendTokenHPKEWrapped, &msg.OutboxSeq, &msg.Status, &msg.Attempts, &msg.ExpiresAt); err != nil {
 			return fmt.Errorf("scan: %w", err)
 		}
 		messages = append(messages, msg)
@@ -154,7 +156,16 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 	sk = strings.TrimSpace(sk)
 
 	for _, msg := range messages {
-		if err := deliverMessage(ctx, tx, msg, cfg, sk); err != nil {
+		if !msg.OutboxSeq.Valid {
+			log.Printf("deliver failed id=%s delivery_id=%s: missing outbox_seq", msg.ID, msg.DeliveryID)
+			_, _ = tx.ExecContext(ctx,
+				`UPDATE outbound_queue SET status = 'bounced', failed_at = now(), attempts = attempts + 1 WHERE id = $1`, msg.ID)
+			_, _ = tx.ExecContext(ctx,
+				`INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_message)
+				 VALUES ($1, 'outbound', $2, $3, $4, 'bounced', 'missing outbox_seq')`, msg.DeliveryID, msg.MailboxID, msg.DomainID, msg.Recipient)
+			continue
+		}
+		if err := deliverMessage(ctx, tx, msg, cfg); err != nil {
 			log.Printf("deliver failed id=%s delivery_id=%s: %v", msg.ID, msg.DeliveryID, err)
 			// Retry with backoff; after max_attempts → bounced
 			_, _ = tx.ExecContext(ctx,
@@ -254,36 +265,77 @@ func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Co
 	return nil
 }
 
-func decryptForDelivery(ctx context.Context, msg OutboundMessage, sk string) ([]byte, error) {
-	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+type DecryptOutboundRequest struct {
+	SendTokenWrapped string `json:"send_token_wrapped"`
+	MailboxID        string `json:"mailbox_id"`
+	MessageSeq       uint64 `json:"message_seq"`
+	Ciphertext       string `json:"ciphertext"`
+}
 
-	cmd := exec.CommandContext(cmdCtx, "byos-crypto-client", "decrypt-outbound-json")
+type DecryptOutboundResponse struct {
+	Plaintext string `json:"plaintext"`
+}
 
-	reqBody, err := json.Marshal(map[string]interface{}{
-		"outbound_sk_b64": sk,
-		"wrapped_b64":     base64.StdEncoding.EncodeToString(msg.SendTokenHPKEWrapped),
-		"mailbox_id":      msg.MailboxID,
-		"outbox_seq":      msg.OutboxSeq,
-		"ciphertext_b64":  base64.StdEncoding.EncodeToString(msg.EncryptedMessage),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("json marshal request: %w", err)
-	}
+var cryptoWorkerInternalKey string
 
-	cmd.Stdin = bytes.NewReader(reqBody)
-
-	out, err := cmd.Output()
-	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("crypto-client failed: %s", string(exitError.Stderr))
+func init() {
+	if keyPath := os.Getenv("CRYPTO_WORKER_INTERNAL_KEY_FILE"); keyPath != "" {
+		if keyBytes, err := os.ReadFile(keyPath); err == nil {
+			cryptoWorkerInternalKey = string(bytes.TrimSpace(keyBytes))
 		}
-		return nil, fmt.Errorf("crypto-client exec: %w", err)
+	}
+}
+
+func getCryptoWorkerURL() string {
+	if u := os.Getenv("CRYPTO_WORKER_URL"); u != "" {
+		return u
+	}
+	return "http://crypto-worker:8084"
+}
+
+func decryptForDelivery(ctx context.Context, msg OutboundMessage) ([]byte, error) {
+	reqData := DecryptOutboundRequest{
+		SendTokenWrapped: base64.StdEncoding.EncodeToString(msg.SendTokenHPKEWrapped),
+		MailboxID:        msg.MailboxID,
+		MessageSeq:       uint64(msg.OutboxSeq.Int64),
+		Ciphertext:       base64.StdEncoding.EncodeToString(msg.EncryptedMessage),
+	}
+	reqBytes, err := json.Marshal(reqData)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	plaintext, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, getCryptoWorkerURL()+"/v1/outbound/decrypt", bytes.NewReader(reqBytes))
 	if err != nil {
-		return nil, fmt.Errorf("base64 decode plaintext: %w", err)
+		return nil, fmt.Errorf("new request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cryptoWorkerInternalKey == "" {
+		return nil, fmt.Errorf("CRYPTO_WORKER_INTERNAL_KEY_FILE not configured or could not be read")
+	}
+	req.Header.Set("X-Internal-Key", cryptoWorkerInternalKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("crypto-worker error: status=%d body=%s", resp.StatusCode, string(body))
+	}
+
+	var respData DecryptOutboundResponse
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	plaintext, err := base64.StdEncoding.DecodeString(respData.Plaintext)
+	if err != nil {
+		return nil, fmt.Errorf("decode plaintext base64: %w", err)
+
 	}
 
 	return plaintext, nil

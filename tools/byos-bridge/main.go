@@ -173,31 +173,6 @@ func searchBridgeMessages(writer *bufio.Writer, tag, criteria string, cfg *Bridg
 		}
 	} else {
 		tokens := strings.Fields(criteriaClean)
-
-		type rule struct {
-			kind string // "ALL", "UNSEEN", "FROM", "TO", "TEXT"
-			term string // pre-lowercased, pre-trimmed search term
-		}
-
-		var rules []rule
-		for i := 0; i < len(tokens); i++ {
-			token := strings.ToUpper(tokens[i])
-			if token == "ALL" || token == "UNSEEN" {
-				rules = append(rules, rule{kind: token})
-			} else if (token == "FROM" || token == "TO") && i+1 < len(tokens) {
-				rules = append(rules, rule{
-					kind: token,
-					term: strings.Trim(strings.ToLower(tokens[i+1]), `"`),
-				})
-				i++
-			} else {
-				rules = append(rules, rule{
-					kind: "TEXT",
-					term: strings.Trim(strings.ToLower(tokens[i]), `"`),
-				})
-			}
-		}
-
 		for _, m := range messages {
 			match := true
 
@@ -221,34 +196,40 @@ func searchBridgeMessages(writer *bufio.Writer, tag, criteria string, cfg *Bridg
 				return false
 			}
 
-			for _, r := range rules {
-				if r.kind == "ALL" {
+			for i := 0; i < len(tokens); i++ {
+				token := strings.ToUpper(tokens[i])
+				if token == "ALL" {
 					continue
-				} else if r.kind == "UNSEEN" {
+				} else if token == "UNSEEN" {
 					if !strings.EqualFold(m.Status, "unseen") && !strings.EqualFold(m.Status, "unread") {
 						match = false
 						break
 					}
-				} else if r.kind == "FROM" {
+				} else if token == "FROM" && i+1 < len(tokens) {
+					term := strings.Trim(strings.ToLower(tokens[i+1]), `"`)
 					if !senderLowered {
 						lowerSender = strings.ToLower(m.Sender)
 						senderLowered = true
 					}
-					if !strings.Contains(lowerSender, r.term) {
+					if !strings.Contains(lowerSender, term) {
 						match = false
 						break
 					}
-				} else if r.kind == "TO" {
-					if !checkRecipients(r.term) {
+					i++
+				} else if token == "TO" && i+1 < len(tokens) {
+					term := strings.Trim(strings.ToLower(tokens[i+1]), `"`)
+					if !checkRecipients(term) {
 						match = false
 						break
 					}
-				} else if r.kind == "TEXT" {
+					i++
+				} else {
+					term := strings.Trim(strings.ToLower(tokens[i]), `"`)
 					if !senderLowered {
 						lowerSender = strings.ToLower(m.Sender)
 						senderLowered = true
 					}
-					if !strings.Contains(lowerSender, r.term) && !checkRecipients(r.term) {
+					if !strings.Contains(lowerSender, term) && !checkRecipients(term) {
 						match = false
 						break
 					}
