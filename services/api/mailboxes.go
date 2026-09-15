@@ -218,7 +218,7 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "local_part and domain_id required", http.StatusBadRequest)
 			return
 		}
-		if strings.Contains(localPart, "@") || strings.Contains(localPart, " ") {
+		if strings.Contains(localPart, "@") || strings.Contains(localPart, " ") || strings.ContainsAny(localPart, "<>\t\n\r") {
 			http.Error(w, "invalid local_part", http.StatusBadRequest)
 			return
 		}
