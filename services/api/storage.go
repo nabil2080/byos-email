@@ -620,14 +620,10 @@ func decodeStorageRetrieveBody(r io.Reader) ([]byte, int64, error) {
 	if len(raw) == 0 {
 		return nil, 0, fmt.Errorf("empty data in storage response")
 	}
-	if rr.Size != 0 && rr.Size != int64(len(raw)) {
+	if rr.Size != int64(len(raw)) {
 		return nil, 0, fmt.Errorf("size mismatch in storage response: header %d != data %d", rr.Size, len(raw))
 	}
-	size := rr.Size
-	if size == 0 {
-		size = int64(len(raw))
-	}
-	return raw, size, nil
+	return raw, rr.Size, nil
 }
 
 // storageInternalKey loads the shared secret the API presents to
