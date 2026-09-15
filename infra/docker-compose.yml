@@ -198,6 +198,11 @@ services:
       - ALL
     environment:
       CRYPTO_WORKER_PORT: "8084"
+      OUTBOUND_DELIVERY_SK_FILE: /run/secrets/outbound_delivery_sk
+      CRYPTO_WORKER_INTERNAL_KEY_FILE: /run/secrets/crypto_worker_internal_key
+    secrets:
+      - outbound_delivery_sk
+      - crypto_worker_internal_key
 
   inbound-bridge:
     build: ../services/inbound-bridge
@@ -250,10 +255,12 @@ services:
       POLL_INTERVAL_MS: "5000"
       RUST_LOG: info
       BYOS_DKIM_DEK_FILE: /run/secrets/byos_dkim_dek
+      CRYPTO_WORKER_INTERNAL_KEY_FILE: /run/secrets/crypto_worker_internal_key
     secrets:
       - outbound_delivery_sk
       - outbound_worker_db_password
       - byos_dkim_dek
+      - crypto_worker_internal_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -275,6 +282,8 @@ secrets:
     file: ./secrets/storage_worker_internal_key.txt
   mail_router_internal_key:
     file: ./secrets/mail_router_internal_key.txt
+  crypto_worker_internal_key:
+    file: ./secrets/crypto_worker_internal_key.txt
 
 volumes:
   postgres-data:

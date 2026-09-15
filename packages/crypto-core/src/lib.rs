@@ -1228,6 +1228,25 @@ mod tests {
     use super::*;
 
     #[test]
+fn test_decrypt_outbound_invalid_format() {
+    // Generate valid sk
+    let (sk_bytes, _pk_bytes) = crate::generate_x25519_keypair();
+
+    // Create an invalid wrapped token by making it larger than 32 bytes
+    let wrapped_bytes = vec![0u8; 40];
+
+    let mailbox_id = [0u8; 16];
+    let res = crate::decrypt_outbound(&sk_bytes, &wrapped_bytes, &mailbox_id, 1, b"some ciphertext");
+
+    // It should fail during HPKE Open, which maps to CryptoError::DecryptionFailed or similar,
+    // but definitely NOT panic.
+    assert!(res.is_err());
+}
+
+
+
+
+    #[test]
     fn test_derive_root_secret() {
         let entropy = [1u8; 32];
         let root_secret = derive_root_secret(&entropy);
