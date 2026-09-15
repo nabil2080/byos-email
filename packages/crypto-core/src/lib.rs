@@ -1221,7 +1221,6 @@ fn hex_decode_32(hex: &str) -> Result<[u8; 32], String> {
 // =============================================
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests {
     use super::*;
 
