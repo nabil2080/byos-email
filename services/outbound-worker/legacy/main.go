@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/smtp"
 	"os"
 	"os/signal"
@@ -15,10 +20,10 @@ import (
 )
 
 type Config struct {
-	ListenAddr       string
-	DatabaseURL      string
-	PostfixAddr      string
-	PollInterval     time.Duration
+	ListenAddr   string
+	DatabaseURL  string
+	PostfixAddr  string
+	PollInterval time.Duration
 }
 
 func loadConfig() Config {
@@ -31,9 +36,9 @@ func loadConfig() Config {
 		}
 	}
 	return Config{
-		ListenAddr:  envOrDefault("OUTBOUND_WORKER_ADDR", ":8085"),
-		DatabaseURL: envOrDefault("DATABASE_URL", "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"),
-		PostfixAddr: envOrDefault("POSTFIX_ADDR", "localhost:25"),
+		ListenAddr:   envOrDefault("OUTBOUND_WORKER_ADDR", ":8085"),
+		DatabaseURL:  envOrDefault("DATABASE_URL", "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"),
+		PostfixAddr:  envOrDefault("POSTFIX_ADDR", "localhost:25"),
 		PollInterval: interval,
 	}
 }
@@ -46,16 +51,17 @@ func envOrDefault(key, def string) string {
 }
 
 type OutboundMessage struct {
-	ID                      string // uuid
-	DeliveryID              string // uuid
-	MailboxID               string // uuid
-	DomainID                string // uuid
-	Recipient               string
-	EncryptedMessage        []byte
-	SendTokenHPKEWrapped    []byte
-	Status                  string
-	Attempts                int
-	ExpiresAt               time.Time
+	ID                   string // uuid
+	DeliveryID           string // uuid
+	MailboxID            string // uuid
+	DomainID             string // uuid
+	Recipient            string
+	EncryptedMessage     []byte
+	SendTokenHPKEWrapped []byte
+	OutboxSeq            int64
+	Status               string
+	Attempts             int
+	ExpiresAt            time.Time
 }
 
 func main() {
@@ -109,7 +115,7 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id::text, delivery_id::text, mailbox_id::text, domain_id::text, recipient,
-		        encrypted_message, send_token_hpke_wrapped, status, attempts, expires_at
+		        encrypted_message, send_token_hpke_wrapped, outbox_seq, status, attempts, expires_at
 		 FROM outbound_queue
 		 WHERE status = 'pending' AND next_attempt_at <= now() AND expires_at > now()
 		 ORDER BY next_attempt_at ASC
@@ -124,7 +130,7 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 	for rows.Next() {
 		var msg OutboundMessage
 		if err := rows.Scan(&msg.ID, &msg.DeliveryID, &msg.MailboxID, &msg.DomainID, &msg.Recipient,
-			&msg.EncryptedMessage, &msg.SendTokenHPKEWrapped, &msg.Status, &msg.Attempts, &msg.ExpiresAt); err != nil {
+			&msg.EncryptedMessage, &msg.SendTokenHPKEWrapped, &msg.OutboxSeq, &msg.Status, &msg.Attempts, &msg.ExpiresAt); err != nil {
 			return fmt.Errorf("scan: %w", err)
 		}
 		messages = append(messages, msg)
@@ -221,14 +227,64 @@ func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Co
 	return nil
 }
 
+type DecryptOutboundRequest struct {
+	SendTokenWrapped string `json:"send_token_wrapped"`
+	MailboxID        string `json:"mailbox_id"`
+	MessageSeq       uint64 `json:"message_seq"`
+	Ciphertext       string `json:"ciphertext"`
+}
+
+type DecryptOutboundResponse struct {
+	Plaintext string `json:"plaintext"`
+}
+
+func getCryptoWorkerURL() string {
+	if u := os.Getenv("CRYPTO_WORKER_URL"); u != "" {
+		return u
+	}
+	return "http://crypto-worker:8084"
+}
+
 func decryptForDelivery(ctx context.Context, msg OutboundMessage) ([]byte, error) {
-	_ = ctx
-	_ = msg
-	// Native Rust crypto-core (compiled to native for server) via crypto-worker HTTP API.
-	// WASM is browser-only; server must not use WASM.
-	// TODO: POST http://crypto-worker:8084/v1/outbound/decrypt {send_token_wrapped, mailbox_id, message_seq, ciphertext}
-	//       → HPKE-Open with outbound_delivery_sk (held only by worker) → AES-GCM decrypt → plaintext
-	return nil, fmt.Errorf("decrypt: not implemented (requires native Rust crypto-core via crypto-worker)")
+	reqData := DecryptOutboundRequest{
+		SendTokenWrapped: base64.StdEncoding.EncodeToString(msg.SendTokenHPKEWrapped),
+		MailboxID:        msg.MailboxID,
+		MessageSeq:       uint64(msg.OutboxSeq),
+		Ciphertext:       base64.StdEncoding.EncodeToString(msg.EncryptedMessage),
+	}
+	reqBytes, err := json.Marshal(reqData)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, getCryptoWorkerURL()+"/v1/outbound/decrypt", bytes.NewReader(reqBytes))
+	if err != nil {
+		return nil, fmt.Errorf("new request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("crypto-worker error: status=%d body=%s", resp.StatusCode, string(body))
+	}
+
+	var respData DecryptOutboundResponse
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	plaintext, err := base64.StdEncoding.DecodeString(respData.Plaintext)
+	if err != nil {
+		return nil, fmt.Errorf("decode plaintext base64: %w", err)
+	}
+
+	return plaintext, nil
 }
 
 func hexEncode(b []byte) string {

@@ -60,6 +60,19 @@ struct HealthResponse {
     implementation: &'static str,
 }
 
+#[derive(Deserialize)]
+struct DecryptOutboundRequest {
+    send_token_wrapped: String,
+    mailbox_id: String,
+    message_seq: u64,
+    ciphertext: String,
+}
+
+#[derive(Serialize)]
+struct DecryptOutboundResponse {
+    plaintext: String,
+}
+
 type ApiResult<T> = Result<Json<T>, (StatusCode, String)>;
 
 #[tokio::main]
@@ -73,6 +86,7 @@ async fn main() {
         .route("/health", get(health))
         .route("/v1/encrypt", post(encrypt))
         .route("/v1/encrypt-outbound", post(encrypt_outbound_handler))
+        .route("/v1/outbound/decrypt", post(decrypt_outbound_handler))
         .with_state(AppState);
 
     println!("BYOS native crypto worker using Rust crypto core on {addr}");
@@ -149,6 +163,38 @@ async fn encrypt_outbound_handler(
         encryption_iv: BASE64.encode(iv),
         encryption_version: ENCRYPTION_VERSION,
         aad_version: AAD_VERSION,
+    }))
+}
+
+
+fn load_outbound_delivery_sk() -> Result<[u8; 32], (StatusCode, String)> {
+    let b64 = if let Ok(path) = env::var("OUTBOUND_DELIVERY_SK_FILE") {
+        std::fs::read_to_string(&path).unwrap_or_default()
+    } else if let Ok(p) = env::var("OUTBOUND_DELIVERY_SK") {
+        p
+    } else {
+        std::fs::read_to_string("/run/secrets/outbound_delivery_sk").unwrap_or_default()
+    };
+    let b64 = b64.trim();
+    if b64.is_empty() {
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "OUTBOUND_DELIVERY_SK not set".to_owned()));
+    }
+    decode_fixed_32(b64, "outbound_delivery_sk")
+}
+
+async fn decrypt_outbound_handler(
+    State(_state): State<AppState>,
+    Json(request): Json<DecryptOutboundRequest>,
+) -> ApiResult<DecryptOutboundResponse> {
+    let sk = load_outbound_delivery_sk()?;
+    let mailbox_id = parse_mailbox_id(&request.mailbox_id)?;
+    let send_token_wrapped = decode(&request.send_token_wrapped, "send_token_wrapped")?;
+    let ciphertext = decode(&request.ciphertext, "ciphertext")?;
+
+    let plaintext = byos_crypto_core::decrypt_outbound(&sk, &send_token_wrapped, &mailbox_id, request.message_seq, &ciphertext).map_err(crypto_error)?;
+
+    Ok(Json(DecryptOutboundResponse {
+        plaintext: BASE64.encode(plaintext),
     }))
 }
 
