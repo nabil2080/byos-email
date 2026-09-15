@@ -173,49 +173,82 @@ func searchBridgeMessages(writer *bufio.Writer, tag, criteria string, cfg *Bridg
 		}
 	} else {
 		tokens := strings.Fields(criteriaClean)
+
+		type rule struct {
+			kind string // "ALL", "UNSEEN", "FROM", "TO", "TEXT"
+			term string // pre-lowercased, pre-trimmed search term
+		}
+
+		var rules []rule
+		for i := 0; i < len(tokens); i++ {
+			token := strings.ToUpper(tokens[i])
+			if token == "ALL" || token == "UNSEEN" {
+				rules = append(rules, rule{kind: token})
+			} else if (token == "FROM" || token == "TO") && i+1 < len(tokens) {
+				rules = append(rules, rule{
+					kind: token,
+					term: strings.Trim(strings.ToLower(tokens[i+1]), `"`),
+				})
+				i++
+			} else {
+				rules = append(rules, rule{
+					kind: "TEXT",
+					term: strings.Trim(strings.ToLower(tokens[i]), `"`),
+				})
+			}
+		}
+
 		for _, m := range messages {
 			match := true
-			for i := 0; i < len(tokens); i++ {
-				token := strings.ToUpper(tokens[i])
-				if token == "ALL" {
+
+			// Lazy lowercasing
+			var lowerSender string
+			senderLowered := false
+
+			lowerRecipients := make([]string, len(m.Recipients))
+			recipientsLowered := make([]bool, len(m.Recipients))
+
+			checkRecipients := func(term string) bool {
+				for j, recip := range m.Recipients {
+					if !recipientsLowered[j] {
+						lowerRecipients[j] = strings.ToLower(recip)
+						recipientsLowered[j] = true
+					}
+					if strings.Contains(lowerRecipients[j], term) {
+						return true
+					}
+				}
+				return false
+			}
+
+			for _, r := range rules {
+				if r.kind == "ALL" {
 					continue
-				} else if token == "UNSEEN" {
+				} else if r.kind == "UNSEEN" {
 					if !strings.EqualFold(m.Status, "unseen") && !strings.EqualFold(m.Status, "unread") {
 						match = false
 						break
 					}
-				} else if token == "FROM" && i+1 < len(tokens) {
-					term := strings.Trim(strings.ToLower(tokens[i+1]), `"`)
-					if !strings.Contains(strings.ToLower(m.Sender), term) {
+				} else if r.kind == "FROM" {
+					if !senderLowered {
+						lowerSender = strings.ToLower(m.Sender)
+						senderLowered = true
+					}
+					if !strings.Contains(lowerSender, r.term) {
 						match = false
 						break
 					}
-					i++
-				} else if token == "TO" && i+1 < len(tokens) {
-					term := strings.Trim(strings.ToLower(tokens[i+1]), `"`)
-					toMatched := false
-					for _, r := range m.Recipients {
-						if strings.Contains(strings.ToLower(r), term) {
-							toMatched = true
-							break
-						}
-					}
-					if !toMatched {
+				} else if r.kind == "TO" {
+					if !checkRecipients(r.term) {
 						match = false
 						break
 					}
-					i++
-				} else {
-					term := strings.Trim(strings.ToLower(tokens[i]), `"`)
-					senderMatch := strings.Contains(strings.ToLower(m.Sender), term)
-					recipMatch := false
-					for _, r := range m.Recipients {
-						if strings.Contains(strings.ToLower(r), term) {
-							recipMatch = true
-							break
-						}
+				} else if r.kind == "TEXT" {
+					if !senderLowered {
+						lowerSender = strings.ToLower(m.Sender)
+						senderLowered = true
 					}
-					if !senderMatch && !recipMatch {
+					if !strings.Contains(lowerSender, r.term) && !checkRecipients(r.term) {
 						match = false
 						break
 					}
