@@ -172,12 +172,21 @@ func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Co
 	}
 	// plaintext is full RFC5322 message (already contains From/To/Subject/MIME, DKIM will be added before this)
 	// For envelope, derive sender from mailbox (lookup) or use plaintext From header fallback.
-	// For now, use envelope-from as empty or extract via simple parse; Postfix permit_mynetworks allows empty.
-	envelopeFrom := "" // TODO: lookup mailbox address for MAIL FROM
-	// Try to extract From header for envelope
-	if idx := findHeader(plaintext, "From:"); idx >= 0 {
-		// keep empty for now; don't fail on parse
-		_ = idx
+	envelopeFrom := ""
+	var localPart, domainName string
+	err = tx.QueryRowContext(ctx,
+		`SELECT m.local_part, d.name
+		 FROM mailboxes m
+		 JOIN domains d ON m.domain_id = d.id
+		 WHERE m.id = $1`, msg.MailboxID).Scan(&localPart, &domainName)
+	if err == nil {
+		envelopeFrom = fmt.Sprintf("%s@%s", localPart, domainName)
+	} else {
+		// Try to extract From header for envelope as fallback
+		if idx := findHeader(plaintext, "From:"); idx >= 0 {
+			// keep empty for now; don't fail on parse
+			_ = idx
+		}
 	}
 
 	host, _, err := net.SplitHostPort(cfg.PostfixAddr)
