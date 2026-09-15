@@ -586,7 +586,8 @@ pub fn decrypt_outbound(
     let content_key = hpke_open(outbound_delivery_sk, send_token_wrapped, &aad)?;
 
     // Decrypt message
-    aes_gcm_decrypt(&content_key.try_into().unwrap(), ciphertext, &aad)
+    let key: [u8; 32] = content_key.try_into().map_err(|_| CryptoError::InvalidFormat)?;
+    aes_gcm_decrypt(&key, ciphertext, &aad)
 }
 
 /// Outbound delivery key pair type for serialization
@@ -1220,8 +1221,28 @@ fn hex_decode_32(hex: &str) -> Result<[u8; 32], String> {
 // =============================================
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+fn test_decrypt_outbound_invalid_format() {
+    // Generate valid sk
+    let (sk_bytes, _pk_bytes) = crate::generate_x25519_keypair();
+
+    // Create an invalid wrapped token by making it larger than 32 bytes
+    let wrapped_bytes = vec![0u8; 40];
+
+    let mailbox_id = [0u8; 16];
+    let res = crate::decrypt_outbound(&sk_bytes, &wrapped_bytes, &mailbox_id, 1, b"some ciphertext");
+
+    // It should fail during HPKE Open, which maps to CryptoError::DecryptionFailed or similar,
+    // but definitely NOT panic.
+    assert!(res.is_err());
+}
+
+
+
 
     #[test]
     fn test_derive_root_secret() {

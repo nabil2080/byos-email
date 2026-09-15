@@ -58,7 +58,7 @@ type OutboundMessage struct {
 	Recipient            string
 	EncryptedMessage     []byte
 	SendTokenHPKEWrapped []byte
-	OutboxSeq            int64
+	OutboxSeq            sql.NullInt64
 	Status               string
 	Attempts             int
 	ExpiresAt            time.Time
@@ -144,6 +144,15 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 	log.Printf("processing %d outbound messages", len(messages))
 
 	for _, msg := range messages {
+		if !msg.OutboxSeq.Valid {
+			log.Printf("deliver failed id=%s delivery_id=%s: missing outbox_seq", msg.ID, msg.DeliveryID)
+			_, _ = tx.ExecContext(ctx,
+				`UPDATE outbound_queue SET status = 'bounced', failed_at = now(), attempts = attempts + 1 WHERE id = $1`, msg.ID)
+			_, _ = tx.ExecContext(ctx,
+				`INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_message)
+				 VALUES ($1, 'outbound', $2, $3, $4, 'bounced', 'missing outbox_seq')`, msg.DeliveryID, msg.MailboxID, msg.DomainID, msg.Recipient)
+			continue
+		}
 		if err := deliverMessage(ctx, tx, msg, cfg); err != nil {
 			log.Printf("deliver failed id=%s delivery_id=%s: %v", msg.ID, msg.DeliveryID, err)
 			// Retry with backoff; after max_attempts → bounced
@@ -238,6 +247,16 @@ type DecryptOutboundResponse struct {
 	Plaintext string `json:"plaintext"`
 }
 
+var cryptoWorkerInternalKey string
+
+func init() {
+	if keyPath := os.Getenv("CRYPTO_WORKER_INTERNAL_KEY_FILE"); keyPath != "" {
+		if keyBytes, err := os.ReadFile(keyPath); err == nil {
+			cryptoWorkerInternalKey = string(bytes.TrimSpace(keyBytes))
+		}
+	}
+}
+
 func getCryptoWorkerURL() string {
 	if u := os.Getenv("CRYPTO_WORKER_URL"); u != "" {
 		return u
@@ -249,7 +268,7 @@ func decryptForDelivery(ctx context.Context, msg OutboundMessage) ([]byte, error
 	reqData := DecryptOutboundRequest{
 		SendTokenWrapped: base64.StdEncoding.EncodeToString(msg.SendTokenHPKEWrapped),
 		MailboxID:        msg.MailboxID,
-		MessageSeq:       uint64(msg.OutboxSeq),
+		MessageSeq:       uint64(msg.OutboxSeq.Int64),
 		Ciphertext:       base64.StdEncoding.EncodeToString(msg.EncryptedMessage),
 	}
 	reqBytes, err := json.Marshal(reqData)
@@ -257,13 +276,18 @@ func decryptForDelivery(ctx context.Context, msg OutboundMessage) ([]byte, error
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
+	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, getCryptoWorkerURL()+"/v1/outbound/decrypt", bytes.NewReader(reqBytes))
 	if err != nil {
 		return nil, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if cryptoWorkerInternalKey == "" {
+		return nil, fmt.Errorf("CRYPTO_WORKER_INTERNAL_KEY_FILE not configured or could not be read")
+	}
+	req.Header.Set("X-Internal-Key", cryptoWorkerInternalKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("do request: %w", err)
 	}

@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use axum::{
     extract::State,
     http::StatusCode,
@@ -11,6 +12,9 @@ use byos_crypto_core::{
 use serde::{Deserialize, Serialize};
 use std::{env, net::SocketAddr};
 use uuid::Uuid;
+
+static INTERNAL_KEY: OnceLock<String> = OnceLock::new();
+static OUTBOUND_SK: OnceLock<[u8; 32]> = OnceLock::new();
 
 #[derive(Clone, Default)]
 struct AppState;
@@ -77,6 +81,27 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, String)>;
 
 #[tokio::main]
 async fn main() {
+        let internal_key = if let Ok(path) = env::var("CRYPTO_WORKER_INTERNAL_KEY_FILE") {
+        std::fs::read_to_string(&path).unwrap_or_default().trim().to_owned()
+    } else {
+        String::new()
+    };
+    INTERNAL_KEY.set(internal_key).unwrap();
+
+    let sk_b64 = if let Ok(path) = env::var("OUTBOUND_DELIVERY_SK_FILE") {
+        std::fs::read_to_string(&path).unwrap_or_default()
+    } else if let Ok(p) = env::var("OUTBOUND_DELIVERY_SK") {
+        p
+    } else {
+        std::fs::read_to_string("/run/secrets/outbound_delivery_sk").unwrap_or_default()
+    };
+    let sk_b64 = sk_b64.trim();
+    let sk = if !sk_b64.is_empty() {
+        decode_fixed_32(sk_b64, "outbound_delivery_sk").unwrap_or([0u8; 32])
+    } else {
+        [0u8; 32]
+    };
+    OUTBOUND_SK.set(sk).unwrap();
     let port = env::var("CRYPTO_WORKER_PORT").unwrap_or_else(|_| "8084".to_owned());
     let addr: SocketAddr = format!("0.0.0.0:{port}")
         .parse()
@@ -167,26 +192,34 @@ async fn encrypt_outbound_handler(
 }
 
 
-fn load_outbound_delivery_sk() -> Result<[u8; 32], (StatusCode, String)> {
-    let b64 = if let Ok(path) = env::var("OUTBOUND_DELIVERY_SK_FILE") {
-        std::fs::read_to_string(&path).unwrap_or_default()
-    } else if let Ok(p) = env::var("OUTBOUND_DELIVERY_SK") {
-        p
-    } else {
-        std::fs::read_to_string("/run/secrets/outbound_delivery_sk").unwrap_or_default()
-    };
-    let b64 = b64.trim();
-    if b64.is_empty() {
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "OUTBOUND_DELIVERY_SK not set".to_owned()));
-    }
-    decode_fixed_32(b64, "outbound_delivery_sk")
-}
+
+use axum::http::HeaderMap;
 
 async fn decrypt_outbound_handler(
     State(_state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<DecryptOutboundRequest>,
 ) -> ApiResult<DecryptOutboundResponse> {
-    let sk = load_outbound_delivery_sk()?;
+    // Validate Internal-Key if configured
+    let expected_key = INTERNAL_KEY.get().unwrap();
+    if expected_key.is_empty() {
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "CRYPTO_WORKER_INTERNAL_KEY_FILE not configured or empty".to_owned()));
+    }
+
+    let provided = headers
+        .get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    use subtle::ConstantTimeEq;
+    if provided.as_bytes().ct_eq(expected_key.as_bytes()).unwrap_u8() == 0 {
+        return Err((StatusCode::UNAUTHORIZED, "invalid internal key".to_owned()));
+    }
+
+    let sk = *OUTBOUND_SK.get().unwrap();
+    if sk == [0u8; 32] {
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "OUTBOUND_DELIVERY_SK not set".to_owned()));
+    }
     let mailbox_id = parse_mailbox_id(&request.mailbox_id)?;
     let send_token_wrapped = decode(&request.send_token_wrapped, "send_token_wrapped")?;
     let ciphertext = decode(&request.ciphertext, "ciphertext")?;
