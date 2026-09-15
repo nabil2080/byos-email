@@ -20,6 +20,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
 )
 
 var ErrStorageDisconnected = errors.New("storage_disconnected")
@@ -245,21 +246,42 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 		normalizedRecipients[i] = normalizeAddress(r)
 	}
 
-	stored := make([]StoredMessage, 0, len(req.Recipients))
-	for _, recipient := range req.Recipients {
-		result, err := a.processRecipient(r.Context(), req.EnvelopeFrom, recipient, rawMessage, deliveryIdentity, normalizedRecipients)
-		if err != nil {
-			if errors.Is(err, ErrStorageDisconnected) || strings.Contains(strings.ToLower(err.Error()), "storage_disconnected") {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				json.NewEncoder(w).Encode(map[string]string{"status": "error", "code": "storage_disconnected", "message": "Mailbox storage is currently unavailable. Please reconnect storage."})
-				return
+	stored := make([]StoredMessage, len(req.Recipients))
+	g, gCtx := errgroup.WithContext(r.Context())
+
+	// Ensure we preserve the first error exactly as the sequential loop would have returned
+	// but we don't abort immediately on the first error necessarily, errgroup handles that.
+	for i, recipient := range req.Recipients {
+		i, recipient := i, recipient
+		g.Go(func() error {
+			result, err := a.processRecipient(gCtx, req.EnvelopeFrom, recipient, rawMessage, deliveryIdentity, normalizedRecipients)
+			if err != nil {
+				return fmt.Errorf("process recipient %q: %w", recipient, err)
 			}
-			log.Printf("process recipient %q: %v", recipient, err)
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			stored[i] = result
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		if errors.Is(err, ErrStorageDisconnected) || strings.Contains(strings.ToLower(err.Error()), "storage_disconnected") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{"status": "error", "code": "storage_disconnected", "message": "Mailbox storage is currently unavailable. Please reconnect storage."})
 			return
 		}
-		stored = append(stored, result)
+		log.Printf("%v", err)
+		// Try to extract the original error message for the HTTP response to maintain compatibility
+		// Since we wrapped it, let's just return err.Error() but it might have "process recipient ...:" prefix.
+		// For safety and compatibility, we'll unwrap it or just return it.
+		// Actually the previous code returned err.Error() directly.
+		// Let's get the underlying error if possible.
+		unwrapped := err
+		if unwrappedInner := errors.Unwrap(err); unwrappedInner != nil {
+			unwrapped = unwrappedInner
+		}
+		http.Error(w, unwrapped.Error(), http.StatusBadGateway)
+		return
 	}
 
 	writeJSON(w, http.StatusAccepted, InboundResponse{Stored: stored})
