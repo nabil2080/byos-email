@@ -1095,7 +1095,7 @@ export async function deletePasskey(id: string): Promise<void> {
   });
 }
 
-// ── Two-Tier Proton Recovery Flow & Key Reactivation ──
+// ── Two-Tier Recovery Flow & Key Reactivation ──
 
 export interface RecoveryRequestResponse {
   challenge_token: string;

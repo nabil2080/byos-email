@@ -119,7 +119,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
         </div>
       </Show>
 
-      {/* Embedded Gmail/Proton Dual-State Inbox Toolbar */}
+      {/* Embedded Dual-State Dual-State Inbox Toolbar */}
       <InboxToolbar
         selectedCount={props.selectedIds.size}
         totalVisibleCount={props.messages.length}

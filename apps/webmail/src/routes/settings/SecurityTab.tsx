@@ -255,6 +255,10 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
       const skHex = Array.from(mailboxSk, (b) => b.toString(16).padStart(2, "0")).join("");
       sessionStorage.setItem("byos_mailbox_sk_" + props.mailbox.id, skHex);
 
+      // Immediately clear the flag on both objects so the UI drops the popup without full page reload.
+      if (props.mailbox) props.mailbox.previous_wrapped_sk_user = undefined;
+      if (props.currentUser) props.currentUser.previous_wrapped_sk_user = undefined;
+
       setReactivateModalOpen(false);
       setReactivateSecretInput("");
       setNewPassForReactivate("");

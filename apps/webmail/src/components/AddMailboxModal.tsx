@@ -34,7 +34,7 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
       let skHex = "";
       let searchKeyHex = "";
 
-      // 2. Client-side key unwrapping if wrapped_sk_user is available
+      // 2. Client-side key unwrapping or self-healing
       if (res.wrapped_sk_user) {
         try {
           const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
@@ -43,6 +43,44 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
           searchKeyHex = wasm.wasm_derive_search_key(skHex);
         } catch (unwrapErr) {
           console.warn("Could not unwrap mailbox key with password:", unwrapErr);
+        }
+      } else if (res.mailbox_id) {
+        // Self-healing: if an account has no active wrapped key material, generate and register a fresh keypair
+        try {
+          const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
+          const kpJson = wasm.wasm_generate_keypair();
+          const kp = JSON.parse(kpJson) as { secret_key: string; public_key: string };
+          const salt = new Uint8Array(16);
+          crypto.getRandomValues(salt);
+          const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
+          const passphraseEnvelope = wasm.wasm_passphrase_wrap_key(pass, saltHex, kp.secret_key);
+          const healWrapped = JSON.stringify({
+            salt: saltHex,
+            envelope: passphraseEnvelope,
+          });
+
+          // Use a temporary apiRequest override to use the NEW token for reactivateHistoricalKeys
+          const tempToken = res.token || sessionStorage.getItem("byos_active_session_token");
+
+          // We need to import reactivateHistoricalKeys or use fetch directly since we need the new token
+          await fetch(`/v1/mailboxes/${res.mailbox_id}/reactivate-keys`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-BYOS-Client": "webmail",
+              "Authorization": `Bearer ${tempToken}`
+            },
+            body: JSON.stringify({
+              wrapped_sk_user: healWrapped,
+              mailbox_pk: kp.public_key,
+            })
+          });
+
+          // Set skHex from the newly generated secret key
+          skHex = kp.secret_key;
+          searchKeyHex = wasm.wasm_derive_search_key(skHex);
+        } catch (healErr) {
+          console.warn("Self-healing mailbox key failed:", healErr);
         }
       }
 

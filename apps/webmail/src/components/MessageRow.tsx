@@ -71,7 +71,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
     e.dataTransfer.setData("application/json", JSON.stringify({ messageIds: ids }));
     e.dataTransfer.effectAllowed = "all";
 
-    // Proton Drag Ghost Pill: "Move N conversation(s)"
+    // Drag Ghost Pill: "Move N conversation(s)"
     const count = ids.length;
     const ghost = document.createElement("div");
     ghost.textContent = `Move ${count} conversation${count > 1 ? "s" : ""}`;
