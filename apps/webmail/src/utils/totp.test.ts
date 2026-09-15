@@ -64,26 +64,42 @@ export async function runTotpTests(): Promise<{ passed: number; failed: number }
   });
 
   // 4. computeTOTPCode
-  await runTest("computeTOTPCode generates correct format", async () => {
-    const secret = "JBSWY3DPEBLW64TMMQQQ";
-    const code0 = await computeTOTPCode(secret, 0);
-    assert(typeof code0 === "string", "Code should be string");
-    assert(code0.length === 6, "Code should be 6 digits");
-    assert(/^[0-9]{6}$/.test(code0), "Code should contain only numbers");
+  await runTest("computeTOTPCode generates correct format and value", async () => {
+    // RFC 6238 test vector
+    // Secret: 12345678901234567890 -> Base32: GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
+    const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const expectedCode = "287082";
+
+    // Time 59 seconds -> counter 1
+    const code = await computeTOTPCode(secret, 59);
+    assert(typeof code === "string", "Code should be string");
+    assert(code.length === 6, "Code should be 6 digits");
+    assert(/^[0-9]{6}$/.test(code), "Code should contain only numbers");
+    assert(code === expectedCode, `Code should match expected known answer vector. Got ${code}, expected ${expectedCode}`);
   });
 
   // 5. verifyTOTPClient
   await runTest("verifyTOTPClient returns true for correct code in window", async () => {
-    const secret = generateTOTPSecret();
-    const now = Math.floor(Date.now() / 1000);
-    const code = await computeTOTPCode(secret, now);
+    // RFC 6238 test vector
+    const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const originalDateNow = Date.now;
 
-    const isValid = await verifyTOTPClient(secret, code);
-    assert(isValid === true, "Should return true for correct code");
+    try {
+      // Freeze time to deterministic value
+      const mockTimeSeconds = 59;
+      Date.now = () => mockTimeSeconds * 1000;
 
-    const isInvalid = await verifyTOTPClient(secret, "000000");
-    // Small chance it's actually 000000, so we check if it was actually that code
-    assert(isInvalid === false || code === "000000", "Should return false for incorrect code");
+      const expectedCode = "287082";
+
+      const isValid = await verifyTOTPClient(secret, expectedCode);
+      assert(isValid === true, "Should return true for correct expected code");
+
+      const isInvalid = await verifyTOTPClient(secret, "000000");
+      assert(isInvalid === false, "Should return false for guaranteed incorrect code");
+    } finally {
+      // Restore Date.now
+      Date.now = originalDateNow;
+    }
   });
 
   return { passed, failed };
