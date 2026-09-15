@@ -11,7 +11,7 @@ import {
   deleteDraft,
   fetchAttachments,
   downloadAndDecryptAttachment,
-  downloadAttachmentForDisplay,
+  downloadAttachment,
   uploadEncryptedAttachment,
   fetchContacts,
   createContact,
@@ -2048,7 +2048,7 @@ const App: Component = () => {
         URL.revokeObjectURL(url);
         return;
       }
-      const { encryptedBlob } = await downloadAttachmentForDisplay(box.id, att.id);
+      const encryptedBlob = await downloadAttachment(box.id, att.id);
       // Locked: hand over the still-encrypted bytes explicitly marked as such.
       const url = URL.createObjectURL(encryptedBlob);
       const a = document.createElement("a");

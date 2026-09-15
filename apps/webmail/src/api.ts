@@ -555,20 +555,6 @@ export async function downloadAndDecryptAttachment(
   return new Blob([decryptedBytes.slice().buffer as ArrayBuffer], { type: encryptedBlob.type });
 }
 
-// TODO: This function will be used when mailbox key management is implemented
-// For now, attachments are downloaded as encrypted blobs and displayed with
-// a message that client-side decryption requires mailbox private key
-export async function downloadAttachmentForDisplay(mailboxId: string, attachmentId: string): Promise<{
-  encryptedBlob: Blob;
-  requiresDecryption: boolean;
-}> {
-  const encryptedBlob = await downloadAttachment(mailboxId, attachmentId);
-  return {
-    encryptedBlob,
-    requiresDecryption: true, // Will be false when mailbox key is available
-  };
-}
-
 export async function deleteAttachment(mailboxId: string, attachmentId: string): Promise<void> {
   return apiRequest<void>(`/v1/mailboxes/${mailboxId}/attachments/${attachmentId}`, {
     method: "DELETE",
