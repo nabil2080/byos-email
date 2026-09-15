@@ -180,10 +180,14 @@ func searchBridgeMessages(writer *bufio.Writer, tag, criteria string, cfg *Bridg
 			var lowerSender string
 			senderLowered := false
 
-			lowerRecipients := make([]string, len(m.Recipients))
-			recipientsLowered := make([]bool, len(m.Recipients))
+			var lowerRecipients []string
+			var recipientsLowered []bool
 
 			checkRecipients := func(term string) bool {
+				if lowerRecipients == nil {
+					lowerRecipients = make([]string, len(m.Recipients))
+					recipientsLowered = make([]bool, len(m.Recipients))
+				}
 				for j, recip := range m.Recipients {
 					if !recipientsLowered[j] {
 						lowerRecipients[j] = strings.ToLower(recip)
