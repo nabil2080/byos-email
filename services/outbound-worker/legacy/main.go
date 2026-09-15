@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/smtp"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -191,8 +192,8 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 	return tx.Commit()
 }
 
-func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Config) error {
-	plaintext, err := decryptForDelivery(ctx, msg)
+func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Config, sk string) error {
+	plaintext, err := decryptForDelivery(ctx, msg, sk)
 	if err != nil {
 		return fmt.Errorf("decrypt: %w", err)
 	}
