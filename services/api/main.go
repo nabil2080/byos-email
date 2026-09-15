@@ -398,6 +398,7 @@ func main() {
 
 	// Email Open Tracking
 	http.HandleFunc("/v1/track/{token}", withSecurityHeaders(withCORS(trackPixelHandler)))
+	http.HandleFunc("/v1/track", withSecurityHeaders(withCORS(trackPixelHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/tracking", withSecurityHeaders(withCORS(mailboxTrackingHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/tracking/{token}", withSecurityHeaders(withCORS(mailboxTrackingItemHandler)))
 

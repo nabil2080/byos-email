@@ -53,7 +53,13 @@ func TestTrackPixelHandler(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/track?id="+token, nil)
 
 		rr := httptest.NewRecorder()
-		trackPixelHandler(rr, req)
+		mux := http.NewServeMux()
+
+		mux.HandleFunc("/v1/track", trackPixelHandler)
+
+		mux.HandleFunc("/v1/track/{token}", trackPixelHandler)
+
+		mux.ServeHTTP(rr, req)
 
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
