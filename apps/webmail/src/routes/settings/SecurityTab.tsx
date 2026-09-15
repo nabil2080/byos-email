@@ -33,6 +33,7 @@ import { generateQRCodeSVG } from "../../utils/qr";
 interface SecurityTabProps {
   mailbox: Mailbox;
   currentUser: UserMe | null;
+  onReactivateSuccess?: () => void;
 }
 
 export const SecurityTab: Component<SecurityTabProps> = (props) => {
@@ -254,6 +255,10 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
 
       const skHex = Array.from(mailboxSk, (b) => b.toString(16).padStart(2, "0")).join("");
       sessionStorage.setItem("byos_mailbox_sk_" + props.mailbox.id, skHex);
+
+      if (props.onReactivateSuccess) {
+        props.onReactivateSuccess();
+      }
 
       setReactivateModalOpen(false);
       setReactivateSecretInput("");

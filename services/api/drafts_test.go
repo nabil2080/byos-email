@@ -132,7 +132,7 @@ func TestDraftCreateListGet(t *testing.T) {
 	defer db.Close()
 	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, mustOrg(t, db, ownerID), ownerID, "a")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 	envB64 := testEnvelopeB64()
 
 	// CREATE -> 201 with version 1 and exact envelope echo.
@@ -240,7 +240,7 @@ func TestDraftInvalidMailbox(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 	envB64 := testEnvelopeB64()
 
 	w := draftRequest(t, http.MethodPost, "not-a-uuid", "",
@@ -266,7 +266,7 @@ func TestDraftCrossOrgForbidden(t *testing.T) {
 	_, mailboxA := createTestMailbox(t, db, mustOrg(t, db, ownerA), ownerA, "a")
 	orgB, ownerB, _, _ := createTestOrgWithEmail(t, db, "b")
 	_, mailboxB := createTestMailbox(t, db, orgB, ownerB, "b")
-	tokenB := createSession(t, db, ownerB)
+	tokenB := createTestSession(t, db, ownerB)
 	envB64 := testEnvelopeB64()
 
 	// Org B actor on org A mailbox: create/list/get all 403.
@@ -285,7 +285,7 @@ func TestDraftCrossOrgForbidden(t *testing.T) {
 	}
 
 	// Draft created in mailbox B must be invisible via mailbox A path (IDOR).
-	tokenA := createSession(t, db, ownerA)
+	tokenA := createTestSession(t, db, ownerA)
 	w = draftRequest(t, http.MethodPost, mailboxB, "",
 		`{"encrypted_envelope":"`+envB64+`"}`, tokenB)
 	if w.Code != http.StatusCreated {
@@ -304,7 +304,7 @@ func TestDraftInvalidPayload(t *testing.T) {
 	defer db.Close()
 	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, mustOrg(t, db, ownerID), ownerID, "a")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 
 	cases := []struct {
 		name string
@@ -330,7 +330,7 @@ func TestDraftNotFound(t *testing.T) {
 	defer db.Close()
 	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, mustOrg(t, db, ownerID), ownerID, "a")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 
 	w := draftRequest(t, http.MethodGet, mailboxID, "00000000-0000-0000-0000-000000000000", "", token)
 	if w.Code != http.StatusNotFound {
@@ -347,7 +347,7 @@ func TestDraftInactiveUserRejected(t *testing.T) {
 	defer db.Close()
 	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, mustOrg(t, db, ownerID), ownerID, "a")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 	if _, err := db.Exec(`UPDATE users SET is_active=false WHERE id=$1`, ownerID); err != nil {
 		t.Fatalf("failed to deactivate: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestDraftSameOrgMemberAllowed(t *testing.T) {
 	defer db.Close()
 	_, ownerID, _, memberID := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, mustOrg(t, db, ownerID), ownerID, "a")
-	memberToken := createSession(t, db, memberID)
+	memberToken := createTestSession(t, db, memberID)
 	w := draftRequest(t, http.MethodPost, mailboxID, "",
 		`{"subject":"m","encrypted_envelope":"`+testEnvelopeB64()+`"}`, memberToken)
 	if w.Code != http.StatusCreated {
@@ -386,7 +386,7 @@ func TestDraftUpdateAndDelete(t *testing.T) {
 	defer db.Close()
 	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, mustOrg(t, db, ownerID), ownerID, "a")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 	envB64 := testEnvelopeB64()
 	w := draftRequest(t, http.MethodPost, mailboxID, "",
 		`{"encrypted_envelope":"`+envB64+`"}`, token)

@@ -11,7 +11,7 @@ import {
   deleteDraft,
   fetchAttachments,
   downloadAndDecryptAttachment,
-  downloadAttachmentForDisplay,
+  downloadAttachment,
   uploadEncryptedAttachment,
   fetchContacts,
   createContact,
@@ -77,6 +77,7 @@ import {
   computeSearchToken,
   extractKeywords,
   ContactPlaintext,
+  bytesToBase64,
 } from "./message_crypto";
 import { loadSignature, saveSignature, applySignature } from "./signature";
 import { SetupAccount } from "./routes/setup-account";
@@ -2048,7 +2049,7 @@ const App: Component = () => {
         URL.revokeObjectURL(url);
         return;
       }
-      const { encryptedBlob } = await downloadAttachmentForDisplay(box.id, att.id);
+      const encryptedBlob = await downloadAttachment(box.id, att.id);
       // Locked: hand over the still-encrypted bytes explicitly marked as such.
       const url = URL.createObjectURL(encryptedBlob);
       const a = document.createElement("a");
@@ -2597,12 +2598,6 @@ const App: Component = () => {
       setErrorMessage(`Failed to send securely: ${err instanceof Error ? err.message : "unknown error"}`);
       setComposeStatus(null);
     }
-  }
-
-  function bytesToBase64(bytes: Uint8Array): string {
-    let binary = "";
-    for (const byte of bytes) binary += String.fromCharCode(byte);
-    return btoa(binary);
   }
 
   async function handleSaveDraft() {
@@ -3387,7 +3382,18 @@ const App: Component = () => {
               <FiltersTab mailbox={selectedMailbox()!} />
             </Show>
             <Show when={activeSettingsTab() === "security" && selectedMailbox()}>
-              <SecurityTab mailbox={selectedMailbox()!} currentUser={currentUser()} />
+              <SecurityTab mailbox={selectedMailbox()!} currentUser={currentUser()} onReactivateSuccess={() => {
+                const box = selectedMailbox();
+                if (box) {
+                  const updatedBox = { ...box, previous_wrapped_sk_user: undefined };
+                  setSelectedMailbox(updatedBox as any);
+                  setMailboxes(mailboxes().map(m => m.id === box.id ? (updatedBox as any) : m));
+                }
+                const user = currentUser();
+                if (user) {
+                  setCurrentUser({ ...user, previous_wrapped_sk_user: undefined });
+                }
+              }} />
             </Show>
           </SettingsLayout>
         }

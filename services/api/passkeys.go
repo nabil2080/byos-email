@@ -189,7 +189,7 @@ func passkeyRegisterHandler(w http.ResponseWriter, r *http.Request) {
 	var item UserPasskey
 	err = conn.QueryRow(ctx, `
 		INSERT INTO user_passkeys (user_id, credential_id, public_key, device_name, aaguid)
-		VALUES ($1, $2, $3, $4, $5)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''))
 		ON CONFLICT (credential_id) DO UPDATE
 		SET device_name = EXCLUDED.device_name, public_key = EXCLUDED.public_key, last_used_at = NOW()
 		RETURNING id::text, user_id::text, credential_id, public_key, counter, device_name, COALESCE(aaguid, ''), created_at

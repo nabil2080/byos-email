@@ -32,7 +32,7 @@ func TestContactsCiphertextLifecycle(t *testing.T) {
 	defer db.Close()
 	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, mustOrg(t, db, ownerID), ownerID, "contacts")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 	envelope := testEnvelopeB64()
 
 	w := contactRequest(t, http.MethodPost, mailboxID, "", `{"encrypted_envelope":"`+envelope+`"}`, token)

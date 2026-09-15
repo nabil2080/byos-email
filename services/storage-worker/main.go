@@ -822,9 +822,6 @@ func (w *StorageWorker) storeHandler(resp http.ResponseWriter, req *http.Request
 	var size int64
 	var isOctetStream bool
 
-	// BUG-003: parse the media type instead of exact-matching the header so
-	// variants like `application/octet-stream; name="f.enc"` still take the
-	// raw-upload path instead of failing JSON decode.
 	if mediaType, _, _ := mime.ParseMediaType(req.Header.Get("Content-Type")); mediaType == "application/octet-stream" {
 		isOctetStream = true
 		objectKey = req.Header.Get("X-Object-Key")

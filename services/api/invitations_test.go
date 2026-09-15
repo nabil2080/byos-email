@@ -51,9 +51,9 @@ func TestMailboxInvite(t *testing.T) {
 	// Upgrade plan so multiple mailboxes can be created
 	db.Exec(`UPDATE organizations SET plan='business' WHERE id=$1`, orgID)
 
-	ownerToken := createSession(t, db, ownerID)
-	adminToken := createSession(t, db, adminID)
-	memberToken := createSession(t, db, memberID)
+	ownerToken := createTestSession(t, db, ownerID)
+	adminToken := createTestSession(t, db, adminID)
+	memberToken := createTestSession(t, db, memberID)
 
 	dummyPk := hex.EncodeToString(bytes.Repeat([]byte{0x01}, 32))
 	dummyWskOrg := "wrapped_org_key_material_test"
@@ -177,7 +177,7 @@ func TestClaimInvitation(t *testing.T) {
 	createTestStorage(t, db, orgID)
 	domainName := "claim-test-" + uuid.New().String() + ".com"
 	createTestDomain(t, db, orgID, domainName)
-	ownerToken := createSession(t, db, ownerID)
+	ownerToken := createTestSession(t, db, ownerID)
 
 	// Create private invite
 	body, _ := json.Marshal(map[string]interface{}{
@@ -293,8 +293,8 @@ func TestImpersonation(t *testing.T) {
 	domainName := "impersonate-test-" + uuid.New().String() + ".com"
 	createTestDomain(t, db, orgID, domainName)
 
-	adminToken := createSession(t, db, adminID)
-	memberToken := createSession(t, db, memberID)
+	adminToken := createTestSession(t, db, adminID)
+	memberToken := createTestSession(t, db, memberID)
 
 	dummyPk := hex.EncodeToString(bytes.Repeat([]byte{0x01}, 32))
 	dummyWskOrg := "wrapped_org_key_material_test"

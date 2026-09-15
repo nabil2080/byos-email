@@ -280,8 +280,21 @@ export const SetupAccount: Component = () => {
         recovery_email: twoFactorMethod() === "email" ? recoveryEmail().trim() : undefined,
       });
 
+      // Populate sessionStorage immediately with keys & session token so the user lands unlocked in the inbox!
+      const mailboxSk = rawMailboxSkHex();
+      if (mailboxSk) {
+        const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
+        const sKeyHex = wasm.wasm_derive_search_key(mailboxSk);
+        sessionStorage.setItem("byos_mailbox_sk_" + data.mailbox_id, mailboxSk);
+        sessionStorage.setItem("byos_mailbox_skey_" + data.mailbox_id, sKeyHex);
+      }
+      if (claimRes.token) {
+        sessionStorage.setItem("byos_active_session_token", claimRes.token);
+      }
+
       // Wrap the recovery phrase under password using wasm_passphrase_wrap_key
       // so the user can re-authenticate to reveal it from Settings > SecurityTab!
+      // Must be done AFTER setting session token since updateMailboxSettings requires auth
       try {
         const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
         const salt = new Uint8Array(16);
@@ -297,18 +310,6 @@ export const SetupAccount: Component = () => {
         });
       } catch (wrapErr) {
         console.warn("Failed to seal recovery phrase in mailbox settings:", wrapErr);
-      }
-
-      // Populate sessionStorage immediately with keys & session token so the user lands unlocked in the inbox!
-      const mailboxSk = rawMailboxSkHex();
-      if (mailboxSk) {
-        const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
-        const sKeyHex = wasm.wasm_derive_search_key(mailboxSk);
-        sessionStorage.setItem("byos_mailbox_sk_" + data.mailbox_id, mailboxSk);
-        sessionStorage.setItem("byos_mailbox_skey_" + data.mailbox_id, sKeyHex);
-      }
-      if (claimRes.token) {
-        sessionStorage.setItem("byos_active_session_token", claimRes.token);
       }
 
       // Successful activation: redirect to webmail inbox
