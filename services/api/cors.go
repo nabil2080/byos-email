@@ -25,7 +25,7 @@ func isAllowedOrigin(origin string, allowedList string) bool {
 	// In development environments, permit any localhost / 127.0.0.1 port
 	if os.Getenv("BYOS_ENV") == "development" {
 		u, err := url.Parse(origin)
-		if err == nil {
+		if err == nil && u.Scheme == "http" {
 			hostname := u.Hostname()
 			if hostname == "localhost" || hostname == "127.0.0.1" {
 				return true
