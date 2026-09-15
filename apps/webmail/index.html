@@ -1,11 +1,28 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="cloud_dancer">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BYOS Webmail</title>
+    <script>
+      (function() {
+        try {
+          var t = localStorage.getItem('byos_theme');
+          if (t === 'dark') {
+            document.documentElement.dataset.theme = 'dark';
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.dataset.theme = 'cloud_dancer';
+            document.documentElement.classList.remove('dark');
+            if (!t) {
+              localStorage.setItem('byos_theme', 'cloud_dancer');
+            }
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
-  <body class="bg-slate-50 text-slate-900 antialiased">
+  <body class="bg-[#F0EEE9] dark:bg-[#121316] text-[#1A1B1E] dark:text-[#F3F4F6] antialiased">
     <div id="root"></div>
     <script type="module" src="/src/index.tsx"></script>
   </body>

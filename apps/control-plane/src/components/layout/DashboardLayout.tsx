@@ -26,7 +26,7 @@ const DashboardLayout: Component<Props> = (props) => {
             aria-hidden="true"
           />
           <div class="fixed inset-y-0 left-0 w-64 bg-white shadow-2xl flex flex-col border-r border-[#E2DFD8]">
-            <Sidebar currentPath={location.pathname} />
+            <Sidebar currentPath={location.pathname} isMobile={true} />
             <button
               onClick={() => setMobileOpen(false)}
               class="absolute top-4 right-4 text-[#6F7173] hover:text-[#3C3D3E] p-1 text-sm font-bold"

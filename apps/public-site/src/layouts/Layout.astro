@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import { Footer } from "../components/layout/Footer";
 
 interface Props {
   title: string;
@@ -8,7 +9,7 @@ interface Props {
 
 const { 
   title, 
-  description = "Normal email on the outside. Customer-controlled persistent storage underneath." 
+  description = "Business Email You Actually Own. Connect your own S3 or R2 storage with zero-knowledge encryption." 
 } = Astro.props;
 ---
 
@@ -21,37 +22,37 @@ const {
     <meta name="description" content={description} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
-  <body class="bg-[#F0EEE9] text-[#4A4A4A] antialiased flex flex-col min-h-screen selection:bg-[#A47764] selection:text-[#F0EEE9]">
+  <body class="bg-[#F0EEE9] text-[#3C3D3E] antialiased flex flex-col min-h-screen selection:bg-[#9E725F] selection:text-white">
     {/* Navigation */}
-    <header class="sticky top-0 z-50 border-b border-[#D1C4B8] bg-[#F0EEE9]/90 backdrop-blur-md">
+    <header class="sticky top-0 z-50 border-b border-[#E2DFD8] bg-[#F0EEE9]/90 backdrop-blur-md">
       <div class="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
         <a href="/" class="flex items-center gap-3 group">
-          <div class="flex items-center justify-center bg-[#A47764] text-[#F0EEE9] px-2.5 py-1 rounded-md text-xs font-mono font-bold tracking-wider shadow-sm group-hover:bg-[#8E6250] transition-colors">
+          <div class="flex items-center justify-center bg-[#9E725F] text-white px-2.5 py-1 rounded-lg text-xs font-mono font-bold tracking-wider shadow-xs group-hover:bg-[#865E4D] transition-colors">
             BYOS
           </div>
           <div class="flex flex-col">
-            <span class="font-bold text-base tracking-tight text-[#242424]">Business Email</span>
-            <span class="text-[9px] font-mono uppercase tracking-widest text-[#A47764] font-semibold">Self-Sovereign Storage</span>
+            <span class="font-bold text-base tracking-tight text-[#3C3D3E]">Business Email</span>
+            <span class="text-[9px] font-mono uppercase tracking-widest text-[#9E725F] font-semibold">Zero Server Plaintext</span>
           </div>
         </a>
 
         {/* Desktop Nav */}
-        <nav class="hidden md:flex items-center gap-8 text-sm font-medium text-[#4A4A4A]">
-          <a href="/#features" class="hover:text-[#A47764] transition-colors">Features</a>
-          <a href="/#architecture" class="hover:text-[#A47764] transition-colors">Architecture</a>
-          <a href="/#storage" class="hover:text-[#A47764] transition-colors">Storage</a>
-          <a href="/pricing" class="hover:text-[#A47764] transition-colors">Pricing</a>
-          <a href="/security" class="hover:text-[#A47764] transition-colors">Security</a>
-          <a href="/docs" class="hover:text-[#A47764] transition-colors">Docs</a>
+        <nav class="hidden md:flex items-center gap-8 text-sm font-medium text-[#6F7173]">
+          <a href="/#how-it-works" class="hover:text-[#3C3D3E] transition-colors">How It Works</a>
+          <a href="/#pricing-calc" class="hover:text-[#3C3D3E] transition-colors">Cost Calculator</a>
+          <a href="/#features" class="hover:text-[#3C3D3E] transition-colors">Features</a>
+          <a href="/pricing" class="hover:text-[#3C3D3E] transition-colors">Pricing</a>
+          <a href="/security" class="hover:text-[#3C3D3E] transition-colors">Security</a>
+          <a href="/docs" class="hover:text-[#3C3D3E] transition-colors">Docs</a>
         </nav>
 
         {/* Action CTAs */}
-        <div class="flex items-center gap-4">
-          <a href="http://127.0.0.1:3000/login" class="text-xs sm:text-sm font-medium text-[#4A4A4A] hover:text-[#242424] transition-colors">
+        <div class="flex items-center gap-3">
+          <a href="/login" class="text-xs sm:text-sm font-semibold text-[#3C3D3E] hover:text-[#9E725F] px-3 py-1.5 transition-colors">
             Sign In
           </a>
-          <a href="http://127.0.0.1:3000/register" class="rounded-lg bg-[#A47764] px-4 py-2 text-xs sm:text-sm font-semibold text-[#F0EEE9] shadow-md hover:bg-[#8E6250] transition-all hover:shadow-[#A47764]/25">
-            Launch Console
+          <a href="/signup" class="rounded-xl bg-[#9E725F] px-4 py-2 text-xs sm:text-sm font-semibold text-white shadow-sm hover:bg-[#865E4D] transition-all">
+            Start Free Trial
           </a>
         </div>
       </div>
@@ -62,85 +63,7 @@ const {
       <slot />
     </main>
 
-    {/* Footer - Exact Architecture Specified (Mocha Mousse Secondary Section) */}
-    <footer class="relative pt-24 spacer text-[#4A4A4A] m-4 mt-20 bg-[#E5DDD5] rounded-3xl border border-[#D1C4B8]">
-      {/* Structural overlapping curved top */}
-      <div class="relative -top-[96px] h-[30px] bg-[#E5DDD5] rounded-b-[20px] shadow-lg border-b border-[#D1C4B8]" />
-
-      <div class="mx-auto max-w-7xl px-6">
-        {/* Footer Columns */}
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-10 pb-16 border-b border-[#D1C4B8]">
-          {/* Brand & Mission */}
-          <div class="lg:col-span-2 pr-4">
-            <div class="flex items-center gap-2.5">
-              <span class="bg-[#A47764] text-[#F0EEE9] px-2 py-0.5 rounded text-xs font-mono font-bold">BYOS</span>
-              <span class="font-bold text-lg text-[#242424]">Business Email</span>
-            </div>
-            <p class="mt-4 text-sm text-[#4A4A4A] leading-relaxed max-w-sm">
-              Standard email protocol compatibility on the outside. True customer-owned, zero-knowledge encrypted object storage underneath.
-            </p>
-            <div class="mt-6 flex items-center gap-2 text-xs font-mono text-[#242424] bg-[#F0EEE9] px-3 py-1.5 rounded-md border border-[#D1C4B8] w-fit shadow-xs">
-              <span class="h-2 w-2 rounded-full bg-emerald-600 animate-pulse"></span>
-              <span>All Systems Operational &bull; 0 Plaintext at Rest</span>
-            </div>
-          </div>
-
-          {/* Product Column */}
-          <div>
-            <h4 class="text-xs font-mono uppercase tracking-wider text-[#A47764] font-bold">Product</h4>
-            <ul class="mt-4 space-y-2.5 text-sm text-[#4A4A4A]">
-              <li><a href="/#features" class="hover:text-[#A47764] transition-colors">Webmail Client</a></li>
-              <li><a href="/#features" class="hover:text-[#A47764] transition-colors">Desktop IMAP Bridge</a></li>
-              <li><a href="/#storage" class="hover:text-[#A47764] transition-colors">BYOS Storage Connectors</a></li>
-              <li><a href="/pricing" class="hover:text-[#A47764] transition-colors">Capacity Plans</a></li>
-              <li><a href="/docs" class="hover:text-[#A47764] transition-colors">Disaster Recovery CLI</a></li>
-            </ul>
-          </div>
-
-          {/* Architecture & Security Column */}
-          <div>
-            <h4 class="text-xs font-mono uppercase tracking-wider text-[#A47764] font-bold">Security &amp; Spec</h4>
-            <ul class="mt-4 space-y-2.5 text-sm text-[#4A4A4A]">
-              <li><a href="/security" class="hover:text-[#A47764] transition-colors">RFC 9180 HPKE Core</a></li>
-              <li><a href="/security" class="hover:text-[#A47764] transition-colors">BIP39 Key Derivation</a></li>
-              <li><a href="/security" class="hover:text-[#A47764] transition-colors">Threat Model</a></li>
-              <li><a href="/security" class="hover:text-[#A47764] transition-colors">DKIM RSA-2048 Engine</a></li>
-              <li><a href="/privacy" class="hover:text-[#A47764] transition-colors">Privacy Charter</a></li>
-            </ul>
-          </div>
-
-          {/* Connectors & Integrations */}
-          <div>
-            <h4 class="text-xs font-mono uppercase tracking-wider text-[#A47764] font-bold">Connectors</h4>
-            <ul class="mt-4 space-y-2.5 text-sm text-[#4A4A4A]">
-              <li><a href="/docs" class="hover:text-[#A47764] transition-colors">Amazon S3</a></li>
-              <li><a href="/docs" class="hover:text-[#A47764] transition-colors">MinIO Self-Hosted</a></li>
-              <li><a href="/docs" class="hover:text-[#A47764] transition-colors">Google Drive OAuth</a></li>
-              <li><a href="/docs" class="hover:text-[#A47764] transition-colors">Cloudflare R2</a></li>
-              <li><a href="/docs" class="hover:text-[#A47764] transition-colors">Backblaze B2</a></li>
-            </ul>
-          </div>
-        </div>
-
-        {/* Sub-footer Legal Bar */}
-        <div class="py-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-[#6E6E6E]">
-          <div>&copy; 2026 BYOS Business Email. Customer Data Sovereignty Guaranteed.</div>
-          <div class="flex items-center gap-6">
-            <a href="/privacy" class="hover:text-[#242424] transition-colors">Privacy Policy</a>
-            <a href="/security" class="hover:text-[#242424] transition-colors">Security Architecture</a>
-            <a href="/docs" class="hover:text-[#242424] transition-colors">Documentation</a>
-          </div>
-        </div>
-
-        {/* High-Impact Reveal Banner specified by user */}
-        <div class="container mx-auto flex">
-          <div class="w-full justify-center text-center flex items-end z-0 pt-12 pb-8">
-            <h2 class="text-[28px] sm:text-[76px] lg:text-[104px] font-black tracking-tighter uppercase leading-none text-[#D1C4B8] hover:text-[#A47764] transition-colors duration-500 reveal-text select-none cursor-default">
-              OWN YOUR STORAGE
-            </h2>
-          </div>
-        </div>
-      </div>
-    </footer>
+    {/* Enterprise Footer */}
+    <Footer client:load />
   </body>
 </html>

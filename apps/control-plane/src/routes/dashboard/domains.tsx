@@ -141,8 +141,12 @@ const DomainsPage: Component = () => {
         {/* Empty State */}
         <Show when={!domains.loading && (domains() ?? []).length === 0}>
           <div class="p-12 text-center">
-            <div class="w-12 h-12 mx-auto rounded-full bg-[#F3ECE8] text-[#9E725F] flex items-center justify-center text-xl mb-3">
-              🌐
+            <div class="w-12 h-12 mx-auto rounded-full bg-[#F3ECE8] text-[#9E725F] flex items-center justify-center mb-3">
+              <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
             </div>
             <h3 class="text-sm font-bold text-[#3C3D3E]">No custom domains configured</h3>
             <p class="mt-1 text-xs text-[#6F7173] max-w-sm mx-auto">
@@ -171,13 +175,22 @@ const DomainsPage: Component = () => {
                         <div class="flex items-center gap-3">
                           <span class="font-bold text-base text-[#3C3D3E]">{d.name}</span>
                           <span
-                            class={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                            class={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
                               isVerified()
                                 ? "bg-emerald-100 text-emerald-800"
                                 : "bg-amber-100 text-amber-800"
                             }`}
                           >
-                            <span>{isVerified() ? "✓" : "⏳"}</span>
+                            <Show when={isVerified()} fallback={
+                              <svg class="w-3 h-3 stroke-amber-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10" />
+                                <polyline points="12 6 12 12 16 14" />
+                              </svg>
+                            }>
+                              <svg class="w-3 h-3 stroke-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            </Show>
                             <span>{isVerified() ? "Verified" : "Pending Verification"}</span>
                           </span>
                         </div>

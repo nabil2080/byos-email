@@ -151,9 +151,13 @@ export const DomainWizard: Component<Props> = (props) => {
         >
           {/* Header */}
           <div class="border-b border-[#E2DFD8] bg-[#F0EEE9]/50 px-6 py-4 flex items-center justify-between">
-            <div class="flex items-center gap-2">
-              <div class="w-7 h-7 rounded-md bg-[#9E725F] text-[#F0EEE9] flex items-center justify-center font-bold text-xs">
-                🌐
+            <div class="flex items-center gap-2.5">
+              <div class="w-7 h-7 rounded-md bg-[#9E725F] text-[#F0EEE9] flex items-center justify-center">
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="2" y1="12" x2="22" y2="12" />
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                </svg>
               </div>
               <h3 class="text-base font-bold text-[#3C3D3E]">
                 Domain Setup Wizard
@@ -488,8 +492,9 @@ export const DomainWizard: Component<Props> = (props) => {
                           TXT
                         </span>
                       </div>
-                      <span class={`text-[11px] font-semibold ${currentDomain()?.is_verified ? "text-emerald-700" : "text-amber-700"}`}>
-                        {currentDomain()?.is_verified ? "🟢 Valid" : "🟡 Pending Propagation"}
+                      <span class={`inline-flex items-center gap-1.5 text-[11px] font-semibold ${currentDomain()?.is_verified ? "text-emerald-700" : "text-amber-700"}`}>
+                        <span class={`w-2 h-2 rounded-full ${currentDomain()?.is_verified ? "bg-emerald-500" : "bg-amber-500"}`}></span>
+                        <span>{currentDomain()?.is_verified ? "Valid" : "Pending Propagation"}</span>
                       </span>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
@@ -525,8 +530,9 @@ export const DomainWizard: Component<Props> = (props) => {
                           TXT
                         </span>
                       </div>
-                      <span class={`text-[11px] font-semibold ${currentDomain()?.is_verified ? "text-emerald-700" : "text-amber-700"}`}>
-                        {currentDomain()?.is_verified ? "🟢 Valid" : "🟡 Pending Propagation"}
+                      <span class={`inline-flex items-center gap-1.5 text-[11px] font-semibold ${currentDomain()?.is_verified ? "text-emerald-700" : "text-amber-700"}`}>
+                        <span class={`w-2 h-2 rounded-full ${currentDomain()?.is_verified ? "bg-emerald-500" : "bg-amber-500"}`}></span>
+                        <span>{currentDomain()?.is_verified ? "Valid" : "Pending Propagation"}</span>
                       </span>
                     </div>
                     <div class="space-y-1.5 mt-2">
@@ -564,8 +570,9 @@ export const DomainWizard: Component<Props> = (props) => {
                           TXT
                         </span>
                       </div>
-                      <span class={`text-[11px] font-semibold ${currentDomain()?.is_verified ? "text-emerald-700" : "text-amber-700"}`}>
-                        {currentDomain()?.is_verified ? "🟢 Valid" : "🟡 Pending Propagation"}
+                      <span class={`inline-flex items-center gap-1.5 text-[11px] font-semibold ${currentDomain()?.is_verified ? "text-emerald-700" : "text-amber-700"}`}>
+                        <span class={`w-2 h-2 rounded-full ${currentDomain()?.is_verified ? "bg-emerald-500" : "bg-amber-500"}`}></span>
+                        <span>{currentDomain()?.is_verified ? "Valid" : "Pending Propagation"}</span>
                       </span>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">

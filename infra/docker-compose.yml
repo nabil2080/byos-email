@@ -110,7 +110,7 @@ services:
       CRYPTO_WORKER_URL: "http://crypto-worker:8084"
       BYOS_LEGACY_AUTH_ENABLED: "false"
       BYOS_ENV: "development"
-      BYOS_ALLOWED_ORIGINS: "${BYOS_ALLOWED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:4173,http://localhost:4173}"
+      BYOS_ALLOWED_ORIGINS: "${BYOS_ALLOWED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:3001,http://localhost:3001,http://127.0.0.1:3002,http://localhost:3002,http://127.0.0.1:4173,http://localhost:4173,http://127.0.0.1:4321,http://localhost:4321,http://127.0.0.1:5173,http://localhost:5173}"
       STORAGE_HEALTH_INTERVAL: "${STORAGE_HEALTH_INTERVAL:-300}"
       STORAGE_WORKER_INTERNAL_KEY_FILE: /run/secrets/storage_worker_internal_key
     secrets:

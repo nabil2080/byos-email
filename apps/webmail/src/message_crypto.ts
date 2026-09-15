@@ -49,6 +49,9 @@ export function unlockMailboxKey(
   if (!words) {
     throw new Error("Recovery phrase is required to unlock the mailbox.");
   }
+  if (/^[0-9a-fA-F]{64}$/.test(words)) {
+    return hexToBytes(words);
+  }
   const rootHex: string = wasm.wasm_recover_root_secret(words);
   const skHex: string = wasm.wasm_unwrap_mailbox_key(
     rootHex,
@@ -60,6 +63,99 @@ export function unlockMailboxKey(
     throw new Error("Mailbox key unwrap failed.");
   }
   return sk;
+}
+
+/**
+ * Automate password-based key unwrapping on login via Argon2id.
+ * Unwraps mailbox_sk using wasm_passphrase_unwrap_key without 24-word phrase entry.
+ */
+export function autoUnwrapMailboxKey(
+  wasm: typeof WasmCore,
+  password: string,
+  wrappedSkUser: string
+): Uint8Array {
+  const trimmed = wrappedSkUser.trim();
+  if (!trimmed) {
+    throw new Error("Missing wrapped_sk_user");
+  }
+
+  let saltHex = "";
+  let envelopeHex = "";
+
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      saltHex = parsed.salt || parsed.salt_hex || "";
+      envelopeHex = parsed.envelope || parsed.envelope_hex || "";
+    } catch {
+      throw new Error("Invalid wrapped_sk_user JSON payload");
+    }
+  } else if (trimmed.includes(":")) {
+    const parts = trimmed.split(":");
+    saltHex = parts[0];
+    envelopeHex = parts[1];
+  } else if (trimmed.length >= 32) {
+    saltHex = trimmed.slice(0, 32);
+    envelopeHex = trimmed.slice(32);
+  } else {
+    throw new Error("Invalid wrapped_sk_user format");
+  }
+
+  if (saltHex.length !== 32) {
+    throw new Error("Invalid salt length: must be 16 bytes (32 hex characters)");
+  }
+
+  const skHex = wasm.wasm_passphrase_unwrap_key(password, saltHex, envelopeHex);
+  const sk = hexToBytes(skHex);
+  if (sk.length !== 32) {
+    throw new Error("Unwrapped mailbox key is invalid length");
+  }
+  return sk;
+}
+
+export function unwrapMailboxKeyWithRecoveryPhrase(
+  wasm: typeof WasmCore,
+  mnemonicPhrase: string,
+  mailboxId: string,
+  wrappedSkUser: string
+): Uint8Array {
+  const trimmed = wrappedSkUser.trim();
+  if (!trimmed) {
+    throw new Error("Missing wrapped mailbox key");
+  }
+
+  const rootHex = wasm.wasm_recover_root_secret(mnemonicPhrase.trim());
+  const boxIdHex = mailboxIdHex(mailboxId);
+
+  let targetEnvelopeHex = trimmed;
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed.root_wrapped) {
+        targetEnvelopeHex = parsed.root_wrapped;
+      }
+    } catch {}
+  }
+
+  const skHex = wasm.wasm_unwrap_mailbox_key(rootHex, targetEnvelopeHex, boxIdHex);
+  const sk = hexToBytes(skHex);
+  if (sk.length !== 32) {
+    throw new Error("Unwrapped mailbox key is invalid length");
+  }
+  return sk;
+}
+
+export function wrapMailboxKeyWithPassphrase(
+  wasm: typeof WasmCore,
+  password: string,
+  mailboxSk: Uint8Array
+): string {
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
+  const saltHex = bytesToHex(salt);
+  const skHex = bytesToHex(mailboxSk);
+  const envelopeHex = wasm.wasm_passphrase_wrap_key(password, saltHex, skHex);
+  return `${saltHex}:${envelopeHex}`;
 }
 
 export interface MessageDecryptInput {
@@ -185,7 +281,11 @@ export function decryptContactEnvelope(
 /** Derive the 32-byte mailbox search key (hex) from the recovery phrase.
     The recovery phrase and derived search key never leave the browser. */
 export function deriveSearchKeyFromMnemonic(wasm: typeof WasmCore, mnemonic: string): string {
-  const rootHex = wasm.wasm_recover_root_secret(mnemonic.trim());
+  const words = mnemonic.trim();
+  if (/^[0-9a-fA-F]{64}$/.test(words)) {
+    return wasm.wasm_derive_search_key(words);
+  }
+  const rootHex = wasm.wasm_recover_root_secret(words);
   return wasm.wasm_derive_search_key(rootHex);
 }
 
@@ -197,7 +297,7 @@ export async function computeSearchToken(searchKeyHex: string, term: string): Pr
   const keyBytes = hexToBytes(searchKeyHex);
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
-    keyBytes,
+    keyBytes as unknown as BufferSource,
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"]

@@ -1,4 +1,4 @@
-import { Component, createSignal, createEffect, onMount, For, Show } from "solid-js";
+import { Component, createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
 import {
   fetchCurrentUser,
   login,
@@ -17,6 +17,18 @@ import {
   createContact,
   updateContact,
   deleteContact,
+  fetchFolders,
+  createFolder,
+  updateFolder,
+  deleteFolder,
+  fetchLabels,
+  createLabel,
+  updateLabel,
+  deleteLabel,
+  updateMessageFolder,
+  attachMessageLabel,
+  detachMessageLabel,
+  setMessageRead,
   deleteAttachment,
   fetchMessages,
   fetchMessageBody,
@@ -26,15 +38,36 @@ import {
   scheduleOutbound,
   searchMailboxTokens,
   indexSearchToken,
+  fetchMailboxSettings,
+  updateMailboxSettings,
+  registerTracking,
+  fetchTrackingList,
+  MessageTrackingItem,
+  getTrackingPixelUrl,
   UserMe,
   Mailbox,
   DraftMessage,
   AttachmentItem,
   ContactItem,
+  MailboxFolder,
+  MailboxLabel,
   MessageMetadata,
+  ConnectedAccount,
+  fetchPasskeyLoginOptions,
+  loginWithPasskey,
+  verifyLogin2FA,
+  sendLogin2FACode,
+  fetchRecoveryOptions,
+  requestRecoveryChallenge,
+  resetPasswordWithRecovery,
+  reactivateHistoricalKeys,
+  apiRequest,
+  RecoveryOptionItem,
 } from "./api";
 import {
   unlockMailboxKey,
+  autoUnwrapMailboxKey,
+  unwrapMailboxKeyWithRecoveryPhrase,
   decryptMessageEnvelope,
   encryptDraftEnvelope,
   decryptDraftEnvelope,
@@ -46,6 +79,25 @@ import {
   ContactPlaintext,
 } from "./message_crypto";
 import { loadSignature, saveSignature, applySignature } from "./signature";
+import { SetupAccount } from "./routes/setup-account";
+import { SettingsLayout, SettingsTabId } from "./routes/settings/SettingsLayout";
+import { SignaturesTab } from "./routes/settings/SignaturesTab";
+import { BridgeTab } from "./routes/settings/BridgeTab";
+import { AppearanceTab } from "./routes/settings/AppearanceTab";
+import { AutoReplyTab } from "./routes/settings/AutoReplyTab";
+import { SecurityTab } from "./routes/settings/SecurityTab";
+import { FiltersTab } from "./routes/settings/FiltersTab";
+import { ComposeDrawer } from "./components/ComposeDrawer";
+import { StorageStatusPill } from "./components/StorageStatusPill";
+import { Sidebar } from "./components/Sidebar";
+import { MessageList } from "./components/MessageList";
+import { ReadingPane } from "./components/ReadingPane";
+import { SelectionFilter, SortOrder } from "./components/InboxToolbar";
+import { AddMailboxModal } from "./components/AddMailboxModal";
+import { CreateLabelModal } from "./components/modals/CreateLabelModal";
+import { CreateFolderModal } from "./components/modals/CreateFolderModal";
+import { ImportEmailsModal } from "./components/modals/ImportEmailsModal";
+import { formatMessageDate } from "./utils/dateTime";
 
 type Folder = "inbox" | "sent" | "drafts" | "archive" | "spam" | "trash";
 
@@ -54,6 +106,8 @@ interface DisplayMessage {
   messageSeq?: number;
   version?: number;
   folder: Folder;
+  folderId?: string | null;
+  labelIds?: string[];
   sender: string;
   recipient: string;
   subject: string;
@@ -64,6 +118,15 @@ interface DisplayMessage {
   starred: boolean;
   isRealApi?: boolean;
   messageId?: string; // For attachment filtering
+  hasAttachments?: boolean;
+  attachmentCount?: number;
+  attachmentTypes?: string[];
+  trackingToken?: string;
+  trackingInfo?: {
+    openCount: number;
+    firstOpenedAt?: string;
+    lastOpenedAt?: string;
+  };
 }
 
 const App: Component = () => {
@@ -86,6 +149,12 @@ const App: Component = () => {
   const [messageAttachments, setMessageAttachments] = createSignal<AttachmentItem[]>([]);
   const [downloadingAttachment, setDownloadingAttachment] = createSignal<string | null>(null);
 
+  // Setup Account & Impersonation state
+  const [isSetupAccount, setIsSetupAccount] = createSignal(false);
+  const [isImpersonating, setIsImpersonating] = createSignal(false);
+  const [impersonateMailboxId, setImpersonateMailboxId] = createSignal<string | null>(null);
+  const [impersonateEmail, setImpersonateEmail] = createSignal<string | null>(null);
+
   // Mailbox key custody: in-memory only, derived per unlock from the recovery
   // phrase. Cleared on mailbox switch and lock. Never persisted or logged.
   const [mailboxKey, setMailboxKey] = createSignal<Uint8Array | null>(null);
@@ -93,9 +162,6 @@ const App: Component = () => {
   const [serverMatchedMsgIds, setServerMatchedMsgIds] = createSignal<string[]>([]);
   const [isSearchingTokens, setIsSearchingTokens] = createSignal(false);
   const [unlockedBoxId, setUnlockedBoxId] = createSignal<string | null>(null);
-  const [unlockMnemonic, setUnlockMnemonic] = createSignal("");
-  const [unlocking, setUnlocking] = createSignal(false);
-  const [unlockError, setUnlockError] = createSignal<string | null>(null);
   const [storageErrorBanner, setStorageErrorBanner] = createSignal<string | null>(null);
 
   // Per-mailbox signature draft (device-local; see signature.ts).
@@ -120,12 +186,494 @@ const App: Component = () => {
   const [composeTo, setComposeTo] = createSignal("");
   const [composeSubject, setComposeSubject] = createSignal("");
   const [composeBody, setComposeBody] = createSignal("");
+  const [composeBodyHtml, setComposeBodyHtml] = createSignal("");
   const [scheduledTime, setScheduledTime] = createSignal("");
+  const [composeTrackOpens, setComposeTrackOpens] = createSignal(false);
   const [composeStatus, setComposeStatus] = createSignal<string | null>(null);
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
   const [composeAttachments, setComposeAttachments] = createSignal<AttachmentItem[]>([]);
   // When set, saving updates this draft (optimistic version) instead of creating.
   const [editingDraft, setEditingDraft] = createSignal<{ id: string; version: number } | null>(null);
+
+  // Settings suite & Layout preferences
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [activeSettingsTab, setActiveSettingsTab] = createSignal<SettingsTabId>("signatures");
+  const [density, setDensity] = createSignal<"compact" | "cozy" | "comfortable">(
+    (typeof window !== "undefined" && (localStorage.getItem("byos_density") as any)) || "cozy"
+  );
+  const [layoutMode, setLayoutMode] = createSignal<"split" | "full">(
+    (typeof window !== "undefined" && (localStorage.getItem("byos_layout") as any)) || "split"
+  );
+  const [theme, setTheme] = createSignal<"cloud_dancer" | "dark">(
+    (typeof window !== "undefined" && (localStorage.getItem("byos_theme") as any)) || "cloud_dancer"
+  );
+  const [language, setLanguage] = createSignal<string>(
+    (typeof window !== "undefined" && localStorage.getItem("byos_language")) || "en"
+  );
+  const [timeFormat, setTimeFormat] = createSignal<"12h" | "24h">(
+    (typeof window !== "undefined" && (localStorage.getItem("byos_time_format") as "12h" | "24h")) || "12h"
+  );
+  const [weekStart, setWeekStart] = createSignal<"sunday" | "monday" | "saturday">(
+    (typeof window !== "undefined" && (localStorage.getItem("byos_week_start") as any)) || "sunday"
+  );
+
+  function handleSetTheme(newTheme: "cloud_dancer" | "dark", persistToBackend = true) {
+    setTheme(newTheme);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("byos_theme", newTheme);
+      document.documentElement.dataset.theme = newTheme;
+      if (newTheme === "dark") {
+        document.documentElement.classList.add("dark");
+      } else {
+        document.documentElement.classList.remove("dark");
+      }
+    }
+    if (persistToBackend) {
+      const box = selectedMailbox();
+      if (box) {
+        updateMailboxSettings(box.id, { theme: newTheme }).catch((err: any) =>
+          console.warn("Failed to update mailbox theme in backend:", err)
+        );
+      }
+    }
+  }
+
+  function handleSetDensity(newDensity: "compact" | "cozy" | "comfortable", persistToBackend = false) {
+    setDensity(newDensity);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("byos_density", newDensity);
+    }
+    if (persistToBackend) {
+      const box = selectedMailbox();
+      if (box) {
+        updateMailboxSettings(box.id, { density: newDensity }).catch((err: any) =>
+          console.warn("Failed to update mailbox density in backend:", err)
+        );
+      }
+    }
+  }
+
+  function handleSetLayoutMode(newLayout: "split" | "full", persistToBackend = false) {
+    setLayoutMode(newLayout);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("byos_layout", newLayout);
+    }
+    if (persistToBackend) {
+      const box = selectedMailbox();
+      if (box) {
+        updateMailboxSettings(box.id, { layout_mode: newLayout }).catch((err: any) =>
+          console.warn("Failed to update mailbox layout in backend:", err)
+        );
+      }
+    }
+  }
+
+  createEffect(() => {
+    const currentTheme = theme();
+    if (typeof window !== "undefined") {
+      localStorage.setItem("byos_theme", currentTheme);
+      document.documentElement.dataset.theme = currentTheme;
+      if (currentTheme === "dark") {
+        document.documentElement.classList.add("dark");
+      } else {
+        document.documentElement.classList.remove("dark");
+      }
+    }
+  });
+
+  createEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("byos_density", density());
+    }
+  });
+
+  createEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("byos_layout", layoutMode());
+    }
+  });
+
+  // Selection, Sorting, and Pagination state
+  const [selectedIds, setSelectedIds] = createSignal<Set<string>>(new Set());
+  const [sortOrder, setSortOrder] = createSignal<SortOrder>("newest");
+  const [currentPage, setCurrentPage] = createSignal(1);
+  const pageSize = 50;
+
+  // Optimistic updates & Undo toast state
+  const [undoAction, setUndoAction] = createSignal<{
+    messageId: string;
+    previousFolder: Folder;
+    timer: any;
+  } | null>(null);
+
+  function toggleMessageStarred(msg: DisplayMessage) {
+    const origStarred = msg.starred;
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msg.id ? { ...m, starred: !origStarred } : m))
+    );
+    if (selectedMsg()?.id === msg.id) {
+      setSelectedMsg({ ...selectedMsg()!, starred: !origStarred });
+    }
+  }
+
+  function toggleMessageRead(msg: DisplayMessage) {
+    const origRead = msg.read;
+    const newRead = !origRead;
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msg.id ? { ...m, read: newRead } : m))
+    );
+    if (selectedMsg()?.id === msg.id) {
+      setSelectedMsg({ ...selectedMsg()!, read: newRead });
+    }
+    const box = selectedMailbox();
+    if (box) {
+      setMessageRead(box.id, msg.id, newRead).catch((err) => {
+        console.error("Failed to persist read state:", err);
+      });
+    }
+  }
+
+  function handleArchiveMessage(msg: DisplayMessage) {
+    const origFolder = msg.folder;
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msg.id ? { ...m, folder: "archive" as Folder } : m))
+    );
+    if (selectedMsg()?.id === msg.id) {
+      setSelectedMsg(null);
+    }
+    if (undoAction()?.timer) clearTimeout(undoAction()!.timer);
+    const timer = setTimeout(() => setUndoAction(null), 5000);
+    setUndoAction({ messageId: msg.id, previousFolder: origFolder, timer });
+  }
+
+  function handleTrashMessage(msg: DisplayMessage) {
+    const origFolder = msg.folder;
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msg.id ? { ...m, folder: "trash" as Folder } : m))
+    );
+    if (selectedMsg()?.id === msg.id) {
+      setSelectedMsg(null);
+    }
+    if (undoAction()?.timer) clearTimeout(undoAction()!.timer);
+    const timer = setTimeout(() => setUndoAction(null), 5000);
+    setUndoAction({ messageId: msg.id, previousFolder: origFolder, timer });
+  }
+
+  function handleDeleteForever(msg: DisplayMessage) {
+    setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+    if (selectedMsg()?.id === msg.id) {
+      setSelectedMsg(null);
+    }
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(msg.id);
+      return next;
+    });
+    showToast("Message permanently deleted");
+  }
+
+  function handleUndo() {
+    const action = undoAction();
+    if (!action) return;
+    clearTimeout(action.timer);
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === action.messageId ? { ...m, folder: action.previousFolder } : m
+      )
+    );
+    setUndoAction(null);
+  }
+
+  // Batch actions with immutable signal updates
+  function handleToggleCheck(msg: DisplayMessage, checked: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        next.add(msg.id);
+      } else {
+        next.delete(msg.id);
+      }
+      return next;
+    });
+  }
+
+  function handleSelectFilter(filter: SelectionFilter) {
+    const visible = paginatedMessages();
+    if (filter === "none") {
+      setSelectedIds(new Set<string>());
+    } else if (filter === "all") {
+      setSelectedIds(new Set(visible.map((m) => m.id)));
+    } else if (filter === "read") {
+      setSelectedIds(new Set(visible.filter((m) => m.read).map((m) => m.id)));
+    } else if (filter === "unread") {
+      setSelectedIds(new Set(visible.filter((m) => !m.read).map((m) => m.id)));
+    } else if (filter === "starred") {
+      setSelectedIds(new Set(visible.filter((m) => m.starred).map((m) => m.id)));
+    } else if (filter === "unstarred") {
+      setSelectedIds(new Set(visible.filter((m) => !m.starred).map((m) => m.id)));
+    }
+  }
+
+  function handleBatchArchive() {
+    const ids = selectedIds();
+    if (ids.size === 0) return;
+    const count = ids.size;
+    setMessages((prev) =>
+      prev.map((m) => (ids.has(m.id) ? { ...m, folder: "archive" as Folder } : m))
+    );
+    if (selectedMsg() && ids.has(selectedMsg()!.id)) {
+      setSelectedMsg(null);
+    }
+    showToast(`Archived ${count} ${count === 1 ? "conversation" : "conversations"}`);
+    setSelectedIds(new Set<string>());
+  }
+
+  function handleBatchSpam() {
+    const ids = selectedIds();
+    if (ids.size === 0) return;
+    const count = ids.size;
+    setMessages((prev) =>
+      prev.map((m) => (ids.has(m.id) ? { ...m, folder: "spam" as Folder } : m))
+    );
+    if (selectedMsg() && ids.has(selectedMsg()!.id)) {
+      setSelectedMsg(null);
+    }
+    showToast(`Moved ${count} ${count === 1 ? "conversation" : "conversations"} to Spam`);
+    setSelectedIds(new Set<string>());
+  }
+
+  function handleBatchTrash() {
+    const ids = selectedIds();
+    if (ids.size === 0) return;
+    const count = ids.size;
+    setMessages((prev) =>
+      prev.map((m) => (ids.has(m.id) ? { ...m, folder: "trash" as Folder } : m))
+    );
+    if (selectedMsg() && ids.has(selectedMsg()!.id)) {
+      setSelectedMsg(null);
+    }
+    showToast(`Moved ${count} ${count === 1 ? "conversation" : "conversations"} to Trash`);
+    setSelectedIds(new Set<string>());
+  }
+
+  function handleBatchDeleteForever() {
+    const ids = selectedIds();
+    if (ids.size === 0) return;
+    const count = ids.size;
+    setMessages((prev) => prev.filter((m) => !ids.has(m.id)));
+    if (selectedMsg() && ids.has(selectedMsg()!.id)) {
+      setSelectedMsg(null);
+    }
+    setSelectedIds(new Set<string>());
+    showToast(`Permanently deleted ${count} ${count === 1 ? "conversation" : "conversations"}`);
+  }
+
+  function handleEmptyTrash() {
+    const trashCount = messages().filter((m) => m.folder === "trash").length;
+    if (trashCount === 0) return;
+    if (!confirm(`Are you sure you want to empty the bin? This will permanently delete ${trashCount} message(s).`)) {
+      return;
+    }
+    setMessages((prev) => prev.filter((m) => m.folder !== "trash"));
+    if (selectedMsg()?.folder === "trash") {
+      setSelectedMsg(null);
+    }
+    setSelectedIds(new Set<string>());
+    showToast("Bin emptied successfully");
+  }
+
+  function handleBatchToggleRead(read: boolean) {
+    const ids = selectedIds();
+    if (ids.size === 0) return;
+    const count = ids.size;
+    setMessages((prev) =>
+      prev.map((m) => (ids.has(m.id) ? { ...m, read } : m))
+    );
+    if (selectedMsg() && ids.has(selectedMsg()!.id)) {
+      setSelectedMsg({ ...selectedMsg()!, read });
+    }
+    showToast(`Marked ${count} as ${read ? "read" : "unread"}`);
+    setSelectedIds(new Set<string>());
+    const box = selectedMailbox();
+    if (box) {
+      Array.from(ids).forEach((id) => {
+        setMessageRead(box.id, id, read).catch((err) => {
+          console.error("Failed to persist read state:", err);
+        });
+      });
+    }
+  }
+
+  function handleBatchToggleStarred(starred: boolean) {
+    const ids = selectedIds();
+    if (ids.size === 0) return;
+    const count = ids.size;
+    setMessages((prev) =>
+      prev.map((m) => (ids.has(m.id) ? { ...m, starred } : m))
+    );
+    if (selectedMsg() && ids.has(selectedMsg()!.id)) {
+      setSelectedMsg({ ...selectedMsg()!, starred });
+    }
+    showToast(starred ? `Starred ${count}` : `Unstarred ${count}`);
+    setSelectedIds(new Set<string>());
+  }
+
+  function handleMoveMessages(messageIds: string[], targetFolder: string) {
+    if (!messageIds.length) return;
+    const idSet = new Set(messageIds);
+    const count = messageIds.length;
+
+    const customFolder = customFolders().find((cf) => cf.id === targetFolder);
+    const newFolder: Folder = customFolder ? "inbox" : (targetFolder as Folder);
+    const newFolderId = customFolder ? customFolder.id : null;
+
+    setMessages((prev) =>
+      prev.map((m) =>
+        idSet.has(m.id)
+          ? { ...m, folder: newFolder, folderId: newFolderId }
+          : m
+      )
+    );
+    if (selectedMsg() && idSet.has(selectedMsg()!.id)) {
+      setSelectedMsg(null);
+    }
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      messageIds.forEach((id) => next.delete(id));
+      return next;
+    });
+
+    const box = selectedMailbox();
+    if (box) {
+      const backendFolder = customFolder ? "custom" : targetFolder;
+      messageIds.forEach((id) => {
+        updateMessageFolder(box.id, id, backendFolder, newFolderId).catch((err) => {
+          console.error("Failed to update message folder:", err);
+        });
+      });
+    }
+
+    const folderName = customFolder ? customFolder.name : targetFolder;
+    showToast(`Moved ${count} ${count === 1 ? "conversation" : "conversations"} to ${folderName}`);
+  }
+
+  function handleAttachLabel(messageIds: string[], labelId: string) {
+    if (!messageIds.length) return;
+    const label = labels().find((l) => l.id === labelId);
+    const labelName = label ? label.name : "Label";
+    const idSet = new Set(messageIds);
+
+    // Optimistically attach label to messages
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (!idSet.has(m.id)) return m;
+        const currentLabelIds = m.labelIds || [];
+        if (currentLabelIds.includes(labelId)) return m;
+        return { ...m, labelIds: [...currentLabelIds, labelId] };
+      })
+    );
+
+    if (selectedMsg() && idSet.has(selectedMsg()!.id)) {
+      setSelectedMsg((prev) => {
+        if (!prev) return null;
+        const currentLabelIds = prev.labelIds || [];
+        if (currentLabelIds.includes(labelId)) return prev;
+        return { ...prev, labelIds: [...currentLabelIds, labelId] };
+      });
+    }
+
+    const box = selectedMailbox();
+    if (box) {
+      messageIds.forEach((id) => {
+        attachMessageLabel(box.id, id, labelId).catch((err) => {
+          console.error("Failed to attach message label:", err);
+        });
+      });
+    }
+
+    showToast(
+      `Applied label "${labelName}" to ${messageIds.length} ${
+        messageIds.length === 1 ? "conversation" : "conversations"
+      }`
+    );
+  }
+
+  function toggleMessageLabel(messageIds: string[], labelId: string) {
+    if (!messageIds.length) return;
+    const label = labels().find((l) => l.id === labelId);
+    const labelName = label ? label.name : "Label";
+    const idSet = new Set(messageIds);
+
+    const targetMsgs = messages().filter((m) => idSet.has(m.id));
+    const allHaveLabel = targetMsgs.length > 0 && targetMsgs.every((m) => m.labelIds?.includes(labelId));
+
+    if (allHaveLabel) {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (!idSet.has(m.id)) return m;
+          const currentLabelIds = m.labelIds || [];
+          return { ...m, labelIds: currentLabelIds.filter((id) => id !== labelId) };
+        })
+      );
+      if (selectedMsg() && idSet.has(selectedMsg()!.id)) {
+        setSelectedMsg((prev) =>
+          prev ? { ...prev, labelIds: (prev.labelIds || []).filter((id) => id !== labelId) } : null
+        );
+      }
+
+      const box = selectedMailbox();
+      if (box) {
+        messageIds.forEach((id) => {
+          detachMessageLabel(box.id, id, labelId).catch((err) => {
+            console.error("Failed to detach message label:", err);
+          });
+        });
+      }
+      showToast(`Removed label "${labelName}"`);
+    } else {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (!idSet.has(m.id)) return m;
+          const currentLabelIds = m.labelIds || [];
+          if (currentLabelIds.includes(labelId)) return m;
+          return { ...m, labelIds: [...currentLabelIds, labelId] };
+        })
+      );
+      if (selectedMsg() && idSet.has(selectedMsg()!.id)) {
+        setSelectedMsg((prev) => {
+          if (!prev) return null;
+          const currentLabelIds = prev.labelIds || [];
+          if (currentLabelIds.includes(labelId)) return prev;
+          return { ...prev, labelIds: [...currentLabelIds, labelId] };
+        });
+      }
+
+      const box = selectedMailbox();
+      if (box) {
+        messageIds.forEach((id) => {
+          attachMessageLabel(box.id, id, labelId).catch((err) => {
+            console.error("Failed to attach message label:", err);
+          });
+        });
+      }
+      showToast(`Applied label "${labelName}"`);
+    }
+  }
+
+  function handleBatchToggleLabel(labelId: string) {
+    const ids = Array.from(selectedIds());
+    if (ids.length > 0) {
+      toggleMessageLabel(ids, labelId);
+    } else if (selectedMsg()) {
+      toggleMessageLabel([selectedMsg()!.id], labelId);
+    }
+  }
+
+  function handleBatchMoveTo(targetFolder: string) {
+    const ids = Array.from(selectedIds());
+    if (ids.length === 0) return;
+    handleMoveMessages(ids, targetFolder);
+  }
 
   // Login form state. The password lives in a signal only while typing and is
   // cleared on every submit attempt, success or failure.
@@ -133,6 +681,39 @@ const App: Component = () => {
   const [loginPassword, setLoginPassword] = createSignal("");
   const [loginBusy, setLoginBusy] = createSignal(false);
   const [loginError, setLoginError] = createSignal<string | null>(null);
+  const [useRecoveryPhrase, setUseRecoveryPhrase] = createSignal(false);
+  const [recoveryPhraseInput, setRecoveryPhraseInput] = createSignal("");
+
+  // 2FA Challenge at Login
+  const [twoFactorChallenge, setTwoFactorChallenge] = createSignal<{
+    challenge_token: string;
+    methods: string[];
+    preferred_method: string;
+    destination_masked: string;
+  } | null>(null);
+  const [twoFactorCodeInput, setTwoFactorCodeInput] = createSignal("");
+  const [cachedPassword, setCachedPassword] = createSignal("");
+  const [twoFactorBusy, setTwoFactorBusy] = createSignal(false);
+  const [twoFactorError, setTwoFactorError] = createSignal<string | null>(null);
+  const [selected2FAMethod, setSelected2FAMethod] = createSignal<string>("totp");
+
+  // Forgot Password / Account Recovery state
+  const [forgotPasswordModalOpen, setForgotPasswordModalOpen] = createSignal(false);
+  const [forgotStep, setForgotStep] = createSignal<1 | 2 | 3>(1);
+  const [forgotEmail, setForgotEmail] = createSignal("");
+  const [forgotMethods, setForgotMethods] = createSignal<RecoveryOptionItem[]>([]);
+  const [forgotSelectedMethod, setForgotSelectedMethod] = createSignal<string>("email");
+  const [forgotChallengeToken, setForgotChallengeToken] = createSignal("");
+  const [forgotDestinationMasked, setForgotDestinationMasked] = createSignal("");
+  const [forgotCode, setForgotCode] = createSignal("");
+  const [forgotNewPassword, setForgotNewPassword] = createSignal("");
+  const [forgotConfirmPassword, setForgotConfirmPassword] = createSignal("");
+  const [forgotBusy, setForgotBusy] = createSignal(false);
+  const [forgotError, setForgotError] = createSignal<string | null>(null);
+  const [forgotMailboxId, setForgotMailboxId] = createSignal("");
+  const [forgotOldWrappedSk, setForgotOldWrappedSk] = createSignal("");
+  const [forgotRecoveryPhrase, setForgotRecoveryPhrase] = createSignal("");
+  const [showPhraseInput, setShowPhraseInput] = createSignal(false);
 
   // Contacts manager state. Plaintext contacts live only in memory while the
   // mailbox is unlocked; the server stores opaque envelopes exclusively.
@@ -149,18 +730,397 @@ const App: Component = () => {
   const [contactEmail, setContactEmail] = createSignal("");
   const [contactNotes, setContactNotes] = createSignal("");
 
-  async function bootstrapSession(user: UserMe) {
+  // Multi-Mailbox state & toast notifications
+  const [connectedAccounts, setConnectedAccounts] = createSignal<ConnectedAccount[]>([]);
+  const [addMailboxModalOpen, setAddMailboxModalOpen] = createSignal(false);
+  const [toastMessage, setToastMessage] = createSignal<string | null>(null);
+  let toastTimer: any = null;
+
+  function showToast(msg: string) {
+    if (toastTimer) clearTimeout(toastTimer);
+    setToastMessage(msg);
+    toastTimer = setTimeout(() => setToastMessage(null), 3500);
+  }
+
+  // Custom Folders & Labels state
+  const [customFolders, setCustomFolders] = createSignal<MailboxFolder[]>([]);
+  const [activeCustomFolder, setActiveCustomFolder] = createSignal<MailboxFolder | null>(null);
+  const [createFolderModalOpen, setCreateFolderModalOpen] = createSignal(false);
+  const [folderToEdit, setFolderToEdit] = createSignal<MailboxFolder | null>(null);
+  const [importEmailsModalOpen, setImportEmailsModalOpen] = createSignal(false);
+
+  const [labels, setLabels] = createSignal<MailboxLabel[]>([]);
+  const [activeLabel, setActiveLabel] = createSignal<MailboxLabel | null>(null);
+  const [createLabelModalOpen, setCreateLabelModalOpen] = createSignal(false);
+  const [labelToEdit, setLabelToEdit] = createSignal<MailboxLabel | null>(null);
+
+  async function handleSaveFolder(name: string, parentId?: string | null, notify?: boolean) {
+    const box = selectedMailbox();
+    if (!box) return;
+    const editing = folderToEdit();
+    const cleanName = name.trim();
+    if (!cleanName) return;
+
+    // Deduplication check (case-insensitive)
+    const duplicate = customFolders().some(
+      (f) => f.name.trim().toLowerCase() === cleanName.toLowerCase() && (!editing || f.id !== editing.id)
+    );
+    if (duplicate) {
+      showToast(`Folder "${cleanName}" already exists`);
+      return;
+    }
+
+    try {
+      if (editing) {
+        const updated = await updateFolder(box.id, editing.id, { name: cleanName, parent_id: parentId, notify });
+        setCustomFolders((prev) =>
+          prev.map((f) => (f.id === editing.id ? updated : f)).sort((a, b) => a.name.localeCompare(b.name))
+        );
+        if (activeCustomFolder()?.id === editing.id) {
+          setActiveCustomFolder(updated);
+        }
+        setFolderToEdit(null);
+        showToast(`Folder "${cleanName}" updated`);
+      } else {
+        const created = await createFolder(box.id, { name: cleanName, parent_id: parentId, notify });
+        setCustomFolders((prev) => {
+          const exists = prev.some((f) => f.id === created.id || f.name.trim().toLowerCase() === cleanName.toLowerCase());
+          if (exists) return prev;
+          return [...prev, created].sort((a, b) => a.name.localeCompare(b.name));
+        });
+        showToast(`Folder "${cleanName}" created`);
+      }
+    } catch (err: any) {
+      showToast(err?.message || "Failed to save folder");
+    }
+  }
+
+  function handleOpenEditFolder(folder: MailboxFolder) {
+    setFolderToEdit(folder);
+    setCreateFolderModalOpen(true);
+  }
+
+  async function handleDeleteFolder(folder: MailboxFolder) {
+    const box = selectedMailbox();
+    if (!box) return;
+    if (!confirm(`Delete folder "${folder.name}"? Contained messages will return to your Inbox.`)) return;
+    try {
+      await deleteFolder(box.id, folder.id);
+      setCustomFolders((prev) => prev.filter((f) => f.id !== folder.id));
+      if (activeCustomFolder()?.id === folder.id) {
+        setActiveCustomFolder(null);
+        setCurrentFolder("inbox");
+      }
+      // Contained messages move to inbox
+      setMessages((prev) =>
+        prev.map((m) => (m.folderId === folder.id ? { ...m, folderId: null, folder: "inbox" as Folder } : m))
+      );
+      showToast(`Folder "${folder.name}" deleted`);
+    } catch (err: any) {
+      alert("Failed to delete folder: " + (err?.message || "unknown error"));
+    }
+  }
+
+  async function handleSaveLabel(name: string, color: string, colorName: string) {
+    const box = selectedMailbox();
+    if (!box) return;
+    const editing = labelToEdit();
+    const cleanName = name.trim();
+    if (!cleanName) return;
+
+    // Deduplication check (case-insensitive)
+    const duplicate = labels().some(
+      (l) => l.name.trim().toLowerCase() === cleanName.toLowerCase() && (!editing || l.id !== editing.id)
+    );
+    if (duplicate) {
+      showToast(`Label "${cleanName}" already exists`);
+      return;
+    }
+
+    try {
+      if (editing) {
+        const updated = await updateLabel(box.id, editing.id, { name: cleanName, color, color_name: colorName });
+        setLabels((prev) =>
+          prev.map((l) => (l.id === editing.id ? updated : l)).sort((a, b) => a.name.localeCompare(b.name))
+        );
+        if (activeLabel()?.id === editing.id) {
+          setActiveLabel(updated);
+        }
+        setLabelToEdit(null);
+        showToast(`Label "${cleanName}" updated`);
+      } else {
+        const created = await createLabel(box.id, { name: cleanName, color, color_name: colorName });
+        setLabels((prev) => {
+          const exists = prev.some((l) => l.id === created.id || l.name.trim().toLowerCase() === cleanName.toLowerCase());
+          if (exists) return prev;
+          return [...prev, created].sort((a, b) => a.name.localeCompare(b.name));
+        });
+        showToast(`Label "${cleanName}" created`);
+      }
+    } catch (err: any) {
+      showToast(err?.message || "Failed to save label");
+    }
+  }
+
+  function handleOpenEditLabel(label: MailboxLabel) {
+    setLabelToEdit(label);
+    setCreateLabelModalOpen(true);
+  }
+
+  async function handleDeleteLabel(label: MailboxLabel) {
+    const box = selectedMailbox();
+    if (!box) return;
+    if (!confirm(`Delete label "${label.name}"?`)) return;
+    try {
+      await deleteLabel(box.id, label.id);
+      setLabels((prev) => prev.filter((l) => l.id !== label.id));
+      if (activeLabel()?.id === label.id) {
+        setActiveLabel(null);
+      }
+      // Detach label from all messages in memory
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.labelIds ? { ...m, labelIds: m.labelIds.filter((lid) => lid !== label.id) } : m
+        )
+      );
+      showToast(`Label "${label.name}" deleted`);
+    } catch (err: any) {
+      alert("Failed to delete label: " + (err?.message || "unknown error"));
+    }
+  }
+
+  function handleSelectCustomFolder(folder: MailboxFolder) {
+    setActiveCustomFolder(folder);
+    setActiveLabel(null);
+    setSelectedMsg(null);
+    setSelectedIds(new Set<string>());
+  }
+
+  function handleSelectLabel(label: MailboxLabel) {
+    setActiveLabel(label);
+    setActiveCustomFolder(null);
+    setSelectedMsg(null);
+    setSelectedIds(new Set<string>());
+  }
+
+  async function bootstrapSession(user: UserMe, password?: string, sessionToken?: string) {
     setCurrentUser(user);
     const boxes = await fetchMailboxes(user.org_id);
-    setMailboxes(boxes);
-    if (boxes.length > 0) {
-      setSelectedMailbox(boxes[0]);
-      refreshSignature(boxes[0].id);
-      await loadMailboxData(boxes[0].id);
+    let targetBox: Mailbox | undefined;
+
+    // Strict user-mailbox binding per Section 12 & 14
+    if (user.mailbox_id) {
+      targetBox = boxes.find((b) => b.id === user.mailbox_id);
+      if (!targetBox && user.mailbox_local_part) {
+        targetBox = {
+          id: user.mailbox_id,
+          local_part: user.mailbox_local_part,
+          domain_id: "",
+          mode: user.mailbox_mode || "org_managed",
+        };
+      }
+    }
+    if (!targetBox && isImpersonating() && impersonateMailboxId()) {
+      targetBox = boxes.find((b) => b.id === impersonateMailboxId());
+    }
+    if (!targetBox && boxes.length > 0) {
+      targetBox = boxes[0];
+    }
+
+    if (targetBox) {
+      setMailboxes([targetBox]);
+      setSelectedMailbox(targetBox);
+      refreshSignature(targetBox.id);
+
+      let currentSkHex = "";
+      let currentSKey = "";
+
+      // Automated key unwrapping upon login (Section 14 / Section 15)
+      const wrappedSk = user.wrapped_sk_user || targetBox.wrapped_sk_user;
+      if (password && wrappedSk) {
+        try {
+          const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+          const skBytes = autoUnwrapMailboxKey(wasm, password, wrappedSk);
+          currentSkHex = Array.from(skBytes, (b) => b.toString(16).padStart(2, "0")).join("");
+          currentSKey = wasm.wasm_derive_search_key(currentSkHex);
+          setMailboxKey(skBytes);
+          setSearchKey(currentSKey);
+          setUnlockedBoxId(targetBox.id);
+          sessionStorage.setItem("byos_mailbox_sk_" + targetBox.id, currentSkHex);
+          sessionStorage.setItem("byos_mailbox_skey_" + targetBox.id, currentSKey);
+        } catch (err) {
+          console.warn("Auto-unwrap of mailbox key failed:", err);
+        }
+      } else if (!password) {
+        // Restore from sessionStorage if user refreshed during an active session
+        const savedSk = sessionStorage.getItem("byos_mailbox_sk_" + targetBox.id);
+        const savedSKey = sessionStorage.getItem("byos_mailbox_skey_" + targetBox.id);
+        if (savedSk) {
+          try {
+            const bytes = new Uint8Array(savedSk.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)));
+            setMailboxKey(bytes);
+            if (savedSKey) setSearchKey(savedSKey);
+            setUnlockedBoxId(targetBox.id);
+            currentSkHex = savedSk;
+            currentSKey = savedSKey || "";
+          } catch {
+            sessionStorage.removeItem("byos_mailbox_sk_" + targetBox.id);
+            sessionStorage.removeItem("byos_mailbox_skey_" + targetBox.id);
+          }
+        }
+      }
+
+      // Sync into ConnectedAccount & sessionStorage
+      const tokenToSave = sessionToken || sessionStorage.getItem("byos_active_session_token") || "";
+      if (tokenToSave) {
+        sessionStorage.setItem("byos_active_session_token", tokenToSave);
+      }
+
+      const activeAcc: ConnectedAccount = {
+        id: targetBox.id,
+        email: user.email,
+        displayName: user.display_name || targetBox.local_part || user.email.split("@")[0],
+        role: user.role || "member",
+        privacyMode: targetBox.mode || "org_managed",
+        sessionToken: tokenToSave,
+        mailboxSkHex: currentSkHex,
+        searchKeyHex: currentSKey,
+      };
+
+      const savedAccountsStr = sessionStorage.getItem("byos_connected_accounts");
+      let list: ConnectedAccount[] = [];
+      if (savedAccountsStr) {
+        try {
+          list = JSON.parse(savedAccountsStr);
+        } catch {}
+      }
+      if (!Array.isArray(list)) list = [];
+      list = list.filter((a) => a.id !== activeAcc.id && a.email.toLowerCase() !== activeAcc.email.toLowerCase());
+      list.unshift(activeAcc);
+      sessionStorage.setItem("byos_connected_accounts", JSON.stringify(list));
+      setConnectedAccounts(list);
+
+      await loadMailboxData(targetBox.id);
+    } else {
+      setMailboxes([]);
+      setSelectedMailbox(null);
+    }
+  }
+
+  async function handleSwitchAccount(account: ConnectedAccount) {
+    setIsLoading(true);
+    try {
+      // 1. Set active session token
+      if (account.sessionToken) {
+        sessionStorage.setItem("byos_active_session_token", account.sessionToken);
+      }
+
+      // 2. Set active cryptographic keys in memory
+      if (account.mailboxSkHex) {
+        try {
+          const bytes = new Uint8Array(account.mailboxSkHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+          setMailboxKey(bytes);
+          setSearchKey(account.searchKeyHex);
+          setUnlockedBoxId(account.id);
+          sessionStorage.setItem("byos_mailbox_sk_" + account.id, account.mailboxSkHex);
+          sessionStorage.setItem("byos_mailbox_skey_" + account.id, account.searchKeyHex);
+        } catch (err) {
+          console.warn("Failed restoring mailbox key on switch:", err);
+        }
+      } else {
+        setMailboxKey(null);
+        setSearchKey(null);
+        setUnlockedBoxId(null);
+      }
+
+      // 3. Update active mailbox and user in reactive store
+      const switchedBox: Mailbox = {
+        id: account.id,
+        local_part: account.email.split("@")[0],
+        domain_id: "",
+        mode: account.privacyMode,
+      };
+      setSelectedMailbox(switchedBox);
+      setMailboxes([switchedBox]);
+      setCurrentUser({
+        id: account.id,
+        user_id: account.id,
+        email: account.email,
+        org_id: currentUser()?.org_id || "",
+        role: account.role,
+        mailbox_id: account.id,
+        mailbox_mode: account.privacyMode,
+      });
+
+      // 4. Reload messages, drafts, folders
+      await loadMailboxData(account.id);
+      refreshSignature(account.id);
+    } catch (err) {
+      console.error("Failed to switch account:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  function handleAccountAdded(account: ConnectedAccount) {
+    setConnectedAccounts((prev) => {
+      const filtered = prev.filter((a) => a.id !== account.id && a.email.toLowerCase() !== account.email.toLowerCase());
+      return [account, ...filtered];
+    });
+    setAddMailboxModalOpen(false);
+    handleSwitchAccount(account);
+    showToast(`Connected ${account.email} successfully`);
+  }
+
+  async function handleExitImpersonation() {
+    sessionStorage.removeItem("byos_impersonation_token");
+    try {
+      await logout();
+    } catch {}
+    window.location.href = "http://127.0.0.1:3000/dashboard/mailboxes";
+  }
+
+  function handleKeyDown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      if (selectedMsg()) {
+        setSelectedMsg(null);
+      } else if (selectedIds().size > 0) {
+        setSelectedIds(new Set<string>());
+      }
     }
   }
 
   onMount(async () => {
+    window.addEventListener("keydown", handleKeyDown);
+
+    const urlParams = new URLSearchParams(window.location.search);
+    if (window.location.pathname === "/setup-account" || urlParams.has("token")) {
+      setIsSetupAccount(true);
+      setIsLoading(false);
+      return;
+    }
+
+    if (urlParams.get("impersonate") === "1") {
+      setIsImpersonating(true);
+      setImpersonateMailboxId(urlParams.get("mailbox_id"));
+      setImpersonateEmail(urlParams.get("email"));
+      const token = urlParams.get("session_token");
+      if (token) {
+        sessionStorage.setItem("byos_impersonation_token", token);
+      }
+    }
+
+    // Restore connected accounts list if present in sessionStorage
+    const savedAccountsStr = sessionStorage.getItem("byos_connected_accounts");
+    if (savedAccountsStr) {
+      try {
+        const list = JSON.parse(savedAccountsStr);
+        if (Array.isArray(list)) {
+          setConnectedAccounts(list);
+        }
+      } catch {}
+    }
+
     setIsLoading(true);
     try {
       const user = await fetchCurrentUser();
@@ -174,6 +1134,10 @@ const App: Component = () => {
     }
   });
 
+  onCleanup(() => {
+    window.removeEventListener("keydown", handleKeyDown);
+  });
+
   async function handleLogin(e: Event) {
     e.preventDefault();
     const email = loginEmail().trim();
@@ -185,15 +1149,35 @@ const App: Component = () => {
     setLoginBusy(true);
     setLoginError(null);
     try {
-      await login(email, password);
-      setLoginPassword("");
+      const loginRes = await login(email, password);
+
+      // Check if 2FA challenge is required
+      if (loginRes.two_factor_required) {
+        setTwoFactorChallenge({
+          challenge_token: loginRes.challenge_token || "",
+          methods: loginRes.methods || ["email"],
+          preferred_method: loginRes.preferred_method || "email",
+          destination_masked: loginRes.destination_masked || "",
+        });
+        setSelected2FAMethod(loginRes.preferred_method || "email");
+        setCachedPassword(password);
+        setTwoFactorCodeInput("");
+        setTwoFactorError(null);
+        setLoginBusy(false);
+        return;
+      }
+
       setIsLoading(true);
+      if (loginRes.token) {
+        sessionStorage.setItem("byos_active_session_token", loginRes.token);
+      }
       const user = await fetchCurrentUser();
       if (!user) throw new Error("Session was not established.");
-      await bootstrapSession(user);
+      if (loginRes.wrapped_sk_user && !user.wrapped_sk_user) {
+        user.wrapped_sk_user = loginRes.wrapped_sk_user;
+      }
+      await bootstrapSession(user, password, loginRes.token);
     } catch (err) {
-      // The server answers wrong/unknown credentials with the same generic
-      // 401, so this message cannot leak which half was wrong.
       setLoginError("Invalid email or password.");
     } finally {
       setLoginPassword("");
@@ -202,49 +1186,558 @@ const App: Component = () => {
     }
   }
 
-  async function handleLogout() {
-    // Revoke server-side best-effort, then always tear down local state: a
-    // failed request must never leave a signed-in UI (shared-machine threat).
-    try {
-      await logout();
-    } catch (err) {
-      console.warn("Server logout failed, clearing local session anyway:", err);
+  async function handleVerifyLogin2FA(e: Event) {
+    e.preventDefault();
+    const challenge = twoFactorChallenge();
+    const code = twoFactorCodeInput().trim();
+    if (!challenge || !code) {
+      setTwoFactorError("Please enter your 6-digit verification code.");
+      return;
     }
-    lockMailbox();
-    setComposeOpen(false);
-    clearComposeForm();
-    setCurrentUser(null);
-    setMailboxes([]);
-    setSelectedMailbox(null);
-    setMessages([]);
-    refreshSignature(null);
-    setLoginPassword("");
+    setTwoFactorBusy(true);
+    setTwoFactorError(null);
+    try {
+      const loginRes = await verifyLogin2FA(challenge.challenge_token, code);
+      setIsLoading(true);
+      if (loginRes.token) {
+        sessionStorage.setItem("byos_active_session_token", loginRes.token);
+      }
+      const user = await fetchCurrentUser();
+      if (!user) throw new Error("Session was not established.");
+      if (loginRes.wrapped_sk_user && !user.wrapped_sk_user) {
+        user.wrapped_sk_user = loginRes.wrapped_sk_user;
+      }
+      const pass = cachedPassword();
+      await bootstrapSession(user, pass, loginRes.token);
+      setTwoFactorChallenge(null);
+      setCachedPassword("");
+      setTwoFactorCodeInput("");
+    } catch (err: any) {
+      setTwoFactorError(err?.message || "Invalid or expired verification code.");
+    } finally {
+      setTwoFactorBusy(false);
+      setIsLoading(false);
+    }
+  }
+
+  async function handleSwitchLogin2FAMethod(method: "email" | "phone") {
+    const challenge = twoFactorChallenge();
+    if (!challenge) return;
+    setTwoFactorBusy(true);
+    setTwoFactorError(null);
+    try {
+      const res = await sendLogin2FACode(challenge.challenge_token, method);
+      if (res.success) {
+        setSelected2FAMethod(method);
+        setTwoFactorChallenge((prev) =>
+          prev
+            ? {
+                ...prev,
+                preferred_method: method,
+                destination_masked: res.destination_masked,
+              }
+            : null
+        );
+      }
+    } catch (err: any) {
+      setTwoFactorError(err?.message || "Failed to send verification code.");
+    } finally {
+      setTwoFactorBusy(false);
+    }
+  }
+
+  function handleCancelLogin2FA() {
+    setTwoFactorChallenge(null);
+    setCachedPassword("");
+    setTwoFactorCodeInput("");
+    setTwoFactorError(null);
+  }
+
+  function handleOpenForgotPassword() {
+    setForgotEmail(loginEmail().trim());
+    setForgotStep(1);
+    setForgotMethods([]);
+    setForgotSelectedMethod("email");
+    setForgotChallengeToken("");
+    setForgotDestinationMasked("");
+    setForgotCode("");
+    setForgotNewPassword("");
+    setForgotConfirmPassword("");
+    setForgotMailboxId("");
+    setForgotOldWrappedSk("");
+    setForgotRecoveryPhrase("");
+    setShowPhraseInput(false);
+    setForgotError(null);
+    setForgotPasswordModalOpen(true);
+  }
+
+  async function handleFindRecoveryMethods(e: Event) {
+    e.preventDefault();
+    const email = forgotEmail().trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      setForgotError("Please enter a valid email address.");
+      return;
+    }
+    setForgotBusy(true);
+    setForgotError(null);
+    try {
+      const res = await fetchRecoveryOptions(email);
+      const m = res.methods || [];
+      setForgotMethods(m);
+      if (m.length > 0) {
+        setForgotSelectedMethod(m[0].type);
+      }
+    } catch (err: any) {
+      setForgotError(err?.message || "Failed to find recovery options.");
+    } finally {
+      setForgotBusy(false);
+    }
+  }
+
+  async function handleRequestRecoveryCode(e: Event) {
+    e.preventDefault();
+    const email = forgotEmail().trim().toLowerCase();
+    const method = (forgotSelectedMethod() || "email") as "email" | "phone" | "totp";
+    if (!email) return;
+    setForgotBusy(true);
+    setForgotError(null);
+    try {
+      const res = await requestRecoveryChallenge(email, method);
+      setForgotChallengeToken(res.challenge_token);
+      setForgotDestinationMasked(res.destination_masked);
+      if (res.mailbox_id) setForgotMailboxId(res.mailbox_id);
+      if (res.wrapped_sk_user) setForgotOldWrappedSk(res.wrapped_sk_user);
+      setForgotStep(2);
+    } catch (err: any) {
+      setForgotError(err?.message || "Failed to request recovery code.");
+    } finally {
+      setForgotBusy(false);
+    }
+  }
+
+  async function handleResetPasswordWithRecovery(e: Event) {
+    e.preventDefault();
+    const token = forgotChallengeToken();
+    const code = forgotCode().trim();
+    const newPass = forgotNewPassword();
+    const confirmPass = forgotConfirmPassword();
+
+    if (code.length !== 6) {
+      setForgotError("Please enter the 6-digit verification code.");
+      return;
+    }
+    if (newPass.length < 12) {
+      setForgotError("New password must be at least 12 characters.");
+      return;
+    }
+    if (newPass !== confirmPass) {
+      setForgotError("Passwords do not match.");
+      return;
+    }
+
+    setForgotBusy(true);
+    setForgotError(null);
+    try {
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      let newMailboxPk = "";
+      let newWrappedSkUser = "";
+
+      const phrase = forgotRecoveryPhrase().trim();
+      const words = phrase.split(/\s+/).filter(Boolean);
+
+      if (words.length === 24 && forgotOldWrappedSk() && forgotMailboxId()) {
+        try {
+          const boxId = forgotMailboxId();
+          const oldWrapped = forgotOldWrappedSk();
+          const skBytes = unwrapMailboxKeyWithRecoveryPhrase(wasm, phrase, boxId, oldWrapped);
+          const skHex = Array.from(skBytes, (b) => b.toString(16).padStart(2, "0")).join("");
+
+          const salt = new Uint8Array(16);
+          crypto.getRandomValues(salt);
+          const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
+          const passphraseEnvelope = wasm.wasm_passphrase_wrap_key(newPass, saltHex, skHex);
+
+          const rootHex = wasm.wasm_recover_root_secret(phrase);
+          const boxIdClean = boxId.replace(/-/g, "");
+          const boxIdHex = Array.from(new TextEncoder().encode(boxIdClean))
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join("");
+          const rootWrappedHex = wasm.wasm_wrap_mailbox_key(rootHex, skHex, boxIdHex);
+
+          newWrappedSkUser = JSON.stringify({
+            salt: saltHex,
+            envelope: passphraseEnvelope,
+            root_wrapped: rootWrappedHex,
+          });
+        } catch (phraseErr) {
+          console.warn("Could not unseal old key with recovery phrase, generating fresh keypair:", phraseErr);
+        }
+      }
+
+      // If user did not provide recovery phrase, generate fresh keypair so mailbox works immediately
+      if (!newWrappedSkUser) {
+        const kpJson = wasm.wasm_generate_keypair();
+        const kp = JSON.parse(kpJson) as { secret_key: string; public_key: string };
+        newMailboxPk = kp.public_key;
+
+        const salt = new Uint8Array(16);
+        crypto.getRandomValues(salt);
+        const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
+        const passphraseEnvelope = wasm.wasm_passphrase_wrap_key(newPass, saltHex, kp.secret_key);
+
+        newWrappedSkUser = JSON.stringify({
+          salt: saltHex,
+          envelope: passphraseEnvelope,
+        });
+      }
+
+      await resetPasswordWithRecovery(token, code, newPass, newMailboxPk, newWrappedSkUser);
+      setForgotStep(3);
+      setLoginEmail(forgotEmail().trim());
+      setLoginPassword(newPass);
+    } catch (err: any) {
+      setForgotError(err?.message || "Failed to reset password. Please verify your code and try again.");
+    } finally {
+      setForgotBusy(false);
+    }
+  }
+
+  function base64URLToBuffer(base64URL: string): ArrayBuffer {
+    const base64 = base64URL.replace(/-/g, "+").replace(/_/g, "/");
+    const pad = base64.length % 4 === 0 ? "" : "=".repeat(4 - (base64.length % 4));
+    const raw = atob(base64 + pad);
+    const buffer = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) {
+      buffer[i] = raw.charCodeAt(i);
+    }
+    return buffer.buffer as ArrayBuffer;
+  }
+
+  function bufferToBase64URL(buffer: ArrayBuffer): string {
+    const bytes = new Uint8Array(buffer);
+    let str = "";
+    for (let i = 0; i < bytes.length; i++) {
+      str += String.fromCharCode(bytes[i]);
+    }
+    return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  }
+
+  async function handlePasskeyLogin() {
+    if (typeof window === "undefined" || !window.PublicKeyCredential) {
+      setLoginError("Passkeys are not supported in this browser.");
+      return;
+    }
+    setLoginBusy(true);
     setLoginError(null);
+    try {
+      const email = loginEmail().trim() || undefined;
+      const opts = await fetchPasskeyLoginOptions(email);
+
+      const allowCreds = opts.allowCredentials?.map((c) => ({
+        id: base64URLToBuffer(c.id),
+        type: "public-key" as const,
+      }));
+
+      const assertion = (await navigator.credentials.get({
+        publicKey: {
+          challenge: base64URLToBuffer(opts.challenge),
+          rpId: opts.rpId,
+          userVerification: opts.userVerification as any,
+          timeout: opts.timeout,
+          allowCredentials: allowCreds && allowCreds.length > 0 ? allowCreds : undefined,
+        },
+      })) as PublicKeyCredential;
+
+      if (!assertion) {
+        throw new Error("Passkey login was cancelled.");
+      }
+
+      const credId = bufferToBase64URL(assertion.rawId);
+      const resp = assertion.response as AuthenticatorAssertionResponse;
+      const sigHex = Array.from(new Uint8Array(resp.signature), (b) => b.toString(16).padStart(2, "0")).join("");
+      const clientDataB64 = bufferToBase64URL(resp.clientDataJSON);
+
+      const loginRes = await loginWithPasskey({
+        credential_id: credId,
+        challenge_token: opts.challenge,
+        signature: sigHex,
+        client_data_json: clientDataB64,
+      });
+
+      setIsLoading(true);
+      if (loginRes.token) {
+        sessionStorage.setItem("byos_active_session_token", loginRes.token);
+      }
+
+      // Check local device vault for this passkey's unsealed mailbox key for 1-touch unlock
+      let vaultData: { mailbox_id: string; mailbox_sk_hex: string; search_key_hex?: string } | null = null;
+      if (typeof window !== "undefined") {
+        const rawVault = localStorage.getItem(`byos_passkey_vault_${credId}`);
+        if (rawVault) {
+          try {
+            vaultData = JSON.parse(rawVault);
+          } catch {}
+        }
+      }
+
+      if (vaultData && vaultData.mailbox_sk_hex) {
+        try {
+          const skBytes = new Uint8Array(vaultData.mailbox_sk_hex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+          setMailboxKey(skBytes);
+          if (vaultData.search_key_hex) setSearchKey(vaultData.search_key_hex);
+          setUnlockedBoxId(vaultData.mailbox_id);
+          sessionStorage.setItem("byos_mailbox_sk_" + vaultData.mailbox_id, vaultData.mailbox_sk_hex);
+          if (vaultData.search_key_hex) {
+            sessionStorage.setItem("byos_mailbox_skey_" + vaultData.mailbox_id, vaultData.search_key_hex);
+          }
+        } catch (vaultErr) {
+          console.warn("Failed restoring mailbox key from passkey vault:", vaultErr);
+        }
+      }
+
+      const user = await fetchCurrentUser();
+      if (!user) throw new Error("Session was not established.");
+      await bootstrapSession(user, undefined, loginRes.token);
+    } catch (err: any) {
+      setLoginError(err?.message || "Passkey login failed.");
+    } finally {
+      setLoginBusy(false);
+      setIsLoading(false);
+    }
+  }
+
+  async function handleUnlock(e: Event) {
+    e.preventDefault();
+    const user = currentUser();
+    const password = loginPassword();
+    if (!user || !password) {
+      setLoginError("Enter your password.");
+      return;
+    }
+    setLoginBusy(true);
+    setLoginError(null);
+    try {
+      const loginRes = await login(user.email, password);
+      setIsLoading(true);
+      if (loginRes.token) {
+        sessionStorage.setItem("byos_active_session_token", loginRes.token);
+      }
+      let targetWrappedSk = loginRes.wrapped_sk_user || user.wrapped_sk_user;
+
+      // Self-healing: if an account has no active wrapped key material, generate and register a fresh keypair
+      if (!targetWrappedSk && loginRes.mailbox_id) {
+        try {
+          const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+          const kpJson = wasm.wasm_generate_keypair();
+          const kp = JSON.parse(kpJson) as { secret_key: string; public_key: string };
+          const salt = new Uint8Array(16);
+          crypto.getRandomValues(salt);
+          const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
+          const passphraseEnvelope = wasm.wasm_passphrase_wrap_key(password, saltHex, kp.secret_key);
+          const healWrapped = JSON.stringify({
+            salt: saltHex,
+            envelope: passphraseEnvelope,
+          });
+          await reactivateHistoricalKeys(loginRes.mailbox_id, healWrapped, kp.public_key);
+          targetWrappedSk = healWrapped;
+        } catch (healErr) {
+          console.warn("Self-healing mailbox key failed:", healErr);
+        }
+      }
+
+      const targetUser = { ...user, wrapped_sk_user: targetWrappedSk };
+      await bootstrapSession(targetUser, password, loginRes.token);
+      if (!mailboxKey()) {
+        throw new Error("Unable to unlock mailbox with this password. If your mailbox was created with a recovery phrase, use your recovery phrase below.");
+      }
+    } catch (err: any) {
+      setLoginError(err?.message || "Invalid password.");
+    } finally {
+      setLoginPassword("");
+      setLoginBusy(false);
+      setIsLoading(false);
+    }
+  }
+
+  async function handleUnlockWithRecovery(e: Event) {
+    e.preventDefault();
+    const user = currentUser();
+    const phrase = recoveryPhraseInput().trim();
+    if (!user || !phrase) {
+      setLoginError("Enter your 24-word recovery phrase.");
+      return;
+    }
+    setLoginBusy(true);
+    setLoginError(null);
+    try {
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      const box = selectedMailbox() || mailboxes()[0];
+      if (!box) throw new Error("No mailbox found.");
+      const wrappedSk = user.wrapped_sk_user || box.wrapped_sk_user;
+      if (!wrappedSk) throw new Error("No encrypted key found for this mailbox.");
+
+      const skBytes = unwrapMailboxKeyWithRecoveryPhrase(wasm, phrase, box.id, wrappedSk);
+      const currentSkHex = Array.from(skBytes, (b) => b.toString(16).padStart(2, "0")).join("");
+      const currentSKey = wasm.wasm_derive_search_key(currentSkHex);
+      setMailboxKey(skBytes);
+      setSearchKey(currentSKey);
+      setUnlockedBoxId(box.id);
+      sessionStorage.setItem("byos_mailbox_sk_" + box.id, currentSkHex);
+      sessionStorage.setItem("byos_mailbox_skey_" + box.id, currentSKey);
+      await loadMailboxData(box.id);
+    } catch (err: any) {
+      setLoginError(err?.message || "Invalid recovery phrase or failed to unlock mailbox keys.");
+    } finally {
+      setRecoveryPhraseInput("");
+      setLoginBusy(false);
+    }
+  }
+
+  async function handleLogout(accountIdToLogout?: string | unknown, logOutAll: boolean = false) {
+    const accounts = connectedAccounts();
+    const currentBoxId = selectedMailbox()?.id || currentUser()?.id;
+    const targetId = typeof accountIdToLogout === "string" ? accountIdToLogout : currentBoxId;
+
+    // Full sign out if explicitly requested, or if only 1 account (or 0) connected
+    if (logOutAll || !targetId || accounts.length <= 1) {
+      sessionStorage.removeItem("byos_impersonation_token");
+      sessionStorage.removeItem("byos_active_session_token");
+      sessionStorage.removeItem("byos_connected_accounts");
+      setConnectedAccounts([]);
+      for (let i = sessionStorage.length - 1; i >= 0; i--) {
+        const key = sessionStorage.key(i);
+        if (key && (key.startsWith("byos_mailbox_sk_") || key.startsWith("byos_mailbox_skey_"))) {
+          sessionStorage.removeItem(key);
+        }
+      }
+      setIsImpersonating(false);
+      try {
+        await logout();
+      } catch (err) {
+        console.warn("Server logout failed, clearing local session anyway:", err);
+      }
+      lockMailbox();
+      setComposeOpen(false);
+      clearComposeForm();
+      setCurrentUser(null);
+      setMailboxes([]);
+      setSelectedMailbox(null);
+      setMessages([]);
+      refreshSignature(null);
+      setLoginPassword("");
+      setLoginError(null);
+      return;
+    }
+
+    // MULTI-ACCOUNT SELECTIVE LOGOUT: Disconnect only the targeted account
+    const targetAccount = accounts.find((a) => a.id === targetId);
+    const targetEmail = targetAccount?.email || "Account";
+
+    // 1. Remove target account keys from sessionStorage
+    sessionStorage.removeItem("byos_mailbox_sk_" + targetId);
+    sessionStorage.removeItem("byos_mailbox_skey_" + targetId);
+
+    // 2. Best-effort server session revocation for target account
+    if (targetAccount?.sessionToken) {
+      try {
+        await apiRequest("/v1/auth/logout", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${targetAccount.sessionToken}`,
+          },
+        });
+      } catch {}
+    }
+
+    // 3. Filter target out of connected accounts and persist remaining
+    const remaining = accounts.filter((a) => a.id !== targetId);
+    setConnectedAccounts(remaining);
+    sessionStorage.setItem("byos_connected_accounts", JSON.stringify(remaining));
+
+    // 4. If target was active account, smoothly switch to the first remaining account
+    if (targetId === currentBoxId && remaining.length > 0) {
+      await handleSwitchAccount(remaining[0]);
+      showToast(`Signed out of ${targetEmail}. Switched to ${remaining[0].email}.`);
+    } else {
+      showToast(`Signed out of ${targetEmail}.`);
+    }
   }
 
   async function loadMailboxData(mailboxId: string) {
     try {
       setStorageErrorBanner(null);
-      const [draftsList, messageList] = await Promise.all([
+      const [draftsList, messageList, folderList, labelList, attachmentList] = await Promise.all([
         fetchDrafts(mailboxId),
         fetchMessages(mailboxId),
+        fetchFolders(mailboxId),
+        fetchLabels(mailboxId),
+        fetchAttachments(mailboxId).catch(() => []),
       ]);
 
-      const realMessages: DisplayMessage[] = messageList.map((m: MessageMetadata) => ({
-        id: m.id,
-        messageId: m.id, // For attachment filtering
-        messageSeq: m.message_seq,
-        folder: m.direction === "sent" ? "sent" : "inbox",
-        sender: m.sender,
-        recipient: m.recipients.join(", "),
-        subject: "(Encrypted message)",
-        snippet: `Encrypted payload • ${m.storage_object_id}`,
-        encryptedBody: m.storage_object_id,
-        date: new Date(m.sent_at || m.received_at).toLocaleString(),
-        read: false,
-        starred: false,
-        isRealApi: true,
-      }));
+      function deduplicateByName<T extends { id: string; name: string }>(items: T[]): T[] {
+        const seen = new Set<string>();
+        const res: T[] = [];
+        for (const item of items) {
+          const k = item.name.trim().toLowerCase();
+          if (!seen.has(k)) {
+            seen.add(k);
+            res.push(item);
+          }
+        }
+        return res;
+      }
+
+      setCustomFolders(deduplicateByName(folderList));
+      setLabels(deduplicateByName(labelList));
+
+      const attachmentsByMsgId = new Map<string, AttachmentItem[]>();
+      for (const att of (attachmentList || [])) {
+        if (att.message_id) {
+          const existing = attachmentsByMsgId.get(att.message_id) || [];
+          existing.push(att);
+          attachmentsByMsgId.set(att.message_id, existing);
+        }
+      }
+
+      function getAttachmentExt(filename: string): string {
+        const ext = filename.split(".").pop()?.toUpperCase() || "";
+        return ext.length > 4 ? ext.slice(0, 4) : ext;
+      }
+
+      const realMessages: DisplayMessage[] = messageList.map((m: MessageMetadata) => {
+        const cachedSubject = sessionStorage.getItem("byos_msg_subject_" + m.id);
+        const cachedSnippet = sessionStorage.getItem("byos_msg_snippet_" + m.id);
+        const msgAtts = attachmentsByMsgId.get(m.id) || [];
+        const uniqueTypes = Array.from(
+          new Set(
+            msgAtts
+              .map((a) => getAttachmentExt(a.filename))
+              .filter(Boolean)
+          )
+        );
+        const attCount = msgAtts.length > 0 ? msgAtts.length : (m.has_attachments ? 1 : 0);
+
+        return {
+          id: m.id,
+          messageId: m.id, // For attachment filtering
+          messageSeq: m.message_seq,
+          folder: (m.folder === "custom" ? "inbox" : (m.folder as Folder)) || (m.direction === "sent" ? "sent" : "inbox"),
+          folderId: m.folder_id || null,
+          labelIds: m.label_ids || [],
+          sender: m.sender,
+          recipient: m.recipients.join(", "),
+          subject: cachedSubject || "(Encrypted message)",
+          snippet: cachedSnippet || `Encrypted payload • ${m.storage_object_id}`,
+          encryptedBody: m.storage_object_id,
+          date: formatMessageDate(m.sent_at || m.received_at, timeFormat(), language()),
+          read: m.is_read ?? false,
+          starred: false,
+          isRealApi: true,
+          hasAttachments: m.has_attachments || msgAtts.length > 0,
+          attachmentCount: attCount,
+          attachmentTypes: uniqueTypes,
+        };
+      });
       const key = mailboxKey();
       const keyBoxId = unlockedBoxId();
       let wasm: typeof import("./generated/crypto-core/byos_crypto_core.js") | null = null;
@@ -276,7 +1769,7 @@ const App: Component = () => {
           subject: d.subject || "(no subject)",
           snippet,
           encryptedBody: d.encrypted_envelope || "Encrypted draft envelope",
-          date: new Date(d.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          date: formatMessageDate(d.created_at, timeFormat(), language()),
           read: true,
           starred: false,
           isRealApi: true,
@@ -284,6 +1777,101 @@ const App: Component = () => {
       });
 
       setMessages([...realMessages, ...draftMessages]);
+
+      // Background preview decryptor for visible real messages
+      if (key && wasm && keyBoxId === mailboxId) {
+        (async () => {
+          for (const m of realMessages) {
+            if (sessionStorage.getItem("byos_msg_subject_" + m.id)) continue;
+            try {
+              const body = await fetchMessageBody(mailboxId, m.id);
+              const plaintext = decryptMessageEnvelope(wasm!, key!, mailboxId, {
+                message_seq: m.messageSeq!,
+                encryption_version: body.encryption_version,
+                encrypted_body: body.encrypted_body,
+                content_key_hpke_wrapped: body.content_key_hpke_wrapped,
+              });
+              let sub = m.subject;
+              const subMatch = plaintext.match(/^Subject:\s*(.*)$/im);
+              if (subMatch && subMatch[1]) sub = subMatch[1].trim();
+              const bodyParts = plaintext.split(/\r?\n\r?\n/);
+              const bodyText = bodyParts.length > 1 ? bodyParts.slice(1).join("\n\n") : plaintext;
+              const snip = bodyText.trim().slice(0, 100).replace(/\s+/g, " ");
+
+              sessionStorage.setItem("byos_msg_subject_" + m.id, sub);
+              sessionStorage.setItem("byos_msg_snippet_" + m.id, snip);
+
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === m.id ? { ...msg, subject: sub, snippet: snip } : msg
+                )
+              );
+            } catch {}
+          }
+        })();
+      }
+
+      // Load appearance preferences and regional settings
+      fetchMailboxSettings(mailboxId)
+        .then((s) => {
+          if (s.density) {
+            setDensity(s.density);
+            if (typeof window !== "undefined") localStorage.setItem("byos_density", s.density);
+          }
+          if (s.layout_mode) {
+            setLayoutMode(s.layout_mode);
+            if (typeof window !== "undefined") localStorage.setItem("byos_layout", s.layout_mode);
+          }
+          if (s.theme) {
+            handleSetTheme(s.theme, false);
+          }
+          if (s.language) {
+            setLanguage(s.language);
+            if (typeof window !== "undefined") localStorage.setItem("byos_language", s.language);
+          }
+          if (s.time_format) {
+            setTimeFormat(s.time_format as "12h" | "24h");
+            if (typeof window !== "undefined") localStorage.setItem("byos_time_format", s.time_format);
+          }
+          if (s.week_start) {
+            setWeekStart(s.week_start as "sunday" | "monday" | "saturday");
+            if (typeof window !== "undefined") localStorage.setItem("byos_week_start", s.week_start);
+          }
+        })
+        .catch(() => {});
+
+      // Fetch tracking list for sent message read receipts
+      fetchTrackingList(mailboxId)
+        .then((trackList) => {
+          if (!trackList || trackList.length === 0) return;
+          const trackBySubjAndTo = new Map<string, MessageTrackingItem>();
+          const trackByToken = new Map<string, MessageTrackingItem>();
+          for (const item of trackList) {
+            if (item.tracking_token) trackByToken.set(item.tracking_token, item);
+            const key = `${(item.subject || "").trim().toLowerCase()}:::${(item.recipient || "").trim().toLowerCase()}`;
+            trackBySubjAndTo.set(key, item);
+          }
+          setMessages((prev) =>
+            prev.map((m) => {
+              const matched =
+                (m.trackingToken ? trackByToken.get(m.trackingToken) : undefined) ||
+                trackBySubjAndTo.get(`${(m.subject || "").trim().toLowerCase()}:::${(m.recipient || "").trim().toLowerCase()}`);
+              if (matched) {
+                return {
+                  ...m,
+                  trackingToken: matched.tracking_token,
+                  trackingInfo: {
+                    openCount: matched.open_count,
+                    firstOpenedAt: matched.first_opened_at,
+                    lastOpenedAt: matched.last_opened_at,
+                  },
+                };
+              }
+              return m;
+            })
+          );
+        })
+        .catch(() => {});
     } catch (err) {
       console.warn("Error loading mailbox data:", err);
       const msg = err instanceof Error ? err.message : String(err);
@@ -298,8 +1886,8 @@ const App: Component = () => {
     setSearchKey(null);
     setServerMatchedMsgIds([]);
     setUnlockedBoxId(null);
-    setUnlockMnemonic("");
-    setUnlockError(null);
+    setSelectedIds(new Set<string>());
+    setCurrentPage(1);
     setSelectedMsg(null);
     setDecryptedContent(null);
     setEditablePlaintext(null);
@@ -312,40 +1900,33 @@ const App: Component = () => {
     setContactEmail("");
     setContactNotes("");
     setContactsError(null);
-  }
-
-  async function handleUnlock() {
-    const box = selectedMailbox();
-    const words = unlockMnemonic().trim();
-    if (!box || !words) {
-      setUnlockError("Select a mailbox and enter its recovery phrase.");
-      return;
-    }
-    setUnlocking(true);
-    setUnlockError(null);
-    try {
-      const detail = await fetchMailboxDetail(box.id);
-      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-      const key = unlockMailboxKey(wasm, words, box.id, detail.mailbox_sk_wrapped);
-      const sKey = deriveSearchKeyFromMnemonic(wasm, words);
-      setMailboxKey(key);
-      setSearchKey(sKey);
-      setUnlockedBoxId(box.id);
-      setUnlockMnemonic("");
-      await loadMailboxData(box.id);
-    } catch (err) {
-      lockMailbox();
-      setUnlockError(err instanceof Error ? err.message : "Unlock failed.");
-    } finally {
-      setUnlocking(false);
-    }
+    setCustomFolders([]);
+    setLabels([]);
+    setActiveCustomFolder(null);
+    setActiveLabel(null);
   }
 
   const filteredMessages = () => {
     const q = searchQuery().toLowerCase().trim();
     const matchedIds = new Set(serverMatchedMsgIds());
     return messages().filter((m) => {
-      const matchFolder = m.folder === currentFolder();
+      let matchFolder = false;
+      const customFolder = activeCustomFolder();
+      const label = activeLabel();
+
+      if (customFolder) {
+        matchFolder = m.folderId === customFolder.id && m.folder !== "trash";
+      } else if (label) {
+        matchFolder = Boolean(m.labelIds?.includes(label.id)) && m.folder !== "trash";
+      } else {
+        const cur = currentFolder();
+        if (cur === "inbox") {
+          matchFolder = (!m.folderId || m.folderId === "") && (!m.folder || m.folder === "inbox");
+        } else {
+          matchFolder = m.folder === cur;
+        }
+      }
+
       if (!q) return matchFolder;
       const localMatch =
         m.sender.toLowerCase().includes(q) ||
@@ -355,6 +1936,58 @@ const App: Component = () => {
       return matchFolder && (localMatch || serverTokenMatch);
     });
   };
+
+  const sortedMessages = () => {
+    const list = [...filteredMessages()];
+    const order = sortOrder();
+    if (order === "newest") {
+      return list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    }
+    if (order === "oldest") {
+      return list.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    }
+    if (order === "unread") {
+      return list.sort((a, b) => {
+        if (a.read === b.read) {
+          return new Date(b.date).getTime() - new Date(a.date).getTime();
+        }
+        return a.read ? 1 : -1;
+      });
+    }
+    return list;
+  };
+
+  const paginatedMessages = () => {
+    const list = sortedMessages();
+    const start = (currentPage() - 1) * pageSize;
+    return list.slice(start, start + pageSize);
+  };
+
+  const currentMsgIndex = () => {
+    const sel = selectedMsg();
+    if (!sel) return -1;
+    return sortedMessages().findIndex((m) => m.id === sel.id);
+  };
+
+  const hasPrevMessage = () => currentMsgIndex() > 0;
+  const hasNextMessage = () => {
+    const idx = currentMsgIndex();
+    return idx >= 0 && idx < sortedMessages().length - 1;
+  };
+
+  function handlePrevMessage() {
+    const idx = currentMsgIndex();
+    if (idx > 0) {
+      openMessage(sortedMessages()[idx - 1]);
+    }
+  }
+
+  function handleNextMessage() {
+    const idx = currentMsgIndex();
+    if (idx >= 0 && idx < sortedMessages().length - 1) {
+      openMessage(sortedMessages()[idx + 1]);
+    }
+  }
 
   createEffect(() => {
     const q = searchQuery().trim();
@@ -428,7 +2061,7 @@ const App: Component = () => {
 
       alert(
         `Attachment downloaded as encrypted file (${att.filename}.encrypted).\n\n` +
-        `Unlock the mailbox with the recovery phrase to download decrypted files.`
+        `Sign in again to download decrypted files.`
       );
     } catch (err) {
       console.error("Failed to download attachment:", err);
@@ -438,7 +2071,9 @@ const App: Component = () => {
     }
   }
 
+  let currentDecryptSeq = 0;
   async function openMessage(msg: DisplayMessage) {
+    const seq = ++currentDecryptSeq;
     setSelectedMsg(msg);
     setIsDecrypting(true);
     setDecryptedContent(null);
@@ -446,15 +2081,23 @@ const App: Component = () => {
     setMessagePlaintext(null);
     setMessageAttachments([]);
 
-    // Mark as read
-    setMessages((prev) =>
-      prev.map((m) => (m.id === msg.id ? { ...m, read: true } : m))
-    );
+    // Mark as read (optimistic + persist)
+    if (!msg.read) {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msg.id ? { ...m, read: true } : m))
+      );
+      const box = selectedMailbox();
+      if (box) {
+        setMessageRead(box.id, msg.id, true).catch(() => {});
+      }
+    }
 
     const box = selectedMailbox();
     if (!box) {
-      setDecryptedContent("No mailbox selected.");
-      setIsDecrypting(false);
+      if (seq === currentDecryptSeq) {
+        setDecryptedContent("No mailbox selected.");
+        setIsDecrypting(false);
+      }
       return;
     }
 
@@ -464,31 +2107,46 @@ const App: Component = () => {
       if (msg.folder === "drafts") {
         const key = mailboxKey();
         if (!key || unlockedBoxId() !== box.id) {
-          setDecryptedContent("Mailbox is locked. Unlock with the recovery phrase to read this draft.");
+          if (seq === currentDecryptSeq) {
+            setDecryptedContent("Mailbox is locked. Please sign in with your password to read this draft.");
+            setIsDecrypting(false);
+          }
           return;
         }
         const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
         const plaintext = decryptDraftEnvelope(wasm, key, box.id, msg.encryptedBody);
-        setDecryptedContent(plaintext);
-        setEditablePlaintext(plaintext);
+        if (seq === currentDecryptSeq) {
+          setDecryptedContent(plaintext);
+          setEditablePlaintext(plaintext);
+          setIsDecrypting(false);
+        }
         return;
       }
-      const body = await fetchMessageBody(box.id, msg.id);
+      const [body, allAttachments] = await Promise.all([
+        fetchMessageBody(box.id, msg.id),
+        fetchAttachments(box.id).catch(() => []),
+      ]);
+
+      if (seq !== currentDecryptSeq) return;
 
       // Fetch attachments for this message - use stable msg.id with fallback for legacy messageId
-      const allAttachments = await fetchAttachments(box.id);
       const targetId = msg.messageId ?? msg.id;
       const msgAttachments = allAttachments.filter((a) => {
         const attMessageId = a.message_id ?? (a as unknown as { messageId?: string }).messageId;
         return attMessageId != null && attMessageId !== "" && attMessageId === targetId;
       });
-      setMessageAttachments(msgAttachments);
+      if (seq === currentDecryptSeq) {
+        setMessageAttachments(msgAttachments);
+      }
 
       // Decrypt locally when unlocked. The key, phrase, and plaintext never
       // leave the browser; failures show a generic message, never key material.
       const key = mailboxKey();
       if (!key || unlockedBoxId() !== box.id || msg.messageSeq === undefined) {
-        setDecryptedContent("Mailbox is locked. Unlock with the recovery phrase to decrypt this message.");
+        if (seq === currentDecryptSeq) {
+          setDecryptedContent("Mailbox is locked. Please sign in with your password to decrypt this message.");
+          setIsDecrypting(false);
+        }
         return;
       }
       const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
@@ -498,8 +2156,38 @@ const App: Component = () => {
         encrypted_body: body.encrypted_body,
         content_key_hpke_wrapped: body.content_key_hpke_wrapped,
       });
-      setDecryptedContent(plaintext);
-      setMessagePlaintext(plaintext);
+
+      let extractedSubject = msg.subject;
+      let extractedBody = plaintext;
+      const subMatch = plaintext.match(/^Subject:\s*(.*)$/im);
+      if (subMatch && subMatch[1]) {
+        extractedSubject = subMatch[1].trim();
+      }
+      const bodyParts = plaintext.split(/\r?\n\r?\n/);
+      if (bodyParts.length > 1) {
+        extractedBody = bodyParts.slice(1).join("\n\n");
+      }
+      const extractedSnippet = extractedBody.trim().slice(0, 100).replace(/\s+/g, " ");
+
+      sessionStorage.setItem("byos_msg_subject_" + msg.id, extractedSubject);
+      sessionStorage.setItem("byos_msg_snippet_" + msg.id, extractedSnippet);
+
+      const updatedMsg: DisplayMessage = {
+        ...msg,
+        subject: extractedSubject,
+        snippet: extractedSnippet || msg.snippet,
+        read: true,
+      };
+
+      if (seq === currentDecryptSeq) {
+        setSelectedMsg(updatedMsg);
+        setMessages((prev) =>
+          prev.map((m) => (m.id === msg.id ? updatedMsg : m))
+        );
+        setDecryptedContent(extractedBody.trim() || plaintext);
+        setMessagePlaintext(extractedBody.trim() || plaintext);
+        setIsDecrypting(false);
+      }
 
       // Asynchronously index search tokens for this message under search_key (Section 16).
       // Only HMAC-SHA256 tokens reach the server; plaintext terms never leave the browser.
@@ -519,6 +2207,7 @@ const App: Component = () => {
         })();
       }
     } catch (err) {
+      if (seq !== currentDecryptSeq) return;
       console.error("Failed to open message:", err);
       const msgStr = err instanceof Error ? err.message : String(err);
       if (msgStr.includes("503") || msgStr.includes("storage_disconnected") || msgStr.includes("storage disconnected")) {
@@ -527,7 +2216,6 @@ const App: Component = () => {
       setDecryptedContent(
         `Failed to open message: ${err instanceof Error ? err.message : "unknown error"}`
       );
-    } finally {
       setIsDecrypting(false);
     }
   }
@@ -542,7 +2230,7 @@ const App: Component = () => {
     if (!box || !key || unlockedBoxId() !== box.id) {
       input.value = ""; // reset
       setErrorMessage(
-        "Unlock the mailbox to attach files: attachments must be client-encrypted."
+        "Sign in again to attach files."
       );
       setComposeStatus(null);
       return;
@@ -591,7 +2279,7 @@ const App: Component = () => {
     const box = selectedMailbox();
     const key = mailboxKey();
     if (!box || !key || unlockedBoxId() !== box.id) {
-      setContactsError("Unlock the mailbox to manage contacts: entries are client-encrypted.");
+      setContactsError("Please sign in with your password to view contacts.");
       setContacts([]);
       setContactsOpen(true);
       return;
@@ -608,8 +2296,7 @@ const App: Component = () => {
           const pt = decryptContactEnvelope(wasm, key, box.id, c.encrypted_envelope);
           shown.push({ id: c.id, version: c.version, ...pt });
         } catch {
-          // One corrupt entry must not hide the rest; surface it explicitly.
-          shown.push({ id: c.id, version: c.version, name: "( undecryptable entry )", email: "", notes: "" });
+          // Skip unreadable or corrupted envelopes to keep contact list clean
         }
       }
       setContacts(shown);
@@ -622,7 +2309,6 @@ const App: Component = () => {
   }
 
   function startEditContact(c: DisplayContact | null) {
-    if (c && c.name.startsWith("( undecryptable")) return;
     setEditingContact(c);
     setContactName(c?.name ?? "");
     setContactEmail(c?.email ?? "");
@@ -634,7 +2320,7 @@ const App: Component = () => {
     const box = selectedMailbox();
     const key = mailboxKey();
     if (!box || !key || unlockedBoxId() !== box.id) {
-      setContactsError("Unlock the mailbox to save contacts.");
+      setContactsError("Please sign in with your password to view contacts.");
       return;
     }
     const name = contactName().trim();
@@ -700,7 +2386,9 @@ const App: Component = () => {
     setComposeTo("");
     setComposeSubject("");
     setComposeBody("");
+    setComposeBodyHtml("");
     setScheduledTime("");
+    setComposeTrackOpens(false);
     setComposeAttachments([]);
     setEditingDraft(null);
   }
@@ -789,15 +2477,76 @@ const App: Component = () => {
       const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
       const mailboxIdHex = box.id.replace(/-/g, "");
       const signedBody = applySignature(body, loadSignature(box.id));
-      const plaintext = [
-        `To: ${to}`,
-        `Subject: ${subject}`,
-        "Content-Type: text/plain; charset=utf-8",
-        "MIME-Version: 1.0",
-        "",
-        signedBody,
-      ].join("\r\n");
-      const plaintextB64 = bytesToBase64(new TextEncoder().encode(plaintext));
+      const htmlBody = composeBodyHtml();
+
+      let trackingToken: string | undefined;
+      if (composeTrackOpens()) {
+        trackingToken = (typeof crypto !== "undefined" && crypto.randomUUID)
+          ? crypto.randomUUID().replace(/-/g, "")
+          : Math.random().toString(36).slice(2) + Date.now().toString(36);
+        try {
+          await registerTracking(box.id, trackingToken, subject, to);
+        } catch (trackErr) {
+          console.warn("Failed to register tracking token:", trackErr);
+          trackingToken = undefined;
+        }
+      }
+
+      let mimeMessage: string;
+      const trackingPixelHtml = trackingToken
+        ? `<img src="${getTrackingPixelUrl(trackingToken)}" alt="" width="1" height="1" style="display:none !important; width:1px; height:1px; border:0;" />`
+        : "";
+
+      if (htmlBody && htmlBody.trim() && htmlBody !== body) {
+        const fullHtml = trackingPixelHtml ? `${htmlBody}\r\n${trackingPixelHtml}` : htmlBody;
+        const boundary = "----=_Part_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+        mimeMessage = [
+          `To: ${to}`,
+          `Subject: ${subject}`,
+          "MIME-Version: 1.0",
+          `Content-Type: multipart/alternative; boundary="${boundary}"`,
+          "",
+          `--${boundary}`,
+          "Content-Type: text/plain; charset=utf-8",
+          "",
+          signedBody,
+          `--${boundary}`,
+          "Content-Type: text/html; charset=utf-8",
+          "",
+          fullHtml,
+          `--${boundary}--`,
+        ].join("\r\n");
+      } else if (trackingPixelHtml) {
+        const boundary = "----=_Part_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+        const autoHtml = `<div style="font-family: sans-serif; font-size: 14px; color: #1a1a1a; white-space: pre-wrap;">${signedBody}</div>\r\n${trackingPixelHtml}`;
+        mimeMessage = [
+          `To: ${to}`,
+          `Subject: ${subject}`,
+          "MIME-Version: 1.0",
+          `Content-Type: multipart/alternative; boundary="${boundary}"`,
+          "",
+          `--${boundary}`,
+          "Content-Type: text/plain; charset=utf-8",
+          "",
+          signedBody,
+          `--${boundary}`,
+          "Content-Type: text/html; charset=utf-8",
+          "",
+          autoHtml,
+          `--${boundary}--`,
+        ].join("\r\n");
+      } else {
+        mimeMessage = [
+          `To: ${to}`,
+          `Subject: ${subject}`,
+          "Content-Type: text/plain; charset=utf-8",
+          "MIME-Version: 1.0",
+          "",
+          signedBody,
+        ].join("\r\n");
+      }
+
+      const plaintextB64 = bytesToBase64(new TextEncoder().encode(mimeMessage));
       const encrypted = JSON.parse(
         wasm.wasm_encrypt_outbound(pubkey, mailboxIdHex, BigInt(reservation.outbox_seq), plaintextB64)
       ) as {
@@ -868,7 +2617,7 @@ const App: Component = () => {
     // the drafts API.
     const key = mailboxKey();
     if (!key || unlockedBoxId() !== box.id) {
-      setErrorMessage("Unlock the mailbox to save drafts: draft bodies must be client-encrypted.");
+      setErrorMessage("Sign in again to save drafts.");
       setComposeStatus(null);
       return;
     }
@@ -975,613 +2724,982 @@ const App: Component = () => {
     trash: "Trash",
   };
 
-  const folderIcons: Record<Folder, string> = {
-    inbox: "📥",
-    sent: "📤",
-    drafts: "▤",
-    archive: "📦",
-    spam: "⚠️",
-    trash: "🗑️",
+  const folderCounts = () => {
+    const counts: Record<Folder, number> = {
+      inbox: 0,
+      sent: 0,
+      drafts: 0,
+      archive: 0,
+      spam: 0,
+      trash: 0,
+    };
+    for (const m of messages()) {
+      if (m.folder === "trash") {
+        counts.trash++;
+      } else {
+        if (m.folder === "inbox") {
+          // Exclude messages in custom folders from inbox count
+          if (!m.folderId) {
+            counts.inbox++;
+          }
+        } else if (counts[m.folder] !== undefined) {
+          counts[m.folder]++;
+        }
+      }
+    }
+    return counts;
+  };
+
+  const customFolderCounts = () => {
+    const counts: Record<string, number> = {};
+    for (const m of messages()) {
+      if (m.folder !== "trash" && m.folderId) {
+        counts[m.folderId] = (counts[m.folderId] || 0) + 1;
+      }
+    }
+    return counts;
+  };
+
+  const labelCounts = () => {
+    const counts: Record<string, number> = {};
+    for (const m of messages()) {
+      if (m.folder !== "trash" && m.labelIds) {
+        for (const lid of m.labelIds) {
+          counts[lid] = (counts[lid] || 0) + 1;
+        }
+      }
+    }
+    return counts;
   };
 
   return (
-    <Show
-      when={currentUser() !== null || isLoading()}
-      fallback={
-        <div class="flex h-screen w-screen items-center justify-center bg-slate-100 p-4">
-          <div class="w-full max-w-sm rounded-xl bg-white shadow-xl border border-slate-200 p-8">
-            <div class="flex items-center gap-2">
-              <span class="text-xl font-bold tracking-wider">BYOS</span>
-              <span class="text-xs bg-sky-600 text-white px-2 py-0.5 rounded font-mono">Webmail</span>
+    <Show when={!isSetupAccount()} fallback={<SetupAccount />}>
+      <Show
+        when={(currentUser() !== null && mailboxKey() !== null) || isLoading()}
+        fallback={
+          <div class="flex h-screen w-screen items-center justify-center bg-[#F0EEE9] p-4">
+            <div class="w-full max-w-sm rounded-2xl bg-white shadow-xl border border-[#E2DFD8] p-8">
+              <div class="flex items-center gap-2">
+                <span class="text-xl font-bold tracking-wider text-[#3C3D3E]">BYOS</span>
+                <span class="text-xs bg-[#A27561] text-white px-2 py-0.5 rounded-lg font-mono">Webmail</span>
+              </div>
+              <Show
+                when={currentUser()}
+                fallback={
+                  <div>
+                    {/* Two-Factor Authentication Challenge during Sign In */}
+                    <Show
+                      when={twoFactorChallenge()}
+                      fallback={
+                        <div>
+                          <p class="mt-2 text-sm text-[#6F7173]">Sign in to access your encrypted mailbox.</p>
+                          <Show when={loginError()}>
+                            <div role="alert" class="mt-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
+                              {loginError()}
+                            </div>
+                          </Show>
+                          <form onSubmit={handleLogin} class="mt-4 space-y-3">
+                            <input
+                              type="email"
+                              autocomplete="username"
+                              placeholder="you@example.com"
+                              value={loginEmail()}
+                              onInput={(e) => setLoginEmail(e.currentTarget.value)}
+                              disabled={loginBusy()}
+                              class="w-full rounded-xl border border-[#E2DFD8] px-3 py-2 text-xs focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6]"
+                            />
+                            <div>
+                              <input
+                                type="password"
+                                autocomplete="current-password"
+                                placeholder="Password"
+                                value={loginPassword()}
+                                onInput={(e) => setLoginPassword(e.currentTarget.value)}
+                                disabled={loginBusy()}
+                                class="w-full rounded-xl border border-[#E2DFD8] px-3 py-2 text-xs focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6]"
+                              />
+                              <div class="flex justify-end mt-1.5">
+                                <button
+                                  type="button"
+                                  onClick={handleOpenForgotPassword}
+                                  class="text-[11px] text-[#A27561] hover:underline cursor-pointer font-medium"
+                                >
+                                  Forgot password?
+                                </button>
+                              </div>
+                            </div>
+                            <button
+                              type="submit"
+                              disabled={loginBusy() || !loginEmail().trim() || !loginPassword()}
+                              class="w-full rounded-xl bg-[#A27561] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#8F6452] transition disabled:opacity-50 cursor-pointer shadow-2xs"
+                            >
+                              {loginBusy() ? "Signing in…" : "Sign in"}
+                            </button>
+                            <div class="relative flex py-1 items-center">
+                              <div class="flex-grow border-t border-[#E2DFD8]"></div>
+                              <span class="flex-shrink mx-3 text-[10px] uppercase tracking-wider text-[#878A8E] font-medium">or</span>
+                              <div class="flex-grow border-t border-[#E2DFD8]"></div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handlePasskeyLogin}
+                              disabled={loginBusy()}
+                              class="w-full rounded-xl border border-[#E2DFD8] hover:border-[#A27561] bg-white hover:bg-[#FAF9F6] px-4 py-2 text-xs font-medium text-[#2B2C2D] transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+                            >
+                              <svg class="w-4 h-4 stroke-current fill-none stroke-2 text-[#A27561]" viewBox="0 0 24 24">
+                                <path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 001.99 5.334" />
+                              </svg>
+                              Sign in with Passkey / Biometrics
+                            </button>
+                          </form>
+                        </div>
+                      }
+                    >
+                      {/* 2FA Challenge View */}
+                      <div>
+                        <div class="mt-2 flex items-center gap-2">
+                          <div class="w-7 h-7 rounded-lg bg-[#A27561]/10 text-[#A27561] flex items-center justify-center">
+                            <svg class="w-4 h-4 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                            </svg>
+                          </div>
+                          <div>
+                            <h2 class="text-sm font-semibold text-[#3C3D3E]">Two-Step Verification</h2>
+                            <p class="text-[11px] text-[#6F7173]">Security challenge required</p>
+                          </div>
+                        </div>
+
+                        <p class="mt-3 text-xs text-[#6F7173] leading-relaxed">
+                          {twoFactorChallenge()?.preferred_method === "totp"
+                            ? "Enter the 6-digit code from your authenticator app to complete sign in."
+                            : `Enter the 6-digit security code sent to ${twoFactorChallenge()?.destination_masked}.`}
+                        </p>
+
+                        <Show when={twoFactorError()}>
+                          <div role="alert" class="mt-3 rounded-xl bg-rose-50 border border-rose-200 p-2.5 text-xs text-rose-700">
+                            {twoFactorError()}
+                          </div>
+                        </Show>
+
+                        <form onSubmit={handleVerifyLogin2FA} class="mt-4 space-y-3">
+                          <div>
+                            <label class="block text-[11px] font-medium text-[#6F7173] mb-1">
+                              Verification Code
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              maxlength="6"
+                              placeholder="123456"
+                              value={twoFactorCodeInput()}
+                              onInput={(e) => setTwoFactorCodeInput(e.currentTarget.value.replace(/[^0-9]/g, ""))}
+                              disabled={twoFactorBusy()}
+                              autofocus
+                              class="w-full tracking-widest text-center font-mono rounded-xl border border-[#E2DFD8] px-3 py-2 text-sm focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6]"
+                            />
+                          </div>
+
+                          <Show when={(twoFactorChallenge()?.methods?.length || 0) > 1}>
+                            <div class="flex items-center justify-between text-[11px] text-[#6F7173] pt-1">
+                              <span>Try another method:</span>
+                              <div class="flex items-center gap-1.5">
+                                <Show when={twoFactorChallenge()?.methods.includes("email") && twoFactorChallenge()?.preferred_method !== "email"}>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSwitchLogin2FAMethod("email")}
+                                    disabled={twoFactorBusy()}
+                                    class="text-[#A27561] hover:underline cursor-pointer"
+                                  >
+                                    Email OTP
+                                  </button>
+                                </Show>
+                                <Show when={twoFactorChallenge()?.methods.includes("phone") && twoFactorChallenge()?.preferred_method !== "phone"}>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSwitchLogin2FAMethod("phone")}
+                                    disabled={twoFactorBusy()}
+                                    class="text-[#A27561] hover:underline cursor-pointer"
+                                  >
+                                    SMS Code
+                                  </button>
+                                </Show>
+                              </div>
+                            </div>
+                          </Show>
+
+                          <button
+                            type="submit"
+                            disabled={twoFactorBusy() || twoFactorCodeInput().trim().length !== 6}
+                            class="w-full rounded-xl bg-[#A27561] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#8F6452] transition disabled:opacity-50 cursor-pointer shadow-2xs"
+                          >
+                            {twoFactorBusy() ? "Verifying…" : "Verify & Sign In"}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={handleCancelLogin2FA}
+                            disabled={twoFactorBusy()}
+                            class="w-full rounded-xl border border-[#E2DFD8] bg-white hover:bg-[#FAF9F6] px-4 py-2 text-xs font-medium text-[#6F7173] hover:text-[#3C3D3E] transition cursor-pointer"
+                          >
+                            Back to Sign In
+                          </button>
+                        </form>
+                      </div>
+                    </Show>
+                  </div>
+                }
+              >
+                <div class="mt-3">
+                  <h2 class="text-base font-semibold text-[#2B2C2D]">Unlock your mailbox</h2>
+                  <p class="mt-1 text-xs text-[#6F7173]">
+                    Signed in as <span class="font-medium text-[#2B2C2D]">{currentUser()?.email}</span>
+                  </p>
+                  <Show when={loginError()}>
+                    <div role="alert" class="mt-3 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
+                      {loginError()}
+                    </div>
+                  </Show>
+                  <Show
+                    when={!useRecoveryPhrase()}
+                    fallback={
+                      <form onSubmit={handleUnlockWithRecovery} class="mt-4 space-y-3">
+                        <div>
+                          <label class="block text-[11px] font-medium text-[#6F7173] mb-1">
+                            24-Word Recovery Phrase
+                          </label>
+                          <textarea
+                            rows={3}
+                            placeholder="word1 word2 word3 ... word24"
+                            value={recoveryPhraseInput()}
+                            onInput={(e) => setRecoveryPhraseInput(e.currentTarget.value)}
+                            disabled={loginBusy()}
+                            autofocus
+                            class="w-full rounded-xl border border-[#E2DFD8] px-3.5 py-2 text-xs focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6] resize-none font-mono"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={loginBusy() || !recoveryPhraseInput().trim()}
+                          class="w-full rounded-xl bg-[#A27561] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#8F6452] transition disabled:opacity-50 cursor-pointer shadow-2xs"
+                        >
+                          {loginBusy() ? "Unwrapping keys…" : "Unlock with Recovery Phrase"}
+                        </button>
+                        <div class="text-center pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setUseRecoveryPhrase(false);
+                              setLoginError(null);
+                            }}
+                            class="text-xs text-[#A27561] hover:underline cursor-pointer"
+                          >
+                            ← Use account password instead
+                          </button>
+                        </div>
+                      </form>
+                    }
+                  >
+                    <form onSubmit={handleUnlock} class="mt-4 space-y-3">
+                      <input
+                        type="password"
+                        autocomplete="current-password"
+                        placeholder="Enter password to unlock"
+                        value={loginPassword()}
+                        onInput={(e) => setLoginPassword(e.currentTarget.value)}
+                        disabled={loginBusy()}
+                        autofocus
+                        class="w-full rounded-xl border border-[#E2DFD8] px-3.5 py-2.5 text-xs focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6]"
+                      />
+                      <button
+                        type="submit"
+                        disabled={loginBusy() || !loginPassword()}
+                        class="w-full rounded-xl bg-[#A27561] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#8F6452] transition disabled:opacity-50 cursor-pointer shadow-2xs"
+                      >
+                        {loginBusy() ? "Unlocking…" : "Unlock Mailbox"}
+                      </button>
+                      <div class="relative flex py-1 items-center">
+                        <div class="flex-grow border-t border-[#E2DFD8]"></div>
+                        <span class="flex-shrink mx-3 text-[10px] uppercase tracking-wider text-[#878A8E] font-medium">or</span>
+                        <div class="flex-grow border-t border-[#E2DFD8]"></div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handlePasskeyLogin}
+                        disabled={loginBusy()}
+                        class="w-full rounded-xl border border-[#E2DFD8] hover:border-[#A27561] bg-white hover:bg-[#FAF9F6] px-4 py-2 text-xs font-medium text-[#2B2C2D] transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+                      >
+                        <svg class="w-4 h-4 stroke-current fill-none stroke-2 text-[#A27561]" viewBox="0 0 24 24">
+                          <path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 001.99 5.334" />
+                        </svg>
+                        Unlock with Passkey / Biometrics
+                      </button>
+                      <div class="text-center pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUseRecoveryPhrase(true);
+                            setLoginError(null);
+                          }}
+                          class="text-xs text-[#6F7173] hover:text-[#2B2C2D] hover:underline cursor-pointer"
+                        >
+                          Unlock with 24-word recovery phrase instead
+                        </button>
+                      </div>
+                    </form>
+                  </Show>
+                  <div class="mt-4 pt-3 border-t border-[#E2DFD8] flex justify-between items-center text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => handleLogout()}
+                      class="text-[#878A8E] hover:text-[#2B2C2D] hover:underline cursor-pointer"
+                    >
+                      Sign in with a different account
+                    </button>
+                  </div>
+                </div>
+              </Show>
             </div>
-            <p class="mt-2 text-sm text-slate-500">Sign in to access your encrypted mailbox.</p>
-            <Show when={loginError()}>
-              <div role="alert" class="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
-                {loginError()}
+
+            {/* ── Forgot Password / Account Recovery Modal ── */}
+            <Show when={forgotPasswordModalOpen()}>
+              <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-fade-in font-sans">
+                <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-[#E2DFD8] overflow-hidden">
+                  {/* Modal Header */}
+                  <div class="px-6 py-4 border-b border-[#E2DFD8] flex items-center justify-between bg-[#FAF9F6]">
+                    <div class="flex items-center gap-2">
+                      <div class="w-7 h-7 rounded-lg bg-[#A27561]/10 text-[#A27561] flex items-center justify-center">
+                        <svg class="w-4 h-4 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                        </svg>
+                      </div>
+                      <h3 class="text-sm font-semibold text-[#3C3D3E]">Account Password Recovery</h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setForgotPasswordModalOpen(false)}
+                      class="text-[#878A8E] hover:text-[#2B2C2D] p-1 rounded-lg hover:bg-[#E2DFD8]/40 transition cursor-pointer"
+                    >
+                      <svg class="w-4 h-4 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  <div class="p-6">
+                    {/* Error Notice */}
+                    <Show when={forgotError()}>
+                      <div class="mb-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
+                        {forgotError()}
+                      </div>
+                    </Show>
+
+                    {/* Step 1: Find Account & Select Recovery Option */}
+                    <Show when={forgotStep() === 1}>
+                      <Show
+                        when={forgotMethods().length > 0}
+                        fallback={
+                          <form onSubmit={handleFindRecoveryMethods} class="space-y-4">
+                            <p class="text-xs text-[#6F7173] leading-relaxed">
+                              Enter your BYOS email address. We will look up the verified 2-step verification and recovery options configured on your account.
+                            </p>
+                            <div>
+                              <label class="block text-xs font-medium text-[#3C3D3E] mb-1.5">
+                                Account Email
+                              </label>
+                              <input
+                                type="email"
+                                value={forgotEmail()}
+                                onInput={(e) => setForgotEmail(e.currentTarget.value)}
+                                placeholder="you@example.com"
+                                required
+                                class="w-full bg-[#FAF9F6] border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] outline-none"
+                              />
+                            </div>
+                            <div class="flex items-center justify-end gap-2 pt-2">
+                              <button
+                                type="button"
+                                onClick={() => setForgotPasswordModalOpen(false)}
+                                class="px-4 py-2 border border-[#E2DFD8] text-[#6F7173] hover:text-[#3C3D3E] text-xs font-medium rounded-xl transition cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="submit"
+                                disabled={forgotBusy() || !forgotEmail().trim()}
+                                class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] disabled:opacity-50 text-white text-xs font-medium rounded-xl transition cursor-pointer shadow-2xs"
+                              >
+                                {forgotBusy() ? "Finding methods…" : "Continue"}
+                              </button>
+                            </div>
+                          </form>
+                        }
+                      >
+                        <form onSubmit={handleRequestRecoveryCode} class="space-y-4">
+                          <p class="text-xs text-[#6F7173] leading-relaxed">
+                            Select how you would like to receive or verify your security recovery code:
+                          </p>
+                          <div class="space-y-2">
+                            <For each={forgotMethods()}>
+                              {(method) => (
+                                <label
+                                  class={`flex items-center justify-between p-3 rounded-xl border cursor-pointer transition ${
+                                    forgotSelectedMethod() === method.type
+                                      ? "border-[#A27561] bg-[#A27561]/5 ring-1 ring-[#A27561]"
+                                      : "border-[#E2DFD8] bg-[#FAF9F6] hover:bg-stone-50"
+                                  }`}
+                                >
+                                  <div class="flex items-center gap-3">
+                                    <input
+                                      type="radio"
+                                      name="recovery_method"
+                                      value={method.type}
+                                      checked={forgotSelectedMethod() === method.type}
+                                      onChange={() => setForgotSelectedMethod(method.type)}
+                                      class="text-[#A27561] focus:ring-[#A27561]"
+                                    />
+                                    <div>
+                                      <span class="text-xs font-medium text-[#3C3D3E] capitalize block">
+                                        {method.type === "totp" ? "Authenticator App" : method.type + " Verification"}
+                                      </span>
+                                      <span class="text-[11px] text-[#6F7173] font-mono">
+                                        {method.destination_masked}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <span class="text-[10px] text-[#A27561] font-mono font-medium">
+                                    {method.type === "totp" ? "TOTP" : "OTP"}
+                                  </span>
+                                </label>
+                              )}
+                            </For>
+                          </div>
+
+                          <div class="flex items-center justify-between pt-2">
+                            <button
+                              type="button"
+                              onClick={() => setForgotMethods([])}
+                              class="text-xs text-[#6F7173] hover:text-[#3C3D3E] cursor-pointer"
+                            >
+                              Change email
+                            </button>
+                            <button
+                              type="submit"
+                              disabled={forgotBusy()}
+                              class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] disabled:opacity-50 text-white text-xs font-medium rounded-xl transition cursor-pointer shadow-2xs"
+                            >
+                              {forgotBusy() ? "Sending code…" : "Send Recovery Code"}
+                            </button>
+                          </div>
+                        </form>
+                      </Show>
+                    </Show>
+
+                    {/* Step 2: Code Entry & New Password */}
+                    <Show when={forgotStep() === 2}>
+                      <form onSubmit={handleResetPasswordWithRecovery} class="space-y-4">
+                        <div class="p-3 bg-[#FAF9F6] rounded-xl border border-[#E2DFD8] text-xs text-[#6F7173]">
+                          <span class="font-medium text-[#3C3D3E] block mb-0.5">Verification required</span>
+                          {forgotSelectedMethod() === "totp"
+                            ? "Enter the 6-digit code from your authenticator app."
+                            : `Enter the 6-digit code sent to ${forgotDestinationMasked()}.`}
+                        </div>
+
+                        <div>
+                          <label class="block text-xs font-medium text-[#3C3D3E] mb-1">
+                            6-Digit Security Code
+                          </label>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            maxlength="6"
+                            value={forgotCode()}
+                            onInput={(e) => setForgotCode(e.currentTarget.value.replace(/[^0-9]/g, ""))}
+                            placeholder="123456"
+                            required
+                            class="w-full tracking-widest text-center font-mono bg-[#FAF9F6] border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-sm text-[#3C3D3E] outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label class="block text-xs font-medium text-[#3C3D3E] mb-1">
+                            New Password (min 12 chars)
+                          </label>
+                          <input
+                            type="password"
+                            value={forgotNewPassword()}
+                            onInput={(e) => setForgotNewPassword(e.currentTarget.value)}
+                            placeholder="At least 12 characters"
+                            required
+                            minlength="12"
+                            class="w-full bg-[#FAF9F6] border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label class="block text-xs font-medium text-[#3C3D3E] mb-1">
+                            Confirm New Password
+                          </label>
+                          <input
+                            type="password"
+                            value={forgotConfirmPassword()}
+                            onInput={(e) => setForgotConfirmPassword(e.currentTarget.value)}
+                            placeholder="Re-enter new password"
+                            required
+                            minlength="12"
+                            class="w-full bg-[#FAF9F6] border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] outline-none"
+                          />
+                        </div>
+
+                        {/* Optional 24-Word Recovery Phrase */}
+                        <div class="pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setShowPhraseInput(!showPhraseInput())}
+                            class="text-[11px] text-[#A27561] hover:underline flex items-center gap-1 cursor-pointer font-medium"
+                          >
+                            <span>{showPhraseInput() ? "− Hide recovery phrase (optional)" : "+ Have your 24-word recovery phrase? (Optional)"}</span>
+                          </button>
+                          <Show when={showPhraseInput()}>
+                            <div class="mt-2 space-y-1.5 p-3 rounded-xl bg-[#F4F1EA] border border-[#E2DFD8]">
+                              <p class="text-[11px] text-[#6F7173] leading-relaxed">
+                                Entering your 24-word recovery phrase re-wraps your historical encryption keys under your new password, keeping all past messages decrypted immediately. If you don't have it right now, you can leave this blank and reactivate past messages later in Settings.
+                              </p>
+                              <textarea
+                                rows={2}
+                                value={forgotRecoveryPhrase()}
+                                onInput={(e) => setForgotRecoveryPhrase(e.currentTarget.value)}
+                                placeholder="word1 word2 word3 ... word24 (optional)"
+                                class="w-full bg-[#FAF9F6] border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-1.5 text-xs text-[#3C3D3E] outline-none font-mono resize-none"
+                              />
+                            </div>
+                          </Show>
+                        </div>
+
+                        <div class="flex items-center justify-between pt-2">
+                          <button
+                            type="button"
+                            onClick={() => setForgotStep(1)}
+                            class="text-xs text-[#6F7173] hover:text-[#3C3D3E] cursor-pointer"
+                          >
+                            Back
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={
+                              forgotBusy() ||
+                              forgotCode().trim().length !== 6 ||
+                              forgotNewPassword().length < 12 ||
+                              forgotNewPassword() !== forgotConfirmPassword()
+                            }
+                            class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] disabled:opacity-50 text-white text-xs font-medium rounded-xl transition cursor-pointer shadow-2xs"
+                          >
+                            {forgotBusy() ? "Resetting…" : "Reset Password"}
+                          </button>
+                        </div>
+                      </form>
+                    </Show>
+
+                    {/* Step 3: Success State */}
+                    <Show when={forgotStep() === 3}>
+                      <div class="text-center py-4 space-y-3">
+                        <div class="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+                          <svg class="w-6 h-6 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        </div>
+                        <h4 class="text-base font-semibold text-[#3C3D3E]">Password Successfully Reset</h4>
+                        <p class="text-xs text-[#6F7173] max-w-sm mx-auto leading-relaxed">
+                          Your password has been updated. You can now sign in to BYOS Webmail. Historical encrypted messages remain securely sealed under your 24-word recovery phrase.
+                        </p>
+                        <div class="pt-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setForgotPasswordModalOpen(false);
+                              setLoginEmail(forgotEmail().trim());
+                              setLoginPassword(forgotNewPassword());
+                            }}
+                            class="w-full px-4 py-2.5 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-medium rounded-xl transition cursor-pointer shadow-2xs"
+                          >
+                            Sign In with New Password
+                          </button>
+                        </div>
+                      </div>
+                    </Show>
+                  </div>
+                </div>
               </div>
             </Show>
-            <form onSubmit={handleLogin} class="mt-4 space-y-3">
-              <input
-                type="email"
-                autocomplete="username"
-                placeholder="you@example.com"
-                value={loginEmail()}
-                onInput={(e) => setLoginEmail(e.currentTarget.value)}
-                disabled={loginBusy()}
-                class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
-              />
-              <input
-                type="password"
-                autocomplete="current-password"
-                placeholder="Password"
-                value={loginPassword()}
-                onInput={(e) => setLoginPassword(e.currentTarget.value)}
-                disabled={loginBusy()}
-                class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
-              />
-              <button
-                type="submit"
-                disabled={loginBusy() || !loginEmail().trim() || !loginPassword()}
-                class="w-full rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
-              >
-                {loginBusy() ? "Signing in…" : "Sign in"}
-              </button>
-            </form>
-            <p class="mt-4 text-[11px] text-slate-400">
-              Passwords verify server-side only. Mailbox decryption additionally requires unlocking with a recovery phrase.
-            </p>
           </div>
-        </div>
-      }
-    >
-    <div class="flex h-screen w-screen overflow-hidden bg-slate-100 text-slate-900 font-sans">
-      {/* ── Left Navigation Sidebar ── */}
-      <aside class="w-64 flex-shrink-0 bg-slate-900 text-slate-300 flex flex-col border-r border-slate-800">
-        <div class="p-4 border-b border-slate-800 flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <span class="text-xl font-bold text-white tracking-wider">BYOS</span>
-            <span class="text-xs bg-sky-600 text-white px-2 py-0.5 rounded font-mono">Webmail</span>
-          </div>
-        </div>
-
-        {/* Mailbox Selector */}
-        <Show when={mailboxes().length > 0}>
-          <div class="px-4 pt-3 pb-1 text-xs font-mono text-slate-400">
-            <label class="block text-[11px] text-slate-500 uppercase tracking-wider mb-1">Active Mailbox</label>
-            <select
-              value={selectedMailbox()?.id || ""}
-              onChange={(e) => {
-                const box = mailboxes().find((m) => m.id === e.currentTarget.value);
-                if (box) {
-                  lockMailbox();
-                  setSelectedMailbox(box);
-                  refreshSignature(box.id);
-                  loadMailboxData(box.id);
-                }
-              }}
-              class="w-full bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1 focus:outline-none"
+        }
+      >
+      <Show
+        when={!settingsOpen()}
+        fallback={
+          <SettingsLayout
+            activeTab={activeSettingsTab()}
+            onTabChange={setActiveSettingsTab}
+            onClose={() => setSettingsOpen(false)}
+            currentUser={currentUser()}
+            selectedMailbox={selectedMailbox()}
+          >
+            <Show when={activeSettingsTab() === "signatures" && selectedMailbox()}>
+              <SignaturesTab mailbox={selectedMailbox()!} currentUser={currentUser()} />
+            </Show>
+            <Show when={activeSettingsTab() === "bridge" && selectedMailbox()}>
+              <BridgeTab mailbox={selectedMailbox()!} currentUser={currentUser()} />
+            </Show>
+            <Show when={activeSettingsTab() === "appearance" && selectedMailbox()}>
+              <AppearanceTab
+                mailbox={selectedMailbox()!}
+                currentDensity={density()}
+                currentLayout={layoutMode()}
+                currentTheme={theme()}
+                currentTimeFormat={timeFormat()}
+                currentLanguage={language()}
+                currentWeekStart={weekStart()}
+                onDensityChange={handleSetDensity}
+                onLayoutChange={handleSetLayoutMode}
+                onThemeChange={(t) => handleSetTheme(t, false)}
+                onTimeFormatChange={(tf) => {
+                  setTimeFormat(tf);
+                  if (typeof window !== "undefined") localStorage.setItem("byos_time_format", tf);
+                }}
+                onLanguageChange={(l) => {
+                  setLanguage(l);
+                  if (typeof window !== "undefined") localStorage.setItem("byos_language", l);
+                }}
+                onWeekStartChange={(ws) => {
+                  setWeekStart(ws);
+                  if (typeof window !== "undefined") localStorage.setItem("byos_week_start", ws);
+                }}
+              />
+            </Show>
+            <Show when={activeSettingsTab() === "autoreply" && selectedMailbox()}>
+              <AutoReplyTab mailbox={selectedMailbox()!} />
+            </Show>
+            <Show when={activeSettingsTab() === "filters" && selectedMailbox()}>
+              <FiltersTab mailbox={selectedMailbox()!} />
+            </Show>
+            <Show when={activeSettingsTab() === "security" && selectedMailbox()}>
+              <SecurityTab mailbox={selectedMailbox()!} currentUser={currentUser()} />
+            </Show>
+          </SettingsLayout>
+        }
+      >
+      <div class="flex flex-col h-screen w-screen overflow-hidden bg-[#F0EEE9] dark:bg-[#121316] text-[#1A1B1E] dark:text-[#F3F4F6] font-sans p-2.5 sm:p-3 gap-2.5 sm:gap-3">
+        {/* Audited Impersonation Banner */}
+        <Show when={isImpersonating()}>
+          <div class="bg-amber-600 text-white px-4 py-2 flex items-center justify-between text-xs sm:text-sm font-medium shadow-sm z-50 rounded-xl">
+            <div class="flex items-center gap-2">
+              <svg class="w-4 h-4 stroke-current fill-none stroke-2 flex-shrink-0" viewBox="0 0 24 24">
+                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+              <span class="font-bold tracking-wide">AUDITED SESSION:</span>
+              <span>
+                Viewing {impersonateEmail() || currentUser()?.email || selectedMailbox()?.local_part || "Mailbox"} as Administrator
+              </span>
+            </div>
+            <button
+              onClick={handleExitImpersonation}
+              class="bg-black/30 hover:bg-black/50 text-white text-xs px-3 py-1 rounded-lg transition font-semibold cursor-pointer"
             >
-              <For each={mailboxes()}>
-                {(m) => <option value={m.id}>{m.local_part} ({m.mode})</option>}
-              </For>
-            </select>
+              Exit Session
+            </button>
           </div>
         </Show>
 
-        {/* Compose Button */}
-        <div class="p-4">
-          <button
-            onClick={() => {
+        {/* Historical Messages Locked Warning Banner (Tier 2 Recovery) */}
+        <Show when={selectedMailbox()?.previous_wrapped_sk_user || currentUser()?.previous_wrapped_sk_user}>
+          <div class="bg-amber-500/15 border border-amber-500/30 text-amber-900 dark:text-amber-200 px-4 py-2.5 flex items-center justify-between text-xs font-medium rounded-xl shadow-xs">
+            <div class="flex items-center gap-2.5">
+              <svg class="w-4 h-4 stroke-amber-600 dark:stroke-amber-400 fill-none stroke-2 shrink-0" viewBox="0 0 24 24">
+                <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+              <span>
+                <strong class="font-semibold">Historical Messages Locked:</strong> Your account password was recently reset. Your previous encrypted messages remain locked until you reactivate your historical keys with your 24-word recovery phrase or old password.
+              </span>
+            </div>
+            <button
+              onClick={() => {
+                setActiveSettingsTab("security");
+                setSettingsOpen(true);
+              }}
+              class="bg-amber-600 hover:bg-amber-700 text-white text-xs px-3 py-1.5 rounded-lg transition font-semibold cursor-pointer shrink-0 shadow-xs"
+            >
+              Reactivate Keys
+            </button>
+          </div>
+        </Show>
+
+        <div class="flex flex-1 overflow-hidden gap-3">
+          {/* ── Left Navigation Sidebar (Unified with Canvas #F0EEE9) ── */}
+          <Sidebar
+            currentUser={currentUser()}
+            selectedMailbox={selectedMailbox()}
+            currentFolder={currentFolder()}
+            onSelectFolder={(f) => {
+              setCurrentFolder(f);
+              setActiveCustomFolder(null);
+              setActiveLabel(null);
+              setSelectedMsg(null);
+              setSelectedIds(new Set<string>());
+              setCurrentPage(1);
+            }}
+            folderCounts={folderCounts()}
+            customFolderCounts={customFolderCounts()}
+            labelCounts={labelCounts()}
+            onCompose={() => {
               setComposeAttachments([]);
               setEditingDraft(null);
               setComposeOpen(true);
             }}
-            class="w-full rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-sky-500 transition-all flex items-center justify-center gap-2"
-          >
-            <span>✏️</span> Compose Email
-          </button>
-          <button
-            onClick={openContacts}
-            class="mt-2 w-full rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
-          >
-            <span>👥</span> Contacts
-          </button>
-        </div>
-
-        {/* Mailbox Unlock */}
-        <div class="px-4 pb-3">
-          <Show
-            when={mailboxKey() && unlockedBoxId() === selectedMailbox()?.id}
-            fallback={
-              <div>
-                <label class="block text-[11px] text-slate-500 uppercase tracking-wider mb-1">
-                  Mailbox locked
-                </label>
-                <input
-                  type="password"
-                  autocomplete="off"
-                  placeholder="Recovery phrase to unlock"
-                  value={unlockMnemonic()}
-                  onInput={(e) => setUnlockMnemonic(e.currentTarget.value)}
-                  disabled={unlocking()}
-                  class="w-full bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1.5 focus:outline-none mb-2"
-                />
-                <button
-                  onClick={handleUnlock}
-                  disabled={unlocking() || !unlockMnemonic().trim() || !selectedMailbox()}
-                  class="w-full rounded bg-emerald-700 px-2 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
-                >
-                  {unlocking() ? "Unlocking…" : "🔓 Unlock mailbox"}
-                </button>
-                <Show when={unlockError()}>
-                  <div class="mt-2 text-[11px] text-red-400">{unlockError()}</div>
-                </Show>
-                <div class="mt-2 text-[11px] text-slate-500">
-                  Unlock decrypts messages, drafts, and attachments locally. The phrase never leaves this browser.
-                </div>
-              </div>
-            }
-          >
-            <div>
-              <div class="text-[11px] text-emerald-400 font-medium">🔓 Mailbox unlocked</div>
-              <button
-                onClick={lockMailbox}
-                class="mt-2 w-full rounded border border-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800"
-              >
-                Lock mailbox
-              </button>
-            </div>
-          </Show>
-        </div>
-
-        {/* Mailbox Signature (device-local) */}
-        <div class="px-4 pb-3">
-          <label class="block text-[11px] text-slate-500 uppercase tracking-wider mb-1">
-            Signature
-          </label>
-          <textarea
-            rows={3}
-            placeholder="Name&#10;Title · Company&#10;Phone"
-            value={signatureText()}
-            onInput={(e) => { setSignatureText(e.currentTarget.value); setSignatureSaved(false); }}
-            class="w-full bg-slate-800 text-slate-200 text-xs rounded border border-slate-700 px-2 py-1.5 focus:outline-none"
+            onOpenContacts={openContacts}
+            onOpenImport={() => setImportEmailsModalOpen(true)}
+            onOpenSettings={() => {
+              setActiveSettingsTab("signatures");
+              setSettingsOpen(true);
+            }}
+            onLogout={handleLogout}
+            isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
+            storageError={storageErrorBanner()}
+            connectedAccounts={connectedAccounts()}
+            onSelectAccount={handleSwitchAccount}
+            onOpenAddMailbox={() => setAddMailboxModalOpen(true)}
+            customFolders={customFolders()}
+            activeFolderId={activeCustomFolder()?.id}
+            onSelectCustomFolder={handleSelectCustomFolder}
+            onOpenCreateFolder={() => {
+              setFolderToEdit(null);
+              setCreateFolderModalOpen(true);
+            }}
+            onEditFolder={handleOpenEditFolder}
+            onDeleteFolder={handleDeleteFolder}
+            labels={labels()}
+            activeLabelId={activeLabel()?.id}
+            onSelectLabel={handleSelectLabel}
+            onOpenCreateLabel={() => {
+              setLabelToEdit(null);
+              setCreateLabelModalOpen(true);
+            }}
+            onEditLabel={handleOpenEditLabel}
+            onDeleteLabel={handleDeleteLabel}
+            onMoveMessages={handleMoveMessages}
+            onAttachLabel={handleAttachLabel}
+            theme={theme()}
+            onSetTheme={handleSetTheme}
+            onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark")}
           />
-          <button
-            onClick={handleSaveSignature}
-            disabled={!selectedMailbox()}
-            class="mt-1 w-full rounded border border-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
-          >
-            {signatureSaved() ? "Saved!" : "Save signature"}
-          </button>
-          <div class="mt-1 text-[11px] text-slate-500">
-            Appended to sent mail. Stored only in this browser, per mailbox.
-          </div>
-        </div>
 
-        {/* Folders List */}
-        <nav class="flex-1 px-3 space-y-1 overflow-y-auto">
-          {(Object.keys(folderNames) as Folder[]).map((f) => (
-            <button
-              onClick={() => {
-                setCurrentFolder(f);
-                setSelectedMsg(null);
+          {/* ── Message List Column (Dynamic Full-Width, 380px Split, or Hidden in Full Mode) ── */}
+          <div
+            class={`${
+              layoutMode() === "full" && selectedMsg()
+                ? "hidden"
+                : selectedMsg()
+                ? "w-[380px] min-w-[340px] max-w-[420px] flex-shrink-0"
+                : "w-full flex-1"
+            } transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] h-full overflow-hidden`}
+          >
+            <MessageList
+              currentFolder={currentFolder()}
+              messages={paginatedMessages()}
+              selectedMessage={selectedMsg()}
+              selectedIds={selectedIds()}
+              isSplit={Boolean(selectedMsg())}
+              onSelectMessage={openMessage}
+              onToggleCheck={handleToggleCheck}
+              onSelectFilter={handleSelectFilter}
+              onClearSelection={() => setSelectedIds(new Set<string>())}
+              onRefresh={() => {
+                const box = selectedMailbox();
+                if (box) {
+                  loadMailboxData(box.id);
+                  showToast("Mailbox refreshed");
+                }
               }}
-              class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
-                currentFolder() === f
-                  ? "bg-slate-800 text-white font-medium"
-                  : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200"
-              }`}
-            >
-              <div class="flex items-center gap-2.5">
-                <span>{folderIcons[f]}</span>
-                <span>{folderNames[f]}</span>
-              </div>
-              <span class="text-xs font-mono text-slate-500">
-                {messages().filter((m) => m.folder === f).length}
-              </span>
-            </button>
-          ))}
-        </nav>
-
-        {/* Security Footer */}
-        <div class="p-4 border-t border-slate-800 text-xs text-slate-500 space-y-1">
-          <div class="flex items-center gap-1.5 font-medium">
-            <Show
-              when={mailboxKey() && unlockedBoxId() === selectedMailbox()?.id}
-              fallback={<><span>🔒</span><span class="text-slate-400">Mailbox locked — metadata only</span></>}
-            >
-              <span>🔓</span><span class="text-emerald-400">Mailbox unlocked — local decryption</span>
-            </Show>
-          </div>
-          <div class="truncate">User: {currentUser()?.email || "Guest Session"}</div>
-          <button
-            onClick={handleLogout}
-            class="mt-1 w-full rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-          >
-            Sign out
-          </button>
-        </div>
-      </aside>
-
-      {/* ── Middle: Message List ── */}
-      <section class="w-96 flex-shrink-0 bg-white border-r border-slate-200 flex flex-col">
-        {/* Storage Disconnected / Outage Banner (Section 11) */}
-        <Show when={storageErrorBanner()}>
-          <div role="alert" class="p-3 bg-amber-50 border-b border-amber-200 text-xs text-amber-800 flex items-start justify-between gap-2">
-            <div class="flex items-start gap-1.5">
-              <span class="text-amber-600 font-bold">⚠️</span>
-              <span>{storageErrorBanner()}</span>
-            </div>
-            <button onClick={() => setStorageErrorBanner(null)} class="text-amber-700 hover:text-amber-900 font-semibold text-[10px]">✕</button>
-          </div>
-        </Show>
-
-        {/* Search Header */}
-        <div class="p-4 border-b border-slate-200 bg-slate-50">
-          <div class="relative">
-            <input
-              type="text"
-              placeholder="Filter messages…"
-              value={searchQuery()}
-              onInput={(e) => setSearchQuery(e.currentTarget.value)}
-              class="w-full rounded-md border border-slate-300 bg-white pl-9 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+              sortOrder={sortOrder()}
+              onSortChange={setSortOrder}
+              searchQuery={searchQuery()}
+              onSearchChange={setSearchQuery}
+              currentPage={currentPage()}
+              pageSize={pageSize}
+              totalCount={sortedMessages().length}
+              onPrevPage={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              onNextPage={() => setCurrentPage((p) => p + 1)}
+              onBatchArchive={handleBatchArchive}
+              onBatchSpam={handleBatchSpam}
+              onBatchTrash={handleBatchTrash}
+              onBatchDeleteForever={handleBatchDeleteForever}
+              onEmptyTrash={handleEmptyTrash}
+              onBatchToggleRead={handleBatchToggleRead}
+              onBatchToggleStarred={handleBatchToggleStarred}
+              onBatchMoveTo={handleBatchMoveTo}
+              onBatchToggleLabel={handleBatchToggleLabel}
+              storageError={storageErrorBanner()}
+              onDismissStorageError={() => setStorageErrorBanner(null)}
+              isLoading={isLoading()}
+              density={density()}
+              onToggleStarred={toggleMessageStarred}
+              onToggleRead={toggleMessageRead}
+              onArchive={handleArchiveMessage}
+              onTrash={handleTrashMessage}
+              onDeleteForever={handleDeleteForever}
+              customFolders={customFolders()}
+              labels={labels()}
+              theme={theme()}
+              onSetTheme={handleSetTheme}
+              onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark")}
             />
-            <span class="absolute left-3 top-2 text-slate-400 text-sm">🔍</span>
           </div>
-          <div class="mt-2 text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center justify-between">
-            <span>{folderNames[currentFolder()]}</span>
-            <span>{filteredMessages().length} messages</span>
-          </div>
-        </div>
 
-        {/* Messages List */}
-        <div class="flex-1 overflow-y-auto divide-y divide-slate-100">
-          <Show when={isLoading()}>
-            <div class="p-8 text-center text-xs text-slate-400 font-mono animate-pulse">
-              Syncing sovereign mailbox…
+          {/* ── Reading Pane (Only mounted when selectedMsg()) ── */}
+          <Show when={selectedMsg()}>
+            <div class="flex-1 min-w-0 h-full overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]">
+              <ReadingPane
+                message={selectedMsg()!}
+                isDecrypting={isDecrypting()}
+                decryptedContent={decryptedContent()}
+                attachments={messageAttachments()}
+                downloadingAttachmentId={downloadingAttachment()}
+                onDownloadAttachment={handleDownloadAttachment}
+                onBack={() => setSelectedMsg(null)}
+                hasPrev={hasPrevMessage()}
+                hasNext={hasNextMessage()}
+                onPrev={handlePrevMessage}
+                onNext={handleNextMessage}
+                onArchive={handleArchiveMessage}
+                onSpam={(msg) => {
+                  setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, folder: "spam" } : m)));
+                  setSelectedMsg(null);
+                  showToast("Moved to Spam");
+                }}
+                onTrash={handleTrashMessage}
+                onDeleteForever={handleDeleteForever}
+                onToggleRead={toggleMessageRead}
+                onToggleStarred={toggleMessageStarred}
+                onMoveTo={(msg, f) => handleMoveMessages([msg.id], f)}
+                onReply={startReply}
+                onForward={startForward}
+                customFolders={customFolders()}
+                labels={labels()}
+                onToggleLabel={(msg, lid) => toggleMessageLabel([msg.id], lid)}
+                onEditDraft={(msg) => {
+                  if (editablePlaintext()) {
+                    startEditDraft(msg, editablePlaintext()!);
+                  }
+                }}
+                onDeleteDraft={handleDeleteMessage}
+              />
             </div>
           </Show>
-          <For each={filteredMessages()}>
-            {(msg) => (
-              <div
-                onClick={() => openMessage(msg)}
-                class={`p-4 cursor-pointer transition-colors ${
-                  selectedMsg()?.id === msg.id
-                    ? "bg-sky-50 border-l-4 border-sky-600"
-                    : msg.read
-                    ? "hover:bg-slate-50"
-                    : "bg-white font-semibold hover:bg-slate-50"
-                }`}
-              >
-                <div class="flex items-center justify-between text-xs text-slate-500">
-                  <span class="font-medium text-slate-900 truncate max-w-[200px]">{msg.sender}</span>
-                  <span class="font-mono text-[11px]">{msg.date}</span>
-                </div>
-                <div class="mt-1 text-sm font-medium text-slate-800 truncate">{msg.subject}</div>
-                <div class="mt-0.5 text-xs text-slate-500 truncate">{msg.snippet}</div>
-              </div>
-            )}
-          </For>
-          <Show when={!isLoading() && filteredMessages().length === 0}>
-            <div class="p-8 text-center text-sm text-slate-400">No messages in {folderNames[currentFolder()]}.</div>
-          </Show>
         </div>
-      </section>
 
-      {/* ── Right: Message Reader ── */}
-      <main class="flex-1 bg-white flex flex-col min-w-0">
-        <Show
-          when={selectedMsg()}
-          fallback={
-            <div class="flex-1 flex items-center justify-center text-slate-400 text-sm flex-col gap-2">
-              <span class="text-4xl">✉️</span>
-              <span>Select a message to view encrypted content.</span>
-            </div>
-          }
-        >
-          {(msg) => (
-            <div class="flex-1 flex flex-col h-full overflow-hidden">
-              {/* Message Header */}
-              <div class="p-6 border-b border-slate-200 bg-slate-50">
-                <div class="flex items-start justify-between">
-                  <h1 class="text-xl font-bold text-slate-900">{msg().subject}</h1>
-                  <div class="flex gap-2">
-                    {/* Server-side delete exists only for drafts; other
-                        folders triage locally. */}
-                    <Show when={msg().folder === "drafts"}>
-                      <button
-                        onClick={() => handleDeleteMessage(msg())}
-                        class="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
-                      >
-                        Delete
-                      </button>
-                    </Show>
-                    {/* Drafts decrypt locally when unlocked; editing reloads
-                        the plaintext into compose and saves via versioned PUT. */}
-                    <Show
-                      when={
-                        msg().folder === "drafts" &&
-                        mailboxKey() &&
-                        unlockedBoxId() === selectedMailbox()?.id &&
-                        editablePlaintext() !== null
-                      }
-                    >
-                      <button
-                        onClick={() => startEditDraft(msg(), editablePlaintext() as string)}
-                        class="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
-                      >
-                        Edit
-                      </button>
-                    </Show>
-                    {/* Reply/Forward need decrypted plaintext; they submit
-                        through the same encrypted send path as compose. */}
-                    <Show when={msg().folder !== "drafts" && messagePlaintext() !== null}>
-                      <button
-                        onClick={() => startReply(msg())}
-                        class="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
-                      >
-                        Reply
-                      </button>
-                      <button
-                        onClick={() => startForward(msg())}
-                        class="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
-                      >
-                        Forward
-                      </button>
-                    </Show>
-                  </div>
-                </div>
-                <div class="mt-3 flex items-center gap-4 text-xs text-slate-600">
-                  <div><span class="font-semibold text-slate-700">From:</span> {msg().sender}</div>
-                  <div><span class="font-semibold text-slate-700">To:</span> {msg().recipient}</div>
-                  <div class="ml-auto font-mono text-slate-400">{msg().date}</div>
-                </div>
-              </div>
+      {/* ── Docking Compose Drawer ── */}
+      <ComposeDrawer
+        isOpen={composeOpen()}
+        onClose={() => {
+          setComposeOpen(false);
+          clearComposeForm();
+          setComposeStatus(null);
+        }}
+        to={composeTo()}
+        onToChange={setComposeTo}
+        subject={composeSubject()}
+        onSubjectChange={setComposeSubject}
+        body={composeBody()}
+        onBodyChange={setComposeBody}
+        bodyHtml={composeBodyHtml()}
+        onBodyHtmlChange={setComposeBodyHtml}
+        attachments={composeAttachments()}
+        onAttachmentSelected={handleAttachmentSelected}
+        onRemoveAttachment={removeComposeAttachment}
+        scheduledTime={scheduledTime()}
+        onScheduledTimeChange={setScheduledTime}
+        trackOpens={composeTrackOpens()}
+        onTrackOpensChange={setComposeTrackOpens}
+        onSend={handleSend}
+        onSaveDraft={handleSaveDraft}
+        status={composeStatus()}
+        errorMessage={errorMessage()}
+        isEditingDraft={Boolean(editingDraft())}
+        senderAddress={
+          selectedMailbox()
+            ? `${selectedMailbox()!.local_part}@${currentUser()?.email.split("@")[1] || "byos.local"}`
+            : currentUser()?.email || ""
+        }
+      />
 
-              {/* Encrypted Envelope Banner */}
-              <div class="px-6 py-2 bg-slate-900 text-slate-300 text-xs font-mono flex items-center justify-between">
-                <span>Payload: AES-256-GCM Sovereign Storage</span>
-                <Show
-                  when={mailboxKey() && unlockedBoxId() === selectedMailbox()?.id}
-                  fallback={<span class="text-amber-400">Locked — showing metadata only</span>}
-                >
-                  <span class="text-emerald-400">Client-Side Decrypted</span>
-                </Show>
-              </div>
-
-              {/* Decrypted Body Reader */}
-              <div class="p-6 flex-1 overflow-y-auto text-sm text-slate-800 leading-relaxed whitespace-pre-wrap">
-                <Show when={isDecrypting()}>
-                  <div class="flex items-center gap-2 text-sky-600 animate-pulse font-mono text-xs">
-                    <span>⚙️</span> Decrypting message payload locally via Rust/WASM…
-                  </div>
-                </Show>
-                <Show when={!isDecrypting() && decryptedContent()}>
-                  {decryptedContent()}
-                </Show>
-
-                {/* Attachments Section */}
-                <Show when={messageAttachments().length > 0}>
-                  <div class="mt-6 pt-6 border-t border-slate-200">
-                    <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
-                      Attachments ({messageAttachments().length})
-                    </h3>
-                    <div class="space-y-2">
-                      <For each={messageAttachments()}>
-                        {(att) => (
-                          <div class="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
-                            <div class="flex items-center gap-3">
-                              <span class="text-lg">📎</span>
-                              <div>
-                                <div class="text-sm font-medium text-slate-700">{att.filename}</div>
-                                <div class="text-xs text-slate-500">
-                                  {Math.round(att.size_bytes / 1024)} KB • {att.content_type}
-                                </div>
-                              </div>
-                            </div>
-                            <button
-                              onClick={() => handleDownloadAttachment(att)}
-                              disabled={downloadingAttachment() === att.id}
-                              class="rounded border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              {downloadingAttachment() === att.id ? "Downloading..." : "Download"}
-                            </button>
-                          </div>
-                        )}
-                      </For>
-                    </div>
-                  </div>
-                </Show>
-              </div>
-            </div>
-          )}
-        </Show>
-      </main>
-
-      {/* ── Compose Email Modal ── */}
-      <Show when={composeOpen()}>
-        <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
-          <div class="w-full max-w-xl rounded-xl bg-white shadow-2xl overflow-hidden flex flex-col border border-slate-200">
-            <div class="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
-              <h3 class="font-semibold text-sm flex items-center gap-2">
-                <span>✏️</span> {editingDraft() ? "Edit Encrypted Draft" : "New Encrypted Message"}
-              </h3>
-              <button onClick={() => { setComposeOpen(false); clearComposeForm(); setComposeStatus(null); }} class="text-slate-400 hover:text-white text-lg">
-                ✕
-              </button>
-            </div>
-
-            <Show when={composeStatus()}>
-              <div class="bg-sky-50 px-6 py-2 text-xs text-sky-800 font-mono animate-pulse border-b border-sky-100">
-                {composeStatus()}
-              </div>
-            </Show>
-
-            <Show when={errorMessage()}>
-              <div class="bg-red-50 px-6 py-2 text-xs text-red-700 border-b border-red-100">
-                {errorMessage()}
-              </div>
-            </Show>
-
-            <form onSubmit={handleSend} class="p-6 space-y-4 flex-1">
-              <div>
-                <label class="block text-xs font-medium text-slate-700">To</label>
-                <input
-                  type="email"
-                  required
-                  placeholder="recipient@example.com"
-                  value={composeTo()}
-                  onInput={(e) => setComposeTo(e.currentTarget.value)}
-                  class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
-                />
-              </div>
-
-              <div>
-                <label class="block text-xs font-medium text-slate-700">Subject</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Subject"
-                  value={composeSubject()}
-                  onInput={(e) => setComposeSubject(e.currentTarget.value)}
-                  class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
-                />
-              </div>
-
-              <div>
-                <label class="block text-xs font-medium text-slate-700">Message Body</label>
-                <textarea
-                  rows={6}
-                  required
-                  placeholder="Type your message here. Content is client-encrypted before outbound dispatch…"
-                  value={composeBody()}
-                  onInput={(e) => setComposeBody(e.currentTarget.value)}
-                  class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
-                />
-              </div>
-
-              {/* Attachments Section — uploads disabled until a real
-                  per-mailbox key source exists (SEC-001). No "encrypted"
-                  claim is made while uploads are blocked. */}
-              <div class="rounded-lg border border-slate-200 p-3 bg-slate-50">
-                <label class="block text-xs font-medium text-slate-700 mb-2">Attachments (Unavailable — encryption key not configured)</label>
-                <input
-                  type="file"
-                  multiple
-                  disabled
-                  onChange={handleAttachmentSelected}
-                  class="block w-full text-xs text-slate-500 file:mr-4 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-sky-100 file:text-sky-700 hover:file:bg-sky-200 disabled:opacity-50"
-                />
-                <span class="text-[11px] text-slate-500 mt-1 block">
-                  Attachment uploads are disabled in this build until mailbox key exchange is configured.
-                </span>
-                <Show when={composeAttachments().length > 0}>
-                  <ul class="mt-2 space-y-1 bg-white border border-slate-200 rounded-md p-2">
-                    <For each={composeAttachments()}>
-                      {(att) => (
-                        <li class="text-xs text-slate-600 flex items-center justify-between">
-                          <span class="truncate pr-4">{att.filename} ({Math.round(att.size_bytes / 1024)} KB)</span>
-                          <button
-                            type="button"
-                            onClick={() => removeComposeAttachment(att.id)}
-                            class="text-red-500 hover:text-red-700 font-mono flex-shrink-0"
-                          >
-                            Remove
-                          </button>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
-                </Show>
-              </div>
-
-              {/* Scheduled Send Option */}
-              <div class="rounded-lg bg-slate-50 p-3 border border-slate-200">
-                <label class="block text-xs font-medium text-slate-700">
-                  <span>⏰</span> Scheduled Send (Section 18)
-                </label>
-                <input
-                  type="datetime-local"
-                  value={scheduledTime()}
-                  onInput={(e) => setScheduledTime(e.currentTarget.value)}
-                  class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-700 bg-white"
-                />
-                <span class="text-[11px] text-slate-500 mt-1 block">
-                  Message will be stored safely and dispatched automatically at the chosen time.
-                </span>
-              </div>
-
-              <div class="flex items-center justify-between pt-2">
-                <button
-                  type="button"
-                  onClick={handleSaveDraft}
-                  class="rounded-md border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  {editingDraft() ? `Update Draft (v${editingDraft()!.version})` : "Save Draft"}
-                </button>
-                <div class="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => { setComposeOpen(false); clearComposeForm(); setComposeStatus(null); }}
-                    class="rounded-md border border-slate-300 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    class="rounded-md bg-sky-600 px-5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-sky-500"
-                  >
-                    {scheduledTime() ? "Schedule Send" : "Send Encrypted"}
-                  </button>
-                </div>
-              </div>
-            </form>
-          </div>
+      {/* Floating Optimistic Undo Toast */}
+      <Show when={undoAction()}>
+        <div class="fixed bottom-6 left-6 sm:left-72 z-40 bg-[#3C3D3E] text-white px-4 py-2.5 rounded-xl shadow-lg flex items-center gap-3 text-xs font-sans border border-[#E2DFD8]/20">
+          <span>Message moved to {undoAction()?.previousFolder === "inbox" ? "Archive" : "Trash"}</span>
+          <button
+            onClick={handleUndo}
+            class="text-[#A27561] hover:text-[#c4927b] font-bold uppercase tracking-wider underline cursor-pointer"
+          >
+            Undo
+          </button>
         </div>
       </Show>
 
       {/* ── Contacts Modal ── */}
       <Show when={contactsOpen()}>
-        <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
-          <div class="w-full max-w-xl rounded-xl bg-white shadow-2xl overflow-hidden flex flex-col border border-slate-200 max-h-[85vh]">
-            <div class="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
-              <h3 class="font-semibold text-sm flex items-center gap-2">
-                <span>👥</span> Contacts (client-encrypted)
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div class="w-full max-w-xl rounded-2xl bg-white dark:bg-[#1E2025] shadow-2xl overflow-hidden flex flex-col border border-[#E2DFD8] dark:border-[#2E3138] max-h-[85vh] font-sans">
+            <div class="px-6 py-4 bg-white dark:bg-[#1E2025] border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between">
+              <h3 class="font-medium text-base text-[#2B2C2D] dark:text-[#F3F4F6]">
+                Contacts
               </h3>
-              <button onClick={() => { setContactsOpen(false); startEditContact(null); setContactsError(null); }} class="text-slate-400 hover:text-white text-lg">
-                ✕
+              <button
+                onClick={() => { setContactsOpen(false); startEditContact(null); setContactsError(null); }}
+                class="text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] p-1 rounded-lg hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] transition cursor-pointer"
+                aria-label="Close contacts"
+              >
+                <svg class="w-4 h-4 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
               </button>
             </div>
             <div class="p-6 space-y-4 overflow-y-auto">
               <Show when={contactsError()}>
-                <div class="rounded-md bg-red-50 p-3 text-xs text-red-700">{contactsError()}</div>
+                <div class="rounded-xl bg-red-50 dark:bg-rose-950/40 p-3 text-xs text-red-700 dark:text-rose-400 border border-red-200 dark:border-rose-900/50">{contactsError()}</div>
               </Show>
               <Show when={contactsLoading()}>
-                <div class="text-xs text-slate-500 animate-pulse font-mono">Decrypting contacts locally…</div>
+                <div class="text-xs text-[#6F7173] dark:text-[#878A8E] animate-pulse font-mono">Loading contacts…</div>
               </Show>
               <Show when={!contactsLoading() && contacts().length === 0 && !contactsError()}>
-                <div class="text-sm text-slate-400">No contacts yet. Entries are encrypted in your browser before upload.</div>
+                <div class="text-sm text-[#6F7173] dark:text-[#878A8E]">No contacts yet.</div>
               </Show>
               <For each={contacts()}>
                 {(c) => (
-                  <div class="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+                  <div class="flex items-center justify-between p-3.5 bg-[#F8F7F4] dark:bg-[#26282E] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138]">
                     <div class="min-w-0">
-                      <div class="text-sm font-medium text-slate-800 truncate">{c.name}</div>
-                      <div class="text-xs text-slate-500 truncate">{c.email}</div>
+                      <div class="text-sm font-medium text-[#2B2C2D] dark:text-[#F3F4F6] truncate">{c.name}</div>
+                      <div class="text-xs text-[#6F7173] dark:text-[#A1A1AA] truncate">{c.email}</div>
                       <Show when={c.notes}>
-                        <div class="text-xs text-slate-400 truncate">{c.notes}</div>
+                        <div class="text-xs text-[#878A8E] dark:text-[#71717A] truncate mt-0.5">{c.notes}</div>
                       </Show>
                     </div>
                     <div class="flex gap-2 flex-shrink-0 ml-3">
                       <button
                         onClick={() => startEditContact(c)}
-                        class="rounded border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                        class="rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] px-2.5 py-1 text-xs text-[#3C3D3E] dark:text-[#E2DFD8] hover:bg-white dark:hover:bg-[#1E2025] transition cursor-pointer"
                       >
                         Edit
                       </button>
                       <button
                         onClick={() => handleDeleteContact(c.id)}
-                        class="rounded border border-slate-300 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50"
+                        class="rounded-lg border border-rose-200 dark:border-rose-900/50 px-2.5 py-1 text-xs text-rose-700 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer"
                       >
                         Delete
                       </button>
@@ -1589,43 +3707,43 @@ const App: Component = () => {
                   </div>
                 )}
               </For>
-              <div class="pt-2 border-t border-slate-200">
-                <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+              <div class="pt-4 border-t border-[#E2DFD8] dark:border-[#2E3138]">
+                <h4 class="text-xs font-semibold text-[#6F7173] dark:text-[#878A8E] uppercase tracking-wider mb-2 font-mono">
                   {editingContact() ? "Edit contact" : "New contact"}
                 </h4>
-                <div class="space-y-2">
+                <div class="space-y-3">
                   <input
                     type="text"
                     placeholder="Name"
                     value={contactName()}
                     onInput={(e) => setContactName(e.currentTarget.value)}
-                    class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] bg-[#FAF9F6] dark:bg-[#18191D] focus:outline-none focus:ring-1 focus:ring-[#A27561] focus:border-[#A27561] transition"
                   />
                   <input
-                    type="text"
+                    type="email"
                     placeholder="email@example.com"
                     value={contactEmail()}
                     onInput={(e) => setContactEmail(e.currentTarget.value)}
-                    class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] bg-[#FAF9F6] dark:bg-[#18191D] focus:outline-none focus:ring-1 focus:ring-[#A27561] focus:border-[#A27561] transition"
                   />
                   <input
                     type="text"
                     placeholder="Notes (optional)"
                     value={contactNotes()}
                     onInput={(e) => setContactNotes(e.currentTarget.value)}
-                    class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] bg-[#FAF9F6] dark:bg-[#18191D] focus:outline-none focus:ring-1 focus:ring-[#A27561] focus:border-[#A27561] transition"
                   />
-                  <div class="flex gap-2">
+                  <div class="flex gap-2 pt-1">
                     <button
                       onClick={handleSaveContact}
-                      class="rounded-md bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-500"
+                      class="bg-[#A27561] hover:bg-[#8F6452] text-white font-medium px-4 py-2 rounded-xl transition-all text-xs cursor-pointer shadow-xs"
                     >
                       {editingContact() ? "Update contact" : "Add contact"}
                     </button>
                     <Show when={editingContact()}>
                       <button
                         onClick={() => startEditContact(null)}
-                        class="rounded-md border border-slate-300 px-4 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                        class="rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-4 py-2 text-xs font-medium text-[#3C3D3E] dark:text-[#E2DFD8] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] transition cursor-pointer"
                       >
                         Cancel
                       </button>
@@ -1637,7 +3755,64 @@ const App: Component = () => {
           </div>
         </div>
       </Show>
-    </div>
+
+      {/* ── Add Mailbox Modal ── */}
+      <AddMailboxModal
+        isOpen={addMailboxModalOpen()}
+        onClose={() => setAddMailboxModalOpen(false)}
+        onSuccess={handleAccountAdded}
+      />
+
+      {/* ── Create Folder Modal ── */}
+      <CreateFolderModal
+        isOpen={createFolderModalOpen()}
+        onClose={() => {
+          setCreateFolderModalOpen(false);
+          setFolderToEdit(null);
+        }}
+        folders={customFolders()}
+        folderToEdit={folderToEdit()}
+        onSave={handleSaveFolder}
+      />
+
+      {/* ── Create Label Modal ── */}
+      <CreateLabelModal
+        isOpen={createLabelModalOpen()}
+        onClose={() => {
+          setCreateLabelModalOpen(false);
+          setLabelToEdit(null);
+        }}
+        labelToEdit={labelToEdit()}
+        onSave={handleSaveLabel}
+      />
+
+      {/* ── Import Emails Modal ── */}
+      <ImportEmailsModal
+        isOpen={importEmailsModalOpen()}
+        onClose={() => setImportEmailsModalOpen(false)}
+        mailboxId={selectedMailbox()?.id || ""}
+        folders={customFolders()}
+        onSuccess={() => {
+          const box = selectedMailbox();
+          if (box) {
+            loadMailboxData(box.id);
+            showToast("Emails successfully imported");
+          }
+        }}
+      />
+
+      {/* ── Global Notification Toast ── */}
+      <Show when={toastMessage()}>
+        <div class="fixed bottom-6 right-6 z-50 bg-[#3C3D3E] text-white px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2.5 text-xs font-sans border border-[#E2DFD8]/20 animate-fade-in">
+          <svg class="w-4 h-4 stroke-[#A27561] fill-none stroke-2 flex-shrink-0" viewBox="0 0 24 24">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <span>{toastMessage()}</span>
+        </div>
+      </Show>
+      </div>
+    </Show>
+    </Show>
     </Show>
   );
 };

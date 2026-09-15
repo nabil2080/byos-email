@@ -38,9 +38,7 @@ const defaultContext: OrgContextValue = {
 
 const OrgContext = createContext<OrgContextValue>(defaultContext);
 
-function apiBase(): string {
-  return (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_BASE || "";
-}
+import { apiBase, getCpHeaders } from "../lib/api/client";
 
 export const OrgProvider: ParentComponent = (props) => {
   const [user, setUser] = createSignal<UserProfile | null>(null);
@@ -54,7 +52,7 @@ export const OrgProvider: ParentComponent = (props) => {
     try {
       const res = await fetch(`${apiBase()}/v1/auth/me`, {
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: getCpHeaders({ "Content-Type": "application/json" }),
       });
 
       if (res.ok) {
@@ -87,9 +85,13 @@ export const OrgProvider: ParentComponent = (props) => {
   };
 
   const handleLogout = async () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("byos_cp_session_token");
+    }
     try {
       await fetch(`${apiBase()}/v1/auth/logout`, {
         method: "POST",
+        headers: getCpHeaders(),
         credentials: "include",
       });
     } catch {

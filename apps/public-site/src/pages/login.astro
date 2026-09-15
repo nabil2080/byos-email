@@ -1,0 +1,33 @@
+---
+import Layout from "../layouts/Layout.astro";
+import { LoginForm } from "../components/auth/LoginForm";
+---
+
+<Layout title="Sign In | Sovereign Business Email">
+  <div class="min-h-[calc(100vh-80px)] flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
+    <div class="sm:mx-auto sm:w-full sm:max-w-md text-center">
+      <div class="inline-flex w-12 h-12 rounded-2xl bg-[#9E725F] items-center justify-center text-white font-mono font-bold text-sm shadow-xs mb-4">
+        BYOS
+      </div>
+      <h1 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-[#3C3D3E]">
+        Welcome Back
+      </h1>
+      <p class="mt-2 text-xs sm:text-sm text-[#6F7173]">
+        Sign in to access your organization control panel or webmail inbox.
+      </p>
+    </div>
+
+    <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+      <div class="bg-white py-8 px-6 shadow-sm border border-[#E2DFD8] rounded-3xl sm:px-10">
+        <LoginForm client:load />
+
+        <div class="mt-6 pt-6 border-t border-[#E2DFD8] text-center text-xs text-[#6F7173]">
+          Don't have an organization yet?{" "}
+          <a href="/signup" class="font-bold text-[#9E725F] hover:underline">
+            Start free trial
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</Layout>

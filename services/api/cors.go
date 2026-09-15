@@ -12,6 +12,27 @@ import (
 	"strings"
 )
 
+func isAllowedOrigin(origin string, allowedList string) bool {
+	if origin == "" {
+		return false
+	}
+	for _, a := range strings.Split(allowedList, ",") {
+		if strings.TrimSpace(a) == origin {
+			return true
+		}
+	}
+	// In development environments, permit any localhost / 127.0.0.1 port
+	if os.Getenv("BYOS_ENV") != "production" {
+		if strings.HasPrefix(origin, "http://localhost:") ||
+			strings.HasPrefix(origin, "http://127.0.0.1:") ||
+			origin == "http://localhost" ||
+			origin == "http://127.0.0.1" {
+			return true
+		}
+	}
+	return false
+}
+
 func withCORS(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
@@ -19,23 +40,18 @@ func withCORS(h http.HandlerFunc) http.HandlerFunc {
 		// CORS if Origin is in the explicit allowlist.
 		allowed := os.Getenv("BYOS_ALLOWED_ORIGINS")
 		if allowed == "" {
-			allowed = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
+			allowed = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:3002,http://127.0.0.1:3002,http://localhost:4173,http://127.0.0.1:4173,http://localhost:4321,http://127.0.0.1:4321,http://localhost:5173,http://127.0.0.1:5173"
 		}
-		if origin != "" && allowed != "" {
-			for _, a := range strings.Split(allowed, ",") {
-				if strings.TrimSpace(a) == origin {
-					w.Header().Set("Access-Control-Allow-Origin", origin)
-					w.Header().Set("Access-Control-Allow-Credentials", "true")
-					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-					w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-User-Id, X-User-ID, Authorization, Cookie")
-					w.Header().Set("Vary", "Origin")
-					break
-				}
-			}
+		if isAllowedOrigin(origin, allowed) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-User-Id, X-User-ID, Authorization, Cookie, X-BYOS-Client, x-byos-client, Accept, Origin, X-Requested-With")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			w.Header().Set("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {
-			// For same-origin proxy, no CORS headers needed; just handle preflight.
-			// Cross-origin not allowed -> still return 204 but without ACAO.
+			// Preflight request response
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

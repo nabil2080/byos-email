@@ -1,4 +1,4 @@
-import { Component, createResource, Show } from "solid-js";
+import { Component, createResource, createSignal, Show } from "solid-js";
 import { A } from "@solidjs/router";
 import { useOrg } from "../../context/OrgContext";
 import { listDomains } from "../../lib/api/domains";
@@ -7,6 +7,18 @@ import { getStorageConnection } from "../../lib/api/storage";
 
 const DashboardOverview: Component = () => {
   const org = useOrg();
+  const [copiedOrgId, setCopiedOrgId] = createSignal(false);
+
+  const handleCopyOrgId = async () => {
+    if (!org.orgId) return;
+    try {
+      await navigator.clipboard.writeText(org.orgId);
+      setCopiedOrgId(true);
+      setTimeout(() => setCopiedOrgId(false), 2000);
+    } catch {
+      // Fallback
+    }
+  };
 
   const [domains] = createResource(
     () => org.orgId,
@@ -89,8 +101,12 @@ const DashboardOverview: Component = () => {
             <span class="text-xs font-bold uppercase tracking-wider text-[#6F7173]">
               Custom Domains
             </span>
-            <span class="w-8 h-8 rounded-lg bg-[#F3ECE8] text-[#9E725F] flex items-center justify-center text-sm">
-              🌐
+            <span class="w-8 h-8 rounded-lg bg-[#F3ECE8] text-[#9E725F] flex items-center justify-center">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
             </span>
           </div>
           <div class="my-4">
@@ -118,8 +134,13 @@ const DashboardOverview: Component = () => {
             <span class="text-xs font-bold uppercase tracking-wider text-[#6F7173]">
               Mailboxes
             </span>
-            <span class="w-8 h-8 rounded-lg bg-[#F3ECE8] text-[#9E725F] flex items-center justify-center text-sm">
-              👥
+            <span class="w-8 h-8 rounded-lg bg-[#F3ECE8] text-[#9E725F] flex items-center justify-center">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
             </span>
           </div>
           <div class="my-4">
@@ -144,8 +165,12 @@ const DashboardOverview: Component = () => {
             <span class="text-xs font-bold uppercase tracking-wider text-[#6F7173]">
               Persistent Storage
             </span>
-            <span class="w-8 h-8 rounded-lg bg-[#F3ECE8] text-[#9E725F] flex items-center justify-center text-sm">
-              💾
+            <span class="w-8 h-8 rounded-lg bg-[#F3ECE8] text-[#9E725F] flex items-center justify-center">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <ellipse cx="12" cy="5" rx="9" ry="3" />
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+              </svg>
             </span>
           </div>
           <div class="my-4">
@@ -177,11 +202,36 @@ const DashboardOverview: Component = () => {
             Organization Identity & Cryptography
           </h2>
           <div class="space-y-3 font-mono text-xs">
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-[#F0EEE9]/60 border border-[#E2DFD8] gap-1">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-[#F0EEE9]/60 border border-[#E2DFD8] gap-2">
               <span class="text-[#6F7173]">Organization ID:</span>
-              <span class="text-[#3C3D3E] font-semibold select-all break-all">
-                {org.orgId || "—"}
-              </span>
+              <div class="flex items-center gap-2">
+                <span class="text-[#3C3D3E] font-semibold select-all break-all">
+                  {org.orgId || "—"}
+                </span>
+                <Show when={org.orgId}>
+                  <button
+                    type="button"
+                    onClick={handleCopyOrgId}
+                    title="Copy Organization ID"
+                    aria-label="Copy Organization ID"
+                    class="p-1.5 rounded-md hover:bg-[#F3ECE8] text-[#6F7173] hover:text-[#9E725F] transition-colors shrink-0"
+                  >
+                    <Show when={copiedOrgId()} fallback={
+                      <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                      </svg>
+                    }>
+                      <span class="inline-flex items-center gap-1 text-[11px] font-sans font-medium text-emerald-700">
+                        <svg class="w-3.5 h-3.5 stroke-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                        Copied
+                      </span>
+                    </Show>
+                  </button>
+                </Show>
+              </div>
             </div>
             <div class="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-[#F0EEE9]/60 border border-[#E2DFD8] gap-1">
               <span class="text-[#6F7173]">Authenticated Role:</span>

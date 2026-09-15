@@ -33,10 +33,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -133,7 +135,14 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodGet {
-		rows, err := conn.Query(ctx, `SELECT id::text, local_part, domain_id::text, mode FROM mailboxes WHERE org_id=$1 ORDER BY local_part`, orgID)
+		rows, err := conn.Query(ctx, `
+			SELECT m.id::text, m.local_part, m.domain_id::text, m.mode, COALESCE(m.status, 'active'),
+			       COALESCE(d.name, ''), COALESCE(m.wrapped_sk_org, ''), COALESCE(m.wrapped_sk_user, '')
+			FROM mailboxes m
+			LEFT JOIN domains d ON d.id = m.domain_id
+			WHERE m.org_id=$1 AND m.is_active=true
+			ORDER BY m.local_part
+		`, orgID)
 		if err != nil {
 			http.Error(w, "failed to list mailboxes", http.StatusInternalServerError)
 			return
@@ -141,15 +150,24 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		mailboxes := []map[string]interface{}{}
 		for rows.Next() {
-			var id, localPart, domainID, mode string
-			if err := rows.Scan(&id, &localPart, &domainID, &mode); err != nil {
+			var id, localPart, domainID, mode, status, domainName, wrappedSkOrg, wrappedSkUser string
+			if err := rows.Scan(&id, &localPart, &domainID, &mode, &status, &domainName, &wrappedSkOrg, &wrappedSkUser); err != nil {
 				continue
 			}
+			email := localPart
+			if domainName != "" {
+				email = localPart + "@" + domainName
+			}
 			mailboxes = append(mailboxes, map[string]interface{}{
-				"id":         id,
-				"local_part": localPart,
-				"domain_id":  domainID,
-				"mode":       mode,
+				"id":              id,
+				"local_part":      localPart,
+				"domain_id":       domainID,
+				"domain_name":     domainName,
+				"email":           email,
+				"mode":            mode,
+				"status":          status,
+				"wrapped_sk_org":  wrappedSkOrg,
+				"wrapped_sk_user": wrappedSkUser,
 			})
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -205,7 +223,7 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if mode == "" {
-			mode = "org_managed"
+			mode = "private"
 		}
 		if mode != "org_managed" && mode != "private" {
 			http.Error(w, "unsupported mode; only org_managed and private are supported", http.StatusBadRequest)
@@ -329,7 +347,7 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var newID string
-		err = tx.QueryRow(ctx, `INSERT INTO mailboxes (id, org_id, user_id, domain_id, local_part, mode, root_secret_id, mailbox_sk_wrapped, mailbox_pk) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id::text`, idStr, orgID, userID, domainID, localPart, mode, rootSecretID, skWrapped, mailboxPk).Scan(&newID)
+		err = tx.QueryRow(ctx, `INSERT INTO mailboxes (id, org_id, user_id, domain_id, local_part, mode, root_secret_id, mailbox_sk_wrapped, mailbox_pk, wrapped_sk_user) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id::text`, idStr, orgID, userID, domainID, localPart, mode, rootSecretID, skWrapped, mailboxPk, strings.TrimSpace(req.MailboxSkWrapped)).Scan(&newID)
 		if err != nil {
 			if isUniqueViolation(err) {
 				http.Error(w, "mailbox already exists", http.StatusConflict)
@@ -362,11 +380,191 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
-func mailboxGetHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func deleteMailbox(ctx context.Context, conn *pgx.Conn, orgID, mailboxID, actorUserID string) (string, error) {
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var localPart, domainID string
+	var associatedUserID *string
+	err = tx.QueryRow(ctx, `
+		SELECT local_part, domain_id::text, user_id::text 
+		FROM mailboxes 
+		WHERE id=$1 AND org_id=$2 AND is_active=true 
+		FOR UPDATE
+	`, mailboxID, orgID).Scan(&localPart, &domainID, &associatedUserID)
+	if err != nil {
+		return "", err
+	}
+
+	// Unbind unique constraint: prefix local_part with deleted_<short_id>_<localPart>
+	shortID := strings.ReplaceAll(mailboxID, "-", "")
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	newLocalPart := fmt.Sprintf("deleted_%s_%s", shortID, localPart)
+	if len(newLocalPart) > 100 {
+		newLocalPart = newLocalPart[:100]
+	}
+
+	// 1. Soft-delete / deactivate the mailbox
+	_, err = tx.Exec(ctx, `
+		UPDATE mailboxes 
+		SET is_active=false, status='suspended', local_part=$1, updated_at=now() 
+		WHERE id=$2
+	`, newLocalPart, mailboxID)
+	if err != nil {
+		return "", fmt.Errorf("failed to deactivate mailbox: %w", err)
+	}
+
+	// 2. Deactivate / remove aliases for this mailbox
+	_, err = tx.Exec(ctx, `
+		UPDATE aliases 
+		SET is_active=false 
+		WHERE mailbox_id=$1
+	`, mailboxID)
+	if err != nil {
+		return "", fmt.Errorf("failed to deactivate aliases: %w", err)
+	}
+
+	// 3. Expire any unconsumed invitations for this mailbox
+	_, _ = tx.Exec(ctx, `
+		UPDATE account_invitations 
+		SET expires_at=now() 
+		WHERE mailbox_id=$1 AND consumed_at IS NULL
+	`, mailboxID)
+
+	// 4. Revoke bridge credentials for this mailbox
+	_, _ = tx.Exec(ctx, `
+		UPDATE bridge_credentials 
+		SET revoked_at=now() 
+		WHERE mailbox_id=$1 AND revoked_at IS NULL
+	`, mailboxID)
+
+	// 5. Revoke device access for this mailbox
+	_, _ = tx.Exec(ctx, `
+		UPDATE device_mailbox_access 
+		SET is_active=false, revoked_at=now() 
+		WHERE mailbox_id=$1 AND is_active=true
+	`, mailboxID)
+
+	// 6. Check associated user (if any)
+	if associatedUserID != nil && *associatedUserID != "" {
+		uID := *associatedUserID
+		var otherCount int
+		_ = tx.QueryRow(ctx, `
+			SELECT count(*) FROM mailboxes 
+			WHERE user_id=$1 AND id != $2 AND is_active=true
+		`, uID, mailboxID).Scan(&otherCount)
+
+		if otherCount == 0 {
+			var uRole, uEmail string
+			_ = tx.QueryRow(ctx, `SELECT role, email FROM users WHERE id=$1`, uID).Scan(&uRole, &uEmail)
+			if uRole == "member" {
+				deletedEmail := fmt.Sprintf("deleted_%s_%s", shortID, uEmail)
+				if len(deletedEmail) > 254 {
+					deletedEmail = deletedEmail[:254]
+				}
+				_, _ = tx.Exec(ctx, `
+					UPDATE users 
+					SET is_active=false, status='suspended', email=$1, updated_at=now() 
+					WHERE id=$2
+				`, deletedEmail, uID)
+				_, _ = tx.Exec(ctx, `
+					UPDATE sessions 
+					SET revoked_at=now() 
+					WHERE user_id=$1 AND revoked_at IS NULL
+				`, uID)
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("failed to commit mailbox deletion: %w", err)
+	}
+
+	auditLog(ctx, conn, orgID, actorUserID, "delete_mailbox", "mailbox", mailboxID, map[string]interface{}{
+		"local_part": localPart,
+		"domain_id":  domainID,
+	})
+
+	return localPart, nil
+}
+
+func mailboxItemHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		orgID := r.PathValue("org_id")
+		mailboxID := r.PathValue("mailbox_id")
+		if orgID == "" || mailboxID == "" {
+			http.Error(w, "organization ID and mailbox ID required", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(orgID); err != nil {
+			http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(mailboxID); err != nil {
+			http.Error(w, "mailbox ID must be UUID", http.StatusBadRequest)
+			return
+		}
+
+		userID, ok := getAuthenticatedUserID(r)
+		if !ok {
+			http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
+			return
+		}
+
+		dsn := os.Getenv("DATABASE_URL")
+		if dsn == "" {
+			dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+		}
+		ctx := context.Background()
+		conn, err := pgx.Connect(ctx, dsn)
+		if err != nil {
+			http.Error(w, "Database connection failed", http.StatusInternalServerError)
+			return
+		}
+		defer conn.Close(ctx)
+
+		// Verify caller belongs to org
+		var userOrgID string
+		err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)
+		if err != nil || userOrgID != orgID {
+			http.Error(w, "not authorized for this organization", http.StatusForbidden)
+			return
+		}
+
+		// Must be admin or owner
+		if !isAdmin(userID, orgID, conn) {
+			http.Error(w, "admin or owner role required to delete mailbox", http.StatusForbidden)
+			return
+		}
+
+		_, err = deleteMailbox(ctx, conn, orgID, mailboxID, userID)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				http.Error(w, "mailbox not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, "failed to delete mailbox: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":     mailboxID,
+			"status": "deleted",
+		})
 		return
 	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+func mailboxGetHandler(w http.ResponseWriter, r *http.Request) {
 	mailboxID := r.PathValue("mailbox_id")
 	if mailboxID == "" {
 		http.Error(w, "mailbox ID required", http.StatusBadRequest)
@@ -399,12 +597,41 @@ func mailboxGetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not authorized", http.StatusForbidden)
 		return
 	}
+
+	if r.Method == http.MethodDelete {
+		if !isAdmin(userID, userOrgID, conn) {
+			http.Error(w, "admin or owner role required to delete mailbox", http.StatusForbidden)
+			return
+		}
+		_, err = deleteMailbox(ctx, conn, userOrgID, mailboxID, userID)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				http.Error(w, "mailbox not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, "failed to delete mailbox: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":     mailboxID,
+			"status": "deleted",
+		})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var id, localPart, domainID, mode, orgID string
 	var rootSecretID *string
 	var mailboxSkWrapped []byte
 	var mailboxPk []byte
 	var mailboxSkVersion int
-	err = conn.QueryRow(ctx, `SELECT id::text, local_part, domain_id::text, mode, org_id::text, root_secret_id::text, mailbox_sk_wrapped, mailbox_pk, mailbox_sk_version FROM mailboxes WHERE id=$1`, mailboxID).Scan(&id, &localPart, &domainID, &mode, &orgID, &rootSecretID, &mailboxSkWrapped, &mailboxPk, &mailboxSkVersion)
+	var wrappedSkUser, previousWrappedSkUser *string
+	err = conn.QueryRow(ctx, `SELECT id::text, local_part, domain_id::text, mode, org_id::text, root_secret_id::text, mailbox_sk_wrapped, mailbox_pk, mailbox_sk_version, wrapped_sk_user, previous_wrapped_sk_user FROM mailboxes WHERE id=$1`, mailboxID).Scan(&id, &localPart, &domainID, &mode, &orgID, &rootSecretID, &mailboxSkWrapped, &mailboxPk, &mailboxSkVersion, &wrappedSkUser, &previousWrappedSkUser)
 	if err != nil {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
@@ -413,14 +640,24 @@ func mailboxGetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
 		return
 	}
+	wskStr := ""
+	if wrappedSkUser != nil {
+		wskStr = *wrappedSkUser
+	}
+	prevWskStr := ""
+	if previousWrappedSkUser != nil {
+		prevWskStr = *previousWrappedSkUser
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"mailbox_id":         id,
-		"mode":               mode,
-		"mailbox_pk":         base64.StdEncoding.EncodeToString(mailboxPk),
-		"mailbox_sk_wrapped": base64.StdEncoding.EncodeToString(mailboxSkWrapped),
-		"mailbox_sk_version": mailboxSkVersion,
+		"mailbox_id":               id,
+		"mode":                     mode,
+		"mailbox_pk":               base64.StdEncoding.EncodeToString(mailboxPk),
+		"mailbox_sk_wrapped":       base64.StdEncoding.EncodeToString(mailboxSkWrapped),
+		"mailbox_sk_version":       mailboxSkVersion,
+		"wrapped_sk_user":          wskStr,
+		"previous_wrapped_sk_user": prevWskStr,
 	})
 }
 
@@ -614,6 +851,163 @@ func mailboxAliasesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+func organizationAliasesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	orgID := r.PathValue("org_id")
+	if orgID == "" {
+		http.Error(w, "organization ID required", http.StatusBadRequest)
+		return
+	}
+	if _, err := uuid.Parse(orgID); err != nil {
+		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	var memberID string
+	err = conn.QueryRow(ctx, `SELECT id::text FROM users WHERE id=$1 AND org_id=$2 AND is_active=true`, userID, orgID).Scan(&memberID)
+	if err != nil {
+		http.Error(w, "not authorized for this organization", http.StatusForbidden)
+		return
+	}
+
+	rows, err := conn.Query(ctx, `
+		SELECT 
+			a.id::text, 
+			a.mailbox_id::text, 
+			m.local_part, 
+			md.name,
+			a.local_part, 
+			a.domain_id::text, 
+			ad.name, 
+			a.is_active, 
+			a.created_at
+		FROM aliases a
+		JOIN mailboxes m ON a.mailbox_id = m.id
+		JOIN domains md ON m.domain_id = md.id
+		JOIN domains ad ON a.domain_id = ad.id
+		WHERE m.org_id = $1 AND m.is_active = true
+		ORDER BY a.created_at DESC`, orgID)
+	if err != nil {
+		http.Error(w, "failed to list organization aliases", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	aliases := []map[string]interface{}{}
+	for rows.Next() {
+		var id, mailboxID, mbLocal, mbDom, aliasLocal, domainID, aliasDom string
+		var isActive bool
+		var createdAt time.Time
+		if err := rows.Scan(&id, &mailboxID, &mbLocal, &mbDom, &aliasLocal, &domainID, &aliasDom, &isActive, &createdAt); err != nil {
+			continue
+		}
+		aliases = append(aliases, map[string]interface{}{
+			"id":                 id,
+			"mailbox_id":         mailboxID,
+			"mailbox_local_part": mbLocal,
+			"mailbox_address":    mbLocal + "@" + mbDom,
+			"local_part":         aliasLocal,
+			"domain_id":          domainID,
+			"domain_name":        aliasDom,
+			"alias_address":      aliasLocal + "@" + aliasDom,
+			"is_active":          isActive,
+			"created_at":         createdAt.Format(time.RFC3339),
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{"aliases": aliases})
+}
+
+func mailboxAliasItemHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mailboxID := r.PathValue("mailbox_id")
+	aliasID := r.PathValue("alias_id")
+	if mailboxID == "" || aliasID == "" {
+		http.Error(w, "mailbox_id and alias_id required", http.StatusBadRequest)
+		return
+	}
+	if _, err := uuid.Parse(mailboxID); err != nil {
+		http.Error(w, "mailbox_id must be UUID", http.StatusBadRequest)
+		return
+	}
+	if _, err := uuid.Parse(aliasID); err != nil {
+		http.Error(w, "alias_id must be UUID", http.StatusBadRequest)
+		return
+	}
+
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	var userOrgID string
+	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)
+	if err != nil {
+		http.Error(w, "not authorized", http.StatusForbidden)
+		return
+	}
+
+	var mailboxOrgID string
+	err = conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID)
+	if err != nil {
+		http.Error(w, "mailbox not found", http.StatusNotFound)
+		return
+	}
+	if mailboxOrgID != userOrgID {
+		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
+		return
+	}
+
+	cmdTag, err := conn.Exec(ctx, `DELETE FROM aliases WHERE id=$1 AND mailbox_id=$2`, aliasID, mailboxID)
+	if err != nil {
+		http.Error(w, "failed to delete alias", http.StatusInternalServerError)
+		return
+	}
+	if cmdTag.RowsAffected() == 0 {
+		http.Error(w, "alias not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "deleted", "id": aliasID})
 }
 
 func mailboxPrivacyModeHandler(w http.ResponseWriter, r *http.Request) {

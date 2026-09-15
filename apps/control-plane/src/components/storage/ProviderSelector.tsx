@@ -16,11 +16,13 @@ const options: Array<{ value: StorageProvider; label: string; desc: string; badg
 
 const ProviderSelector: Component<Props> = (props) => {
   return (
-    <div role="radiogroup" aria-label="Storage provider" class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <div role="radiogroup" aria-label="Storage provider" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
       {options.map((opt) => (
         <label
-          class={`relative flex cursor-pointer flex-col rounded-lg border p-4 hover:bg-slate-50 focus-within:ring-2 focus-within:ring-sky-500 ${
-            props.value === opt.value ? "border-sky-600 ring-1 ring-sky-600" : "border-slate-200"
+          class={`relative flex cursor-pointer flex-col rounded-xl border p-4 transition-all focus-within:ring-2 focus-within:ring-[#9E725F] ${
+            props.value === opt.value
+              ? "border-[#9E725F] ring-1 ring-[#9E725F] bg-[#F3ECE8]/50 shadow-xs"
+              : "border-[#E2DFD8] bg-white hover:border-[#9E725F] hover:bg-[#F3ECE8]/30"
           } ${props.disabled ? "opacity-50 pointer-events-none" : ""}`}
         >
           <input
@@ -32,13 +34,15 @@ const ProviderSelector: Component<Props> = (props) => {
             class="sr-only"
             disabled={props.disabled}
           />
-          <span class="flex items-center gap-2 text-sm font-medium text-slate-900">
+          <span class="flex items-center gap-2 text-xs sm:text-sm font-bold text-[#3C3D3E]">
             {opt.label}
             {opt.badge && (
-              <span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">{opt.badge}</span>
+              <span class="rounded-md bg-[#9E725F]/15 px-2 py-0.5 text-[10px] font-bold font-mono text-[#9E725F]">
+                {opt.badge}
+              </span>
             )}
           </span>
-          <span class="mt-1 text-xs text-slate-500">{opt.desc}</span>
+          <span class="mt-1 text-[11px] text-[#6F7173] leading-normal">{opt.desc}</span>
         </label>
       ))}
     </div>

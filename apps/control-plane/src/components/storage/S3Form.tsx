@@ -23,8 +23,8 @@ const S3Form: Component<Props> = (props) => {
   return (
     <div class="space-y-4">
       <div>
-        <label for="endpoint" class="block text-sm font-medium text-slate-700">
-          Endpoint
+        <label for="endpoint" class="block text-xs font-semibold text-[#3C3D3E] mb-1.5">
+          Endpoint URL
         </label>
         <input
           id="endpoint"
@@ -33,22 +33,22 @@ const S3Form: Component<Props> = (props) => {
           spellcheck={false}
           value={props.endpoint}
           onInput={(e) => props.setEndpoint(e.currentTarget.value)}
-          placeholder="minio:9000"
+          placeholder="e.g. minio:9000 or s3.us-east-1.amazonaws.com"
           disabled={props.disabled}
           aria-invalid={!!props.errors?.endpoint}
           aria-describedby={props.errors?.endpoint ? "err-endpoint" : undefined}
-          class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-sky-500 focus:ring-sky-500"
+          class="block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2 text-xs sm:text-sm text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
         />
         {props.errors?.endpoint && (
-          <p id="err-endpoint" class="mt-1 text-xs text-red-600">
+          <p id="err-endpoint" class="mt-1 text-xs text-rose-600">
             {props.errors.endpoint}
           </p>
         )}
       </div>
 
       <div>
-        <label for="bucket" class="block text-sm font-medium text-slate-700">
-          Bucket
+        <label for="bucket" class="block text-xs font-semibold text-[#3C3D3E] mb-1.5">
+          Bucket Name
         </label>
         <input
           id="bucket"
@@ -60,14 +60,14 @@ const S3Form: Component<Props> = (props) => {
           placeholder="byos-mailbox"
           disabled={props.disabled}
           aria-invalid={!!props.errors?.bucket}
-          class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          class="block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2 text-xs sm:text-sm text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
         />
-        {props.errors?.bucket && <p class="mt-1 text-xs text-red-600">{props.errors.bucket}</p>}
+        {props.errors?.bucket && <p class="mt-1 text-xs text-rose-600">{props.errors.bucket}</p>}
       </div>
 
       <div>
-        <label for="access_key" class="block text-sm font-medium text-slate-700">
-          Access key
+        <label for="access_key" class="block text-xs font-semibold text-[#3C3D3E] mb-1.5">
+          Access Key ID
         </label>
         <input
           id="access_key"
@@ -78,14 +78,14 @@ const S3Form: Component<Props> = (props) => {
           onInput={(e) => props.setAccessKey(e.currentTarget.value)}
           disabled={props.disabled}
           aria-invalid={!!props.errors?.access_key}
-          class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          class="block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2 text-xs sm:text-sm font-mono text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
         />
-        {props.errors?.access_key && <p class="mt-1 text-xs text-red-600">{props.errors.access_key}</p>}
+        {props.errors?.access_key && <p class="mt-1 text-xs text-rose-600">{props.errors.access_key}</p>}
       </div>
 
       <div>
-        <label for="secret_key" class="block text-sm font-medium text-slate-700">
-          Secret key
+        <label for="secret_key" class="block text-xs font-semibold text-[#3C3D3E] mb-1.5">
+          Secret Access Key
         </label>
         <div class="mt-1 flex gap-2">
           <input
@@ -97,23 +97,23 @@ const S3Form: Component<Props> = (props) => {
             onInput={(e) => props.setSecretKey(e.currentTarget.value)}
             disabled={props.disabled}
             aria-invalid={!!props.errors?.secret_key}
-            class="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            class="block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2 text-xs sm:text-sm font-mono text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
           />
           <button
             type="button"
             onClick={() => setShowSecret((v) => !v)}
-            class="rounded-md border border-slate-300 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
+            class="rounded-xl border border-[#E2DFD8] px-3.5 py-2 text-xs font-medium text-[#6F7173] hover:text-[#3C3D3E] hover:bg-[#F3ECE8] transition-colors shrink-0"
             aria-label={showSecret() ? "Hide secret key" : "Show secret key"}
           >
             {showSecret() ? "Hide" : "Show"}
           </button>
         </div>
-        {props.errors?.secret_key && <p class="mt-1 text-xs text-red-600">{props.errors.secret_key}</p>}
+        {props.errors?.secret_key && <p class="mt-1 text-xs text-rose-600">{props.errors.secret_key}</p>}
       </div>
 
       <div>
-        <label for="region" class="block text-sm font-medium text-slate-700">
-          Region <span class="text-slate-400">(optional)</span>
+        <label for="region" class="block text-xs font-semibold text-[#3C3D3E] mb-1.5">
+          Region <span class="text-[#6F7173] font-normal">(optional)</span>
         </label>
         <input
           id="region"
@@ -123,21 +123,21 @@ const S3Form: Component<Props> = (props) => {
           onInput={(e) => props.setRegion(e.currentTarget.value)}
           placeholder="us-east-1"
           disabled={props.disabled}
-          class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          class="block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2 text-xs sm:text-sm text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
         />
       </div>
 
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2.5 pt-1">
         <input
           id="path_style"
           type="checkbox"
           checked={props.pathStyle}
           onChange={(e) => props.setPathStyle(e.currentTarget.checked)}
           disabled={props.disabled}
-          class="h-4 w-4 rounded border-slate-300 text-sky-600"
+          class="h-4 w-4 rounded border-[#E2DFD8] text-[#9E725F] focus:ring-[#9E725F]"
         />
-        <label for="path_style" class="text-sm text-slate-700">
-          Path-style addressing
+        <label for="path_style" class="text-xs font-medium text-[#3C3D3E] select-none">
+          Path-style addressing (required for MinIO and local testing)
         </label>
       </div>
     </div>

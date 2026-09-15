@@ -163,18 +163,30 @@ const ConnectStorageDialog: Component<Props> = (props) => {
         onClose={onDialogClose}
         onClick={onDialogClick}
         aria-labelledby="dialog-title"
-        class="p-0 bg-transparent backdrop:bg-slate-900/50 open:flex open:items-center open:justify-center max-w-none w-full h-full"
+        class="p-0 bg-transparent backdrop:bg-[#3C3D3E]/40 backdrop:backdrop-blur-xs open:flex open:items-center open:justify-center max-w-none w-full h-full"
       >
-        <div class="relative w-full max-w-2xl rounded-lg bg-white p-6 shadow-xl max-h-[90vh] overflow-y-auto mx-4">
-          <h2 id="dialog-title" class="text-lg font-semibold text-slate-900">
-            {props.mode === "create" ? "Connect Storage" : "Replace Storage Configuration"}
-          </h2>
-          <p class="mt-1 text-xs text-slate-500">
-            Credentials are encrypted and stored. They are never displayed again after submission.
-          </p>
+        <div class="relative w-full max-w-2xl rounded-2xl border border-[#E2DFD8] bg-white p-7 shadow-2xl max-h-[90vh] overflow-y-auto mx-4 font-sans">
+          <div class="flex items-start justify-between">
+            <div>
+              <h2 id="dialog-title" class="text-lg font-bold text-[#3C3D3E]">
+                {props.mode === "create" ? "Connect Persistent Storage" : "Replace Storage Configuration"}
+              </h2>
+              <p class="mt-1 text-xs text-[#6F7173]">
+                Customer-controlled storage bucket credentials are encrypted with your organization key and stored securely.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleClose}
+              class="rounded-lg p-1 text-[#6F7173] hover:text-[#3C3D3E] hover:bg-[#F3ECE8] transition-colors"
+              aria-label="Close dialog"
+            >
+              ✕
+            </button>
+          </div>
 
           <Show when={topError()}>
-            <div role="alert" class="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
+            <div role="alert" class="mt-4 rounded-xl bg-rose-50 border border-rose-200 p-3.5 text-xs text-rose-700">
               {topError()}
             </div>
           </Show>
@@ -203,12 +215,12 @@ const ConnectStorageDialog: Component<Props> = (props) => {
 
             <Show when={provider() === "google_drive"}>
               <div class="grid gap-3">
-                <button type="button" onClick={startGoogleAuthorization} disabled={submitting()} class="rounded-md border border-sky-600 px-3 py-2 text-sm font-medium text-sky-700 disabled:opacity-50">Authorize with Google</button>
-                <p class="text-xs text-slate-500">Or enter an existing OAuth token below for controlled service-account deployments.</p>
-                <input type="password" autocomplete="off" placeholder="Google OAuth access token" value={accessToken()} onInput={(event) => setAccessToken(event.currentTarget.value)} disabled={submitting()} class="rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                <input type="password" autocomplete="off" placeholder="Refresh token (optional)" value={refreshToken()} onInput={(event) => setRefreshToken(event.currentTarget.value)} disabled={submitting()} class="rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                <input placeholder="Drive folder ID (optional)" value={folderId()} onInput={(event) => setFolderId(event.currentTarget.value)} disabled={submitting()} class="rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                <p class="text-xs text-slate-500">Tokens are sent once for encrypted storage and are never returned by the API.</p>
+                <button type="button" onClick={startGoogleAuthorization} disabled={submitting()} class="rounded-xl border border-[#9E725F] px-3.5 py-2 text-xs sm:text-sm font-semibold text-[#9E725F] hover:bg-[#F3ECE8] transition-colors disabled:opacity-50">Authorize with Google</button>
+                <p class="text-xs text-[#6F7173]">Or enter an existing OAuth token below for controlled service-account deployments.</p>
+                <input type="password" autocomplete="off" placeholder="Google OAuth access token" value={accessToken()} onInput={(event) => setAccessToken(event.currentTarget.value)} disabled={submitting()} class="rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2 text-xs sm:text-sm text-[#3C3D3E] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]" />
+                <input type="password" autocomplete="off" placeholder="Refresh token (optional)" value={refreshToken()} onInput={(event) => setRefreshToken(event.currentTarget.value)} disabled={submitting()} class="rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2 text-xs sm:text-sm text-[#3C3D3E] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]" />
+                <input placeholder="Drive folder ID (optional)" value={folderId()} onInput={(event) => setFolderId(event.currentTarget.value)} disabled={submitting()} class="rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2 text-xs sm:text-sm text-[#3C3D3E] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]" />
+                <p class="text-xs text-[#6F7173]">Tokens are sent once for encrypted storage and are never returned by the API.</p>
               </div>
             </Show>
 
@@ -216,19 +228,19 @@ const ConnectStorageDialog: Component<Props> = (props) => {
               <MockForm root={root()} setRoot={setRoot} disabled={submitting()} errors={errors()} />
             </Show>
 
-            <div class="flex justify-end gap-3 pt-2">
+            <div class="flex justify-end gap-3 pt-4 border-t border-[#E2DFD8]">
               <button
                 type="button"
                 onClick={handleClose}
                 disabled={submitting()}
-                class="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                class="rounded-xl border border-[#E2DFD8] px-4 py-2 text-xs sm:text-sm font-medium text-[#3C3D3E] hover:bg-[#F3ECE8] transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={submitting()}
-                class="rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+                class="rounded-xl bg-[#9E725F] px-5 py-2 text-xs sm:text-sm font-semibold text-white shadow-xs hover:bg-[#865E4D] transition-colors disabled:opacity-50"
               >
                 {submitting() ? "Saving…" : props.mode === "create" ? "Save configuration" : "Save new configuration"}
               </button>

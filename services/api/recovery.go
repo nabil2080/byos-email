@@ -281,7 +281,7 @@ func recoveryVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	auditLog(ctx, conn, orgID, userID, "recovery_verify", "user", userID, nil)
-	setSessionCookie(w, token, expires)
+	setSessionCookie(w, r, token, expires)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"id": userID, "email": email, "org_id": orgID})
 }

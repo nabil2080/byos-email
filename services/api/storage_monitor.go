@@ -63,7 +63,7 @@ func runStorageHealthCheck() {
 	defer conn.Close(ctx)
 
 	rows, err := conn.Query(ctx, `
-		SELECT id::text, provider, config->>'ciphertext'
+		SELECT id::text, provider, COALESCE(config->>'ciphertext', '')
 		FROM storage_connections
 		WHERE status IN ('active', 'error')
 		ORDER BY updated_at ASC`)
@@ -79,6 +79,9 @@ func runStorageHealthCheck() {
 		var id, provider, ciphertext string
 		if err := rows.Scan(&id, &provider, &ciphertext); err != nil {
 			log.Printf("storage health monitor row failed: %v", err)
+			continue
+		}
+		if ciphertext == "" || ciphertext == "mock_seed" {
 			continue
 		}
 		connections = append(connections, storageConnection{id: id, provider: provider, ciphertext: ciphertext})

@@ -3,21 +3,20 @@
 @layer base {
   :root {
     --cloud-dancer: #F0EEE9;
-    --mocha-mousse: #A47764;
-    --mocha-mousse-hover: #8E6250;
-    --mocha-mousse-light: #EAE3DB;
-    --mocha-mousse-card: #E5DDD5;
-    --mocha-mousse-border: #D1C4B8;
-    --neutral-gray: #4A4A4A;
-    --neutral-gray-dark: #242424;
-    --neutral-gray-light: #6E6E6E;
-    --foreground: #4A4A4A;
+    --mocha-mousse: #9E725F;
+    --mocha-mousse-hover: #865E4D;
+    --mocha-mousse-soft: #F3ECE8;
+    --neutral-charcoal: #3C3D3E;
+    --neutral-muted: #6F7173;
+    --hairline-border: #E2DFD8;
+    --pure-white: #FFFFFF;
+    --foreground: #3C3D3E;
     --background: #F0EEE9;
   }
 
   html {
     background-color: var(--cloud-dancer);
-    color: var(--neutral-gray);
+    color: var(--neutral-charcoal);
     font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     scrollbar-gutter: stable;
     scroll-behavior: smooth;
@@ -25,7 +24,7 @@
 
   body {
     background-color: var(--cloud-dancer);
-    color: var(--neutral-gray);
+    color: var(--neutral-charcoal);
     overflow-x: hidden;
   }
 
@@ -42,28 +41,65 @@
     background: #F0EEE9;
   }
   ::-webkit-scrollbar-thumb {
-    background: #D1C4B8;
+    background: #E2DFD8;
     border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #A47764;
+    background: #9E725F;
   }
 }
 
 /* Subtle architectural grid on Cloud Dancer */
 .bg-architectural-grid {
   background-image: 
-    linear-gradient(to right, rgba(164, 119, 100, 0.08) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(164, 119, 100, 0.08) 1px, transparent 1px);
+    linear-gradient(to right, rgba(158, 114, 95, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(158, 114, 95, 0.08) 1px, transparent 1px);
   background-size: 40px 40px;
 }
 
 /* Warm ambient glow for light background */
 .ambient-glow {
-  background: radial-gradient(circle 800px at 50% -100px, rgba(164, 119, 100, 0.18), transparent 70%);
+  background: radial-gradient(circle 800px at 50% -100px, rgba(158, 114, 95, 0.15), transparent 70%);
 }
 
 .reveal-text {
   letter-spacing: -0.04em;
 }
 
+/* Ambient warm Mocha Mousse mesh */
+.bg-ambient-mesh {
+  background: 
+    radial-gradient(at 15% 10%, rgba(158, 114, 95, 0.12) 0px, transparent 55%),
+    radial-gradient(at 85% 15%, rgba(158, 114, 95, 0.08) 0px, transparent 50%),
+    radial-gradient(at 50% 60%, rgba(243, 236, 232, 0.6) 0px, transparent 65%);
+}
+
+/* High-end editorial paper grain texture overlay */
+.bg-paper-grain {
+  background-image: radial-gradient(rgba(60, 61, 62, 0.045) 1px, transparent 0);
+  background-size: 20px 20px;
+}
+
+/* Tactile Spring Easing Curves */
+.ease-spring {
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes beam-travel {
+  0% {
+    stroke-dashoffset: 120;
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0.3;
+  }
+}
+
+.animate-beam {
+  stroke-dasharray: 10 10;
+  animation: beam-travel 2.4s linear infinite;
+}

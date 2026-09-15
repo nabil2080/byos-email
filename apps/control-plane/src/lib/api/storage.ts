@@ -43,6 +43,8 @@ export interface GoogleDriveAuthorization {
   state: string;
 }
 
+import { getCpHeaders } from "./client";
+
 function getAuthHeader(): Record<string, string> {
   // X-User-Id is prototype auth – injected from OrganizationContext / AuthContext
   // In SolidJS dashboard this comes from useAuth().userId()
@@ -58,6 +60,7 @@ function apiBase(): string {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...getCpHeaders(),
     ...getAuthHeader(),
     ...(init?.headers as Record<string, string>),
   };

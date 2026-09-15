@@ -45,7 +45,10 @@ const AuthGuardContent: Component<AuthGuardProps> = (props) => {
       <Show when={!org.isLoading && !org.isAuthenticated}>
         <div class="min-h-screen bg-[#F0EEE9] flex flex-col items-center justify-center p-6 text-center">
           <div class="w-10 h-10 rounded-lg bg-[#9E725F]/10 flex items-center justify-center mb-3 text-[#9E725F]">
-            🔒
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            </svg>
           </div>
           <h2 class="text-lg font-semibold text-[#3C3D3E]">Session Required</h2>
           <p class="text-sm text-[#6F7173] mt-1 max-w-sm">Redirecting you to sign in…</p>
@@ -61,8 +64,11 @@ const AuthGuardContent: Component<AuthGuardProps> = (props) => {
       <Show when={!org.isLoading && org.isAuthenticated && org.isMember}>
         <div class="min-h-screen bg-[#F0EEE9] flex flex-col items-center justify-center p-6 text-center">
           <div class="max-w-md w-full bg-white rounded-xl border border-[#E2DFD8] p-8 shadow-sm">
-            <div class="w-12 h-12 mx-auto rounded-full bg-[#F3ECE8] text-[#9E725F] flex items-center justify-center text-xl mb-4">
-              ✉️
+            <div class="w-12 h-12 mx-auto rounded-full bg-[#F3ECE8] text-[#9E725F] flex items-center justify-center mb-4">
+              <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="4" width="20" height="16" rx="2" />
+                <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+              </svg>
             </div>
             <h2 class="text-xl font-bold text-[#3C3D3E]">Member Account Detected</h2>
             <p class="mt-2 text-sm text-[#6F7173] leading-relaxed">

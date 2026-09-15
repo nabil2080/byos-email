@@ -22,10 +22,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -154,7 +157,7 @@ func auditLog(ctx context.Context, conn *pgx.Conn, orgID, userID, action, resour
 }
 
 func organizationMembersHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -174,6 +177,7 @@ func organizationMembersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
+
 	// Fetch actor organization from server-side state.
 	var orgID string
 	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&orgID)
@@ -181,29 +185,122 @@ func organizationMembersHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "user not found or not a member of any organization", http.StatusForbidden)
 		return
 	}
-	rows, err := conn.Query(ctx, `SELECT id::text, email, COALESCE(display_name,''), role, is_active FROM users WHERE org_id=$1 ORDER BY email`, orgID)
-	if err != nil {
-		http.Error(w, "failed to list members", http.StatusInternalServerError)
+
+	if r.Method == http.MethodGet {
+		rows, err := conn.Query(ctx, `
+			SELECT u.id::text, u.email, COALESCE(u.display_name,''), u.role, u.is_active,
+			       EXISTS(SELECT 1 FROM mailboxes m WHERE m.user_id = u.id AND m.is_active = true) as has_mailbox
+			FROM users u
+			WHERE u.org_id=$1
+			ORDER BY (u.role='owner') DESC, (u.role='admin') DESC, u.email
+		`, orgID)
+		if err != nil {
+			http.Error(w, "failed to list members", http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+		members := []map[string]interface{}{}
+		for rows.Next() {
+			var id, email, displayName, role string
+			var active, hasMailbox bool
+			if err := rows.Scan(&id, &email, &displayName, &role, &active, &hasMailbox); err != nil {
+				continue
+			}
+			members = append(members, map[string]interface{}{
+				"id":           id,
+				"email":        email,
+				"display_name": displayName,
+				"role":         role,
+				"is_active":    active,
+				"has_mailbox":  hasMailbox,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"members": members})
 		return
 	}
-	defer rows.Close()
-	members := []map[string]interface{}{}
-	for rows.Next() {
-		var id, email, displayName, role string
-		var active bool
-		if err := rows.Scan(&id, &email, &displayName, &role, &active); err != nil {
-			continue
+
+	if r.Method == http.MethodPost {
+		if !isAdmin(userID, orgID, conn) {
+			http.Error(w, "admin or owner role required to invite members", http.StatusForbidden)
+			return
 		}
-		members = append(members, map[string]interface{}{
-			"id":           id,
-			"email":        email,
-			"display_name": displayName,
-			"role":         role,
-			"is_active":    active,
+
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		var req struct {
+			Email       string `json:"email"`
+			Role        string `json:"role"`
+			DisplayName string `json:"display_name"`
+			Password    string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		email := strings.TrimSpace(strings.ToLower(req.Email))
+		if email == "" || !strings.Contains(email, "@") {
+			http.Error(w, "valid email required", http.StatusBadRequest)
+			return
+		}
+		role := strings.TrimSpace(req.Role)
+		if role != "admin" && role != "member" {
+			role = "admin"
+		}
+		displayName := strings.TrimSpace(req.DisplayName)
+		if displayName == "" {
+			displayName = strings.Split(email, "@")[0]
+		}
+
+		var existingID string
+		err = conn.QueryRow(ctx, `SELECT id::text FROM users WHERE email=$1`, email).Scan(&existingID)
+		if err == nil {
+			http.Error(w, "user with this email already exists", http.StatusConflict)
+			return
+		}
+
+		pass := req.Password
+		if pass == "" {
+			passBytes := make([]byte, 12)
+			_, _ = rand.Read(passBytes)
+			pass = "BYOS!" + hex.EncodeToString(passBytes)
+		} else if len(pass) < 8 {
+			http.Error(w, "password must be at least 8 characters", http.StatusBadRequest)
+			return
+		}
+		pwHash, err := hashPassword(pass)
+		if err != nil {
+			http.Error(w, "failed to hash password", http.StatusInternalServerError)
+			return
+		}
+
+		var newUserID string
+		err = conn.QueryRow(ctx, `
+			INSERT INTO users (org_id, email, display_name, password_hash, role, status, is_active)
+			VALUES ($1, $2, $3, $4, $5, 'active', true)
+			RETURNING id::text
+		`, orgID, email, displayName, pwHash, role).Scan(&newUserID)
+		if err != nil {
+			http.Error(w, "failed to create user", http.StatusInternalServerError)
+			return
+		}
+
+		auditLog(ctx, conn, orgID, userID, "member_invite", "user", newUserID, map[string]interface{}{
+			"email": email,
+			"role":  role,
 		})
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":            newUserID,
+			"email":         email,
+			"display_name":  displayName,
+			"role":          role,
+			"temp_password": pass,
+			"success":       true,
+		})
+		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"members": members})
 }
 
 func changeMemberRoleHandler(w http.ResponseWriter, r *http.Request) {

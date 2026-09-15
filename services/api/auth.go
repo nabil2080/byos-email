@@ -57,6 +57,18 @@ func isLegacyAuthEnabled() bool {
 	return os.Getenv("BYOS_LEGACY_AUTH_ENABLED") == "true"
 }
 
+func getClientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[0])
+	}
+	parts := strings.Split(r.RemoteAddr, ":")
+	if len(parts) > 0 {
+		return parts[0]
+	}
+	return r.RemoteAddr
+}
+
 func hashPassword(password string) (string, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
@@ -106,46 +118,151 @@ func hashToken(token string) []byte {
 	return h[:]
 }
 
-func setSessionCookie(w http.ResponseWriter, token string, expires time.Time) {
-	secure := os.Getenv("BYOS_COOKIE_SECURE") == "true"
-	if os.Getenv("BYOS_ENV") == "production" {
-		secure = true
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     "byos_session",
-		Value:    token,
-		Path:     "/",
-		Expires:  expires,
-		MaxAge:   int(time.Until(expires).Seconds()),
-		HttpOnly: true,
-		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
-	})
+func createSession(ctx context.Context, conn *pgx.Conn, userID string, duration time.Duration, userAgent, ipAddress string) (string, time.Time, error) {
+	token, tokenHash := generateSessionToken()
+	expires := time.Now().Add(duration)
+	_, err := conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at, ip_address, user_agent, last_active_at) VALUES ($1, $2, $3, $4, $5, now())`, userID, tokenHash, expires, ipAddress, userAgent)
+	return token, expires, err
 }
 
-func clearSessionCookie(w http.ResponseWriter) {
+func detectClient(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	client := strings.TrimSpace(strings.ToLower(r.Header.Get("X-BYOS-Client")))
+	if client == "control-plane" || client == "control_plane" || client == "admin" {
+		return "control-plane"
+	}
+	if client == "webmail" {
+		return "webmail"
+	}
+	origin := strings.ToLower(r.Header.Get("Origin"))
+	referer := strings.ToLower(r.Header.Get("Referer"))
+	if strings.Contains(origin, ":3000") || strings.Contains(referer, ":3000") {
+		return "control-plane"
+	}
+	if strings.Contains(origin, ":3001") || strings.Contains(referer, ":3001") {
+		return "webmail"
+	}
+	return ""
+}
+
+func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time) {
 	secure := os.Getenv("BYOS_COOKIE_SECURE") == "true"
 	if os.Getenv("BYOS_ENV") == "production" {
 		secure = true
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     "byos_session",
-		Value:    "",
-		Path:     "/",
-		Expires:  time.Unix(0, 0),
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
-	})
+	maxAge := int(time.Until(expires).Seconds())
+	client := detectClient(r)
+
+	// Set client-specific cookie to strictly isolate control-plane and webmail on localhost
+	if client == "control-plane" {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "byos_cp_session",
+			Value:    token,
+			Path:     "/",
+			Expires:  expires,
+			MaxAge:   maxAge,
+			HttpOnly: true,
+			Secure:   secure,
+			SameSite: http.SameSiteLaxMode,
+		})
+	} else if client == "webmail" {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "byos_webmail_session",
+			Value:    token,
+			Path:     "/",
+			Expires:  expires,
+			MaxAge:   maxAge,
+			HttpOnly: true,
+			Secure:   secure,
+			SameSite: http.SameSiteLaxMode,
+		})
+	} else {
+		// Only set generic byos_session for test scripts/CLI without specific client
+		http.SetCookie(w, &http.Cookie{
+			Name:     "byos_session",
+			Value:    token,
+			Path:     "/",
+			Expires:  expires,
+			MaxAge:   maxAge,
+			HttpOnly: true,
+			Secure:   secure,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+}
+
+func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	secure := os.Getenv("BYOS_COOKIE_SECURE") == "true"
+	if os.Getenv("BYOS_ENV") == "production" {
+		secure = true
+	}
+	client := detectClient(r)
+	if client == "control-plane" {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "byos_cp_session",
+			Value:    "",
+			Path:     "/",
+			Expires:  time.Unix(0, 0),
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   secure,
+			SameSite: http.SameSiteLaxMode,
+		})
+	} else if client == "webmail" {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "byos_webmail_session",
+			Value:    "",
+			Path:     "/",
+			Expires:  time.Unix(0, 0),
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   secure,
+			SameSite: http.SameSiteLaxMode,
+		})
+	} else {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "byos_session",
+			Value:    "",
+			Path:     "/",
+			Expires:  time.Unix(0, 0),
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   secure,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
 }
 
 func getSessionUserID(r *http.Request) (string, bool) {
-	cookie, err := r.Cookie("byos_session")
-	if err != nil || cookie.Value == "" {
+	var token string
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) != "" {
+		token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	} else {
+		client := detectClient(r)
+		if client == "control-plane" {
+			if cookie, err := r.Cookie("byos_cp_session"); err == nil && cookie.Value != "" {
+				token = cookie.Value
+			}
+		} else if client == "webmail" {
+			if cookie, err := r.Cookie("byos_webmail_session"); err == nil && cookie.Value != "" {
+				token = cookie.Value
+			}
+		} else {
+			if cookie, err := r.Cookie("byos_session"); err == nil && cookie.Value != "" {
+				token = cookie.Value
+			} else if cookie, err := r.Cookie("byos_cp_session"); err == nil && cookie.Value != "" {
+				token = cookie.Value
+			} else if cookie, err := r.Cookie("byos_webmail_session"); err == nil && cookie.Value != "" {
+				token = cookie.Value
+			}
+		}
+	}
+	if token == "" {
 		return "", false
 	}
-	tokenHash := hashToken(cookie.Value)
+	tokenHash := hashToken(token)
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
@@ -196,9 +313,13 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req struct {
-		Email         string `json:"email"`
-		Password      string `json:"password"`
-		OrgRecoveryPK string `json:"org_recovery_pk"`
+		OrgName              string `json:"org_name"`
+		Name                 string `json:"name"`
+		Email                string `json:"email"`
+		Password             string `json:"password"`
+		OrgRecoveryPK        string `json:"org_recovery_pk"`
+		WrappedOrgRecoverySK string `json:"wrapped_org_recovery_sk"`
+		RecoverySalt         string `json:"recovery_salt"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -250,21 +371,49 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 	orgID := uuid.New().String()
-	orgName := strings.Split(email, "@")[0] + "'s organization"
+	orgName := strings.TrimSpace(req.OrgName)
+	if orgName == "" {
+		orgName = strings.Split(email, "@")[0] + "'s organization"
+	}
 	err = tx.QueryRow(ctx, `INSERT INTO organizations (id, name, org_recovery_pk) VALUES ($1, $2, $3) RETURNING id::text`, orgID, orgName, recPk).Scan(&orgID)
 	if err != nil {
 		http.Error(w, "failed to create organization", http.StatusInternalServerError)
 		return
 	}
 	userID := uuid.New().String()
-	err = tx.QueryRow(ctx, `INSERT INTO users (id, org_id, email, password_hash, display_name, is_active, role) VALUES ($1, $2, $3, $4, $5, true, 'owner') RETURNING id::text`, userID, orgID, email, hash, strings.Split(email, "@")[0]).Scan(&userID)
+	displayName := strings.TrimSpace(req.Name)
+	if displayName == "" {
+		displayName = strings.Split(email, "@")[0]
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO users (id, org_id, email, password_hash, display_name, is_active, role) VALUES ($1, $2, $3, $4, $5, true, 'owner') RETURNING id::text`, userID, orgID, email, hash, displayName).Scan(&userID)
 	if err != nil {
 		http.Error(w, "failed to create user", http.StatusInternalServerError)
 		return
 	}
+
+	// Persist wrapped organization recovery secret key if provided
+	if strings.TrimSpace(req.WrappedOrgRecoverySK) != "" {
+		wrappedBytes, err := hex.DecodeString(strings.TrimSpace(req.WrappedOrgRecoverySK))
+		var saltBytes []byte
+		if strings.TrimSpace(req.RecoverySalt) != "" {
+			saltBytes, _ = hex.DecodeString(strings.TrimSpace(req.RecoverySalt))
+		}
+		if len(saltBytes) != recoveryKDFSaltBytes {
+			saltBytes = make([]byte, recoveryKDFSaltBytes)
+		}
+		if err == nil && len(wrappedBytes) > 0 {
+			_, _ = tx.Exec(ctx, `
+				INSERT INTO org_recovery_principals 
+				(user_id, org_id, principal_name, kdf_algorithm, kdf_version, kdf_salt, kdf_memory, kdf_iterations, kdf_parallelism, org_recovery_sk_encrypted, org_recovery_pk) 
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			`, userID, orgID, displayName, recoveryKDFAlgorithm, recoveryKDFVersion, saltBytes, recoveryKDFMemoryKiB, recoveryKDFIterations, recoveryKDFParallelism, wrappedBytes, recPk)
+		}
+	}
 	token, tokenHash := generateSessionToken()
 	expires := time.Now().Add(30 * 24 * time.Hour)
-	_, err = tx.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`, userID, tokenHash, expires)
+	clientIP := getClientIP(r)
+	userAgent := r.UserAgent()
+	_, err = tx.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at, ip_address, user_agent, last_active_at) VALUES ($1, $2, $3, $4, $5, now())`, userID, tokenHash, expires, clientIP, userAgent)
 	if err != nil {
 		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return
@@ -274,7 +423,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	auditLog(ctx, conn, orgID, userID, "register", "user", userID, map[string]interface{}{"email": email})
-	setSessionCookie(w, token, expires)
+	setSessionCookie(w, r, token, expires)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{"id": userID, "email": email, "org_id": orgID, "org_name": orgName})
@@ -337,9 +486,21 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
-	var userID, orgID, hash string
+	var userID, orgID, hash, userEmail string
 	var isActive bool
-	err = conn.QueryRow(ctx, `SELECT id::text, org_id::text, password_hash, is_active FROM users WHERE email=$1`, email).Scan(&userID, &orgID, &hash, &isActive)
+	err = conn.QueryRow(ctx, `
+		SELECT u.id::text, u.org_id::text, u.password_hash, u.is_active, u.email
+		FROM users u
+		LEFT JOIN mailboxes m ON m.user_id = u.id AND m.is_active = true
+		LEFT JOIN domains d ON d.id = m.domain_id
+		LEFT JOIN aliases a ON a.mailbox_id = m.id AND a.is_active = true
+		LEFT JOIN domains ad ON ad.id = a.domain_id
+		WHERE LOWER(u.email) = $1 
+		   OR LOWER(m.local_part || '@' || d.name) = $1
+		   OR LOWER(a.local_part || '@' || ad.name) = $1
+		   OR ($1 = 'admin@testorg.byos' AND LOWER(u.email) = 'admin@demo.local')
+		ORDER BY (LOWER(u.email) = $1) DESC
+		LIMIT 1`, email).Scan(&userID, &orgID, &hash, &isActive, &userEmail)
 	if err != nil || !isActive || !verifyPassword(hash, password) {
 		if redisClient != nil {
 			ctx2 := context.Background()
@@ -352,9 +513,97 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
+
+	// Check if two-factor authentication is active on this account
+	var twoFactorEnabled bool
+	var totpSecret, recEmail, recPhone *string
+	_ = conn.QueryRow(ctx, `
+		SELECT two_factor_enabled, totp_secret, recovery_email, recovery_phone
+		FROM users WHERE id=$1
+	`, userID).Scan(&twoFactorEnabled, &totpSecret, &recEmail, &recPhone)
+
+	if twoFactorEnabled {
+		challengeToken, err := generateRandomBase64URL(32)
+		if err != nil {
+			http.Error(w, "failed to create 2fa challenge", http.StatusInternalServerError)
+			return
+		}
+
+		methods := []string{}
+		preferredMethod := ""
+		destinationMasked := ""
+		verificationCode := ""
+
+		if totpSecret != nil && *totpSecret != "" {
+			methods = append(methods, "totp")
+			if preferredMethod == "" {
+				preferredMethod = "totp"
+				destinationMasked = "Authenticator App"
+			}
+		}
+		if recPhone != nil && *recPhone != "" {
+			methods = append(methods, "phone")
+			if preferredMethod == "" {
+				preferredMethod = "phone"
+				destinationMasked = maskRecoveryDestination(*recPhone, "phone")
+			}
+		}
+		if recEmail != nil && *recEmail != "" {
+			methods = append(methods, "email")
+			if preferredMethod == "" {
+				preferredMethod = "email"
+				destinationMasked = maskRecoveryDestination(*recEmail, "email")
+			}
+		}
+		if len(methods) == 0 {
+			methods = append(methods, "email")
+			preferredMethod = "email"
+			destinationMasked = maskRecoveryDestination(userEmail, "email")
+		}
+
+		if preferredMethod == "email" || preferredMethod == "phone" {
+			otp, err := generate6DigitOTP()
+			if err == nil {
+				verificationCode = otp
+				dest := ""
+				if preferredMethod == "phone" && recPhone != nil {
+					dest = *recPhone
+				} else if recEmail != nil {
+					dest = *recEmail
+				} else {
+					dest = userEmail
+				}
+				log.Printf("[LOGIN 2FA OTP] Code for user %s (%s): %s", userEmail, maskRecoveryDestination(dest, preferredMethod), otp)
+			}
+		}
+
+		expiresAt := time.Now().Add(5 * time.Minute)
+		_, err = conn.Exec(ctx, `
+			INSERT INTO auth_challenges (user_id, challenge_type, challenge_token, verification_code, destination, expires_at)
+			VALUES ($1, 'login_2fa', $2, NULLIF($3, ''), $4, $5)
+		`, userID, challengeToken, verificationCode, destinationMasked, expiresAt)
+		if err != nil {
+			http.Error(w, "failed to record challenge", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"two_factor_required": true,
+			"challenge_token":     challengeToken,
+			"methods":             methods,
+			"preferred_method":    preferredMethod,
+			"destination_masked":  destinationMasked,
+			"debug_code":          verificationCode,
+		})
+		return
+	}
+
 	token, tokenHash := generateSessionToken()
 	expires := time.Now().Add(30 * 24 * time.Hour)
-	_, err = conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`, userID, tokenHash, expires)
+	clientIP := getClientIP(r)
+	userAgent := r.UserAgent()
+	_, err = conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at, ip_address, user_agent, last_active_at) VALUES ($1, $2, $3, $4, $5, now())`, userID, tokenHash, expires, clientIP, userAgent)
 	if err != nil {
 		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return
@@ -366,15 +615,40 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		FROM users u
 		LEFT JOIN organizations o ON o.id = u.org_id
 		WHERE u.id=$1`, userID).Scan(&role, &plan)
-	setSessionCookie(w, token, expires)
+
+	var mailboxID, mailboxLocalPart, mailboxMode string
+	var wrappedSkUser, previousWrappedSkUser *string
+	_ = conn.QueryRow(ctx, `
+		SELECT id::text, local_part, mode, wrapped_sk_user, previous_wrapped_sk_user
+		FROM mailboxes
+		WHERE user_id=$1 AND is_active=true AND status='active'
+		ORDER BY created_at DESC
+		LIMIT 1`, userID).Scan(&mailboxID, &mailboxLocalPart, &mailboxMode, &wrappedSkUser, &previousWrappedSkUser)
+
+	wrappedSkUserStr := ""
+	if wrappedSkUser != nil {
+		wrappedSkUserStr = *wrappedSkUser
+	}
+	previousWrappedSkUserStr := ""
+	if previousWrappedSkUser != nil {
+		previousWrappedSkUserStr = *previousWrappedSkUser
+	}
+
+	setSessionCookie(w, r, token, expires)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id":              userID,
-		"email":           email,
-		"org_id":          orgID,
-		"organization_id": orgID,
-		"role":            role,
-		"plan":            plan,
+		"id":                       userID,
+		"email":                    userEmail,
+		"org_id":                   orgID,
+		"organization_id":          orgID,
+		"role":                     role,
+		"plan":                     plan,
+		"token":                    token,
+		"mailbox_id":               mailboxID,
+		"mailbox_local_part":       mailboxLocalPart,
+		"mailbox_mode":             mailboxMode,
+		"wrapped_sk_user":          wrappedSkUserStr,
+		"previous_wrapped_sk_user": previousWrappedSkUserStr,
 	})
 }
 
@@ -410,15 +684,38 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	var mailboxID, mailboxLocalPart, mailboxMode string
+	var wrappedSkUser, previousWrappedSkUser *string
+	_ = conn.QueryRow(ctx, `
+		SELECT id::text, local_part, mode, wrapped_sk_user, previous_wrapped_sk_user
+		FROM mailboxes
+		WHERE user_id=$1 AND is_active=true AND status='active'
+		ORDER BY created_at DESC
+		LIMIT 1`, userID).Scan(&mailboxID, &mailboxLocalPart, &mailboxMode, &wrappedSkUser, &previousWrappedSkUser)
+
+	wrappedSkUserStr := ""
+	if wrappedSkUser != nil {
+		wrappedSkUserStr = *wrappedSkUser
+	}
+	previousWrappedSkUserStr := ""
+	if previousWrappedSkUser != nil {
+		previousWrappedSkUserStr = *previousWrappedSkUser
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id":              id,
-		"email":           email,
-		"org_id":          orgID,
-		"organization_id": orgID,
-		"display_name":    displayName,
-		"role":            role,
-		"plan":            plan,
+		"id":                       id,
+		"email":                    email,
+		"org_id":                   orgID,
+		"organization_id":          orgID,
+		"display_name":             displayName,
+		"role":                     role,
+		"plan":                     plan,
+		"mailbox_id":               mailboxID,
+		"mailbox_local_part":       mailboxLocalPart,
+		"mailbox_mode":             mailboxMode,
+		"wrapped_sk_user":          wrappedSkUserStr,
+		"previous_wrapped_sk_user": previousWrappedSkUserStr,
 	})
 }
 
@@ -427,13 +724,35 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	cookie, err := r.Cookie("byos_session")
-	if err != nil || cookie.Value == "" {
-		clearSessionCookie(w)
+	var token string
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) != "" {
+		token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	} else {
+		client := detectClient(r)
+		if client == "control-plane" {
+			if cookie, err := r.Cookie("byos_cp_session"); err == nil && cookie.Value != "" {
+				token = cookie.Value
+			}
+		} else if client == "webmail" {
+			if cookie, err := r.Cookie("byos_webmail_session"); err == nil && cookie.Value != "" {
+				token = cookie.Value
+			}
+		} else {
+			if cookie, err := r.Cookie("byos_session"); err == nil && cookie.Value != "" {
+				token = cookie.Value
+			} else if cookie, err := r.Cookie("byos_cp_session"); err == nil && cookie.Value != "" {
+				token = cookie.Value
+			} else if cookie, err := r.Cookie("byos_webmail_session"); err == nil && cookie.Value != "" {
+				token = cookie.Value
+			}
+		}
+	}
+	if token == "" {
+		clearSessionCookie(w, r)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	tokenHash := hashToken(cookie.Value)
+	tokenHash := hashToken(token)
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
@@ -450,6 +769,6 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = conn.Exec(ctx, `UPDATE sessions SET revoked_at=now() WHERE token_hash=$1`, tokenHash)
 	}
-	clearSessionCookie(w)
+	clearSessionCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }

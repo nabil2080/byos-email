@@ -483,20 +483,22 @@ const RecoveryPage: Component = () => {
   }
 
   return (
-    <div class="mx-auto max-w-2xl px-4 py-8 sm:px-6">
-      <h1 class="text-2xl font-semibold text-slate-900">Recovery Material</h1>
-      <p class="mt-1 text-sm text-slate-500">
-        Your recovery phrase can restore your mailbox keys. Keep it safe and never share it. Nothing on this page
-        is sent to the server except the derived public verifier key on enrollment.
-      </p>
+    <div class="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+      <div class="mb-6">
+        <h1 class="text-2xl font-bold tracking-tight text-[#3C3D3E]">Recovery Material & Root Keys</h1>
+        <p class="mt-1 text-sm text-[#6F7173]">
+          Your zero-knowledge recovery phrase can restore your mailbox keys. Keep it safe and never share it.
+          All cryptographic operations occur client-side; only derived public verifiers are enrolled.
+        </p>
+      </div>
 
       {/* Tab bar */}
-      <div class="mt-6 flex gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1 w-fit flex-wrap">
+      <div class="flex gap-1.5 rounded-xl border border-[#E2DFD8] bg-white p-1.5 w-fit flex-wrap shadow-2xs">
         {(["phrase", "enroll", "recover", "rotate", "principals"] as Tab[]).map((t) => (
           <button
             onClick={() => { setTab(t); if (t === "principals") { void refreshPrincipals(); } }}
-            class={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
-              tab() === t ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+            class={`rounded-lg px-4 py-2 text-xs sm:text-sm font-semibold transition-all ${
+              tab() === t ? "bg-[#9E725F] text-white shadow-xs" : "text-[#6F7173] hover:text-[#3C3D3E] hover:bg-[#F3ECE8]/60"
             }`}
           >
             {t === "phrase"
@@ -515,19 +517,19 @@ const RecoveryPage: Component = () => {
       {/* ── Generate Phrase tab ── */}
       <Show when={tab() === "phrase"}>
         <Show when={phraseError()}>
-          <div role="alert" class="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
+          <div role="alert" class="mt-4 rounded-xl bg-rose-50 border border-rose-200 p-3.5 text-xs text-rose-700">
             {phraseError()}
           </div>
         </Show>
-        <div class="mt-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div class="mt-4 rounded-2xl border border-[#E2DFD8] bg-white p-6 shadow-xs">
           <Show
             when={mnemonic()}
             fallback={
               <div>
-                <p class="text-sm text-slate-600">No recovery phrase generated yet. Generated entirely in your browser — never sent to any server.</p>
+                <p class="text-xs sm:text-sm text-[#6F7173]">No recovery phrase generated yet. Generated entirely in your browser — never sent to any server.</p>
                 <button
                   onClick={handleGenerate}
-                  class="mt-3 rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700"
+                  class="mt-4 rounded-xl bg-[#9E725F] px-4 py-2.5 text-xs sm:text-sm font-semibold text-white shadow-xs hover:bg-[#865E4D] transition-colors"
                 >
                   Generate recovery phrase
                 </button>
@@ -536,27 +538,27 @@ const RecoveryPage: Component = () => {
           >
             {(m) => (
               <div>
-                <p class="text-sm font-medium text-slate-900">Your recovery phrase (24 words):</p>
-                <p class="mt-2 rounded-md bg-amber-50 p-3 font-mono text-sm text-slate-900" style="word-spacing: 0.25rem">
+                <p class="text-xs sm:text-sm font-bold text-[#3C3D3E]">Your recovery phrase (24 words):</p>
+                <p class="mt-2 rounded-xl bg-[#F0EEE9]/60 border border-[#E2DFD8] p-4 font-mono text-xs sm:text-sm text-[#3C3D3E]" style="word-spacing: 0.25rem">
                   {m()}
                 </p>
-                <p class="mt-2 text-xs text-amber-700">Copy it now and store it securely. You will not be shown this again. Do not store it in email or cloud notes.</p>
-                <div class="mt-3 flex flex-wrap gap-2">
-                  <button onClick={handleCopy} class="rounded-md bg-slate-800 px-3 py-2 text-sm text-white hover:bg-slate-900">
+                <p class="mt-2 text-xs text-amber-800">Copy it now and store it securely. You will not be shown this again. Do not store it in email or cloud notes.</p>
+                <div class="mt-4 flex flex-wrap gap-2.5">
+                  <button onClick={handleCopy} class="rounded-xl bg-[#3C3D3E] px-4 py-2 text-xs sm:text-sm font-medium text-white hover:bg-[#2B2D30] transition-colors">
                     {phraseCopied() ? "Copied!" : "Copy to clipboard"}
                   </button>
-                  <button onClick={handleVerify} class="rounded-md bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-700">
+                  <button onClick={handleVerify} class="rounded-xl bg-emerald-600 px-4 py-2 text-xs sm:text-sm font-medium text-white hover:bg-emerald-700 transition-colors">
                     Verify phrase can restore
                   </button>
                   <button
                     onClick={() => { setMnemonic(null); setPhraseVerified(false); }}
-                    class="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    class="rounded-xl border border-[#E2DFD8] px-4 py-2 text-xs sm:text-sm font-medium text-[#3C3D3E] hover:bg-[#F3ECE8] transition-colors"
                   >
                     Clear
                   </button>
                 </div>
                 <Show when={phraseVerified()}>
-                  <p class="mt-3 rounded-md bg-emerald-50 p-2 text-sm text-emerald-800">
+                  <p class="mt-4 rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-xs sm:text-sm text-emerald-800 font-medium">
                     ✓ Verified: phrase recovers the same root and can unwrap a test mailbox key. Wrong ID correctly fails.
                   </p>
                 </Show>
@@ -568,81 +570,81 @@ const RecoveryPage: Component = () => {
 
       {/* ── Enroll Recovery Key tab ── */}
       <Show when={tab() === "enroll"}>
-        <div class="mt-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div class="mt-4 rounded-2xl border border-[#E2DFD8] bg-white p-6 shadow-xs">
           <Show when={enrollDone()}>
-            <div class="rounded-md bg-emerald-50 p-4 text-sm text-emerald-800">
-              <p class="font-medium">Recovery key enrolled successfully.</p>
+            <div class="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-xs sm:text-sm text-emerald-800">
+              <p class="font-bold">Recovery key enrolled successfully.</p>
               <p class="mt-1">Your server now holds the public verifier derived from your phrase. If you lose your password, your phrase can prove your identity during recovery.</p>
             </div>
           </Show>
           <Show when={!enrollDone()}>
-            <p class="text-sm text-slate-600">
+            <p class="text-xs sm:text-sm text-[#6F7173]">
               Enrolling your recovery key registers a public verifier on the server so you can prove your identity using your phrase without revealing it.
               Your phrase is only used locally — only the derived public key is sent to the server.
             </p>
             <Show when={enrollError()}>
-              <div role="alert" class="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
+              <div role="alert" class="mt-3 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
                 {enrollError()}
               </div>
             </Show>
             <label class="mt-4 block">
-              <span class="text-sm font-medium text-slate-700">Your 24-word recovery phrase</span>
+              <span class="text-xs sm:text-sm font-semibold text-[#3C3D3E]">Your 24-word recovery phrase</span>
               <textarea
                 rows={3}
-                class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                class="mt-1.5 block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2.5 text-xs sm:text-sm font-mono text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
                 placeholder="word1 word2 word3 … word24"
                 value={enrollMnemonic()}
                 onInput={(e) => setEnrollMnemonic(e.currentTarget.value)}
                 disabled={enrollBusy()}
               />
             </label>
-            <p class="mt-1 text-xs text-slate-500">
+            <p class="mt-1.5 text-xs text-[#6F7173]">
               The phrase is processed entirely in your browser. Only the derived public key is sent to the server.
             </p>
             <button
               onClick={handleEnroll}
               disabled={enrollBusy() || !enrollMnemonic().trim()}
               aria-busy={enrollBusy()}
-              class="mt-4 rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+              class="mt-4 rounded-xl bg-[#9E725F] px-4 py-2.5 text-xs sm:text-sm font-semibold text-white shadow-xs hover:bg-[#865E4D] disabled:opacity-50 transition-colors"
             >
               {enrollBusy() ? "Enrolling…" : "Enroll recovery key"}
             </button>
           </Show>
         </div>
-        <p class="mt-4 text-xs text-slate-500">
+        <p class="mt-4 text-xs text-[#6F7173]">
           Security: your phrase never leaves your browser. Enrollment stores only the derived Ed25519 public verifier key. This key cannot reverse-derive your phrase or your root secret.
         </p>
       </Show>
 
-      <p class="mt-4 text-xs text-slate-500">
+      <p class="mt-4 text-xs text-[#6F7173]">
         Authentication (login) does not derive mailbox keys. Your mailbox encryption keys are separate from your login password.
       </p>
 
       {/* ── Recover Account tab ── */}
       <Show when={tab() === "recover"}>
-        <div class="mt-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div class="mt-4 rounded-2xl border border-[#E2DFD8] bg-white p-6 shadow-xs">
           <Show when={recoverDone()}>
-            <div class="rounded-md bg-emerald-50 p-4 text-sm text-emerald-800">
-              <p class="font-medium">Identity verified — account access restored.</p>
+            <div class="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-xs sm:text-sm text-emerald-800">
+              <p class="font-bold">Identity verified — account access restored.</p>
               <p class="mt-1">Set a new password below to durably regain login. Your mailbox keys were never involved.</p>
             </div>
             <Show when={pwDone()}>
-              <p class="mt-3 rounded-md bg-emerald-50 p-2 text-sm text-emerald-800">
+              <p class="mt-3 rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-xs sm:text-sm text-emerald-800 font-medium">
                 ✓ Password updated. Other sessions were revoked; this session stays signed in.
               </p>
             </Show>
             <Show when={!pwDone()}>
               <Show when={pwError()}>
-                <div role="alert" class="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
+                <div role="alert" class="mt-3 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
                   {pwError()}
                 </div>
               </Show>
               <label class="mt-4 block">
-                <span class="text-sm font-medium text-slate-700">New password (8-128 characters)</span>
+                <span class="text-xs sm:text-sm font-semibold text-[#3C3D3E]">New password (8-128 characters)</span>
                 <input
                   type="password"
                   autocomplete="new-password"
-                  class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  class="mt-1.5 block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2.5 text-xs sm:text-sm text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
                   value={newPassword()}
                   onInput={(e) => setNewPassword(e.currentTarget.value)}
                   disabled={pwBusy()}
@@ -652,28 +654,28 @@ const RecoveryPage: Component = () => {
                 onClick={handleChangePassword}
                 disabled={pwBusy() || newPassword().length < 8}
                 aria-busy={pwBusy()}
-                class="mt-4 rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+                class="mt-4 rounded-xl bg-[#9E725F] px-4 py-2.5 text-xs sm:text-sm font-semibold text-white shadow-xs hover:bg-[#865E4D] disabled:opacity-50 transition-colors"
               >
                 {pwBusy() ? "Updating…" : "Set new password"}
               </button>
             </Show>
           </Show>
           <Show when={!recoverDone()}>
-            <p class="text-sm text-slate-600">
+            <p class="text-xs sm:text-sm text-[#6F7173]">
               Lost your password? Prove possession of your recovery phrase to restore account access.
               Your phrase is only used locally to sign a one-time server challenge — it is never sent anywhere.
             </p>
             <Show when={recoverError()}>
-              <div role="alert" class="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
+              <div role="alert" class="mt-3 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
                 {recoverError()}
               </div>
             </Show>
             <label class="mt-4 block">
-              <span class="text-sm font-medium text-slate-700">Account email</span>
+              <span class="text-xs sm:text-sm font-semibold text-[#3C3D3E]">Account email</span>
               <input
                 type="email"
                 autocomplete="username"
-                class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                class="mt-1.5 block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2.5 text-xs sm:text-sm text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
                 placeholder="you@example.com"
                 value={recoverEmail()}
                 onInput={(e) => setRecoverEmail(e.currentTarget.value)}
@@ -681,11 +683,11 @@ const RecoveryPage: Component = () => {
               />
             </label>
             <label class="mt-4 block">
-              <span class="text-sm font-medium text-slate-700">24-word recovery phrase</span>
+              <span class="text-xs sm:text-sm font-semibold text-[#3C3D3E]">24-word recovery phrase</span>
               <textarea
                 rows={3}
                 autocomplete="off"
-                class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                class="mt-1.5 block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2.5 text-xs sm:text-sm font-mono text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
                 placeholder="word1 word2 word3 … word24"
                 value={recoverMnemonic()}
                 onInput={(e) => setRecoverMnemonic(e.currentTarget.value)}
@@ -696,7 +698,7 @@ const RecoveryPage: Component = () => {
               onClick={handleRecover}
               disabled={recoverBusy() || !recoverEmail().trim() || !recoverMnemonic().trim()}
               aria-busy={recoverBusy()}
-              class="mt-4 rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+              class="mt-4 rounded-xl bg-[#9E725F] px-4 py-2.5 text-xs sm:text-sm font-semibold text-white shadow-xs hover:bg-[#865E4D] disabled:opacity-50 transition-colors"
             >
               {recoverBusy() ? "Verifying…" : "Recover account"}
             </button>
@@ -706,46 +708,46 @@ const RecoveryPage: Component = () => {
 
       {/* ── Rotate Root tab ── */}
       <Show when={tab() === "rotate"}>
-        <div class="mt-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-          <p class="text-sm text-slate-600">
+        <div class="mt-4 rounded-2xl border border-[#E2DFD8] bg-white p-6 shadow-xs">
+          <p class="text-xs sm:text-sm text-[#6F7173]">
             Replace a mailbox recovery root after compromise (or as hygiene). The mailbox key itself
             does not change, so existing messages keep decrypting; the old root is revoked, its
             device grants die, and private rotations re-enroll the recovery verifier automatically.
           </p>
           <Show when={rotError()}>
-            <div role="alert" class="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
+            <div role="alert" class="mt-3 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
               {rotError()}
             </div>
           </Show>
           <Show when={rotVersion() !== null}>
-            <div class="mt-3 rounded-md bg-emerald-50 p-4 text-sm text-emerald-800">
-              <p class="font-medium">Root rotated to version {rotVersion()}. Recovery verifier re-enrolled where applicable.</p>
+            <div class="mt-3 rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-xs sm:text-sm text-emerald-800">
+              <p class="font-bold">Root rotated to version {rotVersion()}. Recovery verifier re-enrolled where applicable.</p>
               <Show when={rotNewMnemonic()}>
-                <p class="mt-2 font-medium text-slate-900">Your NEW recovery phrase (replaces the old one):</p>
-              <p class="mt-2 rounded-md bg-amber-50 p-3 font-mono text-sm text-slate-900" style="word-spacing: 0.25rem">
+                <p class="mt-2 font-bold text-[#3C3D3E]">Your NEW recovery phrase (replaces the old one):</p>
+              <p class="mt-2 rounded-xl bg-[#F0EEE9]/60 border border-[#E2DFD8] p-4 font-mono text-xs sm:text-sm text-[#3C3D3E]" style="word-spacing: 0.25rem">
                 {rotNewMnemonic()}
               </p>
-              <p class="mt-2 text-xs text-amber-700">Copy it now and store it securely. The old phrase no longer recovers this mailbox.</p>
-              <div class="mt-3 flex gap-2">
-                <button onClick={handleRotCopy} class="rounded-md bg-slate-800 px-3 py-2 text-sm text-white hover:bg-slate-900">
+              <p class="mt-2 text-xs text-amber-800">Copy it now and store it securely. The old phrase no longer recovers this mailbox.</p>
+              <div class="mt-3 flex gap-2.5">
+                <button onClick={handleRotCopy} class="rounded-xl bg-[#3C3D3E] px-4 py-2 text-xs sm:text-sm font-medium text-white hover:bg-[#2B2D30] transition-colors">
                   {rotCopied() ? "Copied!" : "Copy to clipboard"}
                 </button>
                 <button
                   onClick={() => { setRotNewMnemonic(null); setRotVersion(null); setRotBoxId(""); setRotMode(null); setRotMnemonic(""); setRotSkFile(null); }}
-                  class="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  class="rounded-xl border border-[#E2DFD8] px-4 py-2 text-xs sm:text-sm font-medium text-[#3C3D3E] hover:bg-[#F3ECE8] transition-colors"
                 >
                   Clear
                 </button>
               </div>
               </Show>
               <Show when={rotNewMnemonic() === null}>
-                <p class="mt-2 text-xs text-slate-500">
+                <p class="mt-2 text-xs text-[#6F7173]">
                   User recovery verifiers derived from the old root must be re-enrolled by their holders.
                   Device grants under the old root were revoked server-side.
                 </p>
                 <button
                   onClick={() => { setRotVersion(null); setRotBoxId(""); setRotMode(null); setRotSkFile(null); }}
-                  class="mt-3 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  class="mt-3 rounded-xl border border-[#E2DFD8] px-4 py-2 text-xs sm:text-sm font-medium text-[#3C3D3E] hover:bg-[#F3ECE8] transition-colors"
                 >
                   Clear
                 </button>
@@ -754,10 +756,10 @@ const RecoveryPage: Component = () => {
           </Show>
           <Show when={rotVersion() === null}>
             <label class="mt-4 block">
-              <span class="text-sm font-medium text-slate-700">Mailbox ID</span>
+              <span class="text-xs sm:text-sm font-semibold text-[#3C3D3E]">Mailbox ID</span>
               <input
                 type="text"
-                class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                class="mt-1.5 block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2.5 text-xs sm:text-sm font-mono text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
                 placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000"
                 value={rotBoxId()}
                 onInput={(e) => { setRotBoxId(e.currentTarget.value); setRotMode(null); }}
@@ -767,52 +769,52 @@ const RecoveryPage: Component = () => {
             <button
               onClick={handleLoadRotBox}
               disabled={rotLoading() || !rotBoxId().trim()}
-              class="mt-3 rounded-md border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+              class="mt-3 rounded-xl border border-[#E2DFD8] px-4 py-2 text-xs sm:text-sm font-medium text-[#3C3D3E] hover:bg-[#F3ECE8] disabled:opacity-50 transition-colors"
             >
               {rotLoading() ? "Loading…" : "Check mailbox mode"}
             </button>
             <Show when={rotMode() !== null}>
-              <p class="mt-3 text-sm">
-                Mode: <span class="font-mono font-medium">{rotMode()}</span>
+              <p class="mt-3 text-xs sm:text-sm text-[#3C3D3E]">
+                Mode: <span class="font-mono font-bold text-[#9E725F] uppercase">{rotMode()}</span>
               </p>
             </Show>
             <Show when={rotMode() === "private"}>
               <label class="mt-4 block">
-                <span class="text-sm font-medium text-slate-700">Current 24-word recovery phrase (proves possession)</span>
+                <span class="text-xs sm:text-sm font-semibold text-[#3C3D3E]">Current 24-word recovery phrase (proves possession)</span>
                 <textarea
                   rows={3}
                   autocomplete="off"
-                  class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  class="mt-1.5 block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2.5 text-xs sm:text-sm font-mono text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
                   placeholder="word1 word2 word3 … word24"
                   value={rotMnemonic()}
                   onInput={(e) => setRotMnemonic(e.currentTarget.value)}
                   disabled={rotBusy()}
                 />
               </label>
-              <p class="mt-1 text-xs text-slate-500">
+              <p class="mt-1.5 text-xs text-[#6F7173]">
                 A fresh phrase is generated for the new root. The old phrase stops working after rotation.
               </p>
               <button
                 onClick={handleRotate}
                 disabled={rotBusy() || !rotBoxId().trim() || !rotMnemonic().trim()}
                 aria-busy={rotBusy()}
-                class="mt-4 rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+                class="mt-4 rounded-xl bg-[#9E725F] px-4 py-2.5 text-xs sm:text-sm font-semibold text-white shadow-xs hover:bg-[#865E4D] disabled:opacity-50 transition-colors"
               >
                 {rotBusy() ? "Rotating…" : "Rotate root"}
               </button>
             </Show>
             <Show when={rotMode() !== null && rotMode() !== "private"}>
-              <div class="mt-4 rounded-md border border-slate-200 bg-slate-50 p-4">
-                <p class="text-sm text-slate-600">
+              <div class="mt-4 rounded-2xl border border-[#E2DFD8] bg-[#F0EEE9]/40 p-5">
+                <p class="text-xs sm:text-sm text-[#6F7173] leading-relaxed">
                   Org-managed ceremony: provide the org recovery secret file. A fresh root is sealed
-                  to the org public key — <span class="font-medium">no mnemonic is shown to anyone</span> (frozen §9).
+                  to the org public key — <span class="font-bold text-[#3C3D3E]">no mnemonic is shown to anyone</span> (frozen §9).
                 </p>
-                <label class="mt-3 block">
-                  <span class="text-sm font-medium text-slate-700">Org recovery secret (hex file)</span>
+                <label class="mt-3.5 block">
+                  <span class="text-xs sm:text-sm font-semibold text-[#3C3D3E]">Org recovery secret (hex file)</span>
                   <input
                     type="file"
                     accept=".hex,.txt"
-                    class="mt-1 block w-full text-sm text-slate-600"
+                    class="mt-1.5 block w-full text-xs text-[#6F7173] file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-[#9E725F] file:text-white hover:file:bg-[#865E4D] file:cursor-pointer"
                     onChange={(e) => setRotSkFile(e.currentTarget.files?.[0] ?? null)}
                     disabled={rotBusy()}
                   />
@@ -821,7 +823,7 @@ const RecoveryPage: Component = () => {
                   onClick={handleRotateOrgManaged}
                   disabled={rotBusy() || !rotBoxId().trim() || !rotSkFile()}
                   aria-busy={rotBusy()}
-                  class="mt-4 rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+                  class="mt-4 rounded-xl bg-[#9E725F] px-4 py-2.5 text-xs sm:text-sm font-semibold text-white shadow-xs hover:bg-[#865E4D] disabled:opacity-50 transition-colors"
                 >
                   {rotBusy() ? "Rotating…" : "Rotate org-managed root"}
                 </button>
@@ -833,56 +835,56 @@ const RecoveryPage: Component = () => {
 
       {/* ── Principals tab (owner-only enrollment/revocation) ── */}
       <Show when={tab() === "principals"}>
-        <div class="mt-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-          <p class="text-sm text-slate-600">
+        <div class="mt-4 rounded-2xl border border-[#E2DFD8] bg-white p-6 shadow-xs">
+          <p class="text-xs sm:text-sm text-[#6F7173]">
             Recovery principals bind members to passphrase-wrapped copies of the org recovery
             secret. Enrollment and revocation require the organization owner role. The passphrase
             and secret never leave this browser — only the KDF envelope is uploaded.
           </p>
           <Show when={princError()}>
-            <div role="alert" class="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
+            <div role="alert" class="mt-3 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
               {princError()}
             </div>
           </Show>
           <Show when={princNotice()}>
-            <div class="mt-3 rounded-md bg-emerald-50 p-3 text-sm text-emerald-800">
+            <div class="mt-3 rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-xs sm:text-sm text-emerald-800">
               {princNotice()}
             </div>
           </Show>
           <Show
             when={!princLoading()}
-            fallback={<p class="mt-4 text-sm text-slate-500">Loading principals…</p>}
+            fallback={<p class="mt-4 text-xs sm:text-sm text-[#6F7173]">Loading principals…</p>}
           >
             <Show
               when={princList().length > 0}
-              fallback={<p class="mt-4 text-sm text-slate-500">No recovery principals enrolled.</p>}
+              fallback={<p class="mt-4 text-xs sm:text-sm text-[#6F7173]">No recovery principals enrolled.</p>}
             >
-              <ul class="mt-4 divide-y divide-slate-100 rounded-md border border-slate-200">
+              <ul class="mt-4 divide-y divide-[#E2DFD8] rounded-xl border border-[#E2DFD8]">
                 <For each={princList()}>
                   {(p) => (
-                    <li class="flex items-center justify-between gap-3 p-3">
+                    <li class="flex items-center justify-between gap-3 p-3.5 hover:bg-[#F0EEE9]/30 transition-colors">
                       <div class="min-w-0">
-                        <div class="text-sm font-medium text-slate-900">
+                        <div class="text-xs sm:text-sm font-semibold text-[#3C3D3E]">
                           {p.principal_name}
                           <Show when={!p.is_active}>
-                            <span class="ml-2 rounded bg-slate-200 px-2 py-0.5 text-xs text-slate-600">revoked</span>
+                            <span class="ml-2 rounded bg-[#F0EEE9] px-2 py-0.5 text-[10px] font-bold text-[#6F7173] uppercase">revoked</span>
                           </Show>
                         </div>
-                        <div class="truncate font-mono text-xs text-slate-500">
+                        <div class="truncate font-mono text-[11px] text-[#6F7173]">
                           {memberEmail(p.user_id)} · argon2id m={p.kdf_memory} t={p.kdf_iterations} p={p.kdf_parallelism}
                         </div>
                       </div>
                       <div class="flex shrink-0 gap-2">
                         <button
                           onClick={() => handleCopyEnvelope(p.id)}
-                          class="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
+                          class="rounded-lg border border-[#E2DFD8] px-3 py-1.5 text-xs font-medium text-[#3C3D3E] hover:bg-[#F3ECE8] transition-colors"
                         >
                           Copy envelope
                         </button>
                         <Show when={p.is_active}>
                           <button
                             onClick={() => handleRevokePrincipal(p.id, p.principal_name)}
-                            class="rounded border border-red-300 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50"
+                            class="rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 transition-colors"
                           >
                             Revoke
                           </button>
@@ -894,12 +896,12 @@ const RecoveryPage: Component = () => {
               </ul>
             </Show>
           </Show>
-          <div class="mt-6 border-t border-slate-100 pt-4">
-            <h3 class="text-sm font-medium text-slate-900">Enroll principal</h3>
+          <div class="mt-6 border-t border-[#E2DFD8] pt-4">
+            <h3 class="text-xs sm:text-sm font-bold text-[#3C3D3E]">Enroll Principal</h3>
             <label class="mt-3 block">
-              <span class="text-xs font-medium text-slate-700">Member</span>
+              <span class="text-xs font-semibold text-[#3C3D3E]">Member</span>
               <select
-                class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                class="mt-1.5 block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2.5 text-xs sm:text-sm text-[#3C3D3E] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
                 value={princUserId()}
                 onInput={(e) => setPrincUserId(e.currentTarget.value)}
                 disabled={princBusy()}
@@ -908,10 +910,10 @@ const RecoveryPage: Component = () => {
               </select>
             </label>
             <label class="mt-3 block">
-              <span class="text-xs font-medium text-slate-700">Principal name</span>
+              <span class="text-xs font-semibold text-[#3C3D3E]">Principal Name</span>
               <input
                 type="text"
-                class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                class="mt-1.5 block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2.5 text-xs sm:text-sm text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
                 placeholder="e.g. alice-laptop"
                 value={princName()}
                 onInput={(e) => setPrincName(e.currentTarget.value)}
@@ -919,22 +921,22 @@ const RecoveryPage: Component = () => {
               />
             </label>
             <label class="mt-3 block">
-              <span class="text-xs font-medium text-slate-700">New passphrase (8-128 chars, never sent anywhere)</span>
+              <span class="text-xs font-semibold text-[#3C3D3E]">New Passphrase (8-128 chars, never sent anywhere)</span>
               <input
                 type="password"
                 autocomplete="new-password"
-                class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                class="mt-1.5 block w-full rounded-xl border border-[#E2DFD8] bg-[#F0EEE9]/40 px-3.5 py-2.5 text-xs sm:text-sm font-mono text-[#3C3D3E] placeholder-[#6F7173] focus:outline-none focus:border-[#9E725F] focus:ring-1 focus:ring-[#9E725F]"
                 value={princPass()}
                 onInput={(e) => setPrincPass(e.currentTarget.value)}
                 disabled={princBusy()}
               />
             </label>
             <label class="mt-3 block">
-              <span class="text-xs font-medium text-slate-700">Org recovery secret (64-hex file)</span>
+              <span class="text-xs font-semibold text-[#3C3D3E]">Org Recovery Secret (64-hex file)</span>
               <input
                 type="file"
                 accept=".hex,.txt"
-                class="mt-1 block w-full text-sm text-slate-600"
+                class="mt-1.5 block w-full text-xs text-[#6F7173] file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-[#9E725F] file:text-white hover:file:bg-[#865E4D] file:cursor-pointer"
                 onChange={(e) => setPrincFile(e.currentTarget.files?.[0] ?? null)}
                 disabled={princBusy()}
               />
@@ -943,7 +945,7 @@ const RecoveryPage: Component = () => {
               onClick={handleEnrollPrincipal}
               disabled={princBusy() || !princUserId() || !princName().trim() || !princFile()}
               aria-busy={princBusy()}
-              class="mt-4 rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+              class="mt-4 rounded-xl bg-[#9E725F] px-4 py-2.5 text-xs sm:text-sm font-semibold text-white shadow-xs hover:bg-[#865E4D] disabled:opacity-50 transition-colors"
             >
               {princBusy() ? "Enrolling…" : "Enroll principal"}
             </button>

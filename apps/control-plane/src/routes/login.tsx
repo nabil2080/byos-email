@@ -1,6 +1,27 @@
 import { Component, createSignal, Show, onMount } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { login, me } from "../lib/api/auth";
+import { login, me, fetchPasskeyLoginOptions, loginWithPasskey } from "../lib/api/auth";
+
+function base64URLToBuffer(base64URL: string): ArrayBuffer {
+  const base64 = base64URL.replace(/-/g, "+").replace(/_/g, "/");
+  const padLen = (4 - (base64.length % 4)) % 4;
+  const padded = base64 + "=".repeat(padLen);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+function bufferToBase64URL(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let str = "";
+  for (let i = 0; i < bytes.length; i++) {
+    str += String.fromCharCode(bytes[i]);
+  }
+  return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+}
 
 const LoginPage: Component = () => {
   const navigate = useNavigate();
@@ -8,6 +29,7 @@ const LoginPage: Component = () => {
   const [password, setPassword] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(false);
+  const [passkeyLoading, setPasskeyLoading] = createSignal(false);
   const [checkingSession, setCheckingSession] = createSignal(true);
 
   onMount(async () => {
@@ -30,6 +52,68 @@ const LoginPage: Component = () => {
       setCheckingSession(false);
     }
   });
+
+  async function handlePasskeyLogin() {
+    if (typeof window === "undefined" || !window.PublicKeyCredential) {
+      setError("Passkeys and WebAuthn are not supported in this browser.");
+      return;
+    }
+    setError(null);
+    setPasskeyLoading(true);
+    try {
+      const emailInput = email().trim() || undefined;
+      const opts = await fetchPasskeyLoginOptions(emailInput);
+
+      const allowCreds = opts.allowCredentials?.map((c) => ({
+        id: base64URLToBuffer(c.id),
+        type: "public-key" as const,
+      }));
+
+      const assertion = (await navigator.credentials.get({
+        publicKey: {
+          challenge: base64URLToBuffer(opts.challenge),
+          rpId: opts.rpId,
+          userVerification: opts.userVerification as any,
+          timeout: opts.timeout,
+          allowCredentials: allowCreds && allowCreds.length > 0 ? allowCreds : undefined,
+        },
+      })) as PublicKeyCredential;
+
+      if (!assertion) {
+        throw new Error("Passkey login was cancelled.");
+      }
+
+      const credId = bufferToBase64URL(assertion.rawId);
+      const resp = assertion.response as AuthenticatorAssertionResponse;
+      const sigHex = Array.from(new Uint8Array(resp.signature), (b) =>
+        b.toString(16).padStart(2, "0")
+      ).join("");
+      const clientDataB64 = bufferToBase64URL(resp.clientDataJSON);
+
+      const loginRes = await loginWithPasskey({
+        credential_id: credId,
+        challenge_token: opts.challenge,
+        signature: sigHex,
+        client_data_json: clientDataB64,
+      });
+
+      if (loginRes.role === "member") {
+        const webmailUrl =
+          (import.meta as unknown as { env: Record<string, string> }).env?.VITE_WEBMAIL_URL ||
+          "http://127.0.0.1:3001";
+        window.location.replace(webmailUrl);
+        return;
+      }
+      const params = new URLSearchParams(window.location.search);
+      const redirect = params.get("redirect") || "/dashboard";
+      window.location.replace(redirect);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Passkey authentication failed";
+      setError(msg);
+    } finally {
+      setPasskeyLoading(false);
+    }
+  }
 
   async function handleSubmit(e: Event) {
     e.preventDefault();
@@ -127,10 +211,31 @@ const LoginPage: Component = () => {
 
               <button
                 type="submit"
-                disabled={loading()}
+                disabled={loading() || passkeyLoading()}
                 class="w-full inline-flex justify-center items-center rounded-lg bg-[#9E725F] px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[#865E4D] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/30 disabled:opacity-50 transition-colors"
               >
                 {loading() ? "Authenticating…" : "Sign In to Admin Console"}
+              </button>
+
+              <div class="relative my-4">
+                <div class="absolute inset-0 flex items-center">
+                  <div class="w-full border-t border-[#E2DFD8]" />
+                </div>
+                <div class="relative flex justify-center text-xs uppercase">
+                  <span class="bg-white px-2 text-[#6F7173]">Or continue with</span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handlePasskeyLogin}
+                disabled={loading() || passkeyLoading()}
+                class="w-full inline-flex justify-center items-center gap-2 rounded-lg border border-[#E2DFD8] bg-[#F7F5F0] px-4 py-2.5 text-sm font-semibold text-[#3C3D3E] hover:bg-[#EAE6DE] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/30 disabled:opacity-50 transition-colors"
+              >
+                <svg class="w-4 h-4 text-[#9E725F]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 00.528 2.86" />
+                </svg>
+                {passkeyLoading() ? "Verifying Passkey…" : "Sign In with Passkey / Biometrics"}
               </button>
             </form>
 

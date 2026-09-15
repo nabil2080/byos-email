@@ -29,6 +29,7 @@ func TestJanitorPurgesDeadCredentials(t *testing.T) {
 	defer db.Close()
 	conn := janitorConn(t)
 	ctx := context.Background()
+	_, _ = conn.Exec(ctx, `DELETE FROM recovery_challenges; DELETE FROM sessions;`)
 
 	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	var userID string

@@ -23,6 +23,8 @@ export interface Domain {
   dns_records?: DnsRecord[];
 }
 
+import { getCpHeaders } from "./client";
+
 function getAuthHeader(): Record<string, string> {
   const userId =
     (typeof window !== "undefined" && (window as unknown as { __BYOS_USER_ID?: string }).__BYOS_USER_ID) || "";
@@ -36,6 +38,7 @@ function apiBase(): string {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...getCpHeaders(),
     ...getAuthHeader(),
     ...(init?.headers as Record<string, string>),
   };
