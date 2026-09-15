@@ -52,8 +52,8 @@ func TestAttachmentsAuthorization(t *testing.T) {
 
 	_, mailbox1ID := createTestMailbox(t, db, org1ID, owner1ID, "m1")
 
-	token1 := createSession(t, db, owner1ID)
-	token2 := createSession(t, db, owner2ID)
+	token1 := createTestSession(t, db, owner1ID)
+	token2 := createTestSession(t, db, owner2ID)
 
 	// 1. Nonexistent mailbox -> 404
 	fakeMailboxID := "00000000-0000-0000-0000-000000000000"
@@ -94,7 +94,7 @@ func TestAttachmentsRequestValidation(t *testing.T) {
 
 	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "val")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 
 	// 1. Invalid mailbox UUID -> 400
 	req := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/not-a-uuid/attachments", nil)
@@ -156,7 +156,7 @@ func TestAttachmentEncryptedUploadAccepted(t *testing.T) {
 
 	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "enc")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 
 	// Deterministic valid envelope: version 0x01 + 12-byte nonce + 16-byte ct+tag
 	encryptedBytes := make([]byte, 29)
@@ -248,7 +248,7 @@ func TestAttachmentPlaintextRejected(t *testing.T) {
 
 	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "plain")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 
 	plaintextBytes := []byte("attachment-test-payload")
 
@@ -301,7 +301,7 @@ func TestAttachmentMalformedEncryptedRejected(t *testing.T) {
 
 	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "malformed")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 
 	cases := []struct {
 		name string
@@ -352,7 +352,7 @@ func TestAttachmentMissingEncryptedPayloadRejected(t *testing.T) {
 
 	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "missing")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)

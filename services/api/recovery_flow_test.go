@@ -64,7 +64,7 @@ func TestRecoveryVerifyFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	pkB64 := base64.StdEncoding.EncodeToString(pub)
-	ownerToken := createSession(t, db, ownerID)
+	ownerToken := createTestSession(t, db, ownerID)
 	enrollReq := httptest.NewRequest(http.MethodPost, "/v1/auth/recovery-enroll",
 		bytes.NewReader([]byte(`{"recovery_auth_pk":"`+pkB64+`"}`)))
 	enrollReq.AddCookie(&http.Cookie{Name: "byos_session", Value: ownerToken})
@@ -185,7 +185,7 @@ func TestRecoveryEnrollRotation(t *testing.T) {
 	defer db.Close()
 
 	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
-	ownerToken := createSession(t, db, ownerID)
+	ownerToken := createTestSession(t, db, ownerID)
 	enroll := func(pkB64 string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/v1/auth/recovery-enroll",
 			bytes.NewReader([]byte(`{"recovery_auth_pk":"`+pkB64+`"}`)))
