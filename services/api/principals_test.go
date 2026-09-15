@@ -55,9 +55,9 @@ func TestRecoveryPrincipalLifecycle(t *testing.T) {
 	defer db.Close()
 
 	orgID, ownerID, adminID, memberID := createTestOrgAndUsers(t, db)
-	ownerToken := createSession(t, db, ownerID)
-	adminToken := createSession(t, db, adminID)
-	memberToken := createSession(t, db, memberID)
+	ownerToken := createTestSession(t, db, ownerID)
+	adminToken := createTestSession(t, db, adminID)
+	memberToken := createTestSession(t, db, memberID)
 
 	// Enroll happy path (owner).
 	rec := principalRequest(t, http.MethodPost, orgID, "", "", principalEnrollBody(memberID, "laptop"), ownerToken)
@@ -186,8 +186,8 @@ func TestRecoveryPrincipalCrossOrg(t *testing.T) {
 
 	org1, owner1, _, _ := createTestOrgWithEmail(t, db, "princ1")
 	org2, owner2, _, _ := createTestOrgWithEmail(t, db, "princ2")
-	token1 := createSession(t, db, owner1)
-	token2 := createSession(t, db, owner2)
+	token1 := createTestSession(t, db, owner1)
+	token2 := createTestSession(t, db, owner2)
 
 	rec := principalRequest(t, http.MethodPost, org1, "", "", principalEnrollBody(owner1, "desk"), token1)
 	if rec.Code != http.StatusCreated {
