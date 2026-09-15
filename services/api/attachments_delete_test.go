@@ -56,7 +56,7 @@ func TestAttachmentDeleteRemovesObjectAndRow(t *testing.T) {
 
 	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "del")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 	attID := insertAttachmentRow(t, db, mailboxID, "", "mailboxes/"+mailboxID+"/attachments/a/f.enc")
 
 	var gotKey, gotBox string
@@ -100,7 +100,7 @@ func TestAttachmentDeleteLinkedConflict(t *testing.T) {
 
 	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "linked")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 	attID := insertAttachmentRow(t, db, mailboxID, "delivery-1", "mailboxes/k")
 
 	var calls int
@@ -131,7 +131,7 @@ func TestAttachmentDeleteWorkerFailureKeepsRow(t *testing.T) {
 
 	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "fail")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 	attID := insertAttachmentRow(t, db, mailboxID, "", "mailboxes/k")
 
 	mockWorker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -157,7 +157,7 @@ func TestAttachmentDeleteMissing(t *testing.T) {
 
 	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
 	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "miss")
-	token := createSession(t, db, ownerID)
+	token := createTestSession(t, db, ownerID)
 
 	rec := deleteAttachmentRequest(t, mailboxID, "00000000-0000-0000-0000-000000000000", token)
 	if rec.Code != http.StatusNotFound {
