@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -178,8 +179,8 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 		// Enforce 40 MB total payload budget
 		r.Body = http.MaxBytesReader(w, r.Body, MaxAttachmentSize)
 
-		contentType := r.Header.Get("Content-Type")
-		if strings.HasPrefix(contentType, "multipart/form-data") {
+		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err == nil && mediaType == "multipart/form-data" {
 			// Multipart upload
 			err := r.ParseMultipartForm(MaxAttachmentSize)
 			if err != nil {
