@@ -73,6 +73,7 @@ async fn main() {
         .route("/health", get(health))
         .route("/v1/encrypt", post(encrypt))
         .route("/v1/encrypt-outbound", post(encrypt_outbound_handler))
+        .route("/v1/outbound/decrypt", post(decrypt_outbound_handler))
         .with_state(AppState);
 
     println!("BYOS native crypto worker using Rust crypto core on {addr}");
@@ -128,6 +129,43 @@ async fn encrypt(
         bundle_hash: BASE64.encode(bundle_hash),
         encryption_version: ENCRYPTION_VERSION,
         aad_version: AAD_VERSION,
+    }))
+}
+
+#[derive(Deserialize)]
+struct DecryptOutboundRequest {
+    outbound_delivery_sk: String,
+    send_token_wrapped: String,
+    mailbox_id: String,
+    message_seq: u64,
+    ciphertext: String,
+}
+
+#[derive(Serialize)]
+struct DecryptOutboundResponse {
+    plaintext: String,
+}
+
+async fn decrypt_outbound_handler(
+    State(_state): State<AppState>,
+    Json(request): Json<DecryptOutboundRequest>,
+) -> ApiResult<DecryptOutboundResponse> {
+    let sk = decode_fixed_32(&request.outbound_delivery_sk, "outbound_delivery_sk")?;
+    let send_token_wrapped = decode(&request.send_token_wrapped, "send_token_wrapped")?;
+    let mailbox_id = parse_mailbox_id(&request.mailbox_id)?;
+    let ciphertext = decode(&request.ciphertext, "ciphertext")?;
+
+    let plaintext = byos_crypto_core::decrypt_outbound(
+        &sk,
+        &send_token_wrapped,
+        &mailbox_id,
+        request.message_seq,
+        &ciphertext,
+    )
+    .map_err(crypto_error)?;
+
+    Ok(Json(DecryptOutboundResponse {
+        plaintext: BASE64.encode(plaintext),
     }))
 }
 
