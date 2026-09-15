@@ -440,22 +440,30 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		// consistent between send and schedule paths. Validate UUID shape,
 		// scope to the same mailbox, and only link currently-unlinked rows
 		// so one message cannot hijack another message's attachments.
+		var uniqueIDs []string
+		seen := make(map[string]bool)
 		for _, id := range req.AttachmentIDs {
-			if _, err := uuid.Parse(id); err != nil {
+			parsed, err := uuid.Parse(id)
+			if err != nil {
 				http.Error(w, "attachment_ids must be UUIDs", http.StatusBadRequest)
 				return
+			}
+			canonical := parsed.String()
+			if !seen[canonical] {
+				seen[canonical] = true
+				uniqueIDs = append(uniqueIDs, canonical)
 			}
 		}
 		// BUG-002: check the link result before consuming the reservation.
 		// A short count means an ID is unknown, belongs to another mailbox,
 		// or is already linked elsewhere; fail loud instead of queuing a
 		// message whose attachments silently stayed unlinked.
-		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, req.AttachmentIDs, req.MailboxID)
+		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, uniqueIDs, req.MailboxID)
 		if linkErr != nil {
 			http.Error(w, "failed to link attachments", http.StatusInternalServerError)
 			return
 		}
-		if linkRes.RowsAffected() != int64(len(req.AttachmentIDs)) {
+		if linkRes.RowsAffected() != int64(len(uniqueIDs)) {
 			http.Error(w, "attachment not found, already linked, or not in this mailbox", http.StatusBadRequest)
 			return
 		}
@@ -615,19 +623,27 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 	// send handler. Uses the same delivery_id-as-message_id convention (see
 	// note above) so scheduled messages list attachments consistently.
 	if len(req.AttachmentIDs) > 0 {
+		var uniqueIDs []string
+		seen := make(map[string]bool)
 		for _, id := range req.AttachmentIDs {
-			if _, err := uuid.Parse(id); err != nil {
+			parsed, err := uuid.Parse(id)
+			if err != nil {
 				http.Error(w, "attachment_ids must be UUIDs", http.StatusBadRequest)
 				return
 			}
+			canonical := parsed.String()
+			if !seen[canonical] {
+				seen[canonical] = true
+				uniqueIDs = append(uniqueIDs, canonical)
+			}
 		}
 		// BUG-002: same strict link check as the send handler (see above).
-		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, req.AttachmentIDs, req.MailboxID)
+		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, uniqueIDs, req.MailboxID)
 		if linkErr != nil {
 			http.Error(w, "failed to link attachments", http.StatusInternalServerError)
 			return
 		}
-		if linkRes.RowsAffected() != int64(len(req.AttachmentIDs)) {
+		if linkRes.RowsAffected() != int64(len(uniqueIDs)) {
 			http.Error(w, "attachment not found, already linked, or not in this mailbox", http.StatusBadRequest)
 			return
 		}
