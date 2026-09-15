@@ -23,7 +23,7 @@ func isAllowedOrigin(origin string, allowedList string) bool {
 		}
 	}
 	// In development environments, permit any localhost / 127.0.0.1 port
-	if os.Getenv("BYOS_ENV") != "production" {
+	if os.Getenv("BYOS_ENV") == "development" {
 		u, err := url.Parse(origin)
 		if err == nil {
 			hostname := u.Hostname()
@@ -41,7 +41,7 @@ func withCORS(h http.HandlerFunc) http.HandlerFunc {
 		// Same-origin via Vite proxy requires no CORS. Only allow credentialed
 		// CORS if Origin is in the explicit allowlist.
 		allowed := os.Getenv("BYOS_ALLOWED_ORIGINS")
-		if allowed == "" && os.Getenv("BYOS_ENV") != "production" {
+		if allowed == "" && os.Getenv("BYOS_ENV") == "development" {
 			allowed = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:3002,http://127.0.0.1:3002,http://localhost:4173,http://127.0.0.1:4173,http://localhost:4321,http://127.0.0.1:4321,http://localhost:5173,http://127.0.0.1:5173"
 		}
 		if isAllowedOrigin(origin, allowed) {
