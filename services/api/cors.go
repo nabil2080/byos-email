@@ -8,6 +8,7 @@ package main
 
 import (
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -23,11 +24,10 @@ func isAllowedOrigin(origin string, allowedList string) bool {
 	}
 	// In development environments, permit any localhost / 127.0.0.1 port
 	if os.Getenv("BYOS_ENV") != "production" {
-		if strings.HasPrefix(origin, "http://localhost:") ||
-			strings.HasPrefix(origin, "http://127.0.0.1:") ||
-			origin == "http://localhost" ||
-			origin == "http://127.0.0.1" {
-			return true
+		if u, err := url.Parse(origin); err == nil && u.Scheme == "http" {
+			if u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" {
+				return true
+			}
 		}
 	}
 	return false
