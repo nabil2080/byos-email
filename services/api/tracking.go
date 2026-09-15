@@ -50,11 +50,17 @@ func trackPixelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawToken := r.PathValue("token")
+	query := r.URL.Query()
+	trackingID := query.Get("id")
+
+	rawToken := trackingID
+	if rawToken == "" {
+		rawToken = r.PathValue("token")
+	}
 	if rawToken == "" {
 		// Try fallback from URL path
 		parts := strings.Split(r.URL.Path, "/")
-		if len(parts) > 0 {
+		if len(parts) > 0 && parts[len(parts)-1] != "" && parts[len(parts)-1] != "track" && parts[len(parts)-1] != "track/" {
 			rawToken = parts[len(parts)-1]
 		}
 	}
