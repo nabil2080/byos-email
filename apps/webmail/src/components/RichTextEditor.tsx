@@ -1,4 +1,5 @@
 import { Component, createSignal, onMount, Show } from "solid-js";
+import DOMPurify from "dompurify";
 
 export interface RichTextEditorProps {
   value?: string;
@@ -123,18 +124,19 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
 
   function handleHtmlTextareaInput(val: string) {
     setCurrentHtml(val);
+    const cleanHtml = DOMPurify.sanitize(val);
     const temp = document.createElement("div");
-    temp.innerHTML = val;
+    temp.innerHTML = cleanHtml;
     const text = temp.innerText || temp.textContent || "";
-    props.onChange?.({ html: val, text });
+    props.onChange?.({ html: cleanHtml, text });
     if (editorRef) {
-      editorRef.innerHTML = val;
+      editorRef.innerHTML = cleanHtml;
     }
   }
 
   onMount(() => {
     if (editorRef && props.value) {
-      editorRef.innerHTML = props.value;
+      editorRef.innerHTML = DOMPurify.sanitize(props.value);
     }
   });
 
@@ -324,7 +326,7 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
               const next = !isHtmlMode();
               setIsHtmlMode(next);
               if (!next && editorRef) {
-                editorRef.innerHTML = currentHtml();
+                editorRef.innerHTML = DOMPurify.sanitize(currentHtml());
               }
             }}
             class={`px-2.5 h-7 flex items-center gap-1 rounded-lg text-[11px] font-mono transition cursor-pointer ${
@@ -364,7 +366,7 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
             ref={(el) => {
               editorRef = el;
               if (el && currentHtml()) {
-                el.innerHTML = currentHtml();
+                el.innerHTML = DOMPurify.sanitize(currentHtml());
               }
             }}
             contenteditable="true"
