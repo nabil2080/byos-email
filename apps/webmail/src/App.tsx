@@ -77,6 +77,7 @@ import {
   computeSearchToken,
   extractKeywords,
   ContactPlaintext,
+  bytesToBase64,
 } from "./message_crypto";
 import { loadSignature, saveSignature, applySignature } from "./signature";
 import { SetupAccount } from "./routes/setup-account";
@@ -2597,12 +2598,6 @@ const App: Component = () => {
       setErrorMessage(`Failed to send securely: ${err instanceof Error ? err.message : "unknown error"}`);
       setComposeStatus(null);
     }
-  }
-
-  function bytesToBase64(bytes: Uint8Array): string {
-    let binary = "";
-    for (const byte of bytes) binary += String.fromCharCode(byte);
-    return btoa(binary);
   }
 
   async function handleSaveDraft() {
