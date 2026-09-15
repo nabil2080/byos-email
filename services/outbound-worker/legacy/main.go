@@ -1,17 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/smtp"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 type Config struct {
@@ -56,6 +63,7 @@ type OutboundMessage struct {
 	Status                  string
 	Attempts                int
 	ExpiresAt               time.Time
+	OutboxSeq               uint64
 }
 
 func main() {
@@ -109,7 +117,7 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id::text, delivery_id::text, mailbox_id::text, domain_id::text, recipient,
-		        encrypted_message, send_token_hpke_wrapped, status, attempts, expires_at
+		        encrypted_message, send_token_hpke_wrapped, status, attempts, expires_at, outbox_seq
 		 FROM outbound_queue
 		 WHERE status = 'pending' AND next_attempt_at <= now() AND expires_at > now()
 		 ORDER BY next_attempt_at ASC
@@ -124,7 +132,7 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 	for rows.Next() {
 		var msg OutboundMessage
 		if err := rows.Scan(&msg.ID, &msg.DeliveryID, &msg.MailboxID, &msg.DomainID, &msg.Recipient,
-			&msg.EncryptedMessage, &msg.SendTokenHPKEWrapped, &msg.Status, &msg.Attempts, &msg.ExpiresAt); err != nil {
+			&msg.EncryptedMessage, &msg.SendTokenHPKEWrapped, &msg.Status, &msg.Attempts, &msg.ExpiresAt, &msg.OutboxSeq); err != nil {
 			return fmt.Errorf("scan: %w", err)
 		}
 		messages = append(messages, msg)
@@ -137,8 +145,16 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 
 	log.Printf("processing %d outbound messages", len(messages))
 
+	sk := envOrDefault("OUTBOUND_DELIVERY_SK_B64", "")
+	if sk == "" {
+		if b, err := os.ReadFile("/run/secrets/outbound_delivery_sk"); err == nil {
+			sk = string(b)
+		}
+	}
+	sk = strings.TrimSpace(sk)
+
 	for _, msg := range messages {
-		if err := deliverMessage(ctx, tx, msg, cfg); err != nil {
+		if err := deliverMessage(ctx, tx, msg, cfg, sk); err != nil {
 			log.Printf("deliver failed id=%s delivery_id=%s: %v", msg.ID, msg.DeliveryID, err)
 			// Retry with backoff; after max_attempts → bounced
 			_, _ = tx.ExecContext(ctx,
@@ -165,8 +181,8 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 	return tx.Commit()
 }
 
-func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Config) error {
-	plaintext, err := decryptForDelivery(ctx, msg)
+func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Config, sk string) error {
+	plaintext, err := decryptForDelivery(ctx, msg, sk)
 	if err != nil {
 		return fmt.Errorf("decrypt: %w", err)
 	}
@@ -221,14 +237,39 @@ func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Co
 	return nil
 }
 
-func decryptForDelivery(ctx context.Context, msg OutboundMessage) ([]byte, error) {
-	_ = ctx
-	_ = msg
-	// Native Rust crypto-core (compiled to native for server) via crypto-worker HTTP API.
-	// WASM is browser-only; server must not use WASM.
-	// TODO: POST http://crypto-worker:8084/v1/outbound/decrypt {send_token_wrapped, mailbox_id, message_seq, ciphertext}
-	//       → HPKE-Open with outbound_delivery_sk (held only by worker) → AES-GCM decrypt → plaintext
-	return nil, fmt.Errorf("decrypt: not implemented (requires native Rust crypto-core via crypto-worker)")
+func decryptForDelivery(ctx context.Context, msg OutboundMessage, sk string) ([]byte, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "byos-crypto-client", "decrypt-outbound-json")
+
+	reqBody, err := json.Marshal(map[string]interface{}{
+		"outbound_sk_b64": sk,
+		"wrapped_b64":     base64.StdEncoding.EncodeToString(msg.SendTokenHPKEWrapped),
+		"mailbox_id":      msg.MailboxID,
+		"outbox_seq":      msg.OutboxSeq,
+		"ciphertext_b64":  base64.StdEncoding.EncodeToString(msg.EncryptedMessage),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("json marshal request: %w", err)
+	}
+
+	cmd.Stdin = bytes.NewReader(reqBody)
+
+	out, err := cmd.Output()
+	if err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("crypto-client failed: %s", string(exitError.Stderr))
+		}
+		return nil, fmt.Errorf("crypto-client exec: %w", err)
+	}
+
+	plaintext, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+	if err != nil {
+		return nil, fmt.Errorf("base64 decode plaintext: %w", err)
+	}
+
+	return plaintext, nil
 }
 
 func hexEncode(b []byte) string {
