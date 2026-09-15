@@ -443,13 +443,15 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		uniqueIDsMap := make(map[string]bool)
 		uniqueIDs := []string{}
 		for _, id := range req.AttachmentIDs {
-			if _, err := uuid.Parse(id); err != nil {
+			parsed, err := uuid.Parse(id)
+			if err != nil {
 				http.Error(w, "attachment_ids must be UUIDs", http.StatusBadRequest)
 				return
 			}
-			if !uniqueIDsMap[id] {
-				uniqueIDsMap[id] = true
-				uniqueIDs = append(uniqueIDs, id)
+			canonicalID := parsed.String()
+			if !uniqueIDsMap[canonicalID] {
+				uniqueIDsMap[canonicalID] = true
+				uniqueIDs = append(uniqueIDs, canonicalID)
 			}
 		}
 		// BUG-002: check the link result before consuming the reservation.
@@ -624,13 +626,15 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		uniqueIDsMap := make(map[string]bool)
 		uniqueIDs := []string{}
 		for _, id := range req.AttachmentIDs {
-			if _, err := uuid.Parse(id); err != nil {
+			parsed, err := uuid.Parse(id)
+			if err != nil {
 				http.Error(w, "attachment_ids must be UUIDs", http.StatusBadRequest)
 				return
 			}
-			if !uniqueIDsMap[id] {
-				uniqueIDsMap[id] = true
-				uniqueIDs = append(uniqueIDs, id)
+			canonicalID := parsed.String()
+			if !uniqueIDsMap[canonicalID] {
+				uniqueIDsMap[canonicalID] = true
+				uniqueIDs = append(uniqueIDs, canonicalID)
 			}
 		}
 		// BUG-002: same strict link check as the send handler (see above).
