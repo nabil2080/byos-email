@@ -8,7 +8,6 @@ import (
 	"mime"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -121,8 +120,9 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 							rawData, reportedSize, decodeErr := decodeStorageRetrieveBody(retResp.Body)
 							if decodeErr == nil && len(rawData) > 0 &&
 								int64(len(rawData)) == a.SizeBytes && reportedSize == a.SizeBytes {
+								cleanFilename := sanitizeFilename(a.Filename)
 								w.Header().Set("Content-Type", a.ContentType)
-								w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", a.Filename))
+								w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", cleanFilename))
 								w.Write(rawData)
 								return
 							}
@@ -216,10 +216,7 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 			streamReader := io.MultiReader(bytes.NewReader(headerBytes), file)
 
 			messageID := strings.TrimSpace(r.FormValue("message_id"))
-			filename := filepath.Base(header.Filename)
-			if filename == "" {
-				filename = "attachment.bin"
-			}
+			filename := sanitizeFilename(header.Filename)
 			cType := header.Header.Get("Content-Type")
 			if cType == "" {
 				cType = "application/octet-stream"
@@ -371,4 +368,25 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func sanitizeFilename(raw string) string {
+	clean := raw
+	if idx := strings.LastIndexAny(clean, "/\\"); idx != -1 {
+		clean = clean[idx+1:]
+	}
+	clean = strings.TrimSpace(clean)
+	var sb strings.Builder
+	for _, r := range clean {
+		if r < 32 || r == 127 || r == '/' || r == '\\' || r == '"' || r == '\'' || r == ';' {
+			sb.WriteRune('_')
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	res := sb.String()
+	if res == "" || res == "." || res == ".." {
+		return "attachment.bin"
+	}
+	return res
 }

@@ -364,13 +364,24 @@ func NewMockDriveStorage(root string) (*MockDriveStorage, error) {
 }
 
 func (m *MockDriveStorage) fullPath(bucket, key string) string {
-	// For mock, ignore bucket or use as subdir; key may contain slashes
-	// Use bucket as prefix if provided
-	cleanKey := filepath.Clean(key)
+	cleanKey := filepath.Clean("/" + key)
+	cleanKey = strings.TrimPrefix(cleanKey, "/")
+	cleanKey = strings.TrimPrefix(cleanKey, "\\")
+	var baseDir string
 	if bucket != "" {
-		return filepath.Join(m.root, bucket, cleanKey)
+		cleanBucket := filepath.Clean("/" + bucket)
+		cleanBucket = strings.TrimPrefix(cleanBucket, "/")
+		cleanBucket = strings.TrimPrefix(cleanBucket, "\\")
+		baseDir = filepath.Join(m.root, cleanBucket)
+	} else {
+		baseDir = m.root
 	}
-	return filepath.Join(m.root, cleanKey)
+	target := filepath.Join(baseDir, cleanKey)
+	rel, err := filepath.Rel(m.root, target)
+	if err != nil || strings.HasPrefix(rel, "..") || rel == ".." {
+		return filepath.Join(m.root, "invalid_path")
+	}
+	return target
 }
 
 func (m *MockDriveStorage) PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64) error {
