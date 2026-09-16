@@ -250,6 +250,9 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 		normalizedRecipients[i] = normalizeAddress(r)
 	}
 
+	// Pre-lookup mailbox routes in a single batch query to eliminate N+1 DB roundtrips
+	routesMap, _ := a.lookupMailboxRoutesBatch(r.Context(), req.Recipients)
+
 	stored := make([]StoredMessage, len(req.Recipients))
 	errs := make([]error, len(req.Recipients))
 	var g errgroup.Group
@@ -259,8 +262,15 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 	// but we don't abort immediately on the first error necessarily, errgroup handles that.
 	for i, recipient := range req.Recipients {
 		i, recipient := i, recipient
+		var preRoute *mailboxRoute
+		norm := normalizeAddress(recipient)
+		if dom, lp, err := splitAddress(norm); err == nil {
+			if r, ok := routesMap[strings.ToLower(lp)+"@"+strings.ToLower(dom)]; ok {
+				preRoute = &r
+			}
+		}
 		g.Go(func() error {
-			result, err := a.processRecipient(r.Context(), req.EnvelopeFrom, recipient, rawMessage, deliveryIdentity, normalizedRecipients)
+			result, err := a.processRecipient(r.Context(), req.EnvelopeFrom, recipient, rawMessage, deliveryIdentity, normalizedRecipients, preRoute)
 			if err != nil {
 				errs[i] = fmt.Errorf("process recipient %q: %w", recipient, err)
 				return nil
@@ -304,7 +314,7 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, InboundResponse{Stored: stored})
 }
 
-func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient string, rawMessage []byte, deliveryIdentity [32]byte, normalizedRecipients []string) (StoredMessage, error) {
+func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient string, rawMessage []byte, deliveryIdentity [32]byte, normalizedRecipients []string, preRoute *mailboxRoute) (StoredMessage, error) {
 	normalizedRecipient := normalizeAddress(recipient)
 	domain, localPart, err := splitAddress(normalizedRecipient)
 	if err != nil {
@@ -317,9 +327,15 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 	}
 	defer tx.Rollback(ctx)
 
-	route, err := lookupMailboxRoute(ctx, tx, domain, localPart)
-	if err != nil {
-		return StoredMessage{}, err
+	var route mailboxRoute
+	if preRoute != nil {
+		route = *preRoute
+	} else {
+		var err error
+		route, err = lookupMailboxRoute(ctx, tx, domain, localPart)
+		if err != nil {
+			return StoredMessage{}, err
+		}
 	}
 
 	// Serialize processing for this mailbox/identity to prevent duplicate delivery race condition
@@ -669,6 +685,59 @@ func lookupMailboxRoute(ctx context.Context, tx pgx.Tx, domain, localPart string
 		return mailboxRoute{}, ErrStorageDisconnected
 	}
 	return mailboxRoute{}, fmt.Errorf("mailbox route not found for %s@%s: %w", localPart, domain, err)
+}
+
+func (a *App) lookupMailboxRoutesBatch(ctx context.Context, recipients []string) (map[string]mailboxRoute, error) {
+	routes := make(map[string]mailboxRoute, len(recipients))
+	if len(recipients) == 0 {
+		return routes, nil
+	}
+
+	domains := make([]string, 0, len(recipients))
+	localParts := make([]string, 0, len(recipients))
+	for _, r := range recipients {
+		norm := normalizeAddress(r)
+		dom, lp, err := splitAddress(norm)
+		if err != nil {
+			continue
+		}
+		domains = append(domains, strings.ToLower(dom))
+		localParts = append(localParts, strings.ToLower(lp))
+	}
+	if len(domains) == 0 {
+		return routes, nil
+	}
+
+	rows, err := a.pool.Query(ctx, `
+		SELECT lower(d.name), lower(m.local_part), m.id::text, d.id::text, m.mailbox_pk, m.mailbox_sk_version, ms.object_prefix
+		FROM unnest($1::text[], $2::text[]) AS r(domain, local_part)
+		JOIN domains d ON lower(d.name) = r.domain
+		JOIN mailboxes m ON m.domain_id = d.id AND lower(m.local_part) = r.local_part
+		JOIN mailbox_storage ms ON ms.mailbox_id = m.id
+		WHERE m.is_active = true
+		  AND ms.status = 'active'`,
+		domains, localParts,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("batch lookup mailbox routes: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var dom, lp string
+		var route mailboxRoute
+		if err := rows.Scan(&dom, &lp, &route.MailboxID, &route.DomainID, &route.MailboxPK, &route.MailboxSKVersion, &route.ObjectPrefix); err != nil {
+			return nil, fmt.Errorf("scan mailbox route: %w", err)
+		}
+		if len(route.MailboxPK) == 32 {
+			routes[lp+"@"+dom] = route
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	return routes, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
