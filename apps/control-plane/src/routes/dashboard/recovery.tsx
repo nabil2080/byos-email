@@ -21,9 +21,12 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary);
+  const CHUNK_SIZE = 0x8000;
+  const chars: string[] = [];
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    chars.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK_SIZE) as unknown as number[]));
+  }
+  return btoa(chars.join(""));
 }
 
 function hexToB64(hex: string): string {
