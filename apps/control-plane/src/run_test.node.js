@@ -1,8 +1,14 @@
 import { runDomainsTests } from "./lib/api/domains.test.js";
 import { runMailboxesTests } from "./lib/api/mailboxes.test.js";
+import { runEncodingTests } from "./lib/encoding.test.js";
 
 async function main() {
   let totalFailed = 0;
+
+  console.log("Running Encoding Utility Tests...");
+  const encRes = runEncodingTests();
+  console.log(`ENCODING TESTS: ${encRes.passed} passed, ${encRes.failed} failed\n`);
+  totalFailed += encRes.failed;
 
   console.log("Running Domains API Tests...");
   const domainsRes = await runDomainsTests();

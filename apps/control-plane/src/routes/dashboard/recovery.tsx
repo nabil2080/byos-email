@@ -7,27 +7,7 @@ import { useAuth } from "../../lib/auth/context";
 
 type Tab = "phrase" | "enroll" | "recover" | "rotate" | "principals";
 
-function hexToBytes(hex: string): Uint8Array {
-  const clean = hex.trim();
-  const parts = clean.match(/.{2}/g);
-  if (!parts || parts.length * 2 !== clean.length) {
-    throw new Error("Invalid hex string");
-  }
-  return new Uint8Array(parts.map((b) => parseInt(b, 16)));
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  const CHUNK_SIZE = 0x8000;
-  const chars: string[] = [];
-  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-    chars.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK_SIZE) as unknown as number[]));
-  }
-  return btoa(chars.join(""));
-}
+import { hexToBytes, bytesToHex, bytesToBase64 } from "../../lib/encoding";
 
 function hexToB64(hex: string): string {
   return bytesToBase64(hexToBytes(hex));
