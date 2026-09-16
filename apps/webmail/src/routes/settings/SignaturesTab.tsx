@@ -155,7 +155,7 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
       await updateMailboxSettings(props.mailbox.id, {
         display_name: displayName().trim(),
         signature_plain: signaturePlain(),
-        signature_html: signatureHtml(),
+        signature_html: DOMPurify.sanitize(signatureHtml()),
         insert_signature_on_reply: insertOnReply(),
         avatar_url: avatarUrl(),
       });

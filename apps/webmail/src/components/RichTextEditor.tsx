@@ -45,7 +45,11 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
 
   function syncContent() {
     if (!editorRef) return;
-    const html = editorRef.innerHTML;
+    const rawHtml = editorRef.innerHTML;
+    const html = DOMPurify.sanitize(rawHtml);
+    if (rawHtml !== html) {
+      editorRef.innerHTML = html;
+    }
     const text = editorRef.innerText || editorRef.textContent || "";
     setCurrentHtml(html);
     props.onChange?.({ html, text });
@@ -80,10 +84,13 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
   function applyLink(e: Event) {
     e.preventDefault();
     restoreSelection();
-    const url = linkUrl().trim();
+    let url = linkUrl().trim();
     if (!url) {
       setShowLinkModal(false);
       return;
+    }
+    if (!/^https?:\/\//i.test(url) && !/^mailto:/i.test(url)) {
+      url = "https://" + url;
     }
     if (linkText().trim() && (!savedRange || savedRange.collapsed)) {
       const a = document.createElement("a");
@@ -93,11 +100,8 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
       a.style.color = "#A27561";
       a.style.textDecoration = "underline";
       a.textContent = linkText().trim();
-      document.execCommand(
-        "insertHTML",
-        false,
-        a.outerHTML
-      );
+      const clean = DOMPurify.sanitize(a.outerHTML);
+      document.execCommand("insertHTML", false, clean);
     } else {
       // Create a temporary anchor to let browser parse and validate the URL.
       const tempA = document.createElement("a");
@@ -120,13 +124,12 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
     e.preventDefault();
     restoreSelection();
     const url = imageUrl().trim();
-    if (!url) {
+    if (!url || !/^https?:\/\//i.test(url)) {
       setShowImageModal(false);
       return;
     }
     const width = parseInt(imageWidth(), 10) || 200;
     const alt = imageAlt().trim() || "Embedded Image";
-
     const img = document.createElement("img");
     img.src = url;
     img.alt = alt;
@@ -137,19 +140,21 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
     img.style.verticalAlign = "middle";
     img.style.margin = "6px 0";
 
-    document.execCommand("insertHTML", false, img.outerHTML);
+    const clean = DOMPurify.sanitize(img.outerHTML);
+    document.execCommand("insertHTML", false, clean);
     syncContent();
     setShowImageModal(false);
   }
 
   function handleHtmlTextareaInput(val: string) {
     setCurrentHtml(val);
+    const cleanHtml = DOMPurify.sanitize(val);
     const temp = document.createElement("div");
-    temp.innerHTML = val;
+    temp.innerHTML = cleanHtml;
     const text = temp.innerText || temp.textContent || "";
-    props.onChange?.({ html: val, text });
+    props.onChange?.({ html: cleanHtml, text });
     if (editorRef) {
-      editorRef.innerHTML = val;
+      editorRef.innerHTML = cleanHtml;
     }
   }
 
@@ -385,7 +390,7 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
             ref={(el) => {
               editorRef = el;
               if (el && currentHtml()) {
-                el.innerHTML = currentHtml();
+                el.innerHTML = DOMPurify.sanitize(currentHtml());
               }
             }}
             contenteditable="true"
