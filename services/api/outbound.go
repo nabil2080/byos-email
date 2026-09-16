@@ -464,7 +464,7 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to link attachments", http.StatusInternalServerError)
 			return
 		}
-		if linkRes.RowsAffected() != int64(len(req.AttachmentIDs)) {
+		if linkRes.RowsAffected() != int64(len(uniqueIDs)) {
 			_ = tx.Rollback(ctx)
 			http.Error(w, "attachment not found, already linked, or not in this mailbox", http.StatusBadRequest)
 			return
@@ -646,7 +646,7 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to link attachments", http.StatusInternalServerError)
 			return
 		}
-		if linkRes.RowsAffected() != int64(len(req.AttachmentIDs)) {
+		if linkRes.RowsAffected() != int64(len(uniqueIDs)) {
 			_ = tx.Rollback(ctx)
 			http.Error(w, "attachment not found, already linked, or not in this mailbox", http.StatusBadRequest)
 			return

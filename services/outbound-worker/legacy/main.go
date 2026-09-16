@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/smtp"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -147,14 +146,6 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 
 	log.Printf("processing %d outbound messages", len(messages))
 
-	sk := envOrDefault("OUTBOUND_DELIVERY_SK_B64", "")
-	if sk == "" {
-		if b, err := os.ReadFile("/run/secrets/outbound_delivery_sk"); err == nil {
-			sk = string(b)
-		}
-	}
-	sk = strings.TrimSpace(sk)
-
 	for _, msg := range messages {
 		if !msg.OutboxSeq.Valid {
 			log.Printf("deliver failed id=%s delivery_id=%s: missing outbox_seq", msg.ID, msg.DeliveryID)
@@ -192,8 +183,8 @@ func processOutboundQueue(ctx context.Context, db *sql.DB, cfg Config) error {
 	return tx.Commit()
 }
 
-func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Config, sk string) error {
-	plaintext, err := decryptForDelivery(ctx, msg, sk)
+func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Config) error {
+	plaintext, err := decryptForDelivery(ctx, msg)
 	if err != nil {
 		return fmt.Errorf("decrypt: %w", err)
 	}

@@ -342,7 +342,7 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 		// Duplicate delivery_identity found - return existing message without re-encrypting/storing
 		log.Printf("duplicate delivery detected for mailbox=%s delivery_identity=%x", route.MailboxID, deliveryIdentity[:])
 		return StoredMessage{MessageID: messageID, MailboxID: route.MailboxID, Recipient: normalizeAddress(recipient), MessageSeq: 0, StorageObjectID: storageObjectID}, nil
-	} else if err.Error() != "no rows in result set" {
+	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return StoredMessage{}, fmt.Errorf("check duplicate delivery: %w", err)
 	}
 

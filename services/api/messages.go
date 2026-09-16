@@ -724,7 +724,7 @@ func messageImportHandler(w http.ResponseWriter, r *http.Request) {
 			"storage_object_id": existingStorageObj,
 		})
 		return
-	} else if !errors.Is(err, pgx.ErrNoRows) && err.Error() != "no rows in result set" {
+	} else if !errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "deduplication check failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
