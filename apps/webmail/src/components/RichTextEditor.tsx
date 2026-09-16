@@ -45,14 +45,10 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
 
   function syncContent() {
     if (!editorRef) return;
-    const rawHtml = editorRef.innerHTML;
-    const cleanHtml = DOMPurify.sanitize(rawHtml);
-    if (rawHtml !== cleanHtml) {
-        editorRef.innerHTML = cleanHtml;
-    }
+    const html = editorRef.innerHTML;
     const text = editorRef.innerText || editorRef.textContent || "";
-    setCurrentHtml(cleanHtml);
-    props.onChange?.({ html: cleanHtml, text });
+    setCurrentHtml(html);
+    props.onChange?.({ html, text });
   }
 
   function handleFormat(command: string, value?: string) {
@@ -147,20 +143,19 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
   }
 
   function handleHtmlTextareaInput(val: string) {
-    const cleanHtml = DOMPurify.sanitize(val);
-    setCurrentHtml(cleanHtml);
+    setCurrentHtml(val);
     const temp = document.createElement("div");
-    temp.innerHTML = cleanHtml;
+    temp.innerHTML = val;
     const text = temp.innerText || temp.textContent || "";
-    props.onChange?.({ html: cleanHtml, text });
+    props.onChange?.({ html: val, text });
     if (editorRef) {
-      editorRef.innerHTML = cleanHtml;
+      editorRef.innerHTML = val;
     }
   }
 
   onMount(() => {
     if (editorRef && props.value) {
-      editorRef.innerHTML = DOMPurify.sanitize(props.value);
+      editorRef.innerHTML = DOMPurify.sanitize(props.value, { ADD_TAGS: ['style', 'head', 'meta'], FORCE_BODY: true });
     }
   });
 
@@ -350,7 +345,7 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
               const next = !isHtmlMode();
               setIsHtmlMode(next);
               if (!next && editorRef) {
-                editorRef.innerHTML = currentHtml();
+                editorRef.innerHTML = DOMPurify.sanitize(currentHtml(), { ADD_TAGS: ['style', 'head', 'meta'], FORCE_BODY: true });
               }
             }}
             class={`px-2.5 h-7 flex items-center gap-1 rounded-lg text-[11px] font-mono transition cursor-pointer ${

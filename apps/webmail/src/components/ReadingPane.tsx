@@ -866,7 +866,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               when={/<[a-z][\s\S]*>/i.test(props.decryptedContent || "")}
               fallback={props.decryptedContent}
             >
-              <div innerHTML={DOMPurify.sanitize(trackerInfo().sanitized)} />
+              <div innerHTML={DOMPurify.sanitize(trackerInfo().sanitized, { ADD_TAGS: ['style', 'head', 'meta'], FORCE_BODY: true })} />
             </Show>
           </Show>
 
