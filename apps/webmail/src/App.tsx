@@ -1203,8 +1203,19 @@ const App: Component = () => {
       if (loginRes.token) {
         sessionStorage.setItem("byos_active_session_token", loginRes.token);
       }
-      const user = await fetchCurrentUser();
-      if (!user) throw new Error("Session was not established.");
+      let user = currentUser();
+      if (!user) {
+        user = {
+          id: loginRes.id || "",
+          user_id: loginRes.id || "",
+          email: loginRes.email || "",
+          org_id: loginRes.org_id || loginRes.organization_id || "",
+          role: loginRes.role || "member",
+          mailbox_id: loginRes.mailbox_id,
+          mailbox_local_part: loginRes.mailbox_local_part,
+          mailbox_mode: loginRes.mailbox_mode,
+        } as UserMe;
+      }
       if (loginRes.wrapped_sk_user && !user.wrapped_sk_user) {
         user.wrapped_sk_user = loginRes.wrapped_sk_user;
       }

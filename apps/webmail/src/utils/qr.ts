@@ -19,7 +19,7 @@ export function generateQRCodeSVG(text: string, size: number = 200): string {
         }
       }
     }
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${total}" width="${size}" height="${size}" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="#ffffff" rx="8"/>${rects}</svg>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${total}" width="${size}" height="${size}" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="#ffffff"/>${rects}</svg>`;
   } catch (err) {
     console.error("Failed to generate QR code SVG:", err);
     return "";
