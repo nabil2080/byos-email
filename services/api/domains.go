@@ -311,7 +311,7 @@ func domainsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		name := strings.ToLower(strings.TrimSpace(req.Domain))
-		if name == "" || strings.Contains(name, " ") || !strings.Contains(name, ".") {
+		if name == "" || strings.Contains(name, " ") || !strings.Contains(name, ".") || strings.ContainsAny(name, "<>\t\n\r") {
 			http.Error(w, "invalid domain", http.StatusBadRequest)
 			return
 		}

@@ -434,36 +434,38 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(req.AttachmentIDs) > 0 {
-		// BUG-004 hardening: attachments.message_id stores the outbound
+		// Note: attachments.message_id stores the outbound
 		// delivery_id (text column, see 020_attachments.sql). There is no
 		// separate delivery_id column by design for V1; keep the identifier
 		// consistent between send and schedule paths. Validate UUID shape,
 		// scope to the same mailbox, and only link currently-unlinked rows
 		// so one message cannot hijack another message's attachments.
-		seenIDs := make(map[string]bool)
-		canonicalIDs := make([]string, 0, len(req.AttachmentIDs))
+		uniqueIDsMap := make(map[string]bool)
+		uniqueIDs := []string{}
 		for _, id := range req.AttachmentIDs {
 			parsed, err := uuid.Parse(id)
 			if err != nil {
 				http.Error(w, "attachment_ids must be UUIDs", http.StatusBadRequest)
 				return
 			}
-			canonical := parsed.String()
-			if !seenIDs[canonical] {
-				seenIDs[canonical] = true
-				canonicalIDs = append(canonicalIDs, canonical)
+			canonicalID := parsed.String()
+			if !uniqueIDsMap[canonicalID] {
+				uniqueIDsMap[canonicalID] = true
+				uniqueIDs = append(uniqueIDs, canonicalID)
 			}
 		}
 		// BUG-002: check the link result before consuming the reservation.
 		// A short count means an ID is unknown, belongs to another mailbox,
 		// or is already linked elsewhere; fail loud instead of queuing a
 		// message whose attachments silently stayed unlinked.
-		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, canonicalIDs, req.MailboxID)
+		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, uniqueIDs, req.MailboxID)
 		if linkErr != nil {
+			_ = tx.Rollback(ctx)
 			http.Error(w, "failed to link attachments", http.StatusInternalServerError)
 			return
 		}
-		if linkRes.RowsAffected() != int64(len(canonicalIDs)) {
+		if linkRes.RowsAffected() != int64(len(req.AttachmentIDs)) {
+			_ = tx.Rollback(ctx)
 			http.Error(w, "attachment not found, already linked, or not in this mailbox", http.StatusBadRequest)
 			return
 		}
@@ -619,31 +621,33 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to schedule message", http.StatusInternalServerError)
 		return
 	}
-	// BUG-003: propagate attachment IDs on the schedule path, mirroring the
+	// Propagate attachment IDs on the schedule path, mirroring the
 	// send handler. Uses the same delivery_id-as-message_id convention (see
 	// note above) so scheduled messages list attachments consistently.
 	if len(req.AttachmentIDs) > 0 {
-		seenIDs := make(map[string]bool)
-		canonicalIDs := make([]string, 0, len(req.AttachmentIDs))
+		uniqueIDsMap := make(map[string]bool)
+		uniqueIDs := []string{}
 		for _, id := range req.AttachmentIDs {
 			parsed, err := uuid.Parse(id)
 			if err != nil {
 				http.Error(w, "attachment_ids must be UUIDs", http.StatusBadRequest)
 				return
 			}
-			canonical := parsed.String()
-			if !seenIDs[canonical] {
-				seenIDs[canonical] = true
-				canonicalIDs = append(canonicalIDs, canonical)
+			canonicalID := parsed.String()
+			if !uniqueIDsMap[canonicalID] {
+				uniqueIDsMap[canonicalID] = true
+				uniqueIDs = append(uniqueIDs, canonicalID)
 			}
 		}
 		// BUG-002: same strict link check as the send handler (see above).
-		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, canonicalIDs, req.MailboxID)
+		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, uniqueIDs, req.MailboxID)
 		if linkErr != nil {
+			_ = tx.Rollback(ctx)
 			http.Error(w, "failed to link attachments", http.StatusInternalServerError)
 			return
 		}
-		if linkRes.RowsAffected() != int64(len(canonicalIDs)) {
+		if linkRes.RowsAffected() != int64(len(req.AttachmentIDs)) {
+			_ = tx.Rollback(ctx)
 			http.Error(w, "attachment not found, already linked, or not in this mailbox", http.StatusBadRequest)
 			return
 		}

@@ -43,7 +43,7 @@ func TestMailboxRecoveryMaterialAuthorizationAndPrivacy(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/organizations/"+orgID+"/mailboxes/"+mailboxID+"/recovery-material", nil)
 		req.SetPathValue("org_id", orgID)
 		req.SetPathValue("mailbox_id", mailboxID)
-		req.AddCookie(&http.Cookie{Name: "byos_session", Value: createSession(t, db, userID)})
+		req.AddCookie(&http.Cookie{Name: "byos_session", Value: createTestSession(t, db, userID)})
 		rec := httptest.NewRecorder()
 		mailboxRecoveryMaterialHandler(rec, req)
 		return rec

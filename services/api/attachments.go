@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -178,8 +179,8 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 		// Enforce 40 MB total payload budget
 		r.Body = http.MaxBytesReader(w, r.Body, MaxAttachmentSize)
 
-		contentType := r.Header.Get("Content-Type")
-		if strings.HasPrefix(contentType, "multipart/form-data") {
+		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err == nil && mediaType == "multipart/form-data" {
 			// Multipart upload
 			err := r.ParseMultipartForm(MaxAttachmentSize)
 			if err != nil {
@@ -231,7 +232,7 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 			// Forward bytes to customer storage via storage-worker streaming connection.
 			// Total stream size equals the original multipart file size (headerBytes
 			// were read back into streamReader), so ContentLength must be header.Size.
-			// BUG-004 note: Go populates multipart FileHeader.Size while parsing the
+			// Note: Go populates multipart FileHeader.Size while parsing the
 			// form, but proxies/clients that yield an unknown size (Size < 0) are
 			// rejected here because downstream providers (e.g. GoogleDriveStorage)
 			// require an exact non-negative size.
@@ -241,7 +242,7 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			storeReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/store", streamReader)
 			if reqErr != nil {
-				// BUG-001: never create a DB row pointing at an object that was
+				// Never create a DB row pointing at an object that was
 				// never sent; without a store request there is nothing to link.
 				http.Error(w, "failed to prepare storage request", http.StatusInternalServerError)
 				return

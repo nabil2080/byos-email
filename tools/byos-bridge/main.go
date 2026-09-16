@@ -175,6 +175,31 @@ func searchBridgeMessages(writer *bufio.Writer, tag, criteria string, cfg *Bridg
 		tokens := strings.Fields(criteriaClean)
 		for _, m := range messages {
 			match := true
+
+			// Lazy lowercasing
+			var lowerSender string
+			senderLowered := false
+
+			var lowerRecipients []string
+			var recipientsLowered []bool
+
+			checkRecipients := func(term string) bool {
+				if lowerRecipients == nil {
+					lowerRecipients = make([]string, len(m.Recipients))
+					recipientsLowered = make([]bool, len(m.Recipients))
+				}
+				for j, recip := range m.Recipients {
+					if !recipientsLowered[j] {
+						lowerRecipients[j] = strings.ToLower(recip)
+						recipientsLowered[j] = true
+					}
+					if strings.Contains(lowerRecipients[j], term) {
+						return true
+					}
+				}
+				return false
+			}
+
 			for i := 0; i < len(tokens); i++ {
 				token := strings.ToUpper(tokens[i])
 				if token == "ALL" {
@@ -186,36 +211,29 @@ func searchBridgeMessages(writer *bufio.Writer, tag, criteria string, cfg *Bridg
 					}
 				} else if token == "FROM" && i+1 < len(tokens) {
 					term := strings.Trim(strings.ToLower(tokens[i+1]), `"`)
-					if !strings.Contains(strings.ToLower(m.Sender), term) {
+					if !senderLowered {
+						lowerSender = strings.ToLower(m.Sender)
+						senderLowered = true
+					}
+					if !strings.Contains(lowerSender, term) {
 						match = false
 						break
 					}
 					i++
 				} else if token == "TO" && i+1 < len(tokens) {
 					term := strings.Trim(strings.ToLower(tokens[i+1]), `"`)
-					toMatched := false
-					for _, r := range m.Recipients {
-						if strings.Contains(strings.ToLower(r), term) {
-							toMatched = true
-							break
-						}
-					}
-					if !toMatched {
+					if !checkRecipients(term) {
 						match = false
 						break
 					}
 					i++
 				} else {
 					term := strings.Trim(strings.ToLower(tokens[i]), `"`)
-					senderMatch := strings.Contains(strings.ToLower(m.Sender), term)
-					recipMatch := false
-					for _, r := range m.Recipients {
-						if strings.Contains(strings.ToLower(r), term) {
-							recipMatch = true
-							break
-						}
+					if !senderLowered {
+						lowerSender = strings.ToLower(m.Sender)
+						senderLowered = true
 					}
-					if !senderMatch && !recipMatch {
+					if !strings.Contains(lowerSender, term) && !checkRecipients(term) {
 						match = false
 						break
 					}

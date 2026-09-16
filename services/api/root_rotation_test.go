@@ -68,10 +68,10 @@ func TestRootRotationPrivateFlow(t *testing.T) {
 	}
 
 	// Member rotates their OWN private mailbox (no wrap allowed).
-	memberToken := createSession(t, db, memberID)
+	memberToken := createTestSession(t, db, memberID)
 	// A second session simulates a stolen/parallel login: rotation must kill
 	// it while the requesting session survives.
-	staleToken := createSession(t, db, memberID)
+	staleToken := createTestSession(t, db, memberID)
 	rec := rotateRequest(t, orgID, mailboxID, `{}`, memberToken)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("rotate status = %d, want 200: %s", rec.Code, rec.Body.String())
@@ -142,7 +142,7 @@ func TestRootRotationAuthz(t *testing.T) {
 	orgID, ownerID, _, memberID := createTestOrgAndUsers(t, db)
 	org2, _, _, _ := createTestOrgWithEmail(t, db, "rot2")
 	mailboxID, _ := insertPrivateMailbox(t, db, orgID, memberID)
-	ownerToken := createSession(t, db, ownerID)
+	ownerToken := createTestSession(t, db, ownerID)
 
 	// stranger member (not owner of mailbox, not admin) -> 403.
 	var stranger string
@@ -150,7 +150,7 @@ func TestRootRotationAuthz(t *testing.T) {
 		VALUES ($1, $2, 'S', 'x', true, 'member') RETURNING id`, orgID, "stranger-rot-"+uuid.New().String()+"@byos.local").Scan(&stranger); err != nil {
 		t.Fatal(err)
 	}
-	strangerToken := createSession(t, db, stranger)
+	strangerToken := createTestSession(t, db, stranger)
 	if rec := rotateRequest(t, orgID, mailboxID, `{}`, strangerToken); rec.Code != http.StatusForbidden {
 		t.Fatalf("stranger rotate = %d, want 403", rec.Code)
 	}

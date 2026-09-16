@@ -37,6 +37,20 @@ func doStore(t *testing.T, w *StorageWorker, objectKey string, data []byte, key 
 	return rec
 }
 
+func doStoreOctetStream(t *testing.T, w *StorageWorker, objectKey string, data []byte, key, mailboxID, contentType string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/store", bytes.NewReader(data))
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-Object-Key", objectKey)
+	req.Header.Set("X-Mailbox-ID", mailboxID)
+	if key != "" {
+		req.Header.Set("X-Internal-Key", key)
+	}
+	rec := httptest.NewRecorder()
+	w.storeHandler(rec, req)
+	return rec
+}
+
 func doRetrieve(t *testing.T, w *StorageWorker, objectKey, key string) *httptest.ResponseRecorder {
 	t.Helper()
 	payload, _ := json.Marshal(RetrieveRequest{ObjectKey: objectKey})
@@ -110,5 +124,29 @@ func TestInternalKeyEnforced(t *testing.T) {
 	rec = doRetrieve(t, w, "k", "")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("missing key status = %d, want 403", rec.Code)
+	}
+}
+
+func TestStoreOctetStreamVariants(t *testing.T) {
+	w := testWorker(t)
+	const objectKey = "mailboxes/test-mailbox/msg-002.enc"
+	original := []byte("raw data test")
+
+	// Store with parameters in media type
+	stored := doStoreOctetStream(t, w, objectKey, original, "test-internal-key", "test-mailbox", "application/octet-stream; name=\"f.enc\"")
+	if stored.Code != http.StatusOK {
+		t.Fatalf("store status = %d, want 200: %s", stored.Code, stored.Body.String())
+	}
+
+	got := doRetrieve(t, w, objectKey, "test-internal-key")
+	if got.Code != http.StatusOK {
+		t.Fatalf("retrieve status = %d, want 200: %s", got.Code, got.Body.String())
+	}
+	var rr RetrieveResponse
+	if err := json.NewDecoder(got.Body).Decode(&rr); err != nil {
+		t.Fatalf("decode retrieve: %v", err)
+	}
+	if !bytes.Equal(rr.Data, original) {
+		t.Fatalf("round-trip mismatch: got %v want %v", rr.Data, original)
 	}
 }
