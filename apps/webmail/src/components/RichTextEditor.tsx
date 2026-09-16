@@ -45,7 +45,11 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
 
   function syncContent() {
     if (!editorRef) return;
-    const html = editorRef.innerHTML;
+    const rawHtml = editorRef.innerHTML;
+    const html = DOMPurify.sanitize(rawHtml);
+    if (rawHtml !== html) {
+      editorRef.innerHTML = html;
+    }
     const text = editorRef.innerText || editorRef.textContent || "";
     setCurrentHtml(html);
     props.onChange?.({ html, text });
@@ -80,17 +84,24 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
   function applyLink(e: Event) {
     e.preventDefault();
     restoreSelection();
-    const url = linkUrl().trim();
+    let url = linkUrl().trim();
     if (!url) {
       setShowLinkModal(false);
       return;
     }
+    if (!/^https?:\/\//i.test(url) && !/^mailto:/i.test(url)) {
+      url = "https://" + url;
+    }
     if (linkText().trim() && (!savedRange || savedRange.collapsed)) {
-      document.execCommand(
-        "insertHTML",
-        false,
-        `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color: #A27561; text-decoration: underline;">${linkText().trim()}</a>`
-      );
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.style.color = "#A27561";
+      a.style.textDecoration = "underline";
+      a.textContent = linkText().trim();
+      const clean = DOMPurify.sanitize(a.outerHTML);
+      document.execCommand("insertHTML", false, clean);
     } else {
       document.execCommand("createLink", false, url);
     }
@@ -110,14 +121,23 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
     e.preventDefault();
     restoreSelection();
     const url = imageUrl().trim();
-    if (!url) {
+    if (!url || !/^https?:\/\//i.test(url)) {
       setShowImageModal(false);
       return;
     }
     const width = parseInt(imageWidth(), 10) || 200;
     const alt = imageAlt().trim() || "Embedded Image";
-    const imgTag = `<img src="${url}" alt="${alt}" style="max-width: ${width}px; height: auto; border-radius: 4px; display: inline-block; vertical-align: middle; margin: 6px 0;" />`;
-    document.execCommand("insertHTML", false, imgTag);
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = alt;
+    img.style.maxWidth = width + "px";
+    img.style.height = "auto";
+    img.style.borderRadius = "4px";
+    img.style.display = "inline-block";
+    img.style.verticalAlign = "middle";
+    img.style.margin = "6px 0";
+    const clean = DOMPurify.sanitize(img.outerHTML);
+    document.execCommand("insertHTML", false, clean);
     syncContent();
     setShowImageModal(false);
   }

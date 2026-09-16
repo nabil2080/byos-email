@@ -10,6 +10,7 @@ import {
 import { saveSignature } from "../../signature";
 import { ProfileAvatar } from "../../components/ProfileAvatar";
 import { RichTextEditor } from "../../components/RichTextEditor";
+import DOMPurify from "dompurify";
 
 interface SignaturesTabProps {
   mailbox: Mailbox;
@@ -120,7 +121,7 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
         settings.signature_html ||
         settings.signature_plain?.replace(/\n/g, "<br/>") ||
         "";
-      setSignatureHtml(initialHtml);
+      setSignatureHtml(DOMPurify.sanitize(initialHtml));
       setInsertOnReply(settings.insert_signature_on_reply);
       setAliases(aliasList);
       setSelectedSenderIdentity(primaryEmail());
@@ -154,7 +155,7 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
       await updateMailboxSettings(props.mailbox.id, {
         display_name: displayName().trim(),
         signature_plain: signaturePlain(),
-        signature_html: signatureHtml(),
+        signature_html: DOMPurify.sanitize(signatureHtml()),
         insert_signature_on_reply: insertOnReply(),
         avatar_url: avatarUrl(),
       });
@@ -383,7 +384,7 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
                   <div class="text-[#878A8E] dark:text-[#71717A] text-xs">--</div>
                   <div
                     class="prose prose-xs max-w-none text-xs text-[#1A1B1E] dark:text-[#F3F4F6] leading-relaxed break-words"
-                    innerHTML={signatureHtml() || "<span class='text-[#878A8E] italic'>No signature configured</span>"}
+                    innerHTML={DOMPurify.sanitize(signatureHtml()) || "<span class='text-[#878A8E] italic'>No signature configured</span>"}
                   />
                 </div>
               </div>
