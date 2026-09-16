@@ -1,5 +1,5 @@
-import { Component, createSignal, Show } from "solid-js";
-import { ConnectedAccount, login, apiBase } from "../api";
+import { Component, createSignal, Show, For } from "solid-js";
+import { ConnectedAccount, login, verifyLogin2FA, sendLogin2FACode, LoginResponse, apiBase } from "../api";
 import { autoUnwrapMailboxKey } from "../message_crypto";
 
 interface AddMailboxModalProps {
@@ -9,10 +9,145 @@ interface AddMailboxModalProps {
 }
 
 export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
+  const [step, setStep] = createSignal<"credentials" | "2fa">("credentials");
   const [email, setEmail] = createSignal("");
   const [password, setPassword] = createSignal("");
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+
+  // 2FA Challenge State
+  const [cachedMail, setCachedMail] = createSignal("");
+  const [cachedPassword, setCachedPassword] = createSignal("");
+  const [twoFactorChallenge, setTwoFactorChallenge] = createSignal<{
+    challenge_token: string;
+    methods: string[];
+    preferred_method: string;
+    destination_masked: string;
+    debug_code?: string;
+  } | null>(null);
+  const [twoFactorCode, setTwoFactorCode] = createSignal("");
+  const [twoFactorBusy, setTwoFactorBusy] = createSignal(false);
+
+  function resetForm() {
+    setEmail("");
+    setPassword("");
+    setError(null);
+    setStep("credentials");
+    setCachedMail("");
+    setCachedPassword("");
+    setTwoFactorChallenge(null);
+    setTwoFactorCode("");
+    setLoading(false);
+    setTwoFactorBusy(false);
+  }
+
+  function handleClose() {
+    resetForm();
+    props.onClose();
+  }
+
+  async function processAccountLogin(res: LoginResponse, mail: string, pass: string) {
+    let skHex = "";
+    let searchKeyHex = "";
+
+    // Client-side key unwrapping or self-healing
+    if (res.wrapped_sk_user) {
+      try {
+        const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
+        const skBytes = autoUnwrapMailboxKey(wasm, pass, res.wrapped_sk_user);
+        skHex = Array.from(skBytes, (b) => b.toString(16).padStart(2, "0")).join("");
+        searchKeyHex = wasm.wasm_derive_search_key(skHex);
+      } catch (unwrapErr) {
+        console.warn("Could not unwrap mailbox key with password:", unwrapErr);
+      }
+    } else if (res.mailbox_id) {
+      // Self-healing: if an account has no active wrapped key material, generate and register a fresh keypair
+      try {
+        const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
+        const kpJson = wasm.wasm_generate_keypair();
+        const kp = JSON.parse(kpJson) as { secret_key: string; public_key: string };
+        const salt = new Uint8Array(16);
+        crypto.getRandomValues(salt);
+        const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
+        const passphraseEnvelope = wasm.wasm_passphrase_wrap_key(pass, saltHex, kp.secret_key);
+        const healWrapped = JSON.stringify({
+          salt: saltHex,
+          envelope: passphraseEnvelope,
+        });
+
+        const tempToken = res.token || sessionStorage.getItem("byos_active_session_token");
+
+        const reactivateRes = await fetch(`${apiBase()}/v1/mailboxes/${res.mailbox_id}/reactivate-keys`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-BYOS-Client": "webmail",
+            "Authorization": `Bearer ${tempToken}`
+          },
+          body: JSON.stringify({
+            wrapped_sk_user: healWrapped,
+            mailbox_pk: kp.public_key,
+          })
+        });
+
+        if (!reactivateRes.ok) {
+          const errText = await reactivateRes.text().catch(() => "");
+          throw new Error(errText || `Failed to repair mailbox: status ${reactivateRes.status}`);
+        }
+
+        skHex = kp.secret_key;
+        searchKeyHex = wasm.wasm_derive_search_key(skHex);
+      } catch (healErr) {
+        console.warn("Self-healing mailbox key failed:", healErr);
+        throw new Error("Failed to initialize cryptographic keys for the newly connected mailbox.");
+      }
+    }
+
+    const mailboxId = res.mailbox_id || res.id || "";
+    const newAccount: ConnectedAccount = {
+      id: mailboxId,
+      email: res.email || mail,
+      displayName: res.mailbox_local_part || (res.email ? res.email.split("@")[0] : mail.split("@")[0]),
+      role: res.role || "member",
+      privacyMode: res.mailbox_mode || "org_managed",
+      sessionToken: res.token || "",
+      mailboxSkHex: skHex,
+      searchKeyHex: searchKeyHex,
+    };
+
+    // Persist to byos_connected_accounts in both sessionStorage and localStorage
+    for (const storage of [sessionStorage, localStorage]) {
+      try {
+        const existingStr = storage.getItem("byos_connected_accounts");
+        let accounts: ConnectedAccount[] = [];
+        if (existingStr) {
+          try {
+            accounts = JSON.parse(existingStr);
+          } catch {}
+        }
+        if (!Array.isArray(accounts)) accounts = [];
+        accounts = accounts.filter(
+          (a) => a.id !== newAccount.id && a.email.toLowerCase() !== newAccount.email.toLowerCase()
+        );
+        accounts.push(newAccount);
+        storage.setItem("byos_connected_accounts", JSON.stringify(accounts));
+      } catch (e) {
+        console.warn("Failed saving connected accounts to storage:", e);
+      }
+    }
+
+    // Save key material in sessionStorage for immediate inbox unlocking
+    if (mailboxId && skHex) {
+      sessionStorage.setItem("byos_mailbox_sk_" + mailboxId, skHex);
+      sessionStorage.setItem("byos_mailbox_skey_" + mailboxId, searchKeyHex);
+    }
+    if (newAccount.sessionToken) {
+      sessionStorage.setItem("byos_active_session_token", newAccount.sessionToken);
+    }
+
+    resetForm();
+    props.onSuccess(newAccount);
+  }
 
   async function handleSubmit(e: Event) {
     e.preventDefault();
@@ -28,106 +163,79 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
     setError(null);
 
     try {
-      // 1. Authenticate with backend
+      // 1. Authenticate credentials with backend
       const res = await login(mail, pass);
 
-      let skHex = "";
-      let searchKeyHex = "";
-
-      // 2. Client-side key unwrapping or self-healing
-      if (res.wrapped_sk_user) {
-        try {
-          const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
-          const skBytes = autoUnwrapMailboxKey(wasm, pass, res.wrapped_sk_user);
-          skHex = Array.from(skBytes, (b) => b.toString(16).padStart(2, "0")).join("");
-          searchKeyHex = wasm.wasm_derive_search_key(skHex);
-        } catch (unwrapErr) {
-          console.warn("Could not unwrap mailbox key with password:", unwrapErr);
-        }
-      } else if (res.mailbox_id) {
-        // Self-healing: if an account has no active wrapped key material, generate and register a fresh keypair
-        try {
-          const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
-          const kpJson = wasm.wasm_generate_keypair();
-          const kp = JSON.parse(kpJson) as { secret_key: string; public_key: string };
-          const salt = new Uint8Array(16);
-          crypto.getRandomValues(salt);
-          const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
-          const passphraseEnvelope = wasm.wasm_passphrase_wrap_key(pass, saltHex, kp.secret_key);
-          const healWrapped = JSON.stringify({
-            salt: saltHex,
-            envelope: passphraseEnvelope,
-          });
-
-          // Use a temporary apiRequest override to use the NEW token for reactivateHistoricalKeys
-          const tempToken = res.token || sessionStorage.getItem("byos_active_session_token");
-
-          // We need to import reactivateHistoricalKeys or use fetch directly since we need the new token
-          const reactivateRes = await fetch(`${apiBase()}/v1/mailboxes/${res.mailbox_id}/reactivate-keys`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-BYOS-Client": "webmail",
-              "Authorization": `Bearer ${tempToken}`
-            },
-            body: JSON.stringify({
-              wrapped_sk_user: healWrapped,
-              mailbox_pk: kp.public_key,
-            })
-          });
-
-          if (!reactivateRes.ok) {
-            const errText = await reactivateRes.text().catch(() => "");
-            throw new Error(errText || `Failed to repair mailbox: status ${reactivateRes.status}`);
-          }
-
-          // Set skHex from the newly generated secret key
-          skHex = kp.secret_key;
-          searchKeyHex = wasm.wasm_derive_search_key(skHex);
-        } catch (healErr) {
-          console.warn("Self-healing mailbox key failed:", healErr);
-          throw new Error("Failed to initialize cryptographic keys for the newly connected mailbox.");
-        }
+      // Check if 2FA challenge is required
+      if (res.two_factor_required) {
+        setCachedMail(mail);
+        setCachedPassword(pass);
+        setTwoFactorChallenge({
+          challenge_token: res.challenge_token || "",
+          methods: res.methods || ["totp"],
+          preferred_method: res.preferred_method || "totp",
+          destination_masked: res.destination_masked || "",
+          debug_code: res.debug_code,
+        });
+        setTwoFactorCode("");
+        setStep("2fa");
+        return;
       }
 
-      const mailboxId = res.mailbox_id || res.id || "";
-      const newAccount: ConnectedAccount = {
-        id: mailboxId,
-        email: res.email || mail,
-        displayName: res.mailbox_local_part || (res.email ? res.email.split("@")[0] : mail.split("@")[0]),
-        role: res.role || "member",
-        privacyMode: res.mailbox_mode || "org_managed",
-        sessionToken: res.token || "",
-        mailboxSkHex: skHex,
-        searchKeyHex: searchKeyHex,
-      };
-
-      // 3. Persist to byos_connected_accounts in sessionStorage
-      const existingStr = sessionStorage.getItem("byos_connected_accounts");
-      let accounts: ConnectedAccount[] = [];
-      if (existingStr) {
-        try {
-          accounts = JSON.parse(existingStr);
-        } catch {}
-      }
-      accounts = accounts.filter(
-        (a) => a.id !== newAccount.id && a.email.toLowerCase() !== newAccount.email.toLowerCase()
-      );
-      accounts.push(newAccount);
-      sessionStorage.setItem("byos_connected_accounts", JSON.stringify(accounts));
-
-      // Reset form
-      setEmail("");
-      setPassword("");
-      setError(null);
-
-      // 4. Notify parent
-      props.onSuccess(newAccount);
+      await processAccountLogin(res, mail, pass);
     } catch (err: any) {
       setError(err?.message || "Invalid credentials or failed to connect mailbox.");
     } finally {
       setLoading(false);
       setPassword("");
+    }
+  }
+
+  async function handleVerify2FA(e: Event) {
+    e.preventDefault();
+    const challenge = twoFactorChallenge();
+    const code = twoFactorCode().trim();
+
+    if (!challenge || !code) {
+      setError("Please enter your 6-digit verification code.");
+      return;
+    }
+
+    setTwoFactorBusy(true);
+    setError(null);
+
+    try {
+      const res = await verifyLogin2FA(challenge.challenge_token, code);
+      await processAccountLogin(res, cachedMail(), cachedPassword());
+    } catch (err: any) {
+      setError(err?.message || "Invalid or expired verification code.");
+    } finally {
+      setTwoFactorBusy(false);
+    }
+  }
+
+  async function handleSwitch2FAMethod(method: "email" | "phone") {
+    const challenge = twoFactorChallenge();
+    if (!challenge) return;
+    setTwoFactorBusy(true);
+    setError(null);
+    try {
+      const res = await sendLogin2FACode(challenge.challenge_token, method);
+      if (res.success) {
+        setTwoFactorChallenge((prev) =>
+          prev
+            ? {
+                ...prev,
+                preferred_method: method,
+                destination_masked: res.destination_masked,
+              }
+            : null
+        );
+      }
+    } catch (err: any) {
+      setError(err?.message || "Failed to send code.");
+    } finally {
+      setTwoFactorBusy(false);
     }
   }
 
@@ -137,13 +245,17 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
         <div class="bg-white dark:bg-[#1E2025] rounded-2xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-2xl max-w-md w-full p-6 space-y-4 font-sans">
           <div class="flex items-center justify-between pb-3 border-b border-[#E2DFD8] dark:border-[#2E3138]">
             <div>
-              <h3 class="text-sm font-bold text-[#2B2C2D] dark:text-[#F3F4F6]">Add Mailbox</h3>
+              <h3 class="text-sm font-bold text-[#2B2C2D] dark:text-[#F3F4F6]">
+                {step() === "2fa" ? "Two-Step Verification" : "Add Mailbox"}
+              </h3>
               <p class="text-xs text-[#6F7173] dark:text-[#878A8E] mt-0.5">
-                Connect another mailbox to your current Webmail session
+                {step() === "2fa"
+                  ? `Verify identity for ${cachedMail()}`
+                  : "Connect another mailbox to your current Webmail session"}
               </p>
             </div>
             <button
-              onClick={props.onClose}
+              onClick={handleClose}
               class="text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] cursor-pointer p-1 rounded-lg hover:bg-[#F0EEE9]/60 dark:hover:bg-[#26282E] transition"
               title="Close"
             >
@@ -166,51 +278,145 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
             </div>
           </Show>
 
-          <form onSubmit={handleSubmit} class="space-y-4">
-            <div>
-              <label class="block text-xs font-semibold text-[#3C3D3E] dark:text-[#A1A1AA] mb-1">Email address</label>
-              <input
-                type="email"
-                required
-                placeholder="user@yourdomain.com"
-                value={email()}
-                onInput={(e) => setEmail(e.currentTarget.value)}
-                class="w-full px-3.5 py-2.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#3C3D3E] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] focus:outline-none focus:ring-1 focus:ring-[#A27561] focus:border-[#A27561] focus:bg-white dark:focus:bg-[#18191D] transition"
-              />
-            </div>
+          {/* STEP 1: CREDENTIALS */}
+          <Show when={step() === "credentials"}>
+            <form onSubmit={handleSubmit} class="space-y-4">
+              <div>
+                <label class="block text-xs font-semibold text-[#3C3D3E] dark:text-[#A1A1AA] mb-1">Email address</label>
+                <input
+                  type="email"
+                  required
+                  placeholder="user@yourdomain.com"
+                  value={email()}
+                  onInput={(e) => setEmail(e.currentTarget.value)}
+                  class="w-full px-3.5 py-2.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#3C3D3E] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] focus:outline-none focus:ring-1 focus:ring-[#A27561] focus:border-[#A27561] focus:bg-white dark:focus:bg-[#18191D] transition"
+                />
+              </div>
 
-            <div>
-              <label class="block text-xs font-semibold text-[#3C3D3E] dark:text-[#A1A1AA] mb-1">Password</label>
-              <input
-                type="password"
-                required
-                placeholder="Account password"
-                value={password()}
-                onInput={(e) => setPassword(e.currentTarget.value)}
-                class="w-full px-3.5 py-2.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#3C3D3E] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] focus:outline-none focus:ring-1 focus:ring-[#A27561] focus:border-[#A27561] focus:bg-white dark:focus:bg-[#18191D] transition"
-              />
-            </div>
+              <div>
+                <label class="block text-xs font-semibold text-[#3C3D3E] dark:text-[#A1A1AA] mb-1">Password</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Account password"
+                  value={password()}
+                  onInput={(e) => setPassword(e.currentTarget.value)}
+                  class="w-full px-3.5 py-2.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#3C3D3E] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] focus:outline-none focus:ring-1 focus:ring-[#A27561] focus:border-[#A27561] focus:bg-white dark:focus:bg-[#18191D] transition"
+                />
+              </div>
 
-            <div class="flex items-center justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={props.onClose}
-                class="px-4 py-2.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs font-medium text-[#3C3D3E] dark:text-[#A1A1AA] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] transition cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={loading()}
-                class="px-5 py-2.5 rounded-xl bg-[#A27561] text-white text-xs font-semibold hover:bg-[#8F6452] transition disabled:opacity-50 flex items-center gap-2 cursor-pointer shadow-xs"
-              >
-                <Show when={loading()}>
-                  <div class="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                </Show>
-                <span>{loading() ? "Connecting…" : "Connect Mailbox"}</span>
-              </button>
-            </div>
-          </form>
+              <div class="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={handleClose}
+                  class="px-4 py-2.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs font-medium text-[#3C3D3E] dark:text-[#A1A1AA] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading()}
+                  class="px-5 py-2.5 rounded-xl bg-[#A27561] text-white text-xs font-semibold hover:bg-[#8F6452] transition disabled:opacity-50 flex items-center gap-2 cursor-pointer shadow-xs"
+                >
+                  <Show when={loading()}>
+                    <div class="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  </Show>
+                  <span>{loading() ? "Connecting…" : "Connect Mailbox"}</span>
+                </button>
+              </div>
+            </form>
+          </Show>
+
+          {/* STEP 2: 2-STEP VERIFICATION */}
+          <Show when={step() === "2fa"}>
+            <form onSubmit={handleVerify2FA} class="space-y-4">
+              <div class="p-3 bg-[#FAF9F6] dark:bg-[#18191D] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs text-[#6F7173] dark:text-[#878A8E] leading-relaxed">
+                {twoFactorChallenge()?.preferred_method === "totp"
+                  ? "Enter the 6-digit code from your authenticator app to complete connection."
+                  : `Enter the 6-digit security code sent to ${twoFactorChallenge()?.destination_masked || "your recovery address"}.`}
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-[#3C3D3E] dark:text-[#A1A1AA] mb-1">
+                  6-Digit Verification Code
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxlength="6"
+                  required
+                  placeholder="123456"
+                  autofocus
+                  value={twoFactorCode()}
+                  onInput={(e) => setTwoFactorCode(e.currentTarget.value.replace(/[^0-9]/g, ""))}
+                  disabled={twoFactorBusy()}
+                  class="w-full tracking-widest text-center font-mono rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2.5 text-sm bg-[#FAF9F6] dark:bg-[#18191D] text-[#3C3D3E] dark:text-[#F3F4F6] focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]"
+                />
+              </div>
+
+              <Show when={(twoFactorChallenge()?.methods?.length || 0) > 1}>
+                <div class="flex items-center justify-between text-xs text-[#6F7173] dark:text-[#878A8E] pt-1">
+                  <span>Try another method:</span>
+                  <div class="flex items-center gap-2">
+                    <Show when={twoFactorChallenge()?.methods.includes("email") && twoFactorChallenge()?.preferred_method !== "email"}>
+                      <button
+                        type="button"
+                        onClick={() => handleSwitch2FAMethod("email")}
+                        disabled={twoFactorBusy()}
+                        class="text-[#A27561] hover:underline cursor-pointer font-medium"
+                      >
+                        Email OTP
+                      </button>
+                    </Show>
+                    <Show when={twoFactorChallenge()?.methods.includes("phone") && twoFactorChallenge()?.preferred_method !== "phone"}>
+                      <button
+                        type="button"
+                        onClick={() => handleSwitch2FAMethod("phone")}
+                        disabled={twoFactorBusy()}
+                        class="text-[#A27561] hover:underline cursor-pointer font-medium"
+                      >
+                        SMS Code
+                      </button>
+                    </Show>
+                  </div>
+                </div>
+              </Show>
+
+              <div class="flex items-center justify-between gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep("credentials");
+                    setError(null);
+                  }}
+                  disabled={twoFactorBusy()}
+                  class="px-3.5 py-2 rounded-xl text-xs text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] cursor-pointer"
+                >
+                  ← Back to Credentials
+                </button>
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleClose}
+                    class="px-4 py-2.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs font-medium text-[#3C3D3E] dark:text-[#A1A1AA] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={twoFactorBusy() || twoFactorCode().trim().length !== 6}
+                    class="px-5 py-2.5 rounded-xl bg-[#A27561] text-white text-xs font-semibold hover:bg-[#8F6452] transition disabled:opacity-50 flex items-center gap-2 cursor-pointer shadow-xs"
+                  >
+                    <Show when={twoFactorBusy()}>
+                      <div class="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    </Show>
+                    <span>{twoFactorBusy() ? "Verifying…" : "Verify & Connect"}</span>
+                  </button>
+                </div>
+              </div>
+            </form>
+          </Show>
         </div>
       </div>
     </Show>

@@ -282,14 +282,47 @@ export const SetupAccount: Component = () => {
 
       // Populate sessionStorage immediately with keys & session token so the user lands unlocked in the inbox!
       const mailboxSk = rawMailboxSkHex();
+      let sKeyHex = "";
       if (mailboxSk) {
         const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
-        const sKeyHex = wasm.wasm_derive_search_key(mailboxSk);
+        sKeyHex = wasm.wasm_derive_search_key(mailboxSk);
         sessionStorage.setItem("byos_mailbox_sk_" + data.mailbox_id, mailboxSk);
         sessionStorage.setItem("byos_mailbox_skey_" + data.mailbox_id, sKeyHex);
       }
       if (claimRes.token) {
         sessionStorage.setItem("byos_active_session_token", claimRes.token);
+      }
+
+      // Persist newly activated account into byos_connected_accounts for multi-mailbox support
+      const newAccount = {
+        id: data.mailbox_id,
+        email: data.email,
+        displayName: data.email ? data.email.split("@")[0] : "User",
+        role: "member",
+        privacyMode: data.privacy_mode || "private",
+        sessionToken: claimRes.token || "",
+        mailboxSkHex: mailboxSk || "",
+        searchKeyHex: sKeyHex,
+      };
+
+      for (const storage of [sessionStorage, localStorage]) {
+        try {
+          const existingStr = storage.getItem("byos_connected_accounts");
+          let accounts: any[] = [];
+          if (existingStr) {
+            try {
+              accounts = JSON.parse(existingStr);
+            } catch {}
+          }
+          if (!Array.isArray(accounts)) accounts = [];
+          accounts = accounts.filter(
+            (a) => a.id !== newAccount.id && a.email?.toLowerCase() !== newAccount.email.toLowerCase()
+          );
+          accounts.unshift(newAccount);
+          storage.setItem("byos_connected_accounts", JSON.stringify(accounts));
+        } catch (e) {
+          console.warn("Failed saving connected accounts in setup-account:", e);
+        }
       }
 
       // Wrap the recovery phrase under password using wasm_passphrase_wrap_key

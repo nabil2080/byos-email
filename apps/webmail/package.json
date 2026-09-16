@@ -7,7 +7,7 @@
     "build": "vite build",
     "preview": "vite preview --port 3001",
     "typecheck": "tsc --noEmit",
-    "test": "npx tsx src/run_test.node.js"
+    "test": "npx tsx --experimental-wasm-modules src/run_test.node.js"
   },
   "dependencies": {
     "@solidjs/router": "^0.15.3",

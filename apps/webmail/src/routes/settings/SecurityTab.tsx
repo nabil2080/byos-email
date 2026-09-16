@@ -145,10 +145,19 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
     setPasskeyError(null);
     try {
       const opts = await fetchPasskeyRegisterOptions();
+
+      const effectiveRpId =
+        window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+          ? window.location.hostname
+          : (opts.rp?.id || window.location.hostname);
+
       const cred = (await navigator.credentials.create({
         publicKey: {
           challenge: base64URLToBuffer(opts.challenge),
-          rp: opts.rp,
+          rp: {
+            name: opts.rp?.name || "BYOS Secure Email",
+            id: effectiveRpId,
+          },
           user: {
             id: base64URLToBuffer(opts.user.id),
             name: opts.user.name,
@@ -179,11 +188,12 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
 
       // Store device-bound mailbox key in local vault for 1-touch automatic unlock
       if (typeof window !== "undefined") {
-        const skHex = sessionStorage.getItem("byos_mailbox_sk_" + props.mailbox.id);
-        const sKeyHex = sessionStorage.getItem("byos_mailbox_skey_" + props.mailbox.id);
-        if (skHex) {
+        const boxId = props.mailbox?.id || props.currentUser?.mailbox_id || "";
+        const skHex = boxId ? sessionStorage.getItem("byos_mailbox_sk_" + boxId) : null;
+        const sKeyHex = boxId ? sessionStorage.getItem("byos_mailbox_skey_" + boxId) : null;
+        if (boxId && skHex) {
           localStorage.setItem(`byos_passkey_vault_${rawId}`, JSON.stringify({
-            mailbox_id: props.mailbox.id,
+            mailbox_id: boxId,
             mailbox_sk_hex: skHex,
             search_key_hex: sKeyHex || "",
           }));
@@ -195,7 +205,11 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
       showSuccess("Passkey registered! You can now log in with 1-touch authentication.");
       await loadPasskeys();
     } catch (err: any) {
-      setPasskeyError(err?.message || "Failed to enroll passkey.");
+      if (err?.name === "NotAllowedError" || err?.message?.includes("cancelled")) {
+        setPasskeyError("Passkey registration was cancelled or timed out.");
+      } else {
+        setPasskeyError(err?.message || "Failed to enroll passkey.");
+      }
     } finally {
       setAddingPasskey(false);
     }
