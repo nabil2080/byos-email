@@ -115,25 +115,43 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
       searchKeyHex: searchKeyHex,
     };
 
-    // Persist to byos_connected_accounts in both sessionStorage and localStorage
-    for (const storage of [sessionStorage, localStorage]) {
-      try {
-        const existingStr = storage.getItem("byos_connected_accounts");
-        let accounts: ConnectedAccount[] = [];
-        if (existingStr) {
-          try {
-            accounts = JSON.parse(existingStr);
-          } catch {}
-        }
-        if (!Array.isArray(accounts)) accounts = [];
-        accounts = accounts.filter(
-          (a) => a.id !== newAccount.id && a.email.toLowerCase() !== newAccount.email.toLowerCase()
-        );
-        accounts.push(newAccount);
-        storage.setItem("byos_connected_accounts", JSON.stringify(accounts));
-      } catch (e) {
-        console.warn("Failed saving connected accounts to storage:", e);
+    // Persist to byos_connected_accounts in sessionStorage (with in-memory keys)
+    try {
+      const existingStr = sessionStorage.getItem("byos_connected_accounts");
+      let accounts: ConnectedAccount[] = [];
+      if (existingStr) {
+        try { accounts = JSON.parse(existingStr); } catch {}
       }
+      if (!Array.isArray(accounts)) accounts = [];
+      accounts = accounts.filter(
+        (a) => a.id !== newAccount.id && a.email.toLowerCase() !== newAccount.email.toLowerCase()
+      );
+      accounts.push(newAccount);
+      sessionStorage.setItem("byos_connected_accounts", JSON.stringify(accounts));
+    } catch (e) {
+      console.warn("Failed saving connected accounts to sessionStorage:", e);
+    }
+
+    // Persist to localStorage for cross-tab metadata (stripping unsealed private keys for zero-knowledge safety)
+    try {
+      const durableAccount: ConnectedAccount = {
+        ...newAccount,
+        mailboxSkHex: "",
+        searchKeyHex: "",
+      };
+      const existingStr = localStorage.getItem("byos_connected_accounts");
+      let accounts: ConnectedAccount[] = [];
+      if (existingStr) {
+        try { accounts = JSON.parse(existingStr); } catch {}
+      }
+      if (!Array.isArray(accounts)) accounts = [];
+      accounts = accounts.filter(
+        (a) => a.id !== durableAccount.id && a.email.toLowerCase() !== durableAccount.email.toLowerCase()
+      );
+      accounts.push(durableAccount);
+      localStorage.setItem("byos_connected_accounts", JSON.stringify(accounts));
+    } catch (e) {
+      console.warn("Failed saving connected accounts to localStorage:", e);
     }
 
     // Save key material in sessionStorage for immediate inbox unlocking

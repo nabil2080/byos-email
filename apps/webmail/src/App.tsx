@@ -1002,7 +1002,8 @@ const App: Component = () => {
       list.unshift(activeAcc);
       sessionStorage.setItem("byos_connected_accounts", JSON.stringify(list));
       try {
-        localStorage.setItem("byos_connected_accounts", JSON.stringify(list));
+        const durableList = list.map((a) => ({ ...a, mailboxSkHex: "", searchKeyHex: "" }));
+        localStorage.setItem("byos_connected_accounts", JSON.stringify(durableList));
       } catch {}
       setConnectedAccounts(list);
 
@@ -1064,7 +1065,8 @@ const App: Component = () => {
         const updated = [account, ...remaining];
         sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
         try {
-          localStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+          const durableList = updated.map((a) => ({ ...a, mailboxSkHex: "", searchKeyHex: "" }));
+          localStorage.setItem("byos_connected_accounts", JSON.stringify(durableList));
         } catch {}
         return updated;
       });
@@ -1085,7 +1087,8 @@ const App: Component = () => {
       const updated = [account, ...filtered];
       sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
       try {
-        localStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+        const durableList = updated.map((a) => ({ ...a, mailboxSkHex: "", searchKeyHex: "" }));
+        localStorage.setItem("byos_connected_accounts", JSON.stringify(durableList));
       } catch {}
       return updated;
     });

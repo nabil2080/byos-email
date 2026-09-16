@@ -305,24 +305,39 @@ export const SetupAccount: Component = () => {
         searchKeyHex: sKeyHex,
       };
 
-      for (const storage of [sessionStorage, localStorage]) {
-        try {
-          const existingStr = storage.getItem("byos_connected_accounts");
-          let accounts: any[] = [];
-          if (existingStr) {
-            try {
-              accounts = JSON.parse(existingStr);
-            } catch {}
-          }
-          if (!Array.isArray(accounts)) accounts = [];
-          accounts = accounts.filter(
-            (a) => a.id !== newAccount.id && a.email?.toLowerCase() !== newAccount.email.toLowerCase()
-          );
-          accounts.unshift(newAccount);
-          storage.setItem("byos_connected_accounts", JSON.stringify(accounts));
-        } catch (e) {
-          console.warn("Failed saving connected accounts in setup-account:", e);
+      // 1. Persist to sessionStorage with in-memory secret key
+      try {
+        const existingStr = sessionStorage.getItem("byos_connected_accounts");
+        let accounts: any[] = [];
+        if (existingStr) {
+          try { accounts = JSON.parse(existingStr); } catch {}
         }
+        if (!Array.isArray(accounts)) accounts = [];
+        accounts = accounts.filter(
+          (a) => a.id !== newAccount.id && a.email?.toLowerCase() !== newAccount.email.toLowerCase()
+        );
+        accounts.unshift(newAccount);
+        sessionStorage.setItem("byos_connected_accounts", JSON.stringify(accounts));
+      } catch (e) {
+        console.warn("Failed saving connected accounts in sessionStorage:", e);
+      }
+
+      // 2. Persist metadata to localStorage without unsealed secret keys
+      try {
+        const durableAccount = { ...newAccount, mailboxSkHex: "", searchKeyHex: "" };
+        const existingStr = localStorage.getItem("byos_connected_accounts");
+        let accounts: any[] = [];
+        if (existingStr) {
+          try { accounts = JSON.parse(existingStr); } catch {}
+        }
+        if (!Array.isArray(accounts)) accounts = [];
+        accounts = accounts.filter(
+          (a) => a.id !== durableAccount.id && a.email?.toLowerCase() !== durableAccount.email.toLowerCase()
+        );
+        accounts.unshift(durableAccount);
+        localStorage.setItem("byos_connected_accounts", JSON.stringify(accounts));
+      } catch (e) {
+        console.warn("Failed saving connected accounts in localStorage:", e);
       }
 
       // Wrap the recovery phrase under password using wasm_passphrase_wrap_key
