@@ -1,10 +1,20 @@
 import { runDomainsTests } from "./lib/api/domains.test.js";
+import { runMailboxesTests } from "./lib/api/mailboxes.test.js";
 
 async function main() {
+  let totalFailed = 0;
+
   console.log("Running Domains API Tests...");
-  const res = await runDomainsTests();
-  console.log(`DOMAINS API TESTS: ${res.passed} passed, ${res.failed} failed\n`);
-  if (res.failed > 0) process.exit(1);
+  const domainsRes = await runDomainsTests();
+  console.log(`DOMAINS API TESTS: ${domainsRes.passed} passed, ${domainsRes.failed} failed\n`);
+  totalFailed += domainsRes.failed;
+
+  console.log("Running Mailboxes API Tests...");
+  const mailboxesRes = await runMailboxesTests();
+  console.log(`MAILBOXES API TESTS: ${mailboxesRes.passed} passed, ${mailboxesRes.failed} failed\n`);
+  totalFailed += mailboxesRes.failed;
+
+  if (totalFailed > 0) process.exit(1);
 }
 
 main().catch((err) => {
