@@ -69,10 +69,19 @@ const SecurityPage: Component = () => {
     setError(null);
     try {
       const opts = await fetchPasskeyRegisterOptions();
+
+      const effectiveRpId =
+        window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+          ? window.location.hostname
+          : (opts.rp?.id || window.location.hostname);
+
       const cred = (await navigator.credentials.create({
         publicKey: {
           challenge: base64URLToBuffer(opts.challenge),
-          rp: opts.rp,
+          rp: {
+            name: opts.rp?.name || "BYOS Control Panel",
+            id: effectiveRpId,
+          },
           user: {
             id: base64URLToBuffer(opts.user.id),
             name: opts.user.name,
@@ -106,7 +115,11 @@ const SecurityPage: Component = () => {
       showSuccess("Passkey registered successfully! You can now log into Control Panel with 1-touch biometrics.");
       await loadPasskeys();
     } catch (err: any) {
-      setError(err?.message || "Failed to enroll passkey.");
+      if (err?.name === "NotAllowedError" || err?.message?.includes("cancelled")) {
+        setError("Passkey registration was cancelled or timed out.");
+      } else {
+        setError(err?.message || "Failed to enroll passkey.");
+      }
     } finally {
       setEnrolling(false);
     }

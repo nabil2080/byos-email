@@ -988,7 +988,9 @@ const App: Component = () => {
         searchKeyHex: currentSKey,
       };
 
-      const savedAccountsStr = sessionStorage.getItem("byos_connected_accounts");
+      const savedAccountsStr =
+        sessionStorage.getItem("byos_connected_accounts") ||
+        (typeof window !== "undefined" ? localStorage.getItem("byos_connected_accounts") : null);
       let list: ConnectedAccount[] = [];
       if (savedAccountsStr) {
         try {
@@ -999,6 +1001,10 @@ const App: Component = () => {
       list = list.filter((a) => a.id !== activeAcc.id && a.email.toLowerCase() !== activeAcc.email.toLowerCase());
       list.unshift(activeAcc);
       sessionStorage.setItem("byos_connected_accounts", JSON.stringify(list));
+      try {
+        const durableList = list.map((a) => ({ ...a, mailboxSkHex: "", searchKeyHex: "" }));
+        localStorage.setItem("byos_connected_accounts", JSON.stringify(durableList));
+      } catch {}
       setConnectedAccounts(list);
 
       await loadMailboxData(targetBox.id);
@@ -1053,7 +1059,19 @@ const App: Component = () => {
         mailbox_mode: account.privacyMode,
       });
 
-      // 4. Reload messages, drafts, folders
+      // 4. Update connected accounts list to keep active account prominent
+      setConnectedAccounts((prev) => {
+        const remaining = prev.filter((a) => a.id !== account.id && a.email.toLowerCase() !== account.email.toLowerCase());
+        const updated = [account, ...remaining];
+        sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+        try {
+          const durableList = updated.map((a) => ({ ...a, mailboxSkHex: "", searchKeyHex: "" }));
+          localStorage.setItem("byos_connected_accounts", JSON.stringify(durableList));
+        } catch {}
+        return updated;
+      });
+
+      // 5. Reload messages, drafts, folders
       await loadMailboxData(account.id);
       refreshSignature(account.id);
     } catch (err) {
@@ -1066,7 +1084,13 @@ const App: Component = () => {
   function handleAccountAdded(account: ConnectedAccount) {
     setConnectedAccounts((prev) => {
       const filtered = prev.filter((a) => a.id !== account.id && a.email.toLowerCase() !== account.email.toLowerCase());
-      return [account, ...filtered];
+      const updated = [account, ...filtered];
+      sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+      try {
+        const durableList = updated.map((a) => ({ ...a, mailboxSkHex: "", searchKeyHex: "" }));
+        localStorage.setItem("byos_connected_accounts", JSON.stringify(durableList));
+      } catch {}
+      return updated;
     });
     setAddMailboxModalOpen(false);
     handleSwitchAccount(account);
@@ -1091,8 +1115,21 @@ const App: Component = () => {
     }
   }
 
+  function handleStorageChange(e: StorageEvent) {
+    if (e.key === "byos_connected_accounts" && e.newValue) {
+      try {
+        const list = JSON.parse(e.newValue);
+        if (Array.isArray(list)) {
+          setConnectedAccounts(list);
+          sessionStorage.setItem("byos_connected_accounts", e.newValue);
+        }
+      } catch {}
+    }
+  }
+
   onMount(async () => {
     window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("storage", handleStorageChange);
 
     const urlParams = new URLSearchParams(window.location.search);
     if (window.location.pathname === "/setup-account" || urlParams.has("token")) {
@@ -1111,13 +1148,19 @@ const App: Component = () => {
       }
     }
 
-    // Restore connected accounts list if present in sessionStorage
-    const savedAccountsStr = sessionStorage.getItem("byos_connected_accounts");
+    // Restore connected accounts list if present in sessionStorage or localStorage
+    const savedAccountsStr =
+      sessionStorage.getItem("byos_connected_accounts") ||
+      (typeof window !== "undefined" ? localStorage.getItem("byos_connected_accounts") : null);
     if (savedAccountsStr) {
       try {
         const list = JSON.parse(savedAccountsStr);
-        if (Array.isArray(list)) {
+        if (Array.isArray(list) && list.length > 0) {
           setConnectedAccounts(list);
+          sessionStorage.setItem("byos_connected_accounts", JSON.stringify(list));
+          if (!sessionStorage.getItem("byos_active_session_token") && list[0].sessionToken) {
+            sessionStorage.setItem("byos_active_session_token", list[0].sessionToken);
+          }
         }
       } catch {}
     }
@@ -1137,6 +1180,7 @@ const App: Component = () => {
 
   onCleanup(() => {
     window.removeEventListener("keydown", handleKeyDown);
+    window.removeEventListener("storage", handleStorageChange);
   });
 
   async function handleLogin(e: Event) {
@@ -1445,6 +1489,11 @@ const App: Component = () => {
       const email = loginEmail().trim() || undefined;
       const opts = await fetchPasskeyLoginOptions(email);
 
+      const effectiveRpId =
+        window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+          ? window.location.hostname
+          : (opts.rpId || window.location.hostname);
+
       const allowCreds = opts.allowCredentials?.map((c) => ({
         id: base64URLToBuffer(c.id),
         type: "public-key" as const,
@@ -1453,7 +1502,7 @@ const App: Component = () => {
       const assertion = (await navigator.credentials.get({
         publicKey: {
           challenge: base64URLToBuffer(opts.challenge),
-          rpId: opts.rpId,
+          rpId: effectiveRpId,
           userVerification: opts.userVerification as any,
           timeout: opts.timeout,
           allowCredentials: allowCreds && allowCreds.length > 0 ? allowCreds : undefined,
@@ -1530,6 +1579,22 @@ const App: Component = () => {
     setLoginError(null);
     try {
       const loginRes = await login(user.email, password);
+
+      if (loginRes.two_factor_required) {
+        setTwoFactorChallenge({
+          challenge_token: loginRes.challenge_token || "",
+          methods: loginRes.methods || ["email"],
+          preferred_method: loginRes.preferred_method || "email",
+          destination_masked: loginRes.destination_masked || "",
+        });
+        setSelected2FAMethod(loginRes.preferred_method || "email");
+        setCachedPassword(password);
+        setTwoFactorCodeInput("");
+        setTwoFactorError(null);
+        setLoginBusy(false);
+        return;
+      }
+
       setIsLoading(true);
       if (loginRes.token) {
         sessionStorage.setItem("byos_active_session_token", loginRes.token);
@@ -1615,6 +1680,9 @@ const App: Component = () => {
       sessionStorage.removeItem("byos_impersonation_token");
       sessionStorage.removeItem("byos_active_session_token");
       sessionStorage.removeItem("byos_connected_accounts");
+      try {
+        localStorage.removeItem("byos_connected_accounts");
+      } catch {}
       setConnectedAccounts([]);
       for (let i = sessionStorage.length - 1; i >= 0; i--) {
         const key = sessionStorage.key(i);
@@ -1665,6 +1733,9 @@ const App: Component = () => {
     const remaining = accounts.filter((a) => a.id !== targetId);
     setConnectedAccounts(remaining);
     sessionStorage.setItem("byos_connected_accounts", JSON.stringify(remaining));
+    try {
+      localStorage.setItem("byos_connected_accounts", JSON.stringify(remaining));
+    } catch {}
 
     // 4. If target was active account, smoothly switch to the first remaining account
     if (targetId === currentBoxId && remaining.length > 0) {

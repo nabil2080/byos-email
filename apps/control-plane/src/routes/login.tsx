@@ -64,6 +64,11 @@ const LoginPage: Component = () => {
       const emailInput = email().trim() || undefined;
       const opts = await fetchPasskeyLoginOptions(emailInput);
 
+      const effectiveRpId =
+        window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+          ? window.location.hostname
+          : (opts.rpId || window.location.hostname);
+
       const allowCreds = opts.allowCredentials?.map((c) => ({
         id: base64URLToBuffer(c.id),
         type: "public-key" as const,
@@ -72,7 +77,7 @@ const LoginPage: Component = () => {
       const assertion = (await navigator.credentials.get({
         publicKey: {
           challenge: base64URLToBuffer(opts.challenge),
-          rpId: opts.rpId,
+          rpId: effectiveRpId,
           userVerification: opts.userVerification as any,
           timeout: opts.timeout,
           allowCredentials: allowCreds && allowCreds.length > 0 ? allowCreds : undefined,

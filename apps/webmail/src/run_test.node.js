@@ -2,6 +2,7 @@ import { runAttachmentCryptoTests } from "./attachment_crypto.test.js";
 import { runTotpTests } from "./utils/totp.test.js";
 import { runDateTimeTests } from "./utils/dateTime.test.js";
 import { runFileTypeTests } from "./fileType.test.js";
+import { runMultiAccountTests } from "./multi_account.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -30,6 +31,11 @@ async function main() {
   console.log(`FILE TYPE TESTS: ${fileTypeRes.passed} passed, ${fileTypeRes.failed} failed\n`);
   totalPassed += fileTypeRes.passed;
   totalFailed += fileTypeRes.failed;
+
+  const multiAccountRes = runMultiAccountTests();
+  console.log(`MULTI ACCOUNT TESTS: ${multiAccountRes.passed} passed, ${multiAccountRes.failed} failed\n`);
+  totalPassed += multiAccountRes.passed;
+  totalFailed += multiAccountRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

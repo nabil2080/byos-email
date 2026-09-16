@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -26,11 +27,19 @@ type UserPasskey struct {
 }
 
 func getRPID(r *http.Request) string {
-	host := r.Host
+	host := ""
+	if origin := r.Header.Get("Origin"); origin != "" {
+		if u, err := url.Parse(origin); err == nil && u.Hostname() != "" {
+			host = u.Hostname()
+		}
+	}
+	if host == "" {
+		host = r.Host
+	}
 	if strings.Contains(host, ":") {
 		host = strings.Split(host, ":")[0]
 	}
-	if host == "" || host == "localhost" || host == "127.0.0.1" {
+	if host == "" || host == "localhost" {
 		return "localhost"
 	}
 	return host
@@ -113,8 +122,8 @@ func passkeyRegisterOptionsHandler(w http.ResponseWriter, r *http.Request) {
 			{"type": "public-key", "alg": -8},   // Ed25519
 		},
 		"authenticatorSelection": map[string]interface{}{
-			"residentKey":        "required",
-			"requireResidentKey": true,
+			"residentKey":        "preferred",
+			"requireResidentKey": false,
 			"userVerification":   "preferred",
 		},
 		"timeout": 60000,
