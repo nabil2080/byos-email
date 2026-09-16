@@ -96,11 +96,12 @@ func TestBillingPost(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	orgID, ownerID, memberID, _ := createTestOrgAndUsers(t, db)
+	orgID, ownerID, adminID, memberID := createTestOrgAndUsers(t, db)
 	ownerToken := createTestSession(t, db, ownerID)
+	adminToken := createTestSession(t, db, adminID)
 	memberToken := createTestSession(t, db, memberID)
 
-	// 1. Non-owner cannot update plan (403)
+	// 1. Non-owner (member) cannot update plan (403)
 	body := bytes.NewBufferString(`{"plan":"starter"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/billing", body)
 	req.SetPathValue("org_id", orgID)
@@ -108,7 +109,18 @@ func TestBillingPost(t *testing.T) {
 	rec := httptest.NewRecorder()
 	billingHandler(rec, req)
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 when non-owner updates plan, got %d", rec.Code)
+		t.Fatalf("expected 403 when member updates plan, got %d", rec.Code)
+	}
+
+	// Non-owner (admin) cannot update plan (403)
+	body = bytes.NewBufferString(`{"plan":"starter"}`)
+	req = httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/billing", body)
+	req.SetPathValue("org_id", orgID)
+	req.AddCookie(&http.Cookie{Name: "byos_session", Value: adminToken})
+	rec = httptest.NewRecorder()
+	billingHandler(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 when admin updates plan, got %d", rec.Code)
 	}
 
 	// 2. Invalid plan name (400)
