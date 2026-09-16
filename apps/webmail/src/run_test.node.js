@@ -1,5 +1,6 @@
 import { runAttachmentCryptoTests } from "./attachment_crypto.test.js";
 import { runTotpTests } from "./utils/totp.test.js";
+import { runDateTimeTests } from "./utils/dateTime.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -17,6 +18,13 @@ async function main() {
   totalPassed += totpRes.passed;
   totalFailed += totpRes.failed;
 
+  console.log("Running Date Time Tests...");
+  const dateTimeRes = runDateTimeTests();
+  console.log(`DATE TIME TESTS: ${dateTimeRes.passed} passed, ${dateTimeRes.failed} failed\n`);
+  totalPassed += dateTimeRes.passed;
+  totalFailed += dateTimeRes.failed;
+
+  console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {
     process.exit(1);
   }
