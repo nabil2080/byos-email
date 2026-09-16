@@ -1,4 +1,5 @@
 import { Component, createSignal, onMount, Show } from "solid-js";
+import DOMPurify from "dompurify";
 
 export interface RichTextEditorProps {
   value?: string;
@@ -85,13 +86,23 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
       return;
     }
     if (linkText().trim() && (!savedRange || savedRange.collapsed)) {
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.style.color = "#A27561";
+      a.style.textDecoration = "underline";
+      a.textContent = linkText().trim();
       document.execCommand(
         "insertHTML",
         false,
-        `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color: #A27561; text-decoration: underline;">${linkText().trim()}</a>`
+        a.outerHTML
       );
     } else {
-      document.execCommand("createLink", false, url);
+      // Create a temporary anchor to let browser parse and validate the URL.
+      const tempA = document.createElement("a");
+      tempA.href = url;
+      document.execCommand("createLink", false, tempA.href);
     }
     syncContent();
     setShowLinkModal(false);
@@ -115,8 +126,18 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
     }
     const width = parseInt(imageWidth(), 10) || 200;
     const alt = imageAlt().trim() || "Embedded Image";
-    const imgTag = `<img src="${url}" alt="${alt}" style="max-width: ${width}px; height: auto; border-radius: 4px; display: inline-block; vertical-align: middle; margin: 6px 0;" />`;
-    document.execCommand("insertHTML", false, imgTag);
+
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = alt;
+    img.style.maxWidth = `${width}px`;
+    img.style.height = "auto";
+    img.style.borderRadius = "4px";
+    img.style.display = "inline-block";
+    img.style.verticalAlign = "middle";
+    img.style.margin = "6px 0";
+
+    document.execCommand("insertHTML", false, img.outerHTML);
     syncContent();
     setShowImageModal(false);
   }
@@ -134,7 +155,7 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
 
   onMount(() => {
     if (editorRef && props.value) {
-      editorRef.innerHTML = props.value;
+      editorRef.innerHTML = DOMPurify.sanitize(props.value, { ADD_TAGS: ['style', 'head', 'meta'], FORCE_BODY: true });
     }
   });
 
@@ -324,7 +345,7 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
               const next = !isHtmlMode();
               setIsHtmlMode(next);
               if (!next && editorRef) {
-                editorRef.innerHTML = currentHtml();
+                editorRef.innerHTML = DOMPurify.sanitize(currentHtml(), { ADD_TAGS: ['style', 'head', 'meta'], FORCE_BODY: true });
               }
             }}
             class={`px-2.5 h-7 flex items-center gap-1 rounded-lg text-[11px] font-mono transition cursor-pointer ${
