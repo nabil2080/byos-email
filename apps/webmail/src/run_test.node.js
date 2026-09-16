@@ -1,6 +1,7 @@
 import { runAttachmentCryptoTests } from "./attachment_crypto.test.js";
 import { runTotpTests } from "./utils/totp.test.js";
 import { runDateTimeTests } from "./utils/dateTime.test.js";
+import { runFileTypeTests } from "./fileType.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -23,6 +24,12 @@ async function main() {
   console.log(`DATE TIME TESTS: ${dateTimeRes.passed} passed, ${dateTimeRes.failed} failed\n`);
   totalPassed += dateTimeRes.passed;
   totalFailed += dateTimeRes.failed;
+
+  console.log("Running File Type Tests...");
+  const fileTypeRes = runFileTypeTests();
+  console.log(`FILE TYPE TESTS: ${fileTypeRes.passed} passed, ${fileTypeRes.failed} failed\n`);
+  totalPassed += fileTypeRes.passed;
+  totalFailed += fileTypeRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {
