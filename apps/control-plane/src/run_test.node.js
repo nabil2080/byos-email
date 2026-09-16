@@ -7,4 +7,7 @@ async function main() {
   if (res.failed > 0) process.exit(1);
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error("Test runner failed:", err);
+  process.exit(1);
+});
