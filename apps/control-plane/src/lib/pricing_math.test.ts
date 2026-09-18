@@ -113,6 +113,10 @@ export function runPricingMathTests(): { passed: number; failed: number } {
     assert(res.totalMonthlyCost === 168.48, `N=74 monthly equivalent is 168.48 (got ${res.totalMonthlyCost})`);
     assert(res.annualSavings === 404.36, `N=74 annual savings is 404.36 (got ${res.annualSavings})`);
     assert(res.blendedRate === 2.28, `N=74 annualized blended rate is 2.28 (got ${res.blendedRate})`);
+    const linesMonthlySum = Math.round(res.lines.reduce((acc, l) => acc + l.monthlyEquivalentCost, 0) * 100) / 100;
+    assert(linesMonthlySum === res.totalMonthlyCost, `N=74 line items monthly sum (${linesMonthlySum}) must equal totalMonthlyCost (${res.totalMonthlyCost})`);
+    const linesAnnualSum = Math.round(res.lines.reduce((acc, l) => acc + l.annualCost, 0) * 100) / 100;
+    assert(linesAnnualSum === res.annualTotal, `N=74 line items annual sum (${linesAnnualSum}) must equal annualTotal (${res.annualTotal})`);
   }
 
   // =========================================================================

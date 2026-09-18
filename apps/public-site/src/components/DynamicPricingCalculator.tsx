@@ -52,25 +52,41 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
     )
   );
 
+  const maxLimit = () => props.maxSliderSeats || 9999;
+
+  function normalizeSeats(val: number): number {
+    if (!Number.isFinite(val) || isNaN(val)) return minLimit();
+    return Math.min(Math.max(minLimit(), Math.floor(val)), maxLimit());
+  }
+
   const breakdown = createMemo(() => calculateGraduatedPricing(seats(), billingCycle()));
 
   createEffect(
     on(
-      [seats, billingCycle],
-      ([s, c]) => {
-        const b = breakdown();
+      seats,
+      (s) => {
         if (props.onSeatsChange) {
-          props.onSeatsChange(s, b);
+          props.onSeatsChange(s, breakdown());
         }
+      },
+      { defer: true }
+    )
+  );
+
+  createEffect(
+    on(
+      billingCycle,
+      (c) => {
         if (props.onCycleChange) {
-          props.onCycleChange(c, b);
+          props.onCycleChange(c, breakdown());
         }
-      }
+      },
+      { defer: true }
     )
   );
 
   function handleSliderChange(val: number) {
-    const clamped = Math.max(minLimit(), val);
+    const clamped = normalizeSeats(val);
     setSeats(clamped);
     setInputValue(String(clamped));
   }
@@ -78,20 +94,16 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
   function handleInputChange(val: string) {
     setInputValue(val);
     const parsed = parseInt(val, 10);
-    if (!isNaN(parsed) && parsed >= minLimit()) {
+    if (!isNaN(parsed) && parsed >= minLimit() && parsed <= maxLimit()) {
       setSeats(parsed);
     }
   }
 
   function handleInputBlur() {
     const parsed = parseInt(inputValue(), 10);
-    if (isNaN(parsed) || parsed < minLimit()) {
-      setSeats(minLimit());
-      setInputValue(String(minLimit()));
-    } else {
-      setSeats(parsed);
-      setInputValue(String(parsed));
-    }
+    const clamped = normalizeSeats(parsed);
+    setSeats(clamped);
+    setInputValue(String(clamped));
   }
 
   async function handleCta() {
@@ -101,7 +113,14 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
     }
     if (props.redirectUrl) {
       if (typeof window !== "undefined") {
-        window.location.href = props.redirectUrl;
+        try {
+          const parsed = new URL(props.redirectUrl, window.location.origin);
+          if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+            window.location.href = parsed.href;
+          }
+        } catch {
+          // Invalid URL safely rejected
+        }
       }
       return;
     }
@@ -120,7 +139,7 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
       });
       if (res.ok) {
         const data = await res.json();
-        if (data && data.id) {
+        if (data && typeof data === "object" && typeof data.id === "string" && data.id.trim().length > 0) {
           isLoggedIn = true;
         }
       }
@@ -131,7 +150,7 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
     const query = `seats=${seats()}&billing_cycle=${billingCycle()}`;
     const targetUrl = isLoggedIn
       ? `${envCpUrl}/onboarding/pricing?${query}`
-      : `${envCpUrl}/login?${query}`;
+      : `${envCpUrl}/login?redirect=${encodeURIComponent(`/onboarding/pricing?${query}`)}`;
 
     if (typeof window !== "undefined") {
       window.location.href = targetUrl;
