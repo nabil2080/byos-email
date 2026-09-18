@@ -107,6 +107,8 @@ Do not treat architecture as documentation after the fact. The threat model, cry
 
 - Scheduled-send compromise 
 
+- Compromised outbound worker (can read all outgoing plaintext, modify messages before DKIM signing, suppress delivery) 
+
 #### **Architecture rules that are now fixed** 
 
 - Customer persistent mailbox storage is outside BYOS infrastructure. 
@@ -453,6 +455,12 @@ Webmail / SMTP client / approved API | v Authentication | v Outbound Trust & Abu
 #### **Single outbound control path** 
 
 SMTP credentials must never bypass the outbound policy layer. Mail originating from webmail, Outlook, Apple Mail, Thunderbird, CRM software, or a custom application must pass through the same trust and abuse controls. 
+
+**PRIVACY:** Outbound messages pass through the outbound worker in plaintext to enable DKIM signing and SMTP delivery. This creates a transient plaintext processing window on the outbound path. The outbound worker must:
+- Not persist plaintext to disk, database, or object storage
+- Log all message transformations for audit
+- Minimize time plaintext is held in memory
+- Be subject to the same hardening requirements as the inbound path 
 
 BYOS V1 Roadmap  |  Page 11 
 
@@ -804,10 +812,27 @@ For privacy-sensitive fields such as subject terms, the client can compute keyed
 |Match-set size|Accepted; server can see result counts.|
 |Access patterns|Accepted; server can observe which encrypted message objects<br>are subsequentlyfetched.|
 |Timing|Accepted; search time and API activityremain visible.|
+|Outbound plaintext exposure|Accepted. The outbound worker processes plaintext transiently to add DKIM signatures. A compromised outbound worker can read all outgoing mail and, absent sender signatures, modify it undetectably. Mitigation path: cryptographic sender signatures (V1.5).|
 
 
 
 **WORDING:** Do not claim that the server cannot tell two searches use the same word/token. The correct statement is that the server does not receive the plaintext search term. 
+
+#### **Accepted V1 Cryptographic Envelope Metadata Leakage**
+
+Per `docs/crypto/envelope-v1-spec.md`, persistent customer mailbox storage contains ciphertext encrypted under AES-256-GCM. The server and storage provider can observe only the following non-plaintext operational envelope metadata without decrypting:
+
+|**Envelope Metadata**|**V1 Position & Threat Boundary**|
+|---|---|
+|Envelope version (`v`)|Accepted; required for protocol version routing and migrations.|
+|Algorithm identifier (`alg`)|Accepted; required to route payload to proper KEM decapsulator.|
+|Mailbox identifier (`key_id`)|Accepted; stable mailbox identifier required for storage partitioning.|
+|Key epoch (`key_epoch`)|Accepted; reveals key rotation index and frequency.|
+|KEM encapsulation length (`enc`)|Accepted; varies by algorithm (32B for X25519 vs 1120B for X-Wing).|
+|Nonce (`nonce`)|Accepted; 12-byte public GCM nonce.|
+|Ciphertext length|Accepted; reveals approximate plaintext size (mitigated in V2 via padding).|
+
+**BOUNDARY ASSURANCE:** The server and storage provider never observe subject lines, message bodies, attachments, headers, recipient private keys, recovery mnemonics, or shared secret keys.
 
 BYOS V1 Roadmap  |  Page 21 
 
@@ -1233,6 +1258,8 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 
 - Root-rotation behavior 
 
+- Outbound worker trust boundary and plaintext handling 
+
 #### **Launch sequence** 
 
 Internal review -> findings -> fixes -> retest 
@@ -1563,6 +1590,10 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 - Advanced enterprise compliance features. 
 
 - Private-information-retrieval or stronger search-privacy techniques if justified by demand. 
+
+- Cryptographic sender signatures (Ed25519 over AAD || ciphertext) [V1.5 backlog: Ed25519 primitive already exists in the crypto core for recovery ceremonies; envelope versioning makes it non-breaking] 
+
+- Ciphertext length padding to reduce plaintext size leakage [V2 backlog] 
 
 BYOS V1 Roadmap  |  Page 41 
 
