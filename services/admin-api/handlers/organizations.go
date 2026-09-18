@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -126,58 +127,75 @@ func RegisterOrganizationRoutes(mux *http.ServeMux, db *pgxpool.Pool, authMiddle
 // handleGetOrganizations strictly selects non-cryptographic metadata only.
 // Database role role_support_agent has no SELECT privileges on org_recovery_pk.
 func handleGetOrganizations(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool) {
-	var orgs []OrganizationResponse
-	if db != nil {
-		rows, err := db.Query(r.Context(), `
-			SELECT o.id, o.name, o.plan, COALESCE(o.status, 'active'), o.created_at,
-			       COALESCE((SELECT COUNT(*) FROM mailboxes m WHERE m.org_id = o.id), 0) AS mailbox_count,
-			       COALESCE((SELECT SUM(sc.used_bytes) FROM storage_connections sc WHERE sc.org_id = o.id), 0) AS used_bytes,
-			       COALESCE(o.seat_count, 10) AS seat_count,
-			       COALESCE(o.billing_cycle, 'annual') AS billing_cycle,
-			       COALESCE(o.max_domains, 3) AS max_domains,
-			       COALESCE(o.max_aliases, 100) AS max_aliases
-			FROM organizations o
-			ORDER BY o.created_at DESC
-			LIMIT 100
-		`)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var org OrganizationResponse
-				var uid uuid.UUID
-				var usedBytes int64
-				if err := rows.Scan(&uid, &org.Name, &org.Plan, &org.Status, &org.CreatedAt, &org.MailboxCount, &usedBytes, &org.SeatCount, &org.BillingCycle, &org.MaxDomains, &org.MaxAliases); err == nil {
-					org.ID = uid.String()
-					org.OrgUUID = uid.String()
-					org.PlanTier = org.Plan
+	orgs := []OrganizationResponse{}
+	if db == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(orgs)
+		return
+	}
 
-					switch org.Plan {
-					case "enterprise":
-						org.StorageQuota = 100 * 1024 * 1024 * 1024
-					case "business":
-						org.StorageQuota = 25 * 1024 * 1024 * 1024
-					case "starter":
-						org.StorageQuota = 10 * 1024 * 1024 * 1024
-					default:
-						org.StorageQuota = 5 * 1024 * 1024 * 1024
-					}
+	rows, err := db.Query(r.Context(), `
+		SELECT o.id, o.name, COALESCE(o.plan, 'starter'), COALESCE(o.status, 'active'), o.created_at,
+		       COALESCE((SELECT COUNT(*) FROM mailboxes m WHERE m.org_id = o.id), 0) AS mailbox_count,
+		       COALESCE((SELECT SUM(sc.used_bytes) FROM storage_connections sc WHERE sc.org_id = o.id), 0) AS used_bytes,
+		       COALESCE(o.seat_count, 10) AS seat_count,
+		       COALESCE(o.billing_cycle, 'annual') AS billing_cycle,
+		       COALESCE(o.max_domains, 3) AS max_domains,
+		       COALESCE(o.max_aliases, 100) AS max_aliases
+		FROM organizations o
+		ORDER BY o.created_at DESC
+		LIMIT 100
+	`)
+	if err != nil {
+		log.Printf("handleGetOrganizations query error: %v", err)
+		http.Error(w, `{"error":"Failed to query organizations"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
 
-					if usedBytes == 0 {
-						if org.Plan == "enterprise" {
-							usedBytes = int64(float64(org.StorageQuota) * 0.42)
-						} else if org.Plan == "business" {
-							usedBytes = int64(float64(org.StorageQuota) * 0.28)
-						} else if org.Plan == "starter" {
-							usedBytes = int64(float64(org.StorageQuota) * 0.42)
-						} else {
-							usedBytes = int64(float64(org.StorageQuota) * 0.15)
-						}
-					}
-					org.StorageUsed = usedBytes
-					orgs = append(orgs, org)
-				}
+	for rows.Next() {
+		var org OrganizationResponse
+		var uid uuid.UUID
+		var usedBytes int64
+		if err := rows.Scan(&uid, &org.Name, &org.Plan, &org.Status, &org.CreatedAt, &org.MailboxCount, &usedBytes, &org.SeatCount, &org.BillingCycle, &org.MaxDomains, &org.MaxAliases); err != nil {
+			log.Printf("handleGetOrganizations scan error: %v", err)
+			http.Error(w, `{"error":"Failed to scan organization record"}`, http.StatusInternalServerError)
+			return
+		}
+		org.ID = uid.String()
+		org.OrgUUID = uid.String()
+		org.PlanTier = org.Plan
+
+		switch org.Plan {
+		case "enterprise":
+			org.StorageQuota = 100 * 1024 * 1024 * 1024
+		case "business":
+			org.StorageQuota = 25 * 1024 * 1024 * 1024
+		case "starter":
+			org.StorageQuota = 10 * 1024 * 1024 * 1024
+		default:
+			org.StorageQuota = 5 * 1024 * 1024 * 1024
+		}
+
+		if usedBytes == 0 {
+			if org.Plan == "enterprise" {
+				usedBytes = int64(float64(org.StorageQuota) * 0.42)
+			} else if org.Plan == "business" {
+				usedBytes = int64(float64(org.StorageQuota) * 0.28)
+			} else if org.Plan == "starter" {
+				usedBytes = int64(float64(org.StorageQuota) * 0.42)
+			} else {
+				usedBytes = int64(float64(org.StorageQuota) * 0.15)
 			}
 		}
+		org.StorageUsed = usedBytes
+		orgs = append(orgs, org)
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("handleGetOrganizations iteration error: %v", err)
+		http.Error(w, `{"error":"Failed while iterating organizations"}`, http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -509,36 +527,52 @@ func handleStateReset(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool, 
 
 // handleGetAuditLogs fetches read-only entries from the immutable support audit log.
 func handleGetAuditLogs(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool) {
-	var entries []AuditLogEntry
-	if db != nil {
-		rows, err := db.Query(r.Context(), `
-			SELECT id, actor_uuid, action_type,
-			       COALESCE(target_org_uuid::text, COALESCE(target_mailbox_uuid::text, '')) AS target_uuid,
-			       metadata, timestamp
-			FROM support_audit_logs
-			ORDER BY timestamp DESC
-			LIMIT 100
-		`)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var e AuditLogEntry
-				var uid, actorUid uuid.UUID
-				var targetStr string
-				var metaBytes []byte
-				if err := rows.Scan(&uid, &actorUid, &e.ActionType, &targetStr, &metaBytes, &e.Timestamp); err == nil {
-					e.ID = uid.String()
-					e.AdminUUID = actorUid.String()
-					e.ActorUUID = actorUid.String()
-					e.Action = e.ActionType
-					e.TargetUUID = targetStr
-					var parsedMeta any
-					_ = json.Unmarshal(metaBytes, &parsedMeta)
-					e.Metadata = parsedMeta
-					entries = append(entries, e)
-				}
-			}
+	entries := []AuditLogEntry{}
+	if db == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(entries)
+		return
+	}
+
+	rows, err := db.Query(r.Context(), `
+		SELECT id, actor_uuid, action_type,
+		       COALESCE(target_org_uuid::text, COALESCE(target_mailbox_uuid::text, '')) AS target_uuid,
+		       metadata, timestamp
+		FROM support_audit_logs
+		ORDER BY timestamp DESC
+		LIMIT 100
+	`)
+	if err != nil {
+		log.Printf("handleGetAuditLogs query error: %v", err)
+		http.Error(w, `{"error":"Failed to query audit logs"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var e AuditLogEntry
+		var uid, actorUid uuid.UUID
+		var targetStr string
+		var metaBytes []byte
+		if err := rows.Scan(&uid, &actorUid, &e.ActionType, &targetStr, &metaBytes, &e.Timestamp); err != nil {
+			log.Printf("handleGetAuditLogs scan error: %v", err)
+			http.Error(w, `{"error":"Failed to scan audit logs"}`, http.StatusInternalServerError)
+			return
 		}
+		e.ID = uid.String()
+		e.AdminUUID = actorUid.String()
+		e.ActorUUID = actorUid.String()
+		e.Action = e.ActionType
+		e.TargetUUID = targetStr
+		var parsedMeta any
+		_ = json.Unmarshal(metaBytes, &parsedMeta)
+		e.Metadata = parsedMeta
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("handleGetAuditLogs rows error: %v", err)
+		http.Error(w, `{"error":"Failed to read audit logs"}`, http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

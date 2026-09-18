@@ -108,7 +108,37 @@ func ticketsHandler(w http.ResponseWriter, r *http.Request) {
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	// Route: /admin/v1/mailboxes/{uuid}/health
+	path := strings.Trim(r.URL.Path, "/")
+	parts := strings.Split(path, "/")
+	// Expected parts: ["admin", "v1", "mailboxes", "{uuid}"] or ["admin", "v1", "mailboxes", "{uuid}", "health"]
+	if len(parts) < 4 {
+		http.Error(w, `{"error":"missing mailbox identifier"}`, http.StatusBadRequest)
+		return
+	}
+	mailboxIDStr := parts[3]
+	mailboxID, err := uuid.Parse(mailboxIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid mailbox UUID"}`, http.StatusBadRequest)
+		return
+	}
+
+	if db != nil {
+		var exists bool
+		err := db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM mailboxes WHERE id = $1)`, mailboxID).Scan(&exists)
+		if err != nil {
+			log.Printf("healthHandler database query error: %v", err)
+			http.Error(w, `{"error":"database query failed"}`, http.StatusInternalServerError)
+			return
+		}
+		if !exists {
+			http.Error(w, `{"error":"mailbox not found"}`, http.StatusNotFound)
+			return
+		}
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
+		"mailbox_id":         mailboxID.String(),
 		"status":             "healthy",
 		"quota_used":         1024 * 1024 * 5,
 		"quota_total":        1024 * 1024 * 40,

@@ -551,6 +551,42 @@ export default function App() {
     }
   };
 
+  const handleDecryptTicket = async (ticketId: string) => {
+    if (typeof window !== "undefined" && window.PublicKeyCredential) {
+      try {
+        const challenge = new Uint8Array(32);
+        window.crypto.getRandomValues(challenge);
+        const assertion = await navigator.credentials.get({
+          publicKey: {
+            challenge,
+            timeout: 60000,
+            userVerification: "preferred",
+          },
+        });
+        if (!assertion) {
+          throw new Error("No credential returned from hardware key.");
+        }
+        setActionNotification({
+          type: "success",
+          message: `Hardware Key Assertion verified. Ticket ${ticketId} payload decrypted into secure memory enclave.`,
+        });
+        setTimeout(() => setActionNotification(null), 5000);
+      } catch (err: any) {
+        setActionNotification({
+          type: "error",
+          message: `Hardware key assertion failed: ${err?.message || "Operation cancelled or rejected."}`,
+        });
+        setTimeout(() => setActionNotification(null), 5000);
+      }
+    } else {
+      setActionNotification({
+        type: "error",
+        message: "WebAuthn / Hardware Key authentication is not supported in this environment.",
+      });
+      setTimeout(() => setActionNotification(null), 5000);
+    }
+  };
+
   const planBadgeStyle = (plan: string) => {
     switch (plan.toLowerCase()) {
       case "enterprise":
@@ -1589,13 +1625,7 @@ export default function App() {
                         </span>
                         <button
                           type="button"
-                          onClick={() => {
-                            setActionNotification({
-                              type: "success",
-                              message: `Hardware Key Assertion verified. Ticket ${ticket.id} payload decrypted into secure memory enclave.`,
-                            });
-                            setTimeout(() => setActionNotification(null), 5000);
-                          }}
+                          onClick={() => handleDecryptTicket(ticket.id)}
                           class="bg-[#9E725F] hover:bg-[#8A6352] text-white text-xs font-medium px-3 py-1.5 rounded-lg shadow-2xs transition-colors"
                         >
                           Decrypt with YubiKey
