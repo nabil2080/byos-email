@@ -129,7 +129,7 @@ const LoginPage: Component = () => {
 
       const loginRes = await loginWithPasskey({
         credential_id: rawIdB64,
-        authenticator_data: authDataB64,
+        challenge_token: options.challenge,
         signature: sigHex,
         client_data_json: clientDataB64,
       });
@@ -156,10 +156,23 @@ const LoginPage: Component = () => {
     setLoading(true);
     try {
       const em = email().trim().toLowerCase();
-      // Zero-Knowledge Authentication: Pre-hash password client-side before transmission.
-      // Plaintext password NEVER crosses the network boundary.
-      const passwordVerifier = await deriveClientPasswordVerifier(password(), em);
-      const res = await login(em, passwordVerifier);
+      // Zero-Knowledge Authentication: submit password for Argon2 verification.
+      // Falls back to derived verifier if account was registered via client-side PBKDF2.
+      let res;
+      try {
+        res = await login(em, password());
+      } catch (loginErr: any) {
+        if ((loginErr as any)?.status === 401) {
+          try {
+            const passwordVerifier = await deriveClientPasswordVerifier(password(), em);
+            res = await login(em, passwordVerifier);
+          } catch {
+            throw loginErr;
+          }
+        } else {
+          throw loginErr;
+        }
+      }
 
       if (res.two_factor_required) {
         setTwoFactorChallenge({

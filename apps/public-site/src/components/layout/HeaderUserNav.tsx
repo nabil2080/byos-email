@@ -195,7 +195,7 @@ export const HeaderUserNav: Component = () => {
               Sign In
             </a>
             <a
-              href={`${cpBase()}/login`}
+              href={`${cpBase()}/register`}
               class="rounded-xl bg-[#9E725F] px-4 py-2 text-xs sm:text-sm font-semibold text-white shadow-sm hover:bg-[#865E4D] transition-all"
             >
               Start Free Trial
