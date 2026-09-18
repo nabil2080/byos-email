@@ -16,7 +16,25 @@ function parseArgs(args) {
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--breakpoints' && args[i + 1]) {
-      breakpoints = args[i + 1].split(',').map(w => parseInt(w.trim(), 10)).filter(n => !isNaN(n));
+      const rawTokens = args[i + 1].split(',').map(w => w.trim());
+      const parsed = [];
+      for (const token of rawTokens) {
+        if (!/^\d+$/.test(token)) {
+          console.error(`Error: Invalid breakpoint '${token}'. Must be a positive integer.`);
+          process.exit(1);
+        }
+        const width = parseInt(token, 10);
+        if (width < 320 || width > 3840) {
+          console.error(`Error: Breakpoint width ${width}px out of supported bounds [320, 3840].`);
+          process.exit(1);
+        }
+        parsed.push(width);
+      }
+      if (parsed.length === 0) {
+        console.error('Error: --breakpoints must contain at least one valid width.');
+        process.exit(1);
+      }
+      breakpoints = parsed;
       i++;
     } else if (args[i] === '--before') {
       isBefore = true;

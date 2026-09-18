@@ -1,6 +1,6 @@
 ---
-name: frontend-design
-description: Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, artifacts, posters, or applications.
+name: 07-frontend-design
+description: Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when modifying .tsx, .css, or layout components in apps/webmail/ or apps/public-site/.
 ---
 
 This skill guides creation of distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.

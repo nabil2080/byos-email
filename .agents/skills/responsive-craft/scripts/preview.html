@@ -188,10 +188,16 @@
 
       let breakpoints;
       if (bpParam) {
-        breakpoints = bpParam.split(',').map(w => {
-          const width = parseInt(w.trim(), 10);
-          return { width, name: BREAKPOINT_NAMES[width] || `${width}px` };
-        }).filter(bp => !isNaN(bp.width));
+        const rawTokens = bpParam.split(',').map(w => w.trim());
+        const valid = [];
+        for (const token of rawTokens) {
+          if (!/^\d+$/.test(token)) continue;
+          const width = parseInt(token, 10);
+          if (width >= 320 && width <= 3840) {
+            valid.push({ width, name: BREAKPOINT_NAMES[width] || `${width}px` });
+          }
+        }
+        breakpoints = valid.length > 0 ? valid : DEFAULT_BREAKPOINTS;
       } else {
         breakpoints = DEFAULT_BREAKPOINTS;
       }

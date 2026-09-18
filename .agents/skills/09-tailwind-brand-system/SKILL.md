@@ -1,3 +1,8 @@
+---
+name: 09-tailwind-brand-system
+description: Tailwind brand system, approved palette, and layout styling rules. Use when modifying layouts, typography, spacing, styling, or CSS classes across the application.
+---
+
 # UI Engineering: Tailwind & Brand System Constraints
 
 ## Trigger

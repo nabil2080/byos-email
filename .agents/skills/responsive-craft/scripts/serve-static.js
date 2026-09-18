@@ -33,11 +33,19 @@ const LIVE_RELOAD_SCRIPT = `
 </script>
 `;
 
-const rootDir = path.resolve(process.argv[2] || '.');
+const rootDirInput = path.resolve(process.argv[2] || '.');
 let startPort = parseInt(process.argv[3], 10) || 8787;
 
-if (!fs.existsSync(rootDir)) {
-  console.error(`Error: Directory does not exist: ${rootDir}`);
+if (!fs.existsSync(rootDirInput)) {
+  console.error(`Error: Directory does not exist: ${rootDirInput}`);
+  process.exit(1);
+}
+
+let realRootDir;
+try {
+  realRootDir = fs.realpathSync(rootDirInput);
+} catch (err) {
+  console.error(`Error resolving real path for ${rootDirInput}: ${err.message}`);
   process.exit(1);
 }
 
@@ -46,12 +54,11 @@ const reloadClients = [];
 
 // Watch for file changes
 let debounceTimer;
-fs.watch(rootDir, { recursive: true }, () => {
+fs.watch(realRootDir, { recursive: true }, () => {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     reloadClients.forEach(res => {
       try { res.write('data: reload\n\n'); } catch {
-        // Remove dead client on write failure
         const idx = reloadClients.indexOf(res);
         if (idx !== -1) reloadClients.splice(idx, 1);
       }
@@ -61,13 +68,30 @@ fs.watch(rootDir, { recursive: true }, () => {
 
 function serve(port) {
   const server = http.createServer((req, res) => {
-    // SSE endpoint for live reload
-    if (req.url === '/__reload') {
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(req.url, 'http://127.0.0.1');
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
+      res.end('400 Bad Request: Malformed URL');
+      return;
+    }
+
+    let decodedPath;
+    try {
+      decodedPath = decodeURIComponent(parsedUrl.pathname);
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
+      res.end('400 Bad Request: Malformed percent-encoding');
+      return;
+    }
+
+    // SSE endpoint for live reload (same-origin, no wildcard CORS)
+    if (decodedPath === '/__reload') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
       });
       res.write('data: connected\n\n');
       reloadClients.push(res);
@@ -78,30 +102,67 @@ function serve(port) {
       return;
     }
 
-    let filePath = path.resolve(rootDir, decodeURIComponent(req.url).replace(/^\/+/, ''));
-
-    // Default to index.html for directory requests
-    if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
-      filePath = path.join(filePath, 'index.html');
-    }
-
-    // Prevent path traversal — canonicalize both paths before comparing
-    const canonicalRoot = path.resolve(rootDir) + path.sep;
-    const canonicalFile = path.resolve(filePath);
-    if (!canonicalFile.startsWith(canonicalRoot) && canonicalFile !== path.resolve(rootDir)) {
-      res.writeHead(403);
-      res.end('Forbidden');
+    // Serve internal responsive preview UI without copying to user's project directory
+    if (decodedPath === '/_responsive-preview.html') {
+      const previewHtmlPath = path.join(__dirname, 'preview.html');
+      fs.readFile(previewHtmlPath, (err, data) => {
+        if (err) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('500 Internal Server Error: Could not load preview UI');
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(data);
+      });
       return;
     }
 
-    fs.readFile(filePath, (err, data) => {
+    let filePath = path.resolve(realRootDir, decodedPath.replace(/^\/+/, ''));
+
+    // Default to index.html for directory requests
+    if (fs.existsSync(filePath)) {
+      try {
+        if (fs.statSync(filePath).isDirectory()) {
+          filePath = path.join(filePath, 'index.html');
+        }
+      } catch {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end(`404 Not Found: ${req.url}`);
+        return;
+      }
+    }
+
+    if (!fs.existsSync(filePath)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end(`404 Not Found: ${req.url}`);
+      return;
+    }
+
+    // Resolve realpath to prevent symlink traversal out of root directory
+    let realFile;
+    try {
+      realFile = fs.realpathSync(filePath);
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end(`404 Not Found: ${req.url}`);
+      return;
+    }
+
+    const canonicalRoot = realRootDir.endsWith(path.sep) ? realRootDir : realRootDir + path.sep;
+    if (realFile !== realRootDir && !realFile.startsWith(canonicalRoot)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('403 Forbidden: Path traversal detected');
+      return;
+    }
+
+    fs.readFile(realFile, (err, data) => {
       if (err) {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end(`404 Not Found: ${req.url}`);
         return;
       }
 
-      const ext = path.extname(filePath).toLowerCase();
+      const ext = path.extname(realFile).toLowerCase();
       const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
       // Inject live reload script into HTML files
@@ -112,10 +173,10 @@ function serve(port) {
         } else {
           html += LIVE_RELOAD_SCRIPT;
         }
-        res.writeHead(200, { 'Content-Type': contentType, 'Access-Control-Allow-Origin': '*' });
+        res.writeHead(200, { 'Content-Type': contentType });
         res.end(html);
       } else {
-        res.writeHead(200, { 'Content-Type': contentType, 'Access-Control-Allow-Origin': '*' });
+        res.writeHead(200, { 'Content-Type': contentType });
         res.end(data);
       }
     });
@@ -130,10 +191,9 @@ function serve(port) {
     }
   });
 
-  server.listen(port, () => {
-    // Output the port on its own line so the launcher can parse it
+  server.listen(port, '127.0.0.1', () => {
     console.log(`SERVING_PORT:${port}`);
-    console.log(`Serving ${rootDir} at http://localhost:${port}`);
+    console.log(`Serving ${realRootDir} at http://127.0.0.1:${port}`);
     console.log('Live reload enabled — file changes trigger browser refresh');
   });
 }

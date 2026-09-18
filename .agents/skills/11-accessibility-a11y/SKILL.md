@@ -1,3 +1,8 @@
+---
+name: 11-accessibility-a11y
+description: Accessibility, keyboard navigation, visible focus, and ARIA semantics. Use when designing interactive components, dropdowns, forms, or navigating lists.
+---
+
 # UI Engineering: Accessibility & Keyboard Navigation
 
 ## Trigger

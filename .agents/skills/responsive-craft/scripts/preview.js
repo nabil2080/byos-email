@@ -6,7 +6,6 @@ const fs = require('fs');
 const os = require('os');
 
 const SCRIPTS_DIR = __dirname;
-const PREVIEW_HTML = path.join(SCRIPTS_DIR, 'preview.html');
 const SERVE_SCRIPT = path.join(SCRIPTS_DIR, 'serve-static.js');
 
 function parseArgs(args) {
@@ -30,26 +29,26 @@ function isUrl(str) {
 }
 
 function openInBrowser(url) {
-  const cmd = process.platform === 'darwin' ? 'open'
-    : process.platform === 'win32' ? 'start'
-    : 'xdg-open';
-  execFile(cmd, [url], (err) => {
-    if (err) console.error(`Could not open browser: ${err.message}`);
-  });
+  if (process.platform === 'win32') {
+    execFile('cmd.exe', ['/d', '/s', '/c', 'start', '""', url], (err) => {
+      if (err) console.error(`Could not open browser: ${err.message}`);
+    });
+  } else {
+    const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
+    execFile(cmd, [url], (err) => {
+      if (err) console.error(`Could not open browser: ${err.message}`);
+    });
+  }
 }
 
 function buildPreviewUrl(port, targetUrl, breakpoints) {
   const params = new URLSearchParams();
   params.set('url', targetUrl);
   if (breakpoints) params.set('breakpoints', breakpoints);
-  return `http://localhost:${port}/_responsive-preview.html?${params.toString()}`;
+  return `http://127.0.0.1:${port}/_responsive-preview.html?${params.toString()}`;
 }
 
 function startServer(serveDir, onReady) {
-  // Copy preview.html into the serve directory so it's served over HTTP
-  const previewDest = path.join(serveDir, '_responsive-preview.html');
-  fs.copyFileSync(PREVIEW_HTML, previewDest);
-
   const server = spawn('node', [SERVE_SCRIPT, serveDir], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -61,7 +60,6 @@ function startServer(serveDir, onReady) {
     if (!ready) {
       console.error('Server failed to start within 10 seconds.');
       server.kill();
-      try { fs.unlinkSync(previewDest); } catch {}
       process.exit(1);
     }
   }, 10000);
@@ -87,7 +85,6 @@ function startServer(serveDir, onReady) {
 
   server.on('close', (code) => {
     clearTimeout(startupTimeout);
-    try { fs.unlinkSync(previewDest); } catch {}
     if (code !== 0 && !ready) {
       console.error(`Server exited with code ${code}`);
     }
@@ -95,7 +92,6 @@ function startServer(serveDir, onReady) {
 
   function cleanup() {
     server.kill();
-    try { fs.unlinkSync(previewDest); } catch {}
     process.exit(0);
   }
 
@@ -126,14 +122,12 @@ Examples:
 }
 
 if (isUrl(target)) {
-  // Dev server already running — serve preview.html from a temp directory
+  // Dev server already running — serve preview from a temp directory
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'responsive-preview-'));
   console.log(`Launching responsive preview for ${target}...\n`);
 
-  // Clean up temp dir on exit
-  const origCleanup = process.listeners('SIGINT');
   process.on('exit', () => {
-    try { fs.rmSync(tmpDir, { recursive: true }); } catch {}
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   });
 
   startServer(tmpDir, (port) => {
@@ -142,7 +136,7 @@ if (isUrl(target)) {
     openInBrowser(previewUrl);
   });
 } else {
-  // Static file — serve the target directory with preview.html alongside it
+  // Static file — serve the target directory directly without copying files into it
   const resolvedPath = path.resolve(target);
 
   if (!fs.existsSync(resolvedPath)) {
@@ -157,7 +151,7 @@ if (isUrl(target)) {
   console.log(`Launching responsive preview for ${resolvedPath}...\n`);
 
   startServer(serveDir, (port) => {
-    const targetUrl = `http://localhost:${port}/${fileName}`;
+    const targetUrl = `http://127.0.0.1:${port}/${fileName}`;
     const previewUrl = buildPreviewUrl(port, targetUrl, breakpoints);
     console.log(`\nPreview: ${previewUrl}\n`);
     openInBrowser(previewUrl);

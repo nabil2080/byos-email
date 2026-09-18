@@ -1,3 +1,8 @@
+---
+name: 08-solidjs-reactivity
+description: SolidJS reactivity constraints and presentation layer rules. Use when creating, modifying, or reviewing frontend components, state management, or UI logic in .tsx or .ts files.
+---
+
 # UI Engineering: SolidJS Reactivity Constraints
 
 ## Trigger

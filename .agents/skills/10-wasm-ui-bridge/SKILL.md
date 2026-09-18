@@ -1,3 +1,8 @@
+---
+name: 10-wasm-ui-bridge
+description: WASM cryptography bridge safeguards and sensitive memory cleanup rules. Use when connecting UI components to client-side cryptographic functions, byos_crypto_core, or asynchronous decrypt/encrypt pipelines.
+---
+
 # UI Engineering: WASM & Crypto Bridge Constraints
 
 ## Trigger
