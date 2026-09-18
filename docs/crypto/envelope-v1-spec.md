@@ -89,7 +89,7 @@ The AAD is a packed binary buffer constructed deterministically before encryptio
 4. `enc` contains the raw decoded binary bytes of the KEM encapsulation output.
 5. `nonce_length` MUST be exactly `12` (`0x0C`). Any other value triggers `InvalidNonceLength (1004)`.
 6. `nonce` contains the exact 12 raw bytes used for AES-GCM.
-7. Both Go (`internal/crypto`) and Rust (`apps/wasm-crypto`) MUST produce byte-identical AAD buffers for any given envelope. If any single bit in the AAD differs, AES-GCM tag verification fails, returning `AADMismatch (1010)` or `DecryptionFailed (1006)`.
+7. Both Go (`crypto`) and Rust (`apps/wasm-crypto`) MUST produce byte-identical AAD buffers for any given envelope. If any single bit in the AAD differs, AES-GCM tag verification fails, returning `AADMismatch (1010)` or `DecryptionFailed (1006)`.
 
 ---
 
