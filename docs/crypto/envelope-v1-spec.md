@@ -420,7 +420,8 @@ previously shown in this section are illustrative only.
 | X25519 suite | ✅ | ✅ | ✅ |
 | X-Wing suite | ✅ | ✅ | ✅ |
 | Dispatch | ✅ | ✅ | ✅ |
-| WASM bindings | N/A | ✅ (target verified / pending) | N/A |
+| WASM bindings compile | N/A | ✅ wasm32-unknown-unknown | N/A |
+| WASM runtime in browser | N/A | ⏳ not yet tested | N/A |
 
 External verification sources:
 - X-Wing draft-connolly-cfrg-xwing-kem-10 Appendix C (3 vectors)
