@@ -321,3 +321,76 @@ func OpenX25519(recipientPriv []byte, env *envelope.CryptoEnvelope) ([]byte, err
 
 	return plaintext, nil
 }
+
+// sealX25519Deterministic is a test-only helper. It accepts an externally
+// supplied ephemeral private key and nonce to enable cross-language byte-parity
+// tests. Do not call from production code.
+func sealX25519Deterministic(
+	recipientPub []byte,
+	ephemeralPriv []byte,
+	plaintext []byte,
+	nonce []byte,
+	keyID string,
+	keyEpoch uint32,
+) (*envelope.CryptoEnvelope, error) {
+	if len(recipientPub) != envelope.X25519EncSize {
+		return nil, envelope.NewEnvelopeError(envelope.ErrCodeInvalidKeyLength, fmt.Sprintf("recipient public key must be %d bytes, got %d", envelope.X25519EncSize, len(recipientPub)))
+	}
+	if len(ephemeralPriv) != envelope.X25519EncSize {
+		return nil, envelope.NewEnvelopeError(envelope.ErrCodeInvalidKeyLength, fmt.Sprintf("ephemeral private key must be %d bytes, got %d", envelope.X25519EncSize, len(ephemeralPriv)))
+	}
+	if len(nonce) != envelope.NonceSize {
+		return nil, envelope.NewEnvelopeError(envelope.ErrCodeInvalidNonceLength, fmt.Sprintf("nonce must be %d bytes, got %d", envelope.NonceSize, len(nonce)))
+	}
+	if len(keyID) == 0 || len(keyID) > 255 {
+		return nil, envelope.NewEnvelopeError(envelope.ErrCodeSerializationError, "key_id length must be between 1 and 255 bytes")
+	}
+	if keyEpoch == 0 {
+		return nil, envelope.NewEnvelopeError(envelope.ErrCodeUnknownKeyEpoch, "key_epoch 0 is reserved")
+	}
+
+	curve := ecdh.X25519()
+	ephemeralKey, err := curve.NewPrivateKey(ephemeralPriv)
+	if err != nil {
+		return nil, envelope.NewEnvelopeError(envelope.ErrCodeInvalidKeyLength, fmt.Sprintf("invalid ephemeral private key: %v", err))
+	}
+
+	enc, sharedSecret, err := EncapsulateX25519WithKey(ephemeralKey, recipientPub)
+	if err != nil {
+		return nil, err
+	}
+
+	aesKey, err := DeriveAEADKey(sharedSecret, SuiteX25519)
+	if err != nil {
+		return nil, err
+	}
+
+	aad, err := envelope.BuildAADRaw(envelope.CurrentVersion, envelope.AlgX25519, keyID, keyEpoch, enc, nonce)
+	if err != nil {
+		return nil, err
+	}
+
+	block, err := aes.NewCipher(aesKey)
+	if err != nil {
+		return nil, fmt.Errorf("aes.NewCipher failed: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("cipher.NewGCM failed: %w", err)
+	}
+
+	ciphertext := gcm.Seal(nil, nonce, plaintext, aad)
+
+	b64 := base64.StdEncoding
+	return &envelope.CryptoEnvelope{
+		Alg:        envelope.AlgX25519,
+		Ciphertext: b64.EncodeToString(ciphertext),
+		Enc:        b64.EncodeToString(enc),
+		KeyEpoch:   keyEpoch,
+		KeyID:      keyID,
+		Nonce:      b64.EncodeToString(nonce),
+		Sig:        nil,
+		V:          envelope.CurrentVersion,
+	}, nil
+}
+
