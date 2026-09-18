@@ -1,0 +1,12 @@
+go 1.27.0
+
+use (
+	.
+	./services/api
+	./services/inbound-bridge
+	./services/mail-router
+	./services/storage-worker
+	./tools/byos-backup
+	./tools/byos-bridge
+	./tools/byos-export
+)

@@ -46,3 +46,6 @@ infra/secrets/
 # Astro generated cache (contains local pid/startedAt dev artifacts)
 **/.astro/
 
+# Go workspace sum
+go.work.sum
+
