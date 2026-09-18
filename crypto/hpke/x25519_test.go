@@ -112,6 +112,64 @@ func TestRFC9180VectorA11(t *testing.T) {
 	t.Logf("RFC 9180 Vector A.1.1 PASSED: enc=%s, ss=%s", actualEncHex, actualSSHex)
 }
 
+// TestRFC9180VectorA12KeySchedule verifies the key schedule intermediate values
+// (secret, key, base_nonce) against RFC 9180 Appendix A.1.1 (referenced as A.1.2 in task).
+//
+// Technical Context on RFC 9180 Appendix A.1:
+// - Appendix A.1.1 specifies Base Mode (mode 0) with DHKEM(X25519, HKDF-SHA256) + HKDF-SHA256 + AES-128-GCM.
+// - Inputs:
+//     shared_secret = fe0e18c9f024ce43799ae393c7e8fe8fce9d218875e8227b0187c04e7d2ea1fc
+//     suite_id      = "HPKE" || 0x0020 || 0x0001 || 0x0001
+// - Intermediate values published in RFC 9180 §A.1.1:
+//     secret     = 12fff91991e93b48de37e7daddb52981084bd8aa64289c3788471d9a9712f397
+//     key        = 4531685d41d65f03dc48f6b8302c05b0 (16 bytes for AES-128-GCM)
+//     base_nonce = 56d890e5accaaf011cff4b7d (12 bytes)
+func TestRFC9180VectorA12KeySchedule(t *testing.T) {
+	sharedSecretHex := "fe0e18c9f024ce43799ae393c7e8fe8fce9d218875e8227b0187c04e7d2ea1fc"
+	sharedSecret, err := hex.DecodeString(sharedSecretHex)
+	if err != nil {
+		t.Fatalf("Decode sharedSecret: %v", err)
+	}
+
+	// suite_id = "HPKE" || 0x0020 (DHKEM X25519) || 0x0001 (HKDF-SHA256) || 0x0001 (AES-128-GCM)
+	suiteID := []byte{'H', 'P', 'K', 'E', 0x00, 0x20, 0x00, 0x01, 0x00, 0x01}
+
+	// 1. Secret derivation per RFC 9180 §5.1:
+	// secret = LabeledExtract(shared_secret, "secret", psk="")
+	secret := hpke.LabeledExtract(sharedSecret, "secret", nil, suiteID)
+	actualSecretHex := hex.EncodeToString(secret)
+	expectedSecretHex := "12fff91991e93b48de37e7daddb52981084bd8aa64289c3788471d9a9712f397"
+	if actualSecretHex != expectedSecretHex {
+		t.Fatalf("secret mismatch:\n  actual:   %s\n  expected: %s", actualSecretHex, expectedSecretHex)
+	}
+
+	// 2. Key schedule context per RFC 9180 §5.1 for Appendix A.1.1 (Base Mode, info = "Ode on a Grecian Urn"):
+	info := []byte("Ode on a Grecian Urn")
+	pskIDHash := hpke.LabeledExtract(nil, "psk_id_hash", nil, suiteID)
+	infoHash := hpke.LabeledExtract(nil, "info_hash", info, suiteID)
+	ksContext := append([]byte{0x00}, append(pskIDHash, infoHash...)...)
+
+	// 3. AEAD key (16 bytes for AES-128-GCM)
+	key := hpke.LabeledExpand(secret, "key", ksContext, 16, suiteID)
+	actualKeyHex := hex.EncodeToString(key)
+	expectedKeyHex := "4531685d41d65f03dc48f6b8302c05b0"
+	if actualKeyHex != expectedKeyHex {
+		t.Fatalf("key mismatch:\n  actual:   %s\n  expected: %s", actualKeyHex, expectedKeyHex)
+	}
+
+	// 4. Base nonce (12 bytes)
+	baseNonce := hpke.LabeledExpand(secret, "base_nonce", ksContext, 12, suiteID)
+	actualNonceHex := hex.EncodeToString(baseNonce)
+	expectedNonceHex := "56d890e5accaaf011cff4b7d"
+	if actualNonceHex != expectedNonceHex {
+		t.Fatalf("base_nonce mismatch:\n  actual:   %s\n  expected: %s", actualNonceHex, expectedNonceHex)
+	}
+
+	t.Logf("RFC 9180 Appendix A.1 Key Schedule PASSED:\n  secret:     %s\n  key (16B):  %s\n  base_nonce: %s",
+		actualSecretHex, actualKeyHex, actualNonceHex)
+}
+
+
 // TestNegativeKeyLengths tests that public keys with length != 32 fail with ErrCodeInvalidKeyLength (1007).
 func TestNegativeKeyLengths(t *testing.T) {
 	badLengths := []int{0, 16, 31, 33, 64}

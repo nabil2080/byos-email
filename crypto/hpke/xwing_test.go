@@ -92,6 +92,12 @@ func TestRoundTripXWing(t *testing.T) {
 
 // TestXWingDraft10VectorIntegration verifies that the official draft-10 test vectors
 // successfully decapsulate and derive stable AEAD keys with SuiteXWing.
+//
+// NOTE: The aead_key and tag values below are regression anchors produced 
+// by this implementation, not external test vectors. X-Wing draft-10 
+// Appendix C publishes only (seed, sk, pk, eseed, ct, ss) — not HPKE key 
+// schedule outputs. External verification of the key schedule is provided 
+// by TestRFC9180VectorA12KeySchedule.
 func TestXWingDraft10VectorIntegration(t *testing.T) {
 	vectors := loadXWingVectors(t)
 	if len(vectors) != 3 {
