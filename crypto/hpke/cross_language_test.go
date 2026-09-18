@@ -16,24 +16,90 @@ import (
 	"byos.email/crypto/envelope"
 )
 
+// VectorSuite represents the top-level structure of cross_language_vectors.json.
+type VectorSuite struct {
+	Warning string                `json:"_warning"`
+	Vectors []CrossLanguageVector `json:"vectors"`
+}
+
 // CrossLanguageVector represents a deterministic test vector for cross-language verification.
 type CrossLanguageVector struct {
-	ID                        string                  `json:"id"`
-	Description               string                  `json:"description"`
-	Algorithm                 string                  `json:"algorithm"`
-	KeyID                     string                  `json:"key_id"`
-	KeyEpoch                  uint32                  `json:"key_epoch"`
-	RecipientPublicKeyHex     string                  `json:"recipient_public_key_hex"`
-	RecipientPrivateKeyHex    string                  `json:"recipient_private_key_hex"`
-	EphemeralPrivateKeyHex    string                  `json:"ephemeral_private_key_hex,omitempty"`
-	ESeedHex                  string                  `json:"eseed_hex,omitempty"`
-	NonceHex                  string                  `json:"nonce_hex"`
+	ID                     string `json:"id"`
+	Description            string `json:"description"`
+	TestOnly               bool   `json:"_test_only"`
+	Algorithm              string `json:"algorithm"`
+	KeyID                  string `json:"key_id"`
+	KeyEpoch               uint32 `json:"key_epoch"`
+	RecipientPublicKeyHex  string `json:"recipient_public_key_hex"`
+	RecipientPrivateKeyHex string `json:"test_only_recipient_private_key_hex"`
+	EphemeralPrivateKeyHex string `json:"test_only_ephemeral_private_key_hex,omitempty"`
+	ESeedHex               string `json:"test_only_eseed_hex,omitempty"`
+	NonceHex               string `json:"nonce_hex"`
+
+	// Full vector fields (for small payloads)
 	Plaintext                 string                  `json:"plaintext,omitempty"`
-	PlaintextHex              string                  `json:"plaintext_hex"`
-	PlaintextLen              int                     `json:"plaintext_len"`
-	ExpectedAADHex            string                  `json:"expected_aad_hex"`
-	ExpectedEnvelopeCanonical string                  `json:"expected_envelope_canonical"`
-	ExpectedEnvelope          *envelope.CryptoEnvelope `json:"expected_envelope"`
+	PlaintextHex              string                  `json:"plaintext_hex,omitempty"`
+	PlaintextLen              int                     `json:"plaintext_len,omitempty"`
+	ExpectedAADHex            string                  `json:"expected_aad_hex,omitempty"`
+	ExpectedEnvelopeCanonical string                  `json:"expected_envelope_canonical,omitempty"`
+	ExpectedEnvelope          *envelope.CryptoEnvelope `json:"expected_envelope,omitempty"`
+
+	// Hash-only vector fields (for large payloads, e.g. 1 MB)
+	PlaintextSeedHex       string `json:"plaintext_seed_hex,omitempty"`
+	PlaintextSize          int    `json:"plaintext_size,omitempty"`
+	PlaintextSHA256        string `json:"plaintext_sha256,omitempty"`
+	ExpectedEnvelopeSHA256 string `json:"expected_envelope_sha256,omitempty"`
+}
+
+// UnmarshalJSON implements custom unmarshaling to support both new and legacy field names.
+func (v *CrossLanguageVector) UnmarshalJSON(data []byte) error {
+	type Alias CrossLanguageVector
+	aux := &struct {
+		*Alias
+		LegacyRecipPriv string `json:"recipient_private_key_hex"`
+		LegacyEphPriv   string `json:"ephemeral_private_key_hex"`
+		LegacyESeed     string `json:"eseed_hex"`
+	}{
+		Alias: (*Alias)(v),
+	}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if v.RecipientPrivateKeyHex == "" && aux.LegacyRecipPriv != "" {
+		v.RecipientPrivateKeyHex = aux.LegacyRecipPriv
+	}
+	if v.EphemeralPrivateKeyHex == "" && aux.LegacyEphPriv != "" {
+		v.EphemeralPrivateKeyHex = aux.LegacyEphPriv
+	}
+	if v.ESeedHex == "" && aux.LegacyESeed != "" {
+		v.ESeedHex = aux.LegacyESeed
+	}
+	return nil
+}
+
+// expandTestPlaintext derives a deterministic byte slice of the requested size
+// from a 32-byte seed using RFC 5869 HKDF-Expand-SHA256 in 4096-byte chunks.
+// RFC 5869 §2.3 limits a single Expand call to 255 * 32 = 8160 bytes.
+// For chunk index i (0..ceil(size/4096)-1):
+//   chunkInfo = fmt.Sprintf("%s-%d", infoPrefix, i)
+//   chunk = hkdfExpand(seed, []byte(chunkInfo), chunkSize)
+func expandTestPlaintext(seed []byte, infoPrefix string, size int) []byte {
+	out := make([]byte, 0, size)
+	chunkSize := 4096
+	for offset := 0; offset < size; offset += chunkSize {
+		curr := chunkSize
+		if size-offset < curr {
+			curr = size - offset
+		}
+		chunkIdx := offset / chunkSize
+		chunkInfo := fmt.Sprintf("%s-%d", infoPrefix, chunkIdx)
+		chunk, err := hkdfExpand(seed, []byte(chunkInfo), curr)
+		if err != nil {
+			panic(fmt.Sprintf("expandTestPlaintext: %v", err))
+		}
+		out = append(out, chunk...)
+	}
+	return out
 }
 
 func deriveDeterministic32(label string) []byte {
@@ -103,6 +169,7 @@ func generateAllVectors(t *testing.T) []CrossLanguageVector {
 		vectors = append(vectors, CrossLanguageVector{
 			ID:                        fmt.Sprintf("x25519-standard-%02d", i+1),
 			Description:               fmt.Sprintf("X25519 standard test vector %d", i+1),
+			TestOnly:                  true,
 			Algorithm:                 envelope.AlgX25519,
 			KeyID:                     keyID,
 			KeyEpoch:                  keyEpoch,
@@ -168,6 +235,7 @@ func generateAllVectors(t *testing.T) []CrossLanguageVector {
 		vectors = append(vectors, CrossLanguageVector{
 			ID:                        fmt.Sprintf("xwing-standard-%02d", i+1),
 			Description:               fmt.Sprintf("X-Wing standard post-quantum test vector %d", i+1),
+			TestOnly:                  true,
 			Algorithm:                 envelope.AlgXWing,
 			KeyID:                     keyID,
 			KeyEpoch:                  keyEpoch,
@@ -214,6 +282,7 @@ func generateAllVectors(t *testing.T) []CrossLanguageVector {
 		vectors = append(vectors, CrossLanguageVector{
 			ID:                        "x25519-edge-empty-plaintext",
 			Description:               "Edge case: 0-byte empty plaintext under X25519",
+			TestOnly:                  true,
 			Algorithm:                 envelope.AlgX25519,
 			KeyID:                     keyID,
 			KeyEpoch:                  keyEpoch,
@@ -258,6 +327,7 @@ func generateAllVectors(t *testing.T) []CrossLanguageVector {
 		vectors = append(vectors, CrossLanguageVector{
 			ID:                        "xwing-edge-empty-plaintext",
 			Description:               "Edge case: 0-byte empty plaintext under X-Wing hybrid",
+			TestOnly:                  true,
 			Algorithm:                 envelope.AlgXWing,
 			KeyID:                     keyID,
 			KeyEpoch:                  keyEpoch,
@@ -275,7 +345,7 @@ func generateAllVectors(t *testing.T) []CrossLanguageVector {
 	}
 
 	// ==========================================
-	// Edge Case 3: 1 MB Plaintext (X25519)
+	// Edge Case 3: 1 MB Plaintext (X25519) - Hash-Only
 	// ==========================================
 	{
 		privR := deriveDeterministic32("byos_x25519_recipient_1mb")
@@ -285,46 +355,49 @@ func generateAllVectors(t *testing.T) []CrossLanguageVector {
 
 		ephPriv := deriveDeterministic32("byos_x25519_ephemeral_1mb")
 		nonce := deriveDeterministic32("byos_x25519_nonce_1mb")[:12]
-		keyID := "mbx_1mb_payload_x25519"
-		keyEpoch := uint32(5)
+		keyID := "mbx_x25519_1mb"
+		keyEpoch := uint32(1)
 
-		oneMB := make([]byte, 1024*1024)
-		for j := 0; j < len(oneMB); j++ {
-			oneMB[j] = byte((j * 31) ^ (j >> 8))
-		}
+		ptSeed := deriveDeterministic32("byos_plaintext_seed_1mb_x25519")
+		size := 1048576
+		pt := expandTestPlaintext(ptSeed, "byos-test-plaintext", size)
+		ptSHA := sha256.Sum256(pt)
 
-		env, err := sealX25519Deterministic(pubR, ephPriv, oneMB, nonce, keyID, keyEpoch)
+		env, err := sealX25519Deterministic(pubR, ephPriv, pt, nonce, keyID, keyEpoch)
 		if err != nil {
 			t.Fatalf("seal 1mb x25519: %v", err)
 		}
-		canonBytes, _ := envelope.MarshalCanonical(env)
-		aadBytes, _ := envelope.BuildAAD(env)
+		canonBytes, err := envelope.MarshalCanonical(env)
+		if err != nil {
+			t.Fatalf("MarshalCanonical 1mb x25519: %v", err)
+		}
+		envSHA := sha256.Sum256(canonBytes)
 
 		rec, err := Open(env, privR)
-		if err != nil || !bytes.Equal(rec, oneMB) {
-			t.Fatalf("Failed 1MB plaintext X25519")
+		if err != nil || !bytes.Equal(rec, pt) {
+			t.Fatalf("Failed 1MB plaintext X25519 decryption")
 		}
 
 		vectors = append(vectors, CrossLanguageVector{
-			ID:                        "x25519-edge-1mb-plaintext",
-			Description:               "Edge case: 1,048,576 byte (1MB) payload under X25519",
-			Algorithm:                 envelope.AlgX25519,
-			KeyID:                     keyID,
-			KeyEpoch:                  keyEpoch,
-			RecipientPublicKeyHex:     hex.EncodeToString(pubR),
-			RecipientPrivateKeyHex:    hex.EncodeToString(privR),
-			EphemeralPrivateKeyHex:    hex.EncodeToString(ephPriv),
-			NonceHex:                  hex.EncodeToString(nonce),
-			PlaintextHex:              hex.EncodeToString(oneMB),
-			PlaintextLen:              len(oneMB),
-			ExpectedAADHex:            hex.EncodeToString(aadBytes),
-			ExpectedEnvelopeCanonical: string(canonBytes),
-			ExpectedEnvelope:          env,
+			ID:                     "x25519-edge-1mb-plaintext",
+			Description:            "X25519 with 1 MB plaintext (deterministic seed)",
+			TestOnly:               true,
+			Algorithm:              envelope.AlgX25519,
+			KeyID:                  keyID,
+			KeyEpoch:               keyEpoch,
+			RecipientPublicKeyHex:  hex.EncodeToString(pubR),
+			RecipientPrivateKeyHex: hex.EncodeToString(privR),
+			EphemeralPrivateKeyHex: hex.EncodeToString(ephPriv),
+			NonceHex:               hex.EncodeToString(nonce),
+			PlaintextSeedHex:       hex.EncodeToString(ptSeed),
+			PlaintextSize:          size,
+			PlaintextSHA256:        hex.EncodeToString(ptSHA[:]),
+			ExpectedEnvelopeSHA256: hex.EncodeToString(envSHA[:]),
 		})
 	}
 
 	// ==========================================
-	// Edge Case 4: 1 MB Plaintext (X-Wing)
+	// Edge Case 4: 1 MB Plaintext (X-Wing) - Hash-Only
 	// ==========================================
 	{
 		skSeed := deriveDeterministic32("byos_xwing_recipient_1mb")
@@ -332,41 +405,44 @@ func generateAllVectors(t *testing.T) []CrossLanguageVector {
 		pk := expanded.PK
 		eseed := deriveDeterministic64("byos_xwing_eseed_1mb")
 		nonce := deriveDeterministic32("byos_xwing_nonce_1mb")[:12]
-		keyID := "mbx_1mb_payload_xwing"
-		keyEpoch := uint32(10)
+		keyID := "mbx_xwing_1mb"
+		keyEpoch := uint32(1)
 
-		oneMB := make([]byte, 1024*1024)
-		for j := 0; j < len(oneMB); j++ {
-			oneMB[j] = byte((j * 37) ^ (j >> 7))
-		}
+		ptSeed := deriveDeterministic32("byos_plaintext_seed_1mb_xwing")
+		size := 1048576
+		pt := expandTestPlaintext(ptSeed, "byos-test-plaintext", size)
+		ptSHA := sha256.Sum256(pt)
 
-		env, err := sealXWingDeterministic(pk, eseed, oneMB, nonce, keyID, keyEpoch)
+		env, err := sealXWingDeterministic(pk, eseed, pt, nonce, keyID, keyEpoch)
 		if err != nil {
 			t.Fatalf("seal 1mb xwing: %v", err)
 		}
-		canonBytes, _ := envelope.MarshalCanonical(env)
-		aadBytes, _ := envelope.BuildAAD(env)
+		canonBytes, err := envelope.MarshalCanonical(env)
+		if err != nil {
+			t.Fatalf("MarshalCanonical 1mb xwing: %v", err)
+		}
+		envSHA := sha256.Sum256(canonBytes)
 
 		rec, err := Open(env, skSeed)
-		if err != nil || !bytes.Equal(rec, oneMB) {
-			t.Fatalf("Failed 1MB plaintext X-Wing")
+		if err != nil || !bytes.Equal(rec, pt) {
+			t.Fatalf("Failed 1MB plaintext X-Wing decryption")
 		}
 
 		vectors = append(vectors, CrossLanguageVector{
-			ID:                        "xwing-edge-1mb-plaintext",
-			Description:               "Edge case: 1,048,576 byte (1MB) payload under X-Wing hybrid",
-			Algorithm:                 envelope.AlgXWing,
-			KeyID:                     keyID,
-			KeyEpoch:                  keyEpoch,
-			RecipientPublicKeyHex:     hex.EncodeToString(pk),
-			RecipientPrivateKeyHex:    hex.EncodeToString(skSeed),
-			ESeedHex:                  hex.EncodeToString(eseed),
-			NonceHex:                  hex.EncodeToString(nonce),
-			PlaintextHex:              hex.EncodeToString(oneMB),
-			PlaintextLen:              len(oneMB),
-			ExpectedAADHex:            hex.EncodeToString(aadBytes),
-			ExpectedEnvelopeCanonical: string(canonBytes),
-			ExpectedEnvelope:          env,
+			ID:                     "xwing-edge-1mb-plaintext",
+			Description:            "X-Wing with 1 MB plaintext (deterministic seed)",
+			TestOnly:               true,
+			Algorithm:              envelope.AlgXWing,
+			KeyID:                  keyID,
+			KeyEpoch:               keyEpoch,
+			RecipientPublicKeyHex:  hex.EncodeToString(pk),
+			RecipientPrivateKeyHex: hex.EncodeToString(skSeed),
+			ESeedHex:               hex.EncodeToString(eseed),
+			NonceHex:               hex.EncodeToString(nonce),
+			PlaintextSeedHex:       hex.EncodeToString(ptSeed),
+			PlaintextSize:          size,
+			PlaintextSHA256:        hex.EncodeToString(ptSHA[:]),
+			ExpectedEnvelopeSHA256: hex.EncodeToString(envSHA[:]),
 		})
 	}
 
@@ -374,59 +450,50 @@ func generateAllVectors(t *testing.T) []CrossLanguageVector {
 }
 
 // TestGenerateAndSaveCrossLanguageVectors generates the vector suite and writes
-// testdata/cross_language_vectors.json and crypto/hpke/testdata/cross_language_vectors.json.
+// testdata/cross_language_vectors.json as the single canonical vector file.
 func TestGenerateAndSaveCrossLanguageVectors(t *testing.T) {
 	vectors := generateAllVectors(t)
 	if len(vectors) < 12 {
 		t.Fatalf("Expected at least 12 vectors, got %d", len(vectors))
 	}
 
-	outJSON, err := json.MarshalIndent(vectors, "", "  ")
+	suite := VectorSuite{
+		Warning: "TEST-ONLY KEYS. These are not production secrets. Never use for anything other than test vector verification.",
+		Vectors: vectors,
+	}
+
+	outJSON, err := json.MarshalIndent(suite, "", "  ")
 	if err != nil {
 		t.Fatalf("json.MarshalIndent: %v", err)
 	}
 
-	paths := []string{
-		filepath.Join("..", "..", "testdata", "cross_language_vectors.json"),
-		filepath.Join(".", "testdata", "cross_language_vectors.json"),
+	p := filepath.Join("..", "..", "testdata", "cross_language_vectors.json")
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		t.Fatalf("os.MkdirAll %s: %v", filepath.Dir(p), err)
 	}
-
-	for _, p := range paths {
-		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
-			t.Fatalf("os.MkdirAll %s: %v", filepath.Dir(p), err)
-		}
-		if err := os.WriteFile(p, outJSON, 0644); err != nil {
-			t.Fatalf("os.WriteFile %s: %v", p, err)
-		}
-		t.Logf("Wrote %d vectors to %s (%d bytes)", len(vectors), p, len(outJSON))
+	if err := os.WriteFile(p, outJSON, 0644); err != nil {
+		t.Fatalf("os.WriteFile %s: %v", p, err)
 	}
+	t.Logf("Wrote %d vectors to %s (%d bytes)", len(vectors), p, len(outJSON))
 }
 
 // TestVerifyCrossLanguageVectors loads cross_language_vectors.json and verifies
 // that deterministic sealing produces byte-identical output, matching AAD, and opens cleanly.
 func TestVerifyCrossLanguageVectors(t *testing.T) {
-	paths := []string{
-		filepath.Join(".", "testdata", "cross_language_vectors.json"),
-		filepath.Join("..", "..", "testdata", "cross_language_vectors.json"),
+	p := filepath.Join("..", "..", "testdata", "cross_language_vectors.json")
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("Failed to read cross_language_vectors.json from %s: %v", p, err)
 	}
 
-	var data []byte
-	var err error
-	for _, p := range paths {
-		data, err = os.ReadFile(p)
-		if err == nil {
-			break
+	var suite VectorSuite
+	if err := json.Unmarshal(data, &suite); err != nil {
+		if err2 := json.Unmarshal(data, &suite.Vectors); err2 != nil {
+			t.Fatalf("Failed to unmarshal cross_language_vectors.json: %v", err)
 		}
 	}
-	if err != nil {
-		t.Fatalf("Failed to read cross_language_vectors.json: %v", err)
-	}
 
-	var vectors []CrossLanguageVector
-	if err := json.Unmarshal(data, &vectors); err != nil {
-		t.Fatalf("Failed to unmarshal cross_language_vectors.json: %v", err)
-	}
-
+	vectors := suite.Vectors
 	if len(vectors) < 12 {
 		t.Fatalf("Expected at least 12 vectors, got %d", len(vectors))
 	}
@@ -447,13 +514,27 @@ func TestVerifyCrossLanguageVectors(t *testing.T) {
 			}
 
 			var ptBytes []byte
-			if len(vec.PlaintextHex) > 0 {
-				ptBytes, err = hex.DecodeString(vec.PlaintextHex)
+			isHashOnly := vec.PlaintextSize > 0
+
+			if isHashOnly {
+				seedBytes, err := hex.DecodeString(vec.PlaintextSeedHex)
 				if err != nil {
-					t.Fatalf("Decode plaintext_hex: %v", err)
+					t.Fatalf("Decode plaintext_seed_hex: %v", err)
+				}
+				ptBytes = expandTestPlaintext(seedBytes, "byos-test-plaintext", vec.PlaintextSize)
+				ptSHA := sha256.Sum256(ptBytes)
+				if hex.EncodeToString(ptSHA[:]) != vec.PlaintextSHA256 {
+					t.Fatalf("Plaintext SHA-256 mismatch:\n  got:  %x\n  want: %s", ptSHA, vec.PlaintextSHA256)
 				}
 			} else {
-				ptBytes = []byte{}
+				if len(vec.PlaintextHex) > 0 {
+					ptBytes, err = hex.DecodeString(vec.PlaintextHex)
+					if err != nil {
+						t.Fatalf("Decode plaintext_hex: %v", err)
+					}
+				} else {
+					ptBytes = []byte{}
+				}
 			}
 
 			var env *envelope.CryptoEnvelope
@@ -482,44 +563,52 @@ func TestVerifyCrossLanguageVectors(t *testing.T) {
 				t.Fatalf("Unknown algorithm: %s", vec.Algorithm)
 			}
 
-			// 1. Verify canonical serialization matches byte-for-byte
+			// 1. Verify canonical serialization matches byte-for-byte or SHA-256 matches for hash-only
 			canon, err := envelope.MarshalCanonical(env)
 			if err != nil {
 				t.Fatalf("MarshalCanonical failed: %v", err)
 			}
-			if string(canon) != vec.ExpectedEnvelopeCanonical {
-				t.Fatalf("Canonical JSON mismatch:\n  got:  %s\n  want: %s", string(canon), vec.ExpectedEnvelopeCanonical)
+
+			if isHashOnly {
+				envSHA := sha256.Sum256(canon)
+				if hex.EncodeToString(envSHA[:]) != vec.ExpectedEnvelopeSHA256 {
+					t.Fatalf("Canonical envelope SHA-256 mismatch:\n  got:  %x\n  want: %s", envSHA, vec.ExpectedEnvelopeSHA256)
+				}
+			} else {
+				if string(canon) != vec.ExpectedEnvelopeCanonical {
+					t.Fatalf("Canonical JSON mismatch:\n  got:  %s\n  want: %s", string(canon), vec.ExpectedEnvelopeCanonical)
+				}
+
+				// 2. Verify AAD matches expected_aad_hex byte-for-byte
+				aad, err := envelope.BuildAAD(env)
+				if err != nil {
+					t.Fatalf("BuildAAD failed: %v", err)
+				}
+				if hex.EncodeToString(aad) != vec.ExpectedAADHex {
+					t.Fatalf("AAD mismatch:\n  got:  %x\n  want: %s", aad, vec.ExpectedAADHex)
+				}
+
+				// 3. Verify unmarshaling canonical JSON matches envelope
+				unmarshaled, err := envelope.UnmarshalCanonical([]byte(vec.ExpectedEnvelopeCanonical))
+				if err != nil {
+					t.Fatalf("UnmarshalCanonical failed: %v", err)
+				}
+				unmarshaledCanon, err := envelope.MarshalCanonical(unmarshaled)
+				if err != nil {
+					t.Fatalf("MarshalCanonical of unmarshaled failed: %v", err)
+				}
+				if !bytes.Equal(unmarshaledCanon, canon) {
+					t.Fatalf("Unmarshaled canonical mismatch")
+				}
 			}
 
-			// 2. Verify AAD matches expected_aad_hex byte-for-byte
-			aad, err := envelope.BuildAAD(env)
-			if err != nil {
-				t.Fatalf("BuildAAD failed: %v", err)
-			}
-			if hex.EncodeToString(aad) != vec.ExpectedAADHex {
-				t.Fatalf("AAD mismatch:\n  got:  %x\n  want: %s", aad, vec.ExpectedAADHex)
-			}
-
-			// 3. Verify Open recovers the exact plaintext
+			// In both cases, verify Open recovers the exact plaintext
 			recovered, err := Open(env, privBytes)
 			if err != nil {
 				t.Fatalf("Open failed: %v", err)
 			}
 			if !bytes.Equal(recovered, ptBytes) {
 				t.Fatalf("Decrypted plaintext mismatch (len %d vs %d)", len(recovered), len(ptBytes))
-			}
-
-			// 4. Verify unmarshaling canonical JSON matches envelope
-			unmarshaled, err := envelope.UnmarshalCanonical([]byte(vec.ExpectedEnvelopeCanonical))
-			if err != nil {
-				t.Fatalf("UnmarshalCanonical failed: %v", err)
-			}
-			unmarshaledCanon, err := envelope.MarshalCanonical(unmarshaled)
-			if err != nil {
-				t.Fatalf("MarshalCanonical of unmarshaled failed: %v", err)
-			}
-			if !bytes.Equal(unmarshaledCanon, canon) {
-				t.Fatalf("Unmarshaled canonical mismatch")
 			}
 		})
 	}
