@@ -51,8 +51,6 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
     )
   );
 
-  const maxLimit = () => props.maxSliderSeats || 9999;
-
   function normalizeSeats(val: number): number {
     if (!Number.isFinite(val) || isNaN(val)) return minLimit();
     return Math.min(Math.max(minLimit(), Math.floor(val)), maxLimit());

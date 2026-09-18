@@ -1,0 +1,21 @@
+---
+// Redirect public site register directly to Control Panel register
+const rawUrl = Astro.request?.url || "";
+const search = rawUrl.includes("?") ? rawUrl.slice(rawUrl.indexOf("?")) : (Astro.url.search || "");
+return Astro.redirect(`http://127.0.0.1:3000/register${search}`, 302);
+---
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Redirecting to Control Panel Register...</title>
+    <script is:inline>
+      const search = window.location.search || "";
+      window.location.replace(`http://127.0.0.1:3000/register${search}`);
+    </script>
+  </head>
+  <body class="bg-[#F0EEE9] text-[#3C3D3E] flex items-center justify-center min-h-screen">
+    <p class="text-sm">Redirecting to Control Panel Register...</p>
+  </body>
+</html>

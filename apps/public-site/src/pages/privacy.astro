@@ -1,59 +1,53 @@
 ---
 import Layout from "../layouts/Layout.astro";
+import PageHeader from "../components/layout/PageHeader.astro";
 ---
 
-<Layout title="Privacy Charter & Data Classification">
-  {/* Header */}
-  <section class="pt-20 pb-12 px-6 max-w-4xl mx-auto text-center ambient-glow">
-    <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#EAE3DB] border border-[#A47764]/40 text-[#A47764] text-xs font-mono font-semibold mb-6 shadow-xs">
-      <span>Zero-Knowledge Privacy Charter</span>
-    </div>
-    <h1 class="text-4xl sm:text-5xl font-extrabold text-[#242424] tracking-tight">
-      Privacy Policy &amp; Data Boundaries
-    </h1>
-    <p class="mt-4 text-sm sm:text-base text-[#4A4A4A]">
-      Effective Date: August 2026 &bull; Architecture Specification V5.3
-    </p>
-  </section>
+<Layout title="Privacy Charter & Data Boundaries">
+  <PageHeader
+    title="Privacy Policy & Data Boundaries"
+    badge="Zero-Knowledge Privacy Charter"
+    description="Effective Date: 2026 • Architecture Specification V5.3 • Zero plaintext escrow on BYOS servers."
+  />
 
-  {/* Content (Mocha Mousse Secondary Card) */}
+  {/* Content */}
   <section class="py-8 px-6 max-w-4xl mx-auto">
-    <div class="p-8 sm:p-12 rounded-3xl border border-[#D1C4B8] bg-[#E5DDD5] space-y-8 text-sm text-[#4A4A4A] leading-relaxed shadow-lg">
+    <div class="p-8 sm:p-12 rounded-3xl border border-[#E2DFD8] bg-white space-y-8 text-sm text-[#6F7173] leading-relaxed shadow-xs">
       <div>
-        <h2 class="text-lg font-bold text-[#242424] flex items-center gap-2">
-          <span class="text-[#A47764]">1.</span> Customer-Controlled Persistent Storage
+        <h2 class="text-lg font-bold text-[#2B2C2D] flex items-center gap-2">
+          <span class="text-[#9E725F]">1.</span> Customer-Controlled Persistent Storage
         </h2>
         <p class="mt-2">
-          Persistent email messages, attachments, draft contents, and address books are uploaded directly to the customer&apos;s designated storage bucket (AWS S3, Google Drive, MinIO, Cloudflare R2). Every persistent object is encrypted client-side using RFC 9180 HPKE and AES-256-GCM. BYOS servers hold zero persistent customer mail data in plaintext.
+          Persistent email messages, attachments, draft contents, and address books are uploaded directly to your designated cloud storage bucket (AWS S3, Google Drive, MinIO, or Cloudflare R2). Every persistent object is encrypted client-side. BYOS servers hold zero persistent customer mail data in plaintext.
         </p>
       </div>
 
-      <div class="pt-6 border-t border-[#D1C4B8]">
-        <h2 class="text-lg font-bold text-[#242424] flex items-center gap-2">
-          <span class="text-[#A47764]">2.</span> Inbound Transient Processing Window
+      <div class="pt-6 border-t border-[#E2DFD8]">
+        <h2 class="text-lg font-bold text-[#2B2C2D] flex items-center gap-2">
+          <span class="text-[#9E725F]">2.</span> Inbound Transient Processing Window
         </h2>
         <p class="mt-2">
-          Inbound email arriving over SMTP port 25 from the internet is processed transiently in memory for spam filtering (Rspamd), virus checking, and RFC 9180 HPKE envelope encryption. Immediately upon successful delivery to the customer&apos;s storage bucket, transient in-memory buffers are wiped. Plaintext message bodies are never written to disk or the central relational database.
+          Inbound email arriving over SMTP from the internet is processed transiently in memory for spam filtering, virus checking, and envelope encryption. Immediately upon successful delivery to your storage bucket, transient in-memory buffers are wiped. Plaintext message bodies are never written to disk or the central relational database.
         </p>
       </div>
 
-      <div class="pt-6 border-t border-[#D1C4B8]">
-        <h2 class="text-lg font-bold text-[#242424] flex items-center gap-2">
-          <span class="text-[#A47764]">3.</span> Privacy-Preserving Search Tokens
+      <div class="pt-6 border-t border-[#E2DFD8]">
+        <h2 class="text-lg font-bold text-[#2B2C2D] flex items-center gap-2">
+          <span class="text-[#9E725F]">3.</span> Privacy-Preserving Search
         </h2>
         <p class="mt-2">
-          When search indexing is enabled, keywords are blinded on the client device using HMAC-SHA256 derived from a client-held search key. The BYOS relational database stores only blind 256-bit hashes. The BYOS platform cannot correlate search queries to actual keywords or readable language.
+          When search indexing is enabled, keywords are blinded on your device before searching. The BYOS relational database stores only blind cryptographic hashes. The BYOS platform cannot correlate search queries to actual keywords or readable messages.
         </p>
       </div>
 
-      <div class="pt-6 border-t border-[#D1C4B8]">
-        <h2 class="text-lg font-bold text-[#242424] flex items-center gap-2">
-          <span class="text-[#A47764]">4.</span> Operational Metadata Retention
+      <div class="pt-6 border-t border-[#E2DFD8]">
+        <h2 class="text-lg font-bold text-[#2B2C2D] flex items-center gap-2">
+          <span class="text-[#9E725F]">4.</span> Operational Metadata
         </h2>
         <p class="mt-2">
-          To maintain email delivery reliability and defend against denial-of-service or outbound spam abuse, BYOS retains operational metadata:
+          To maintain email delivery reliability and defend against denial-of-service or abuse, BYOS retains essential operational metadata:
         </p>
-        <ul class="mt-3 space-y-1.5 list-disc list-inside text-xs text-[#4A4A4A]">
+        <ul class="mt-3 space-y-1.5 list-disc list-inside text-xs text-[#6F7173]">
           <li>Account credentials (salted and stretched via Argon2id)</li>
           <li>Verified custom domain routing records and DKIM public keys</li>
           <li>Rate limiting counters in volatile Redis cache</li>
@@ -61,12 +55,12 @@ import Layout from "../layouts/Layout.astro";
         </ul>
       </div>
 
-      <div class="pt-6 border-t border-[#D1C4B8]">
-        <h2 class="text-lg font-bold text-[#242424] flex items-center gap-2">
-          <span class="text-[#A47764]">5.</span> Zero Third-Party Tracking
+      <div class="pt-6 border-t border-[#E2DFD8]">
+        <h2 class="text-lg font-bold text-[#2B2C2D] flex items-center gap-2">
+          <span class="text-[#9E725F]">5.</span> Zero Third-Party Tracking
         </h2>
         <p class="mt-2">
-          The BYOS website and web applications contain zero third-party advertising trackers, cross-site analytics beacons, or behavioral profiling scripts. All fonts and assets are served locally.
+          The BYOS website and web applications contain zero third-party advertising trackers, cross-site analytics beacons, or behavioral profiling scripts. All assets and fonts are served locally.
         </p>
       </div>
     </div>
