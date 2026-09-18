@@ -26,7 +26,25 @@ Security/crypto tasks:
 * load `03-security-privacy`
 * load `04-crypto-boundary`
 
+Frontend/UI tasks:
+
+* load `07-frontend-design`
+* load `08-solidjs-reactivity`
+* load `09-tailwind-brand-system`
+* load `11-accessibility-a11y`
+* load `kylezantos/responsive-craft`
+* load `LottieFiles/motion-design-skill`
+
+UI/Crypto Bridge tasks:
+
+* load `10-wasm-ui-bridge`
+
 Do not load every skill unless needed.
+
+## Global UI/UX Constraints
+
+* **Responsive Architecture:** All components (including data tables and complex sliders) must scale flawlessly down to a 375px mobile viewport using Tailwind responsive modifiers and `@container` variants. No horizontal scrolling permitted.
+* **Motion Design:** Choreograph dynamic elements (e.g., expanding receipts, state changes) using a snappy, deliberate, and professional "infrastructure" motion archetype. Bouncy, playful, or over-exaggerated easing is strictly forbidden on this high-security zero-knowledge platform.
 
 ## Frozen
 
