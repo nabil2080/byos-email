@@ -40,6 +40,14 @@ js-sys = "0.3"
 # Random generation
 rand_core = { version = "0.6", features = ["std"] }
 
+# getrandom has two versions in the dependency tree:
+# - getrandom 0.2 (pulled by rand_core)
+# - getrandom 0.4 (pulled by ml-kem 0.3)
+# Both need target-specific features to compile to wasm32:
+# - 0.2 requires features = ["js"]
+# - 0.4 requires features = ["wasm_js"]
+# Do NOT remove either dependency without verifying both transitive 
+# paths still work on wasm32.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
