@@ -1,5 +1,5 @@
 ---
-// Redirect public site signup directly to Control Panel register
+// Redirect public site register directly to Control Panel register
 const rawUrl = Astro.request?.url || "";
 const search = rawUrl.includes("?") ? rawUrl.slice(rawUrl.indexOf("?")) : (Astro.url.search || "");
 return Astro.redirect(`http://127.0.0.1:3000/register${search}`, 302);

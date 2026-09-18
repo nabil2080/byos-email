@@ -1,33 +1,41 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import { AnimatedHero } from "../components/hero/AnimatedHero";
+import { ProductShowcaseSlides } from "../components/features/ProductShowcaseSlides";
+import { ArchitectureComparison } from "../components/features/ArchitectureComparison";
+import { BentoGrid } from "../components/features/BentoGrid";
 import { HowItWorks } from "../components/interactive/HowItWorks";
 import { CostCalculator } from "../components/interactive/CostCalculator";
-import { BentoGrid } from "../components/features/BentoGrid";
 ---
 
 <Layout title="Business Email You Actually Own | Zero Storage Markup">
-  {/* Ultra-Premium Animated Hero Banner & Message Ingestion Simulation */}
+  {/* Ultra-Premium Hero Banner with Interactive Delivery Simulation */}
   <AnimatedHero client:load />
+
+  {/* Interactive Product Showcase UI Tour Carousel */}
+  <ProductShowcaseSlides client:visible />
+
+  {/* Side-by-Side Comparison: Traditional Big Tech vs BYOS */}
+  <ArchitectureComparison client:visible />
 
   {/* High-Impact 4-Cell Bento Feature Grid */}
   <BentoGrid client:visible />
 
-  {/* Section: Interactive 3-Step Explainer */}
+  {/* Section: Interactive 3-Step Setup Walkthrough */}
   <section id="how-it-works" class="py-20 px-6 max-w-7xl mx-auto scroll-mt-20">
     <div class="text-center max-w-2xl mx-auto mb-12">
       <span class="text-xs uppercase tracking-widest font-mono text-[#9E725F] font-bold">
         Simple 3-Step Setup
       </span>
       <h2 class="text-3xl sm:text-5xl font-extrabold text-[#2B2C2D] mt-2 tracking-tight">
-        How BYOS Sovereign Email Works
+        How BYOS Email Works
       </h2>
       <p class="text-sm sm:text-base text-[#6F7173] mt-3">
-        A revolutionary decoupling of email transport from storage custody. Setup takes under 5 minutes.
+        Email transport decoupled from storage custody. Setup takes under 5 minutes.
       </p>
     </div>
 
-    {/* Interactive Explainer Motion Island */}
+    {/* Interactive Setup Walkthrough */}
     <HowItWorks client:visible />
   </section>
 
@@ -37,33 +45,33 @@ import { BentoGrid } from "../components/features/BentoGrid";
   </section>
 
   {/* Call To Action Banner */}
-  <section class="py-20 px-6 max-w-7xl mx-auto">
-    <div class="rounded-3xl bg-[#2B2C2D] text-white p-8 sm:p-14 text-center space-y-6 relative overflow-hidden shadow-2xl border border-stone-800">
-      {/* Decorative Glow */}
-      <div class="absolute -top-24 -right-24 w-80 h-80 bg-[#9E725F]/20 rounded-full blur-3xl pointer-events-none"></div>
-      <div class="absolute -bottom-24 -left-24 w-80 h-80 bg-[#9E725F]/15 rounded-full blur-3xl pointer-events-none"></div>
+  <section class="pt-20 pb-12 bg-[#2B2C2D] text-white relative overflow-hidden">
+    {/* Decorative Glow */}
+    <div class="absolute -top-24 -right-24 w-80 h-80 bg-[#9E725F]/20 rounded-full blur-3xl pointer-events-none"></div>
+    <div class="absolute -bottom-24 -left-24 w-80 h-80 bg-[#9E725F]/15 rounded-full blur-3xl pointer-events-none"></div>
 
-      <div class="max-w-2xl mx-auto space-y-3 relative z-10">
+    <div class="max-w-3xl mx-auto px-6 text-center space-y-6 relative z-10">
+      <div class="space-y-3">
         <h2 class="text-2xl sm:text-4xl font-extrabold tracking-tight">
-          Ready to Take Back Control of Your Corporate Email?
+          Ready to Take Back Control of Your Business Email?
         </h2>
-        <p class="text-xs sm:text-sm text-stone-300">
-          Join sovereign businesses saving up to 80% on corporate email bills while eliminating server surveillance.
+        <p class="text-xs sm:text-sm text-stone-300 max-w-lg mx-auto leading-relaxed">
+          Save up to 80% on company email bills while keeping all your communications private and stored in your own cloud.
         </p>
       </div>
 
-      <div class="flex flex-wrap items-center justify-center gap-4 pt-2 relative z-10">
-        <a
-          href="/signup"
-          class="rounded-xl bg-[#9E725F] px-8 py-3.5 text-sm font-semibold text-white shadow-sm hover:bg-[#865E4D] transition-all hover:scale-[1.02] active:scale-[0.98]"
-        >
-          Start Your 14-Day Free Trial →
-        </a>
+      <div class="flex flex-wrap items-center justify-center gap-4 pt-2">
         <a
           href="/pricing"
+          class="rounded-xl bg-[#9E725F] px-8 py-3.5 text-sm font-semibold text-white shadow-sm hover:bg-[#865E4D] transition-all hover:scale-[1.02] active:scale-[0.98]"
+        >
+          Calculate Capacity &amp; Start →
+        </a>
+        <a
+          href="http://127.0.0.1:3000/login"
           class="rounded-xl border border-stone-600 bg-stone-800/80 px-6 py-3.5 text-sm font-semibold text-stone-200 hover:bg-stone-700 hover:text-white transition-all"
         >
-          View Capacity Tiers
+          Sign In to Account
         </a>
       </div>
     </div>

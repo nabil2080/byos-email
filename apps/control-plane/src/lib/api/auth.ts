@@ -1,26 +1,69 @@
 import { apiBase, getCpHeaders } from "./client";
 
 export interface AuthSessionResponse {
-  id: string;
-  email: string;
-  org_id: string;
+  id?: string;
+  email?: string;
+  org_id?: string;
   organization_id?: string;
   display_name?: string;
   role?: "owner" | "admin" | "member";
   plan?: string;
   token?: string;
+  two_factor_required?: boolean;
+  challenge_token?: string;
+  methods?: string[];
+  preferred_method?: string;
+  destination_masked?: string;
+  debug_code?: string;
+}
+
+export interface CheckEmailResponse {
+  email: string;
+  exists: boolean;
+  already_logged_in: boolean;
+  current_session: boolean;
+  message: string;
+}
+
+export async function checkEmailAvailability(email: string): Promise<CheckEmailResponse> {
+  const res = await fetch(`${apiBase()}/v1/auth/check-email`, {
+    method: "POST",
+    headers: getCpHeaders({ "Content-Type": "application/json" }),
+    credentials: "include",
+    body: JSON.stringify({ email: email.trim() }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const err = new Error(text || `Check email failed ${res.status}`) as Error & { status: number };
+    err.status = res.status;
+    throw err;
+  }
+  return (await res.json()) as CheckEmailResponse;
 }
 
 export async function register(
   email: string,
-  password: string,
-  orgRecoveryPk: string
+  passwordVerifier: string,
+  orgRecoveryPk: string,
+  wrappedOrgRecoverySk?: string,
+  recoverySalt?: string
 ): Promise<{ id: string; email: string; org_id: string; org_name: string }> {
+  const payload: Record<string, string> = {
+    email: email.trim(),
+    password: passwordVerifier,
+    org_recovery_pk: orgRecoveryPk,
+  };
+  if (wrappedOrgRecoverySk) {
+    payload.wrapped_org_recovery_sk = wrappedOrgRecoverySk;
+  }
+  if (recoverySalt) {
+    payload.recovery_salt = recoverySalt;
+  }
   const res = await fetch(`${apiBase()}/v1/auth/register`, {
     method: "POST",
     headers: getCpHeaders({ "Content-Type": "application/json" }),
     credentials: "include",
-    body: JSON.stringify({ email, password, org_recovery_pk: orgRecoveryPk }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -36,7 +79,7 @@ export async function login(email: string, password: string): Promise<AuthSessio
     method: "POST",
     headers: getCpHeaders({ "Content-Type": "application/json" }),
     credentials: "include",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, client: "control-plane" }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -49,6 +92,59 @@ export async function login(email: string, password: string): Promise<AuthSessio
     localStorage.setItem("byos_cp_session_token", data.token);
   }
   return data;
+}
+
+export async function verifyLogin2FA(
+  challengeToken: string,
+  code: string
+): Promise<AuthSessionResponse> {
+  const res = await fetch(`${apiBase()}/v1/auth/2fa/verify-login`, {
+    method: "POST",
+    headers: getCpHeaders({ "Content-Type": "application/json" }),
+    credentials: "include",
+    body: JSON.stringify({
+      challenge_token: challengeToken,
+      code: code,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    let errorMsg = text || `Verification failed ${res.status}`;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.error) errorMsg = parsed.error;
+    } catch {}
+    const err = new Error(errorMsg) as Error & { status: number };
+    err.status = res.status;
+    throw err;
+  }
+  const data = (await res.json()) as AuthSessionResponse;
+  if (data.token && typeof window !== "undefined") {
+    localStorage.setItem("byos_cp_session_token", data.token);
+  }
+  return data;
+}
+
+export async function sendLogin2FACode(
+  challengeToken: string,
+  method: "email" | "phone"
+): Promise<{ success: boolean; method: string; destination_masked: string; debug_code?: string }> {
+  const res = await fetch(`${apiBase()}/v1/auth/2fa/send-code`, {
+    method: "POST",
+    headers: getCpHeaders({ "Content-Type": "application/json" }),
+    credentials: "include",
+    body: JSON.stringify({
+      challenge_token: challengeToken,
+      method: method,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const err = new Error(text || `Failed to send code: status ${res.status}`) as Error & { status: number };
+    err.status = res.status;
+    throw err;
+  }
+  return (await res.json()) as { success: boolean; method: string; destination_masked: string; debug_code?: string };
 }
 
 export async function logout(): Promise<void> {
