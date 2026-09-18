@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-canvas: #F0EEE9;
+  --color-brand-primary: #9E725F;
+  --color-brand-text: #3C3D3E;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  background-color: var(--color-brand-canvas);
+  color: var(--color-brand-text);
+}
