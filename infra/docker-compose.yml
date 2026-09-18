@@ -88,6 +88,29 @@ services:
       - "11334"
     volumes:
       - ./rspamd/local.d:/etc/rspamd/local.d:ro
+    healthcheck:
+      # Port 11333 = normal worker (HTTP /check endpoint used by inbound-bridge).
+      # TCP probe avoids requiring wget/curl inside the rspamd image.
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/11333' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: byos-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 byosminio byosminio_dev_password &&
+        mc mb --ignore-existing local/byos-mailbox &&
+        echo 'minio-init: bucket byos-mailbox ready'
+      "
+    # One-shot: exits 0 after bucket creation; do not restart.
+    restart: "no"
 
   api:
     build: ../services/api
@@ -139,6 +162,7 @@ services:
     environment:
       DATABASE_URL: "postgres://byos:byos_dev_password@postgres:5432/byos"
       MAIL_ROUTER_PORT: "8081"
+      MAIL_ROUTER_HEALTH_PORT: "8082"
       CRYPTO_WORKER_URL: "http://crypto-worker:8084"
       STORAGE_WORKER_URL: "http://storage-worker:8083"
       STORAGE_WORKER_INTERNAL_KEY_FILE: /run/secrets/storage_worker_internal_key
@@ -146,6 +170,12 @@ services:
     secrets:
       - storage_worker_internal_key
       - mail_router_internal_key
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/health | grep -q healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
@@ -177,9 +207,17 @@ services:
     secrets:
       - storage_dek
       - storage_worker_internal_key
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8083/health | grep -q healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     depends_on:
       minio:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
 
@@ -203,11 +241,21 @@ services:
     secrets:
       - outbound_delivery_sk
       - crypto_worker_internal_key
+    healthcheck:
+      # debian:bookworm-slim has no wget/curl; use TCP probe to verify the
+      # Axum HTTP server is listening on port 8084.
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8084' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
 
   inbound-bridge:
     build: ../services/inbound-bridge
     container_name: byos-inbound-bridge
     ports:
+      # Port 25 bound on all interfaces: inbound-bridge IS the SMTP MX listener.
+      # For a local-only profile, change to "127.0.0.1:2225:25" to avoid conflicts.
       - "25:25"
       - "127.0.0.1:8085:8085"
     user: "65534:65534"
@@ -226,6 +274,12 @@ services:
       MAIL_ROUTER_INTERNAL_KEY_FILE: /run/secrets/mail_router_internal_key
     secrets:
       - mail_router_internal_key
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8085/health | grep -q healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     depends_on:
       mail-router:
         condition: service_started
