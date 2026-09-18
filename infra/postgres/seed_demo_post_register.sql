@@ -20,9 +20,21 @@ BEGIN
     VALUES (v_domain_id, v_org_id, 'demo.local', true, 'byos', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'), 'v=DKIM1; k=rsa; p=dummy')
     ON CONFLICT (name) DO UPDATE SET is_verified = true;
 
-    -- 2. Insert active storage connection for org
-    INSERT INTO storage_connections (id, org_id, provider, provider_type, bucket_name, endpoint, credentials_enc, status, is_active)
-    VALUES (v_storage_conn_id, v_org_id, 'minio', 'minio', 'byos-mailbox', 'minio:9000', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'), 'active', true)
-    ON CONFLICT (id) DO UPDATE SET status = 'active';
+    -- 2. Insert active encrypted storage connection for org
+    INSERT INTO storage_connections (id, org_id, provider, provider_type, bucket_name, endpoint, credentials_enc, config, encrypted, status, is_active)
+    VALUES (
+        v_storage_conn_id,
+        v_org_id,
+        'minio',
+        'minio',
+        'byos-mailbox',
+        'minio:9000',
+        decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'),
+        '{"endpoint": "minio:9000", "bucket": "byos-mailbox", "access_key_id": "minioadmin", "secret_access_key": "minioadmin"}',
+        true,
+        'active',
+        true
+    )
+    ON CONFLICT (id) DO UPDATE SET status = 'active', encrypted = true;
 
 END $$;

@@ -43,4 +43,3 @@ SET
 -- Grant column-level access to support role preserving Zero-Knowledge boundaries:
 GRANT SELECT (id, name, default_storage_connection_id, created_at, updated_at, plan, status, seat_count, billing_cycle, max_domains, max_aliases) ON organizations TO role_support_agent;
 GRANT UPDATE (plan, status, updated_at, seat_count, billing_cycle, max_domains, max_aliases) ON organizations TO role_support_agent;
-GRANT INSERT ON domains TO role_support_agent;
