@@ -1,4 +1,5 @@
 import { Component, createSignal } from "solid-js";
+import { calculateGraduatedPricing } from "../../lib/pricing_math";
 
 export const CostCalculator: Component = () => {
   const [mailboxCount, setMailboxCount] = createSignal(25);
@@ -7,13 +8,9 @@ export const CostCalculator: Component = () => {
   const legacyMonthlyCost = () => mailboxCount() * 10;
   const legacyAnnualCost = () => legacyMonthlyCost() * 12;
 
-  // BYOS Capacity Tier pricing: flat fee, NOT per-seat
+  // BYOS Graduated Capacity pricing with 5% compounding step-down brackets
   const byosMonthlyCost = () => {
-    const count = mailboxCount();
-    if (count <= 5) return 3; // Solo / Seed
-    if (count <= 25) return 18; // Small Team
-    if (count <= 75) return 48; // Growth Organization
-    return 110; // Enterprise Capacity
+    return calculateGraduatedPricing(mailboxCount()).totalMonthlyCost;
   };
 
   const byosStorageEstMonthly = () => {
@@ -28,6 +25,40 @@ export const CostCalculator: Component = () => {
   const percentSaved = () =>
     Math.round((annualSavings() / (legacyAnnualCost() || 1)) * 100);
 
+  const cpBase = () => {
+    const envUrl = (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_CP_URL;
+    return envUrl || "http://127.0.0.1:3000";
+  };
+  const apiBase = () => {
+    const envUrl = (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_API_URL;
+    return envUrl ?? "";
+  };
+
+  async function handleCtaClick(e: MouseEvent) {
+    e.preventDefault();
+    let isLoggedIn = false;
+    try {
+      const res = await fetch(`${apiBase()}/v1/auth/me`, {
+        headers: { Accept: "application/json" },
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.id) {
+          isLoggedIn = true;
+        }
+      }
+    } catch {}
+
+    const query = `seats=${mailboxCount()}`;
+    const targetUrl = isLoggedIn
+      ? `${cpBase()}/onboarding/pricing?${query}`
+      : `${cpBase()}/login?${query}`;
+    if (typeof window !== "undefined") {
+      window.location.href = targetUrl;
+    }
+  }
+
   return (
     <div class="bg-white rounded-3xl border border-[#E2DFD8] shadow-sm p-6 sm:p-10 space-y-8">
       {/* Header */}
@@ -39,7 +70,7 @@ export const CostCalculator: Component = () => {
           See How Much You Save on BYOS
         </h3>
         <p class="text-xs sm:text-sm text-[#6F7173] mt-2">
-          Legacy email suites charge exponential per-seat fees that punish company growth. BYOS charges flat capacity tiers.
+          Legacy email suites charge exponential per-seat fees that punish company growth. BYOS charges raw infrastructure capacity with compounding volume discounts.
         </p>
       </div>
 
@@ -144,11 +175,11 @@ export const CostCalculator: Component = () => {
 
           <div>
             <div class="text-3xl font-bold text-[#3C3D3E]">
-              ${byosTotalMonthly().toLocaleString()}
+              ${byosTotalMonthly().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               <span class="text-xs font-normal text-[#6F7173]"> / month</span>
             </div>
             <div class="text-xs text-[#6F7173] font-mono mt-1">
-              ${byosAnnualCost().toLocaleString()} per year (${byosMonthlyCost()}/mo plan + ~${byosStorageEstMonthly()}/mo storage)
+              ${byosAnnualCost().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} per year (${byosMonthlyCost().toFixed(2)}/mo capacity + ~${byosStorageEstMonthly().toFixed(2)}/mo storage)
             </div>
           </div>
 
@@ -160,7 +191,7 @@ export const CostCalculator: Component = () => {
               <span>✓</span> Client-side sealed zero-knowledge encryption
             </li>
             <li class="flex items-center gap-2 text-emerald-800 font-medium">
-              <span>✓</span> Flat capacity pricing that protects your margins
+              <span>✓</span> Fluid graduated capacity with volume discounts
             </li>
           </ul>
         </div>
@@ -173,12 +204,13 @@ export const CostCalculator: Component = () => {
             Estimated Annual Savings
           </div>
           <div class="text-2xl sm:text-3xl font-black tracking-tight">
-            ${annualSavings().toLocaleString()} / year
+            ${annualSavings().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / year
           </div>
         </div>
 
         <a
-          href="/signup"
+          href={`${cpBase()}/login?seats=${mailboxCount()}`}
+          onClick={handleCtaClick}
           class="px-5 py-2.5 rounded-xl bg-white text-[#9E725F] text-xs font-bold hover:bg-[#F0EEE9] transition shadow-xs whitespace-nowrap cursor-pointer"
         >
           Claim Your Savings →

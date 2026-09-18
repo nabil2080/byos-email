@@ -1,6 +1,10 @@
 ---
 import "../styles/global.css";
 import { Footer } from "../components/layout/Footer";
+import { HeaderUserNav } from "../components/layout/HeaderUserNav";
+import { MobileMenu } from "../components/layout/MobileMenu";
+import { StickyNav } from "../components/layout/StickyNav";
+import { DesktopNav } from "../components/layout/DesktopNav";
 
 interface Props {
   title: string;
@@ -22,38 +26,30 @@ const {
     <meta name="description" content={description} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
-  <body class="bg-[#F0EEE9] text-[#3C3D3E] antialiased flex flex-col min-h-screen selection:bg-[#9E725F] selection:text-white">
-    {/* Navigation */}
-    <header class="sticky top-0 z-50 border-b border-[#E2DFD8] bg-[#F0EEE9]/90 backdrop-blur-md">
-      <div class="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
-        <a href="/" class="flex items-center gap-3 group">
-          <div class="flex items-center justify-center bg-[#9E725F] text-white px-2.5 py-1 rounded-lg text-xs font-mono font-bold tracking-wider shadow-xs group-hover:bg-[#865E4D] transition-colors">
+  <body class="pt-4 bg-[#F0EEE9] text-[#3C3D3E] antialiased flex flex-col min-h-screen selection:bg-[#9E725F] selection:text-white relative">
+    {/* Primary Hanging Desktop Navigation (Top of page on Desktop) */}
+    <DesktopNav client:load />
+
+    {/* Floating Dynamic Sticky Navigation (Pill with Popover Menus & Search on Scroll) */}
+    <StickyNav client:load />
+
+    {/* Mobile Navigation Header (Only visible on screens < lg down to 375px) */}
+    <header class="lg:hidden sticky top-0 z-40 border-b border-[#E2DFD8] bg-[#F0EEE9] backdrop-blur-md">
+      <div class="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
+        <a href="/" class="flex items-center gap-2 group shrink-0">
+          <div class="flex items-center justify-center bg-[#9E725F] text-white px-2 py-0.5 rounded-lg text-xs font-mono font-bold tracking-wider shadow-xs group-hover:bg-[#865E4D] transition-colors">
             BYOS
           </div>
           <div class="flex flex-col">
-            <span class="font-bold text-base tracking-tight text-[#3C3D3E]">Business Email</span>
-            <span class="text-[9px] font-mono uppercase tracking-widest text-[#9E725F] font-semibold">Zero Server Plaintext</span>
+            <span class="font-bold text-sm tracking-tight text-[#2B2C2D]">Business Email</span>
+            <span class="text-[9px] font-mono uppercase tracking-widest text-[#9E725F] font-semibold">Zero Markup</span>
           </div>
         </a>
 
-        {/* Desktop Nav */}
-        <nav class="hidden md:flex items-center gap-8 text-sm font-medium text-[#6F7173]">
-          <a href="/#how-it-works" class="hover:text-[#3C3D3E] transition-colors">How It Works</a>
-          <a href="/#pricing-calc" class="hover:text-[#3C3D3E] transition-colors">Cost Calculator</a>
-          <a href="/#features" class="hover:text-[#3C3D3E] transition-colors">Features</a>
-          <a href="/pricing" class="hover:text-[#3C3D3E] transition-colors">Pricing</a>
-          <a href="/security" class="hover:text-[#3C3D3E] transition-colors">Security</a>
-          <a href="/docs" class="hover:text-[#3C3D3E] transition-colors">Docs</a>
-        </nav>
-
-        {/* Action CTAs */}
-        <div class="flex items-center gap-3">
-          <a href="/login" class="text-xs sm:text-sm font-semibold text-[#3C3D3E] hover:text-[#9E725F] px-3 py-1.5 transition-colors">
-            Sign In
-          </a>
-          <a href="/signup" class="rounded-xl bg-[#9E725F] px-4 py-2 text-xs sm:text-sm font-semibold text-white shadow-sm hover:bg-[#865E4D] transition-all">
-            Start Free Trial
-          </a>
+        {/* User Auth Nav & Mobile Menu Drawer */}
+        <div class="flex items-center gap-2">
+          <HeaderUserNav client:load />
+          <MobileMenu client:load />
         </div>
       </div>
     </header>
