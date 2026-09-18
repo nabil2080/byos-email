@@ -252,6 +252,55 @@ func TestSigNonNullBehaviorV1(t *testing.T) {
 	})
 }
 
+// TestMissingRequiredFieldRejected verifies that UnmarshalCanonical rejects JSON
+// payloads omitting any of the 8 required fields specified in BYOS-SPEC-CRYPTO-ENV-V1 §2.1.
+func TestMissingRequiredFieldRejected(t *testing.T) {
+	validEnv := makeValidX25519Envelope()
+	canonicalBytes, err := envelope.MarshalCanonical(validEnv)
+	if err != nil {
+		t.Fatalf("MarshalCanonical failed: %v", err)
+	}
+
+	// 1. All fields present with sig=null -> expect nil error
+	parsed, err := envelope.UnmarshalCanonical(canonicalBytes)
+	if err != nil {
+		t.Fatalf("Expected nil error for valid canonical JSON with sig=null, got: %v", err)
+	}
+	if parsed == nil {
+		t.Fatalf("Expected non-nil parsed envelope")
+	}
+
+	testCases := []struct {
+		name         string
+		omitField    string
+		expectedCode int
+	}{
+		{"MissingSig", `"sig":null,`, envelope.ErrCodeSerializationError},
+		{"MissingAlg", `"alg":"HPKE-X25519-AES256GCM-v1",`, envelope.ErrCodeSerializationError},
+		{"MissingV", `,"v":1`, envelope.ErrCodeSerializationError},
+		{"MissingNonce", fmt.Sprintf(`"nonce":%q,`, validEnv.Nonce), envelope.ErrCodeSerializationError},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			jsonStr := string(canonicalBytes)
+			if !strings.Contains(jsonStr, tc.omitField) {
+				t.Fatalf("Substring %q not found in canonical JSON: %s", tc.omitField, jsonStr)
+			}
+			tamperedJSON := strings.Replace(jsonStr, tc.omitField, "", 1)
+
+			_, err := envelope.UnmarshalCanonical([]byte(tamperedJSON))
+			if err == nil {
+				t.Fatalf("Expected error for omitted field %s, got nil", tc.name)
+			}
+			envErr, ok := err.(*envelope.EnvelopeError)
+			if !ok || envErr.Code != tc.expectedCode {
+				t.Fatalf("Expected error code %d for %s, got %v", tc.expectedCode, tc.name, err)
+			}
+		})
+	}
+}
+
 // TestAADBinaryLayout verifies the exact byte offsets from §3.1:
 // Offset 0: v (1 byte)
 // Offset 1: alg_length (1 byte)

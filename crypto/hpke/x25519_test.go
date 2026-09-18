@@ -103,7 +103,7 @@ func TestRFC9180VectorA11(t *testing.T) {
 	// 3. Verify RFC 9180 Section 5.1 secret derivation:
 	// secret = LabeledExtract(shared_secret, "secret", psk="")
 	suiteIDVector := []byte{0x48, 0x50, 0x4b, 0x45, 0x00, 0x20, 0x00, 0x01, 0x00, 0x01}
-	secret := hpke.LabeledExtractBytes(sharedSecret, "secret", nil, suiteIDVector)
+	secret := hpke.LabeledExtract(sharedSecret, "secret", nil, suiteIDVector)
 	actualSecretHex := hex.EncodeToString(secret)
 	if actualSecretHex != expectedSecretHex {
 		t.Fatalf("secret mismatch:\n  actual:   %s\n  expected: %s", actualSecretHex, expectedSecretHex)

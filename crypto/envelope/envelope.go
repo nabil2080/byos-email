@@ -346,7 +346,25 @@ func Unmarshal(data []byte) (*CryptoEnvelope, error) {
 }
 
 // UnmarshalCanonical parses JSON data into a CryptoEnvelope and runs full validation.
+// All 8 fields defined in BYOS-SPEC-CRYPTO-ENV-V1 §2.1 must be present:
+// "alg", "ciphertext", "enc", "key_epoch", "key_id", "nonce", "sig", "v".
 func UnmarshalCanonical(data []byte) (*CryptoEnvelope, error) {
+	if len(data) == 0 {
+		return nil, NewEnvelopeError(ErrCodeSerializationError, "empty envelope data")
+	}
+
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawMap); err != nil {
+		return nil, NewEnvelopeError(ErrCodeSerializationError, fmt.Sprintf("json decode failed: %v", err))
+	}
+
+	requiredFields := []string{"alg", "ciphertext", "enc", "key_epoch", "key_id", "nonce", "sig", "v"}
+	for _, field := range requiredFields {
+		if _, exists := rawMap[field]; !exists {
+			return nil, NewEnvelopeError(ErrCodeSerializationError, fmt.Sprintf("missing required envelope field: %q", field))
+		}
+	}
+
 	env, err := Unmarshal(data)
 	if err != nil {
 		return nil, err

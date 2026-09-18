@@ -21,25 +21,25 @@ import (
 // HPKE Suite Identifiers per RFC 9180 §7.1 - §7.3
 const (
 	KemID_DHKEM_X25519_HKDF_SHA256 = 0x0020
+	KemID_XWing                    = 0x647a
 	KdfID_HKDF_SHA256              = 0x0001
 	AeadID_AES_256_GCM             = 0x0002
 )
 
+// SuiteX25519 is the 10-byte HPKE suite identifier for HPKE-X25519-AES256GCM-v1:
+// "HPKE" || 0x0020 (KEM) || 0x0001 (KDF) || 0x0002 (AEAD)
+var SuiteX25519 = []byte{'H', 'P', 'K', 'E', 0x00, 0x20, 0x00, 0x01, 0x00, 0x02}
+
+// SuiteXWing is the 10-byte HPKE suite identifier for HPKE-XWing-AES256GCM-v1:
+// "HPKE" || 0x647a (KEM) || 0x0001 (KDF) || 0x0002 (AEAD)
+var SuiteXWing = []byte{'H', 'P', 'K', 'E', 0x64, 0x7a, 0x00, 0x01, 0x00, 0x02}
+
 // DHKEMX25519SuiteID is the 5-byte KEM suite identifier: "KEM" || 0x0020
 var DHKEMX25519SuiteID = []byte{0x4b, 0x45, 0x4d, 0x00, 0x20}
 
-// HPKEX25519SuiteID is the 10-byte HPKE suite identifier for HPKE-X25519-AES256GCM-v1:
-// "HPKE" || 0x0020 (KEM) || 0x0001 (KDF) || 0x0002 (AEAD)
-var HPKEX25519SuiteID = []byte{0x48, 0x50, 0x4b, 0x45, 0x00, 0x20, 0x00, 0x01, 0x00, 0x02}
-
 // LabeledExtract implements RFC 9180 §4:
 // LabeledExtract(salt, label, ikm) = HMAC-SHA256(salt, "HPKE-v1" || suite_id || label || ikm)
-func LabeledExtract(salt, label string, ikm []byte, suiteID []byte) []byte {
-	return LabeledExtractBytes([]byte(salt), label, ikm, suiteID)
-}
-
-// LabeledExtractBytes implements RFC 9180 §4 with byte-slice salt.
-func LabeledExtractBytes(salt []byte, label string, ikm []byte, suiteID []byte) []byte {
+func LabeledExtract(salt []byte, label string, ikm []byte, suiteID []byte) []byte {
 	mac := hmac.New(sha256.New, salt)
 	mac.Write([]byte("HPKE-v1"))
 	mac.Write(suiteID)
@@ -52,12 +52,7 @@ func LabeledExtractBytes(salt []byte, label string, ikm []byte, suiteID []byte) 
 
 // LabeledExpand implements RFC 9180 §4:
 // LabeledExpand(prk, label, info, L) = HKDF-Expand(prk, I2OSP(L,2) || "HPKE-v1" || suite_id || label || info, L)
-func LabeledExpand(prk, label string, info []byte, length int, suiteID []byte) []byte {
-	return LabeledExpandBytes([]byte(prk), label, info, length, suiteID)
-}
-
-// LabeledExpandBytes implements RFC 9180 §4 with byte-slice PRK.
-func LabeledExpandBytes(prk []byte, label string, info []byte, length int, suiteID []byte) []byte {
+func LabeledExpand(prk []byte, label string, info []byte, length int, suiteID []byte) []byte {
 	labeledInfo := make([]byte, 0, 2+7+len(suiteID)+len(label)+len(info))
 	lenBuf := make([]byte, 2)
 	binary.BigEndian.PutUint16(lenBuf, uint16(length))
@@ -103,32 +98,39 @@ func hkdfExpand(prk, info []byte, length int) ([]byte, error) {
 //	eae_prk = LabeledExtract("", "eae_prk", dh)
 //	shared_secret = LabeledExpand(eae_prk, "shared_secret", kem_context, Nsecret)
 func DHKEMExtractAndExpand(dh, enc, pkR []byte) []byte {
-	eaePRK := LabeledExtractBytes(nil, "eae_prk", dh, DHKEMX25519SuiteID)
+	eaePRK := LabeledExtract(nil, "eae_prk", dh, DHKEMX25519SuiteID)
 	kemContext := make([]byte, 0, len(enc)+len(pkR))
 	kemContext = append(kemContext, enc...)
 	kemContext = append(kemContext, pkR...)
-	return LabeledExpandBytes(eaePRK, "shared_secret", kemContext, 32, DHKEMX25519SuiteID)
+	return LabeledExpand(eaePRK, "shared_secret", kemContext, 32, DHKEMX25519SuiteID)
 }
 
-// DeriveKeySchedule derives the 32-byte AES-256-GCM symmetric key from sharedSecret
-// using RFC 9180 §5.1 key schedule primitives:
+// DeriveAEADKey derives the 32-byte AES-256-GCM symmetric key from sharedSecret
+// using RFC 9180 §5.1 key schedule primitives with the parameterized suiteID:
 //
 //	psk_id_hash = LabeledExtract("", "psk_id_hash", psk_id)
 //	info_hash = LabeledExtract("", "info_hash", info)
 //	key_schedule_context = concat(I2OSP(mode, 1), psk_id_hash, info_hash)
 //	secret = LabeledExtract(shared_secret, "secret", psk)
 //	key = LabeledExpand(secret, "key", key_schedule_context, 32)
-func DeriveKeySchedule(sharedSecret, info, suiteID []byte) []byte {
-	pskIDHash := LabeledExtractBytes(nil, "psk_id_hash", nil, suiteID)
-	infoHash := LabeledExtractBytes(nil, "info_hash", info, suiteID)
+func DeriveAEADKey(sharedSecret []byte, suiteID []byte) (key []byte, err error) {
+	if len(sharedSecret) == 0 {
+		return nil, errors.New("sharedSecret must not be empty")
+	}
+	if len(suiteID) == 0 {
+		return nil, errors.New("suiteID must not be empty")
+	}
+
+	pskIDHash := LabeledExtract(nil, "psk_id_hash", nil, suiteID)
+	infoHash := LabeledExtract(nil, "info_hash", nil, suiteID)
 
 	ksContext := make([]byte, 0, 1+len(pskIDHash)+len(infoHash))
 	ksContext = append(ksContext, 0x00) // Mode Base = 0x00
 	ksContext = append(ksContext, pskIDHash...)
 	ksContext = append(ksContext, infoHash...)
 
-	secret := LabeledExtractBytes(sharedSecret, "secret", nil, suiteID)
-	return LabeledExpandBytes(secret, "key", ksContext, 32, suiteID)
+	secret := LabeledExtract(sharedSecret, "secret", nil, suiteID)
+	return LabeledExpand(secret, "key", ksContext, 32, suiteID), nil
 }
 
 // GenerateKeyPairX25519 generates a fresh random X25519 key pair.
@@ -212,7 +214,7 @@ func DecapsulateX25519(recipientPriv, enc []byte) ([]byte, error) {
 
 // SealX25519 seals plaintext for recipientPub using HPKE-X25519-AES256GCM-v1:
 // 1. Encapsulates ephemeral key to obtain enc and sharedSecret.
-// 2. Derives 32-byte AES key via RFC 9180 key schedule with HPKEX25519SuiteID.
+// 2. Derives 32-byte AES key via DeriveAEADKey(sharedSecret, SuiteX25519).
 // 3. Generates 12-byte CSPRNG random nonce.
 // 4. Builds deterministic binary AAD binding envelope metadata.
 // 5. Encrypts plaintext with AES-256-GCM.
@@ -232,7 +234,10 @@ func SealX25519(recipientPub, plaintext []byte, keyID string, keyEpoch uint32) (
 		return nil, err
 	}
 
-	aesKey := DeriveKeySchedule(sharedSecret, nil, HPKEX25519SuiteID)
+	aesKey, err := DeriveAEADKey(sharedSecret, SuiteX25519)
+	if err != nil {
+		return nil, err
+	}
 
 	nonce := make([]byte, envelope.NonceSize)
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
@@ -290,7 +295,10 @@ func OpenX25519(recipientPriv []byte, env *envelope.CryptoEnvelope) ([]byte, err
 		return nil, err
 	}
 
-	aesKey := DeriveKeySchedule(sharedSecret, nil, HPKEX25519SuiteID)
+	aesKey, err := DeriveAEADKey(sharedSecret, SuiteX25519)
+	if err != nil {
+		return nil, err
+	}
 
 	aad, err := envelope.BuildAAD(env)
 	if err != nil {

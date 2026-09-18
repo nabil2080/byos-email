@@ -1,3 +1,7 @@
+// NOTE: ./services/outbound-worker/legacy is intentionally excluded.
+// It is a superseded legacy module on Go 1.22 with an old import path.
+// Do not add it to the workspace without migrating it first.
+
 go 1.27.0
 
 use (
