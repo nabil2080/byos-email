@@ -120,35 +120,157 @@ To prevent confusion with external draft iterations, algorithm identifiers use B
 | Identifier | Cryptographic Suite Definition | Upstream Specification |
 |---|---|---|
 | `HPKE-X25519-AES256GCM-v1` | RFC 9180 HPKE Mode `0x0000` (Base Mode):<br>&bull; KEM: `DHKEM(X25519, HKDF-SHA256)` (`0x0020`)<br>&bull; KDF: `HKDF-SHA256` (`0x0001`)<br>&bull; AEAD: `AES-256-GCM` (`0x0002`) | RFC 9180 |
-| `HPKE-XWing-AES256GCM-v1` | Post-Quantum Hybrid KEM:<br>&bull; Hybrid KEM: X25519 + ML-KEM-768 (FIPS 203)<br>&bull; Key Combiner: SHA3-256 with domain label `\./^`<br>&bull; AEAD: `AES-256-GCM` | draft-connolly-cfrg-xwing-kem-02 / FIPS 203 |
+| `HPKE-XWing-AES256GCM-v1` | Post-Quantum Hybrid KEM Suite:<br>&bull; Hybrid KEM: X-Wing (X25519 + ML-KEM-768, KEM ID `0x647a` = 25722)<br>&bull; KDF: `HKDF-SHA256` (`0x0001`)<br>&bull; AEAD: `AES-256-GCM` (`0x0002`)<br>&bull; Combiner: SHA3-256 with 6-byte suffix label `\./^\` | draft-connolly-cfrg-xwing-kem / FIPS 203 / RFC 9180 |
 
 ### 5.1 `HPKE-X25519-AES256GCM-v1` (Classical Standard)
-- **Library (Go):** `github.com/cloudflare/circl/hpke`
+- **Library (Go):** `github.com/cloudflare/circl/hpke` or `filippo.io/hpke`
 - **Library (Rust):** `hpke` crate (RFC 9180 compliant)
 - **Encapsulation (`enc`):** 32 bytes (raw ephemeral X25519 public key).
 - **Public Key:** 32 bytes (X25519 public key).
 - **Private Key:** 32 bytes (X25519 static secret).
 
 ### 5.2 `HPKE-XWing-AES256GCM-v1` (Post-Quantum Hybrid)
-- **Classical Primitive:** X25519 (32-byte secret, 32-byte public).
-- **Post-Quantum Primitive:** ML-KEM-768 per NIST FIPS 203:
-  - Public Key (`pk_M`): 1184 bytes.
+- **Classical Component:** X25519 per RFC 7748 (32-byte secret scalar, 32-byte public u-coordinate).
+- **Post-Quantum Component:** ML-KEM-768 per NIST FIPS 203:
+  - Public Encapsulation Key (`pk_M`): 1184 bytes.
   - Ciphertext (`ct_M`): 1088 bytes.
   - Shared Secret (`ss_M`): 32 bytes.
 - **Combined Public Key:** `pk_XWing = pk_M (1184 bytes) || pk_X (32 bytes)` = 1216 bytes.
 - **Combined Encapsulation (`enc`):** `enc = ct_M (1088 bytes) || ct_X (32 bytes)` = 1120 bytes.
-- **Exact Combiner Definition:**
+- **Exact Verbatim Combiner Definition (`draft-connolly-cfrg-xwing-kem` §5.3):**
+  ```python
+  def Combiner(ss_M, ss_X, ct_X, pk_X):
+      return SHA3-256(concat(
+          ss_M,        # ML-KEM-768 shared secret (32 bytes)
+          ss_X,        # X25519 shared secret (32 bytes)
+          ct_X,        # Ephemeral X25519 public key / ciphertext (32 bytes)
+          pk_X,        # Recipient classical X25519 public key (32 bytes)
+          XWingLabel   # 6-byte domain separation label (suffix)
+      ))
   ```
-  ss_combined = SHA3-256(
-      "\.//^\" ||          // 6-byte domain separation label (0x5c 0x2e 0x2f 0x2f 0x5e 0x22)
-      ss_M ||              // ML-KEM-768 shared secret (32 bytes)
-      ss_X ||              // X25519 shared secret (32 bytes)
-      ct_X ||              // Ephemeral X25519 public key (32 bytes)
-      pk_M ||              // Recipient ML-KEM-768 public key (1184 bytes)
-      ct_M                 // ML-KEM-768 ciphertext (1088 bytes)
-  )
+  Where `XWingLabel` is the 6-byte ASCII string `\./` + `/^\`, defined in hexadecimal as:
   ```
-  The resulting 32-byte `ss_combined` serves as the symmetric key for AES-256-GCM encryption with the binary AAD defined in Section 3.
+  5c 2e 2f 2f 5e 5c
+  ```
+  Total concatenated input length to `SHA3-256` is exactly $32 + 32 + 32 + 32 + 6 = 134\text{ bytes}$.
+
+  > [!IMPORTANT]
+  > **Combiner Invariants:**
+  > 1. `XWingLabel` MUST be placed as a **suffix** at the end of the concatenation buffer, matching `draft-connolly-cfrg-xwing-kem` (§5.3).
+  > 2. The ML-KEM-768 public key (`pk_M`) and ciphertext (`ct_M`) are **deliberately excluded** from the combiner hash. In X-Wing, ML-KEM's internal Fujisaki-Okamoto transform already provides ciphertext binding for the post-quantum component, making their inclusion redundant.
+
+### 5.3 HPKE Integration Architecture (Strategy Selection)
+
+This specification adopts **Strategy B: Modular KEM + RFC 9180 Key Schedule**:
+
+#### Architectural Comparison & Justification
+- **Strategy A ("Black-box HPKE Context"):** High-level HPKE APIs (e.g. `hpke.Seal()` / `sender.Seal()`) encapsulate AEAD nonce generation internally as `base_nonce ^ seq`. In standard HPKE, callers cannot supply an explicit 12-byte CSPRNG random nonce, nor can they access `base_nonce` prior to sealing in order to bind it into an external AAD buffer. Furthermore, in Go, the `filippo.io/hpke.KEM` interface contains unexported methods, preventing third-party KEM implementations, while `circl/hpke` uses a closed ciphersuite registry.
+- **Strategy B ("Modular KEM + RFC 9180 Key Schedule"):** Cleanly separates KEM encapsulation from symmetric envelope encryption:
+  1. X-Wing encapsulation is executed via standard KEM primitives to produce `(enc, ss_combined)`.
+  2. The 32-byte AES-256-GCM symmetric key is derived from `ss_combined` using RFC 9180 Section 5.1 key schedule primitives (`LabeledExtract` / `LabeledExpand`).
+  3. The 12-byte random nonce is generated via CSPRNG per Section 4.1.
+  4. The deterministic binary AAD is constructed per Section 3.1, binding `v`, `alg`, `key_id`, `key_epoch`, `enc`, and `nonce`.
+  5. The payload is encrypted with standard AES-256-GCM (`crypto/cipher` in Go, `aes-gcm` in Rust).
+
+This strategy guarantees 100% adherence to the frozen binary AAD and random nonce policy without requiring patched or unexported HPKE internals in either language.
+
+#### Key Schedule Derivation Steps
+1. **Inputs:**
+   - `ss_combined`: 32-byte combined shared secret from `Combiner(ss_M, ss_X, ct_X, pk_X)`.
+   - `suite_id`: RFC 9180 HPKE suite identifier for X-Wing + HKDF-SHA256 + AES-256-GCM:
+     ```
+     suite_id = concat("HPKE", I2OSP(0x647a, 2), I2OSP(0x0001, 2), I2OSP(0x0002, 2))
+     ```
+     Binary (10 bytes): `0x48 0x50 0x4b 0x45 0x64 0x7a 0x00 0x01 0x00 0x02`
+2. **Pseudorandom Key (PRK) Extraction:**
+   ```
+   PRK = HKDF-Extract(salt="", IKM=ss_combined)
+   ```
+   where `salt` is a zero-filled byte string of hash digest length (32 zero bytes).
+3. **AEAD Key Expansion:**
+   ```
+   key = LabeledExpand(PRK, "key", "", 32)
+   ```
+   where RFC 9180 `LabeledExpand(PRK, label, info, L)` is defined as:
+   ```
+   LabeledExpand(PRK, label, info, L) = HKDF-Expand(
+       PRK,
+       concat(I2OSP(L, 2), "HPKE-v1", suite_id, label, info),
+       L
+   )
+   ```
+   The resulting 32-byte `key` is the symmetric key for AES-256-GCM.
+4. **Nonce Generation & Role:**
+   Per Section 4.1, the 96-bit (12-byte) AES-GCM nonce is generated by a CSPRNG (`crypto/rand.Reader` in Go, `getrandom` in Rust) for each envelope, populated into the JSON `nonce` field, and bound at offset `pos..pos+12` of the binary AAD.
+5. **Role of Ephemeral Key:**
+   For every sealed envelope, the sender generates fresh ephemeral randomness:
+   - Ephemeral X25519 scalar $ek_X \in \mathbb{F}_p$ yielding ephemeral public key $ct_X = X25519(ek_X, 9)$.
+   - Ephemeral ML-KEM-768 randomness yielding $(ss_M, ct_M)$.
+   The ephemeral outputs are packed into `enc = ct_M || ct_X` (1120 bytes). Because $ek_X$ and $(ss_M, ct_M)$ are unique per message, $ss_{combined}$ and $key$ are unique per envelope, ensuring forward secrecy and preventing key reuse.
+
+### 5.4 X-Wing Wire Layout & Serialization Rules
+
+#### 1. Public Key (Encapsulation Key: 1216 Bytes)
+The X-Wing public key `pk_XWing` is the contiguous concatenation of the post-quantum encapsulation key and the classical public key:
+```
++-------------------------------------------------------------------------+
+| Byte Range      | Component | Size       | Encoding / Format            |
++-------------------------------------------------------------------------+
+| 0 .. 1183       | pk_M      | 1184 bytes | ML-KEM-768 Encapsulation Key |
+|                 |           |            | (FIPS 203 §7.1 polynomial)   |
++-------------------------------------------------------------------------+
+| 1184 .. 1215    | pk_X      | 32 bytes   | X25519 Public Key            |
+|                 |           |            | (RFC 7748 little-endian u)   |
++-------------------------------------------------------------------------+
+```
+
+#### 2. Ciphertext Wire Layout (`enc`: 1120 Bytes)
+The KEM encapsulation output stored in the envelope `enc` field (after Base64 decoding) is the contiguous concatenation of the post-quantum ciphertext and the classical ephemeral public key:
+```
++-------------------------------------------------------------------------+
+| Byte Range      | Component | Size       | Encoding / Format            |
++-------------------------------------------------------------------------+
+| 0 .. 1087       | ct_M      | 1088 bytes | ML-KEM-768 Ciphertext        |
+|                 |           |            | (FIPS 203 §7.2 compressed)   |
++-------------------------------------------------------------------------+
+| 1088 .. 1119    | ct_X      | 32 bytes   | Ephemeral X25519 Public Key  |
+|                 |           |            | (RFC 7748 little-endian u)   |
++-------------------------------------------------------------------------+
+```
+
+#### 3. Decapsulation Key (Private Key: 32 Bytes)
+In accordance with `draft-connolly-cfrg-xwing-kem` §5.1, the serialized X-Wing private key is a compact 32-byte random seed `sk`. Decapsulation expands this seed deterministically on demand:
+```python
+def expandDecapsulationKey(sk):
+    expanded = SHAKE256(sk, 96 * 8)  # 96 bytes = 768 bits
+    d = expanded[0:32]
+    z = expanded[32:64]
+    (pk_M, sk_M) = ML-KEM-768.KeyGen_internal(d, z)
+    sk_X = expanded[64:96]
+    pk_X = X25519(sk_X, 9)
+    return (sk_M, sk_X, pk_M, pk_X)
+```
+- Implementations MAY cache the expanded keys in memory during an active session.
+- Expanded private keys MUST NOT be serialized or transmitted across process boundaries.
+
+## 5.5 Decapsulation
+
+Given the 32-byte private key seed `sk_seed` and the envelope's raw `enc` 
+bytes (1120 bytes), the recipient reconstructs the combined shared secret:
+
+    Decapsulate(sk_seed, enc, pk_XWing):
+      (sk_M, sk_X, pk_M, pk_X) = expandDecapsulationKey(sk_seed)
+      ct_M = enc[0:1088]
+      ct_X = enc[1088:1120]
+      ss_M = ML-KEM-768.Decapsulate(sk_M, ct_M)
+      ss_X = X25519(sk_X, ct_X)
+      return Combiner(ss_M, ss_X, ct_X, pk_X)
+
+Where expandDecapsulationKey is defined in Section 5.4.
+
+Note: The recipient's pk_XWing (public key) is needed by the Combiner, but 
+it is not stored in the envelope. It must be derived from the recipient's 
+own private key during decapsulation.
 
 ---
 
@@ -257,4 +379,31 @@ The server and storage provider CANNOT observe:
 4. **Official Test Vector Compliance:**
    - ML-KEM-768 Known Answer Tests (NIST FIPS 203).
    - RFC 9180 HPKE test vectors.
+   - X-Wing hybrid KEM test vectors (`draft-connolly-cfrg-xwing-kem` Appendix C).
    - AES-GCM NIST SP 800-38D test vectors.
+
+---
+
+## 12. Test Vectors & Upstream Reference
+
+Implementations in both Go and Rust MUST validate their X-Wing combiner and key derivation against the official test vectors published in `draft-connolly-cfrg-xwing-kem` (Appendix C).
+
+### 12.1 Derandomized Test Vector 1 (`draft-connolly-cfrg-xwing-kem` Appendix C)
+
+Full test vectors are published in draft-connolly-cfrg-xwing-kem Appendix C. 
+Implementations MUST pass the derandomized test vector before any other 
+integration. During Phase 1, create testdata/xwing_vectors.json containing 
+the complete byte values from the draft's Appendix C. The truncated values 
+previously shown in this section are illustrative only.
+
+---
+
+## 13. Normative References
+
+1. **RFC 9180:** Hybrid Public Key Encryption (HPKE), February 2022.
+2. **NIST FIPS 203:** Module-Lattice-Based Key-Encapsulation Mechanism Standard (ML-KEM), August 2024.
+3. **draft-connolly-cfrg-xwing-kem-10:** X-Wing: general-purpose hybrid post-quantum KEM, March 2026.
+4. **RFC 7748:** Elliptic Curves for Security (X25519), January 2016.
+5. **NIST SP 800-38D:** Recommendation for Block Cipher Modes of Operation: Galois/Counter Mode (GCM).
+6. **RFC 5869:** HMAC-based Extract-and-Expand Key Derivation Function (HKDF), May 2010.
+
