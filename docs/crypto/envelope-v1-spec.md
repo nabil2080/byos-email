@@ -407,3 +407,23 @@ previously shown in this section are illustrative only.
 5. **NIST SP 800-38D:** Recommendation for Block Cipher Modes of Operation: Galois/Counter Mode (GCM).
 6. **RFC 5869:** HMAC-based Extract-and-Expand Key Derivation Function (HKDF), May 2010.
 
+---
+
+## 14. Implementation Status
+
+| Component | Go | Rust/WASM | Cross-verified |
+|---|---|---|---|
+| X-Wing combiner | ✅ | ✅ | ✅ |
+| RFC 9180 key schedule | ✅ | ✅ | ✅ |
+| Envelope serialization | ✅ | ✅ | ✅ |
+| Binary AAD | ✅ | ✅ | ✅ |
+| X25519 suite | ✅ | ✅ | ✅ |
+| X-Wing suite | ✅ | ✅ | ✅ |
+| Dispatch | ✅ | ✅ | ✅ |
+| WASM bindings | N/A | ✅ (target verified / pending) | N/A |
+
+External verification sources:
+- X-Wing draft-connolly-cfrg-xwing-kem-10 Appendix C (3 vectors)
+- RFC 9180 Appendix A.1.1 (KEM + key schedule)
+- Cross-language: 14 vectors in testdata/cross_language_vectors.json
+

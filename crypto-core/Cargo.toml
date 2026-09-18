@@ -1,0 +1,52 @@
+[package]
+name = "crypto-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# ML-KEM-768 (FIPS 203)
+ml-kem = { version = "0.3", features = ["hazmat", "zeroize", "getrandom"] }
+
+# X25519
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+
+# SHA-3 / SHAKE-256 for X-Wing combiner and key expansion
+sha3 = "0.10"
+
+# HKDF and SHA-256 for key schedule
+hkdf = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+
+# AES-256-GCM AEAD
+aes-gcm = "0.10"
+
+# Encoding
+base64 = "0.22"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Security
+zeroize = { version = "1", features = ["derive"] }
+
+# WASM
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+
+# Random generation
+rand_core = { version = "0.6", features = ["std"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
