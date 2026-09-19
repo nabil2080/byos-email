@@ -1,85 +1,79 @@
 ---
 import Layout from "../layouts/Layout.astro";
+import PageHeader from "../components/layout/PageHeader.astro";
 ---
 
-<Layout title="Security Architecture & Threat Model">
-  {/* Header */}
-  <section class="pt-20 pb-12 px-6 max-w-7xl mx-auto text-center ambient-glow">
-    <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#EAE3DB] border border-[#A47764]/40 text-[#A47764] text-xs font-mono font-semibold mb-6 shadow-xs">
-      <span>Frozen Specification &bull; Sections 0, 12, 15</span>
-    </div>
-    <h1 class="text-4xl sm:text-6xl font-extrabold text-[#242424] tracking-tight">
-      Zero-Trust Cryptographic Architecture
-    </h1>
-    <p class="mt-4 text-base sm:text-lg text-[#4A4A4A] max-w-2xl mx-auto">
-      BYOS is engineered around mathematical guarantees, not corporate promises. Persistent mailbox storage is segregated from key custody.
-    </p>
-  </section>
+<Layout title="Security Architecture & Privacy Guarantees">
+  <PageHeader
+    title="Private By Design. Not By Policy."
+    badge="Verified Security Architecture • Privacy by Default"
+    description="Most email providers promise they won't look at your emails. We designed BYOS so we mathematically couldn't, even if we wanted to."
+  />
 
-  {/* Visual Cryptographic Hierarchy Diagram (Mocha Mousse Secondary Section) */}
-  <section class="py-8 px-6 max-w-7xl mx-auto">
-    <div class="p-8 sm:p-12 rounded-3xl border border-[#D1C4B8] bg-[#E5DDD5] shadow-lg">
-      <div class="text-xs font-mono text-[#A47764] font-bold">SECTION 12 &bull; KEY DERIVATION HIERARCHY</div>
-      <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-[#242424]">The Seed-to-Mailbox Cryptographic Tree</h2>
-      <p class="mt-2 text-xs text-[#4A4A4A] max-w-2xl">
-        A single offline 24-word BIP39 mnemonic deterministically generates all cryptographic capabilities without ever transmitting the private root to the server.
+  {/* Visual Key Derivation Tree (Secondary Section) */}
+  <section id="architecture" class="py-8 px-6 max-w-7xl mx-auto">
+    <div class="p-8 sm:p-12 rounded-3xl border border-[#E2DFD8] bg-white shadow-xs">
+      <div class="text-xs font-mono text-[#9E725F] font-bold uppercase tracking-wider">Device Key Security</div>
+      <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-[#2B2C2D]">How Your Privacy Is Guaranteed</h2>
+      <p class="mt-2 text-xs sm:text-sm text-[#6F7173] max-w-2xl leading-relaxed">
+        Your email keys are generated right on your phone or computer. The master key never touches our servers.
       </p>
 
-      {/* Visual Tree */}
+      {/* Visual Flow Grid */}
       <div class="mt-8 grid grid-cols-1 md:grid-cols-4 gap-4">
         {/* Node 1 */}
-        <div class="p-5 rounded-2xl bg-[#F0EEE9] border-2 border-[#A47764] flex flex-col justify-between shadow-xs">
+        <div class="p-5 rounded-2xl bg-[#FBFBFA] border border-[#E2DFD8] flex flex-col justify-between shadow-2xs">
           <div>
-            <div class="text-[10px] font-mono text-[#A47764] font-bold">PRIMARY ENTROPY</div>
-            <div class="mt-1 font-bold text-sm text-[#242424]">24-Word BIP39 Seed</div>
-            <p class="mt-2 text-[11px] text-[#4A4A4A]">
-              256-bit cryptographic entropy stored offline on paper or hardware token.
+            <div class="text-[10px] font-mono text-[#9E725F] font-bold uppercase">1. Recovery Phrase</div>
+            <div class="mt-1 font-bold text-sm text-[#2B2C2D]">12/24-Word Secret Seed</div>
+            <p class="mt-2 text-[11px] text-[#6F7173] leading-relaxed">
+              Kept offline in your password manager or printed safely. Only you hold it.
             </p>
           </div>
-          <div class="mt-4 text-[10px] font-mono text-[#6E6E6E] pt-2 border-t border-[#D1C4B8]">
-            Client-Only Custody
+          <div class="mt-4 text-[10px] font-mono text-[#6F7173] pt-2 border-t border-[#E2DFD8]">
+            Your Possession Only
           </div>
         </div>
 
         {/* Node 2 */}
-        <div class="p-5 rounded-2xl bg-[#F0EEE9] border border-[#D1C4B8] flex flex-col justify-between shadow-xs">
+        <div class="p-5 rounded-2xl bg-[#FBFBFA] border border-[#E2DFD8] flex flex-col justify-between shadow-2xs">
           <div>
-            <div class="text-[10px] font-mono text-[#A47764] font-bold">DERIVATION STEP</div>
-            <div class="mt-1 font-bold text-sm text-[#242424]">Root Secret (HKDF)</div>
-            <p class="mt-2 text-[11px] text-[#4A4A4A]">
-              HKDF-SHA256 derivation with domain separation tag <code>&quot;byos-v1-root&quot;</code>.
+            <div class="text-[10px] font-mono text-[#9E725F] font-bold uppercase">2. In-Memory Key</div>
+            <div class="mt-1 font-bold text-sm text-[#2B2C2D]">Device Key Derivation</div>
+            <p class="mt-2 text-[11px] text-[#6F7173] leading-relaxed">
+              Derived securely inside your browser or email app while you are logged in.
             </p>
           </div>
-          <div class="mt-4 text-[10px] font-mono text-[#6E6E6E] pt-2 border-t border-[#D1C4B8]">
-            RFC 5869 KDF
+          <div class="mt-4 text-[10px] font-mono text-[#6F7173] pt-2 border-t border-[#E2DFD8]">
+            Never Transmitted
           </div>
         </div>
 
         {/* Node 3 */}
-        <div class="p-5 rounded-2xl bg-[#F0EEE9] border border-emerald-600/40 flex flex-col justify-between shadow-xs">
+        <div class="p-5 rounded-2xl bg-[#F3ECE8]/50 border-2 border-[#9E725F] flex flex-col justify-between shadow-2xs">
           <div>
-            <div class="text-[10px] font-mono text-emerald-700 font-bold">MAILBOX ENCRYPTION</div>
-            <div class="mt-1 font-bold text-sm text-[#242424]">X25519 HPKE Keypair</div>
-            <p class="mt-2 text-[11px] text-[#4A4A4A]">
-              Public key encrypts inbound mail payloads; private key unwraps in-memory on client.
+            <div class="text-[10px] font-mono text-[#9E725F] font-bold uppercase">3. Message Lock</div>
+            <div class="mt-1 font-bold text-sm text-[#2B2C2D]">Sealed Cloud Storage</div>
+            <p class="mt-2 text-[11px] text-[#6F7173] leading-relaxed">
+              Incoming emails are sealed before storage. Only your device key can open them.
             </p>
           </div>
-          <div class="mt-4 text-[10px] font-mono text-emerald-700 pt-2 border-t border-[#D1C4B8] font-medium">
-            RFC 9180 Standard
+          <div class="mt-4 text-[10px] font-mono text-emerald-700 pt-2 border-t border-[#9E725F]/30 font-medium">
+            100% Sealed on Cloud
           </div>
         </div>
 
         {/* Node 4 */}
-        <div class="p-5 rounded-2xl bg-[#F0EEE9] border border-[#D1C4B8] flex flex-col justify-between shadow-xs">
+        <div class="p-5 rounded-2xl bg-[#FBFBFA] border border-[#E2DFD8] flex flex-col justify-between shadow-2xs">
           <div>
-            <div class="text-[10px] font-mono text-[#A47764] font-bold">ACCOUNT RECOVERY</div>
-            <div class="mt-1 font-bold text-sm text-[#242424]">Ed25519 Auth Keypair</div>
-            <p class="mt-2 text-[11px] text-[#4A4A4A]">
-              Signs server challenge-response tokens during account recovery and root rotation.
+            <div class="text-[10px] font-mono text-[#9E725F] font-bold uppercase">4. Zero Plaintext Auth</div>
+            <div class="mt-1 font-bold text-sm text-[#2B2C2D]">Safe Sign-In Challenge</div>
+            <p class="mt-2 text-[11px] text-[#6F7173] leading-relaxed">
+              Authentication uses mathematical challenge-response so your password is never exposed.
             </p>
           </div>
-          <div class="mt-4 text-[10px] font-mono text-[#6E6E6E] pt-2 border-t border-[#D1C4B8]">
-            RFC 8032 Signature
+          <div class="mt-4 text-[10px] font-mono text-[#6F7173] pt-2 border-t border-[#E2DFD8]">
+            Protected Sign In
           </div>
         </div>
       </div>
@@ -87,55 +81,55 @@ import Layout from "../layouts/Layout.astro";
   </section>
 
   {/* Threat Scenarios Matrix */}
-  <section class="py-12 px-6 max-w-7xl mx-auto">
-    <h2 class="text-2xl sm:text-3xl font-bold text-[#242424] mb-6">Threat Scenarios &amp; Cryptographic Mitigations</h2>
+  <section id="threats" class="py-12 px-6 max-w-7xl mx-auto">
+    <h2 class="text-2xl sm:text-3xl font-bold text-[#2B2C2D] mb-6">Real-World Security Scenarios</h2>
     
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
       {/* Scenario 1 */}
-      <div class="p-6 rounded-3xl border border-[#D1C4B8] bg-[#EAE3DB] shadow-xs">
+      <div class="p-6 rounded-3xl border border-[#E2DFD8] bg-white shadow-xs">
         <div class="flex items-center gap-3">
-          <span class="p-2 rounded-lg bg-[#FAF8F5] border border-rose-300 text-rose-800 text-xs font-mono font-bold">THREAT 01</span>
-          <h3 class="font-bold text-base text-[#242424]">Total Control-Plane Database Leak</h3>
+          <span class="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-mono font-bold">SCENARIO 01</span>
+          <h3 class="font-bold text-base text-[#2B2C2D]">Server or Database Breach</h3>
         </div>
-        <div class="mt-4 space-y-2 text-xs text-[#4A4A4A]">
-          <p><strong>Attacker Capability:</strong> Full read access to PostgreSQL tables, API sessions, and routing records.</p>
-          <p class="text-emerald-800 font-medium"><strong>Mitigation Guarantee:</strong> Zero email bodies or attachments are stored in the database. All mailbox keys are stored as wrapped ciphertexts. An attacker gains only metadata and blind HMAC search tokens.</p>
+        <div class="mt-4 space-y-2 text-xs text-[#6F7173] leading-relaxed">
+          <p><strong class="text-[#2B2C2D]">Attacker Goal:</strong> Steal and inspect customer communications from central servers.</p>
+          <p class="text-emerald-800 font-medium"><strong>Our Guarantee:</strong> Zero email bodies or attachments live in the database. An intruder finds only unreadable locked blocks without keys to decode them.</p>
         </div>
       </div>
 
       {/* Scenario 2 */}
-      <div class="p-6 rounded-3xl border border-[#D1C4B8] bg-[#EAE3DB] shadow-xs">
+      <div class="p-6 rounded-3xl border border-[#E2DFD8] bg-white shadow-xs">
         <div class="flex items-center gap-3">
-          <span class="p-2 rounded-lg bg-[#FAF8F5] border border-rose-300 text-rose-800 text-xs font-mono font-bold">THREAT 02</span>
-          <h3 class="font-bold text-base text-[#242424]">Customer S3 Bucket Compromise</h3>
+          <span class="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-mono font-bold">SCENARIO 02</span>
+          <h3 class="font-bold text-base text-[#2B2C2D]">Cloud Bucket Compromise</h3>
         </div>
-        <div class="mt-4 space-y-2 text-xs text-[#4A4A4A]">
-          <p><strong>Attacker Capability:</strong> Direct unauthorized access to the customer&apos;s AWS S3 or MinIO bucket.</p>
-          <p class="text-emerald-800 font-medium"><strong>Mitigation Guarantee:</strong> Every object is an AES-256-GCM ciphertext encrypted with a random content key sealed under the recipient&apos;s HPKE public key. Without the offline client private key, the objects cannot be decrypted.</p>
+        <div class="mt-4 space-y-2 text-xs text-[#6F7173] leading-relaxed">
+          <p><strong class="text-[#2B2C2D]">Attacker Goal:</strong> Access files inside your Cloudflare R2 or Amazon S3 bucket directly.</p>
+          <p class="text-emerald-800 font-medium"><strong>Our Guarantee:</strong> Every file is individually encrypted with industry-standard AES-256. Without the key on your local device, all files are meaningless noise.</p>
         </div>
       </div>
 
       {/* Scenario 3 */}
-      <div class="p-6 rounded-3xl border border-[#D1C4B8] bg-[#EAE3DB] shadow-xs">
+      <div class="p-6 rounded-3xl border border-[#E2DFD8] bg-white shadow-xs">
         <div class="flex items-center gap-3">
-          <span class="p-2 rounded-lg bg-[#FAF8F5] border border-rose-300 text-rose-800 text-xs font-mono font-bold">THREAT 03</span>
-          <h3 class="font-bold text-base text-[#242424]">Stolen Laptop or Lost Client Device</h3>
+          <span class="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-mono font-bold">SCENARIO 03</span>
+          <h3 class="font-bold text-base text-[#2B2C2D]">Lost or Stolen Device</h3>
         </div>
-        <div class="mt-4 space-y-2 text-xs text-[#4A4A4A]">
-          <p><strong>Attacker Capability:</strong> Physical possession of an employee&apos;s workstation.</p>
-          <p class="text-emerald-800 font-medium"><strong>Mitigation Guarantee:</strong> Admin or user triggers instant session, device grant, and bridge token revocation. The user rotates their root secret using their 24-word seed, rendering cached tokens useless.</p>
+        <div class="mt-4 space-y-2 text-xs text-[#6F7173] leading-relaxed">
+          <p><strong class="text-[#2B2C2D]">Attacker Goal:</strong> Gain physical access to an employee&apos;s laptop or phone.</p>
+          <p class="text-emerald-800 font-medium"><strong>Our Guarantee:</strong> Organization admins can revoke the active session instantly from the control panel. Cached tokens are invalidated immediately.</p>
         </div>
       </div>
 
       {/* Scenario 4 */}
-      <div class="p-6 rounded-3xl border border-[#D1C4B8] bg-[#EAE3DB] shadow-xs">
+      <div class="p-6 rounded-3xl border border-[#E2DFD8] bg-white shadow-xs">
         <div class="flex items-center gap-3">
-          <span class="p-2 rounded-lg bg-[#FAF8F5] border border-rose-300 text-rose-800 text-xs font-mono font-bold">THREAT 04</span>
-          <h3 class="font-bold text-base text-[#242424]">Rogue Cloud / BYOS Infrastructure Admin</h3>
+          <span class="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-mono font-bold">SCENARIO 04</span>
+          <h3 class="font-bold text-base text-[#2B2C2D]">Rogue Server Administrator</h3>
         </div>
-        <div class="mt-4 space-y-2 text-xs text-[#4A4A4A]">
-          <p><strong>Attacker Capability:</strong> A rogue BYOS operator attempting to inspect customer mailboxes.</p>
-          <p class="text-emerald-800 font-medium"><strong>Mitigation Guarantee:</strong> Zero master decryption keys exist in the BYOS architecture. Inbound mail is encrypted transiently before upload to customer storage. The operator cannot decrypt historical mail.</p>
+        <div class="mt-4 space-y-2 text-xs text-[#6F7173] leading-relaxed">
+          <p><strong class="text-[#2B2C2D]">Attacker Goal:</strong> An internal operator or rogue engineer trying to inspect customer mail.</p>
+          <p class="text-emerald-800 font-medium"><strong>Our Guarantee:</strong> No master decryption keys exist in the BYOS infrastructure. BYOS employees cannot decrypt your historical or incoming messages.</p>
         </div>
       </div>
     </div>
@@ -143,29 +137,29 @@ import Layout from "../layouts/Layout.astro";
 
   {/* RFC Standards Table */}
   <section class="py-12 px-6 max-w-7xl mx-auto">
-    <div class="p-8 sm:p-10 rounded-3xl border border-[#D1C4B8] bg-[#E5DDD5]">
-      <h3 class="text-xl font-bold text-[#242424]">Frozen RFC Cryptographic Standards</h3>
-      <p class="mt-2 text-xs text-[#4A4A4A]">
-        We do not invent cryptographic protocols. Every primitive is verified against official RFC test vectors.
+    <div class="p-8 sm:p-10 rounded-3xl border border-[#E2DFD8] bg-white shadow-xs">
+      <h3 class="text-xl font-bold text-[#2B2C2D]">Open &amp; Audited Industry Standards</h3>
+      <p class="mt-2 text-xs sm:text-sm text-[#6F7173]">
+        We build upon open, battle-tested Internet Engineering Task Force (IETF) standards:
       </p>
 
       <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-        <div class="p-5 rounded-2xl bg-[#F0EEE9] border border-[#D1C4B8] shadow-xs">
-          <div class="font-mono text-[#A47764] font-bold">RFC 9180</div>
-          <div class="font-bold text-[#242424] mt-1">Hybrid Public Key Encryption</div>
-          <div class="text-[#6E6E6E] text-[11px] mt-1">DHKEM(X25519, HKDF-SHA256) + AES-256-GCM</div>
+        <div class="p-5 rounded-2xl bg-[#FBFBFA] border border-[#E2DFD8] shadow-2xs">
+          <div class="font-mono text-[#9E725F] font-bold">RFC 9180</div>
+          <div class="font-bold text-[#2B2C2D] mt-1">Hybrid Public Key Encryption</div>
+          <div class="text-[#6F7173] text-[11px] mt-1">Standard modern envelope encryption with AES-256-GCM.</div>
         </div>
 
-        <div class="p-5 rounded-2xl bg-[#F0EEE9] border border-[#D1C4B8] shadow-xs">
-          <div class="font-mono text-[#A47764] font-bold">RFC 8032</div>
-          <div class="font-bold text-[#242424] mt-1">Edwards-Curve Signatures</div>
-          <div class="text-[#6E6E6E] text-[11px] mt-1">Ed25519 for account recovery challenge-verify</div>
+        <div class="p-5 rounded-2xl bg-[#FBFBFA] border border-[#E2DFD8] shadow-2xs">
+          <div class="font-mono text-[#9E725F] font-bold">RFC 8032</div>
+          <div class="font-bold text-[#2B2C2D] mt-1">Edwards-Curve Signatures</div>
+          <div class="text-[#6F7173] text-[11px] mt-1">High-performance cryptographic verification for sign-ins.</div>
         </div>
 
-        <div class="p-5 rounded-2xl bg-[#F0EEE9] border border-[#D1C4B8] shadow-xs">
-          <div class="font-mono text-[#A47764] font-bold">RFC 6376</div>
-          <div class="font-bold text-[#242424] mt-1">DomainKeys Identified Mail</div>
-          <div class="text-[#6E6E6E] text-[11px] mt-1">RSA-2048 outbound cryptographic signing</div>
+        <div class="p-5 rounded-2xl bg-[#FBFBFA] border border-[#E2DFD8] shadow-2xs">
+          <div class="font-mono text-[#9E725F] font-bold">RFC 6376</div>
+          <div class="font-bold text-[#2B2C2D] mt-1">DomainKeys Identified Mail (DKIM)</div>
+          <div class="text-[#6F7173] text-[11px] mt-1">2048-bit digital signatures ensuring trusted inbox delivery.</div>
         </div>
       </div>
     </div>

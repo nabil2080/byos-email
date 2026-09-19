@@ -13,6 +13,8 @@ import RecoveryPage from "./routes/dashboard/recovery";
 import SecurityPage from "./routes/dashboard/security";
 import LoginPage from "./routes/login";
 import RegisterPage from "./routes/register";
+import OnboardingPricingPage from "./routes/onboarding/pricing";
+import OnboardingCheckoutPage from "./routes/onboarding/checkout";
 
 const ProtectedDashboard: Component<{ children?: JSX.Element }> = (props) => (
   <AuthGuard>
@@ -25,6 +27,8 @@ const App: Component = () => {
     <Router>
       <Route path="/login" component={LoginPage} />
       <Route path="/register" component={RegisterPage} />
+      <Route path="/onboarding/pricing" component={OnboardingPricingPage} />
+      <Route path="/onboarding/checkout" component={OnboardingCheckoutPage} />
       <Route path="/dashboard" component={ProtectedDashboard}>
         <Route path="/" component={DashboardOverview} />
         <Route path="/domains" component={DomainsPage} />

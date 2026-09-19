@@ -1,0 +1,21 @@
+{
+  "name": "byos-support-crm",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "solid-js": "^1.9.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.4.5",
+    "vite": "^6.2.0",
+    "vite-plugin-solid": "^2.10.2"
+  }
+}

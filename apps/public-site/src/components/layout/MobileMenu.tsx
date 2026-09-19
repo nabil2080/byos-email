@@ -1,0 +1,95 @@
+﻿import { createSignal, Show, onMount, onCleanup } from "solid-js";
+
+export function MobileMenu() {
+  const [isOpen, setIsOpen] = createSignal(false);
+  let menuRef: HTMLDivElement | undefined;
+
+  const toggleMenu = () => setIsOpen(!isOpen());
+  const closeMenu = () => setIsOpen(false);
+
+  onMount(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeMenu();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
+  });
+
+  const links = [
+    { label: "How It Works", href: "/#how-it-works" },
+    { label: "Cost Calculator", href: "/#pricing-calc" },
+    { label: "Features", href: "/#features" },
+    { label: "Pricing", href: "/pricing" },
+    { label: "Security", href: "/security" },
+    { label: "Docs", href: "/docs" },
+  ];
+
+  return (
+    <div class="md:hidden relative" ref={menuRef}>
+      {/* Mobile Toggle Button */}
+      <button
+        type="button"
+        onClick={toggleMenu}
+        class="p-2 rounded-xl border border-[#E2DFD8] bg-white text-[#2B2C2D] hover:bg-[#FAF9F6] transition-colors focus:outline-none focus:ring-2 focus:ring-[#9E725F]/30 cursor-pointer"
+        aria-label="Toggle mobile menu"
+        aria-expanded={isOpen()}
+      >
+        <Show
+          when={isOpen()}
+          fallback={
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="4" y1="6" x2="20" y2="6" />
+              <line x1="4" y1="12" x2="20" y2="12" />
+              <line x1="4" y1="18" x2="20" y2="18" />
+            </svg>
+          }
+        >
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </Show>
+      </button>
+
+      {/* Mobile Drawer Dropdown */}
+      <Show when={isOpen()}>
+        <div class="fixed inset-x-0 top-[65px] bg-[#F0EEE9]/95 backdrop-blur-lg border-b border-[#E2DFD8] shadow-xl z-50 p-6 space-y-4 animate-in fade-in slide-in-from-top-2 duration-150">
+          <nav class="flex flex-col space-y-3">
+            {links.map((link) => (
+              <a
+                href={link.href}
+                onClick={closeMenu}
+                class="text-base font-semibold text-[#2B2C2D] hover:text-[#9E725F] transition-colors py-2 px-3 rounded-xl hover:bg-white/60"
+              >
+                {link.label}
+              </a>
+            ))}
+          </nav>
+
+          <div class="pt-4 border-t border-[#E2DFD8] flex flex-col gap-2.5">
+            <a
+              href="http://127.0.0.1:3000/login"
+              class="w-full text-center py-2.5 rounded-xl border border-[#E2DFD8] bg-white text-xs font-bold text-[#2B2C2D] hover:bg-[#FAF9F6] transition-colors shadow-2xs"
+            >
+              Sign In to Control Panel
+            </a>
+            <a
+              href="/pricing"
+              class="w-full text-center py-2.5 rounded-xl bg-[#9E725F] text-white text-xs font-bold hover:bg-[#865E4D] transition-colors shadow-xs"
+            >
+              Get Started →
+            </a>
+          </div>
+
+          <div class="pt-2 flex items-center justify-between text-[11px] text-[#6F7173] font-mono">
+            <span class="flex items-center gap-1.5">
+              <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+              <span>All Systems Operational</span>
+            </span>
+            <span>0% Storage Markup</span>
+          </div>
+        </div>
+      </Show>
+    </div>
+  );
+}
