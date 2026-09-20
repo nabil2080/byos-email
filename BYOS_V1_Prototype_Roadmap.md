@@ -527,6 +527,50 @@ BYOS V1 Roadmap  |  Page 13
 
 BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP 
 
+**SECTION 7.6**
+
+### **Two Cryptographic Formats**
+
+BYOS uses two distinct cryptographic formats for two distinct purposes.
+
+**Format 1 — Storage encryption (binary)**
+
+Used for inbound external mail (from Gmail, Outlook, etc.) that has been
+received in plaintext by the inbound pipeline. The server re-encrypts it
+for storage in customer-controlled storage.
+
+- Purpose: encrypt at-rest for storage
+- Format: `version(1) || nonce(12) || ciphertext+tag(N)`
+- Wrapped content key: stored separately in `message_metadata.content_key_hpke_wrapped` in Postgres
+- Algorithm: DHKEM(X25519, HKDF-SHA256) + AES-256-GCM
+- Used by: `crypto-worker` (server-side), for all inbound mail
+
+**Format 2 — End-to-end envelope (JSON)**
+
+Used for internal BYOS-to-BYOS mail where the sender's client encrypts to
+the recipient's public key, and the outbound worker routes without
+decrypting.
+
+- Purpose: end-to-end encryption between BYOS users
+- Format: JSON with fields `v, alg, key_id, key_epoch, enc, nonce, ciphertext, sig`
+- Wrapped content key: embedded in the envelope's `enc` field
+- Algorithm: X-Wing hybrid KEM (X25519 + ML-KEM-768) via HPKE + AES-256-GCM
+- Used by: client (Rust/WASM) for internal mail composition, and
+  outbound worker for routing without decryption
+
+The formats are intentionally separate:
+- Storage encryption solves at-rest confidentiality for mail that BYOS
+  has already seen in plaintext.
+- End-to-end encryption solves confidentiality for mail that BYOS should
+  never see in plaintext.
+
+A future V1.5 goal is to unify them if doing so does not compromise the
+E2E guarantee.
+
+BYOS V1 Roadmap  |  Page 13a
+
+BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
+
 **SECTION 8** 
 
 ### **Outbound Trust, Abuse & Reputation Engine** 
@@ -745,6 +789,15 @@ Stable recovery root secret
 #### **V1 implementation status**
 
 The crypto core is implemented in both Go (server) and Rust/WASM (client). Both implementations are verified byte-for-byte identical across 14 cross-language test vectors. External verification includes X-Wing draft-10 Appendix C and RFC 9180 Appendix A.1.1.
+
+**Storage path (Format 1):** implemented and verified end-to-end in Step 3.
+Uses X25519-only classical HPKE for content key wrapping. The hybrid X-Wing
+path is implemented in crypto-core and verified against external test
+vectors but is not yet wired into the storage pipeline.
+
+**E2E path (Format 2):** spec complete at docs/crypto/envelope-v1-spec.md;
+implementation of the client-side encryption and outbound worker routing
+is pending.
 
 #### **Implementation gates still to resolve** 
 
