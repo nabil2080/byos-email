@@ -1,78 +1,558 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import { AnimatedHero } from "../components/hero/AnimatedHero";
-import { ProductShowcaseSlides } from "../components/features/ProductShowcaseSlides";
-import { ArchitectureComparison } from "../components/features/ArchitectureComparison";
-import { BentoGrid } from "../components/features/BentoGrid";
-import { HowItWorks } from "../components/interactive/HowItWorks";
-import { CostCalculator } from "../components/interactive/CostCalculator";
+import { BigIdeaSeparation } from "../components/interactive/BigIdeaSeparation";
+import { StorageConstellation } from "../components/interactive/StorageConstellation";
+import { InteropExplainer } from "../components/interactive/InteropExplainer";
+import { SeatCalculator } from "../components/interactive/SeatCalculator";
+
+const cpUrl = "http://127.0.0.1:3000";
+
+const trustPoints = [
+  "Customer-controlled storage",
+  "Encrypted mailbox data",
+  "Custom business domains",
+  "Standard email compatibility",
+  "Privacy-focused architecture",
+];
+
+const mailboxNav = [
+  { label: "Inbox", count: "24" },
+  { label: "Sent", count: "" },
+  { label: "Drafts", count: "3" },
+  { label: "Archive", count: "" },
+  { label: "Folders", count: "" },
+  { label: "Labels", count: "" },
+  { label: "Contacts", count: "" },
+];
+
+const mailboxCapabilities = [
+  "Inbox", "Sent", "Drafts", "Archive", "Folders", "Labels",
+  "Contacts", "Attachments", "Rules", "Scheduled send", "Signatures",
+];
+
+const clients = [
+  { name: "Outlook", note: "Desktop & web" },
+  { name: "Apple Mail", note: "macOS & iOS" },
+  { name: "Thunderbird", note: "Cross-platform" },
+  { name: "BYOS Webmail", note: "Built in" },
+];
+
+const adminItems = [
+  "Organizations", "Users", "Mailboxes", "Domains", "Aliases",
+  "Storage", "Policies", "Billing", "Security",
+];
+
+const migrationSteps = [
+  { n: "01", title: "Connect domain", body: "Point your business domain at BYOS with guided DNS records." },
+  { n: "02", title: "Connect storage", body: "Link the S3-compatible bucket or Drive you already control." },
+  { n: "03", title: "Create mailboxes", body: "Provision mailboxes, aliases, and signatures for your team." },
+  { n: "04", title: "Start using BYOS", body: "Send and receive through webmail or your existing client." },
+];
+
+const securityDocs = [
+  { label: "Security architecture", status: "Documented" },
+  { label: "Privacy boundaries", status: "Documented" },
+  { label: "Recovery model", status: "Designed" },
+  { label: "Storage model", status: "Implemented" },
+  { label: "Interoperability limits", status: "Documented" },
+  { label: "Threat model", status: "Under review" },
+];
+
+const statusTone: Record<string, string> = {
+  Implemented: "border-[#9E725F]/30 bg-[#F3ECE8] text-[#865E4D]",
+  Documented: "border-[#E2DFD8] bg-white text-[#6F7173]",
+  Designed: "border-[#E2DFD8] bg-white text-[#6F7173]",
+  "Under review": "border-[#E2DFD8] bg-white text-[#8B8E91]",
+};
 ---
 
-<Layout title="Business Email You Actually Own | Zero Storage Markup">
-  {/* Ultra-Premium Hero Banner with Interactive Delivery Simulation */}
+<Layout
+  title="BYOS Business Email | Your Email. Your Storage. Your Control."
+  description="Professional business email with custom domains, powerful mailbox tools, customer-controlled storage, and privacy-focused architecture."
+>
+  {/* 1 — Hero */}
   <AnimatedHero client:load />
 
-  {/* Interactive Product Showcase UI Tour Carousel */}
-  <ProductShowcaseSlides client:visible />
+  {/* 10 — Trust strip */}
+  <section class="border-y border-[#E2DFD8] bg-[#F0EEE9]">
+    <div class="mx-auto max-w-7xl px-6">
+      <ul class="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 py-5 divide-[#E2DFD8]">
+        {trustPoints.map((point, i) => (
+          <li class="flex items-center gap-8">
+            {i > 0 && <span class="hidden sm:block h-3 w-px bg-[#E2DFD8]" aria-hidden="true"></span>}
+            <span class="text-[11px] font-medium uppercase tracking-[0.14em] text-[#6F7173]">
+              {point}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </section>
 
-  {/* Side-by-Side Comparison: Traditional Big Tech vs BYOS */}
-  <ArchitectureComparison client:visible />
+  {/* 11 — The big idea */}
+  <section class="relative overflow-hidden py-24 sm:py-32">
+    <div class="absolute inset-0 bg-editorial-rules opacity-60 pointer-events-none" aria-hidden="true"></div>
+    <div class="relative mx-auto max-w-7xl px-6 grid lg:grid-cols-2 gap-16 items-center">
+      <div data-reveal>
+        <span class="eyebrow">The idea</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl lg:text-[3.5rem] font-extrabold leading-[1.05] text-[#2B2C2D]">
+          Your email shouldn't decide where your data lives.
+        </h2>
+        <p class="mt-6 max-w-lg text-lg text-[#6F7173] leading-relaxed">
+          Most providers bundle the mailbox and the storage together, so leaving means losing
+          access. BYOS keeps the two separate: we run the service, and your persistent mailbox
+          data stays in storage you control.
+        </p>
+      </div>
+      <div data-reveal style="--reveal-delay: 120ms">
+        <BigIdeaSeparation client:visible />
+      </div>
+    </div>
+  </section>
 
-  {/* High-Impact 4-Cell Bento Feature Grid */}
-  <BentoGrid client:visible />
+  {/* 12 — How BYOS works */}
+  <section id="how-it-works" class="scroll-mt-24 py-24 sm:py-28 bg-[#F0EEE9] border-t border-[#E2DFD8]">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="max-w-2xl" data-reveal>
+        <span class="eyebrow">How it works</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold text-[#2B2C2D] leading-[1.06]">
+          Normal email on the outside. Your control underneath.
+        </h2>
+      </div>
 
-  {/* Section: Interactive 3-Step Setup Walkthrough */}
-  <section id="how-it-works" class="py-20 px-6 max-w-7xl mx-auto scroll-mt-20">
-    <div class="text-center max-w-2xl mx-auto mb-12">
-      <span class="text-xs uppercase tracking-widest font-mono text-[#9E725F] font-bold">
-        Simple 3-Step Setup
-      </span>
-      <h2 class="text-3xl sm:text-5xl font-extrabold text-[#2B2C2D] mt-2 tracking-tight">
-        How BYOS Email Works
-      </h2>
-      <p class="text-sm sm:text-base text-[#6F7173] mt-3">
-        Email transport decoupled from storage custody. Setup takes under 5 minutes.
+      <div class="mt-14 grid gap-4 md:grid-cols-4">
+        {[
+          { k: "Your domain", v: "company.com", d: "Your business identity and addresses." },
+          { k: "BYOS", v: "Email infrastructure", d: "Delivery, mailboxes, and interoperability." },
+          { k: "Your mailbox", v: "you@company.com", d: "Inbox, folders, rules, and signatures." },
+          { k: "Your storage", v: "S3 · Drive · R2", d: "Persistent data you own and can leave with." },
+        ].map((step, i) => (
+          <div class="relative" data-reveal style={`--reveal-delay: ${i * 110}ms`}>
+            <div class="card-editorial h-full p-6">
+              <span class="text-[11px] font-mono uppercase tracking-widest text-[#9E725F]">
+                Step {i + 1}
+              </span>
+              <h3 class="mt-3 font-display text-xl font-bold text-[#2B2C2D]">{step.k}</h3>
+              <p class="mt-0.5 text-sm font-mono text-[#6F7173]">{step.v}</p>
+              <p class="mt-3 text-sm text-[#6F7173] leading-relaxed">{step.d}</p>
+            </div>
+            {i < 3 && (
+              <div class="hidden md:flex absolute top-1/2 -right-2.5 z-10 -translate-y-1/2 h-5 w-5 items-center justify-center rounded-full bg-[#9E725F] text-white text-xs" aria-hidden="true">
+                &rarr;
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <p class="mt-8 max-w-2xl text-base text-[#6F7173] leading-relaxed" data-reveal>
+        BYOS handles the email infrastructure. You control where your persistent mailbox data
+        lives. That single decision is what makes BYOS different.
       </p>
     </div>
-
-    {/* Interactive Setup Walkthrough */}
-    <HowItWorks client:visible />
   </section>
 
-  {/* Section: Dynamic Cost Calculator */}
-  <section id="pricing-calc" class="py-20 px-6 max-w-7xl mx-auto scroll-mt-20">
-    <CostCalculator client:visible />
-  </section>
-
-  {/* Call To Action Banner */}
-  <section class="pt-20 pb-12 bg-[#2B2C2D] text-white relative overflow-hidden">
-    {/* Decorative Glow */}
-    <div class="absolute -top-24 -right-24 w-80 h-80 bg-[#9E725F]/20 rounded-full blur-3xl pointer-events-none"></div>
-    <div class="absolute -bottom-24 -left-24 w-80 h-80 bg-[#9E725F]/15 rounded-full blur-3xl pointer-events-none"></div>
-
-    <div class="max-w-3xl mx-auto px-6 text-center space-y-6 relative z-10">
-      <div class="space-y-3">
-        <h2 class="text-2xl sm:text-4xl font-extrabold tracking-tight">
-          Ready to Take Back Control of Your Business Email?
+  {/* 13/14 — Product: custom business email (text left / UI right) */}
+  <section id="features" class="scroll-mt-24 py-24 sm:py-32 border-t border-[#E2DFD8]">
+    <div class="mx-auto max-w-7xl px-6 grid lg:grid-cols-2 gap-14 items-center">
+      <div data-reveal>
+        <span class="eyebrow">Custom business email</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold text-[#2B2C2D] leading-[1.06]">
+          Professional from the address onward.
         </h2>
-        <p class="text-xs sm:text-sm text-stone-300 max-w-lg mx-auto leading-relaxed">
-          Save up to 80% on company email bills while keeping all your communications private and stored in your own cloud.
+        <p class="mt-6 max-w-lg text-lg text-[#6F7173] leading-relaxed">
+          Bring your own domain and give every role a real business identity. Add aliases,
+          mailbox identities, and polished signatures without touching a mail server.
+        </p>
+        <ul class="mt-8 space-y-2.5">
+          {["Custom domains", "Aliases", "Mailbox identities", "Signatures"].map((f) => (
+            <li class="flex items-center gap-3 text-[#3C3D3E]">
+              <span class="flex h-5 w-5 items-center justify-center rounded-full bg-[#F3ECE8] text-[#9E725F] text-xs">&#10003;</span>
+              <span class="text-sm font-medium">{f}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Domain management UI mock */}
+      <div data-reveal style="--reveal-delay: 120ms">
+        <div class="card-editorial overflow-hidden">
+          <div class="flex items-center justify-between border-b border-[#E2DFD8] px-5 py-3.5">
+            <span class="text-sm font-semibold text-[#2B2C2D]">Domains &amp; addresses</span>
+            <span class="rounded-full border border-[#9E725F]/30 bg-[#F3ECE8] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#865E4D]">
+              company.com verified
+            </span>
+          </div>
+          <div class="divide-y divide-[#E2DFD8]">
+            {["hello@company.com", "sales@company.com", "support@company.com"].map((addr, i) => (
+              <div class="flex items-center justify-between px-5 py-4" data-reveal style={`--reveal-delay: ${200 + i * 120}ms`}>
+                <div class="flex items-center gap-3">
+                  <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-[#F4F2EC] border border-[#E2DFD8] text-[#9E725F] text-xs font-bold">
+                    {addr.charAt(0).toUpperCase()}
+                  </span>
+                  <span class="text-sm font-medium text-[#2B2C2D] font-mono">{addr}</span>
+                </div>
+                <span class="text-[11px] font-mono uppercase tracking-widest text-[#6F7173]">
+                  {i === 0 ? "Mailbox" : "Alias"}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div class="border-t border-[#E2DFD8] bg-[#F4F2EC] px-5 py-3 text-[11px] font-mono text-[#6F7173]">
+            Signature &middot; DKIM &middot; SPF configured
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {/* 15 — Full mailbox experience (UI left / text right) */}
+  <section class="py-24 sm:py-32 bg-[#F0EEE9] border-t border-[#E2DFD8]">
+    <div class="mx-auto max-w-7xl px-6 grid lg:grid-cols-2 gap-14 items-center">
+      {/* Mailbox UI mock */}
+      <div class="order-2 lg:order-1" data-reveal>
+        <div class="card-editorial overflow-hidden">
+          <div class="flex items-center gap-2 border-b border-[#E2DFD8] px-4 py-3">
+            <span class="h-2.5 w-2.5 rounded-full bg-[#E2DFD8]"></span>
+            <span class="h-2.5 w-2.5 rounded-full bg-[#E2DFD8]"></span>
+            <span class="h-2.5 w-2.5 rounded-full bg-[#E2DFD8]"></span>
+            <span class="ml-3 text-xs font-mono text-[#6F7173]">BYOS Webmail</span>
+          </div>
+          <div class="grid grid-cols-[130px_1fr]">
+            <aside class="border-r border-[#E2DFD8] bg-[#F4F2EC] p-3 space-y-0.5">
+              {mailboxNav.map((item, i) => (
+                <div class={`flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs ${i === 0 ? "bg-[#9E725F] text-white font-semibold" : "text-[#3C3D3E]"}`}>
+                  <span>{item.label}</span>
+                  {item.count && (
+                    <span class={`text-[10px] ${i === 0 ? "text-white/80" : "text-[#6F7173]"}`}>{item.count}</span>
+                  )}
+                </div>
+              ))}
+            </aside>
+            <div class="divide-y divide-[#E2DFD8]">
+              {[
+                { from: "Maria Chen", subj: "Q3 board deck — final", time: "9:41", unread: true },
+                { from: "Billing", subj: "Invoice #2048 scheduled", time: "8:12", unread: false },
+                { from: "Dev Team", subj: "Release notes for review", time: "Yest", unread: false },
+                { from: "Priya N.", subj: "Re: Contract redlines", time: "Yest", unread: false },
+              ].map((m) => (
+                <div class="flex items-center gap-3 px-4 py-3">
+                  <span class={`h-1.5 w-1.5 rounded-full ${m.unread ? "bg-[#9E725F]" : "bg-transparent"}`}></span>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between">
+                      <span class={`text-xs ${m.unread ? "font-bold text-[#2B2C2D]" : "font-medium text-[#3C3D3E]"}`}>{m.from}</span>
+                      <span class="text-[10px] text-[#8B8E91]">{m.time}</span>
+                    </div>
+                    <div class="truncate text-xs text-[#6F7173]">{m.subj}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="order-1 lg:order-2" data-reveal style="--reveal-delay: 120ms">
+        <span class="eyebrow">Full mailbox experience</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold text-[#2B2C2D] leading-[1.06]">
+          Everything your team expects from business email.
+        </h2>
+        <p class="mt-6 max-w-lg text-lg text-[#6F7173] leading-relaxed">
+          A complete, believable mailbox — not a stripped-down privacy experiment. The tools your
+          team already relies on, working the way they expect.
+        </p>
+        <div class="mt-8 flex flex-wrap gap-2">
+          {mailboxCapabilities.map((c) => (
+            <span class="rounded-full border border-[#E2DFD8] bg-white px-3 py-1.5 text-xs font-medium text-[#3C3D3E]">
+              {c}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {/* 16/17 — Storage (Soft Badge Tint) */}
+  <section class="py-24 sm:py-32 bg-[#F3ECE8] border-t border-[#E2DFD8]">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="max-w-2xl" data-reveal>
+        <span class="eyebrow">Storage</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold text-[#2B2C2D] leading-[1.06]">
+          Keep your mailbox where you control it.
+        </h2>
+        <p class="mt-6 text-lg text-[#6F7173] leading-relaxed">
+          Connect the storage you already trust. BYOS uses a provider-neutral interface, so your
+          persistent mailbox data stays under your account, not locked inside ours.
+        </p>
+      </div>
+      <div class="mt-14" data-reveal style="--reveal-delay: 120ms">
+        <StorageConstellation client:visible />
+      </div>
+    </div>
+  </section>
+
+  {/* 18/19 — Privacy (Charcoal) */}
+  <section id="privacy-section" class="py-24 sm:py-32 bg-[#3C3D3E] text-[#F0EEE9]">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="max-w-2xl" data-reveal>
+        <span class="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#C89F8D]">Privacy</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold leading-[1.06]">
+          Privacy that works quietly.
+        </h2>
+        <p class="mt-6 text-lg text-[#F0EEE9]/70 leading-relaxed">
+          Your team gets ordinary business email. The privacy architecture works underneath.
         </p>
       </div>
 
-      <div class="flex flex-wrap items-center justify-center gap-4 pt-2">
-        <a
-          href="/pricing"
-          class="rounded-xl bg-[#9E725F] px-8 py-3.5 text-sm font-semibold text-white shadow-sm hover:bg-[#865E4D] transition-all hover:scale-[1.02] active:scale-[0.98]"
-        >
-          Calculate Capacity &amp; Start →
-        </a>
-        <a
-          href="http://127.0.0.1:3000/login"
-          class="rounded-xl border border-stone-600 bg-stone-800/80 px-6 py-3.5 text-sm font-semibold text-stone-200 hover:bg-stone-700 hover:text-white transition-all"
-        >
-          Sign In to Account
-        </a>
+      <div class="mt-14 grid gap-4 md:grid-cols-3">
+        {[
+          { t: "Encrypted storage", d: "Persistent mailbox content can remain encrypted in customer-controlled storage." },
+          { t: "Stronger internal privacy", d: "Mail between BYOS users can use end-to-end protection." },
+          { t: "Control", d: "The customer controls the persistent storage layer." },
+        ].map((c, i) => (
+          <div class="rounded-[18px] border border-white/10 bg-white/5 p-7" data-reveal style={`--reveal-delay: ${i * 110}ms`}>
+            <div class="mb-4 h-8 w-8 rounded-lg border border-[#9E725F]/40 bg-[#9E725F]/20 flex items-center justify-center">
+              <span class="h-2 w-2 rounded-sm bg-[#C89F8D]"></span>
+            </div>
+            <h3 class="font-display text-xl font-bold">{c.t}</h3>
+            <p class="mt-2 text-sm text-[#F0EEE9]/65 leading-relaxed">{c.d}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  {/* 20 — Honest interoperability */}
+  <section class="py-24 sm:py-28 border-t border-[#E2DFD8]">
+    <div class="mx-auto max-w-4xl px-6">
+      <div class="max-w-2xl mb-10" data-reveal>
+        <span class="eyebrow">Honest by design</span>
+        <h2 class="mt-4 font-display text-3xl sm:text-4xl font-extrabold text-[#2B2C2D] leading-[1.08]">
+          We tell you where protection ends.
+        </h2>
+        <p class="mt-4 text-base text-[#6F7173] leading-relaxed">
+          Internal BYOS mail and external internet email have different privacy boundaries. Toggle
+          below to see exactly which is which.
+        </p>
+      </div>
+      <div data-reveal style="--reveal-delay: 100ms">
+        <InteropExplainer client:visible />
+      </div>
+    </div>
+  </section>
+
+  {/* 21 — Compatibility */}
+  <section class="py-24 sm:py-32 bg-[#F0EEE9] border-t border-[#E2DFD8]">
+    <div class="mx-auto max-w-7xl px-6 grid lg:grid-cols-2 gap-14 items-center">
+      <div data-reveal>
+        <span class="eyebrow">Compatibility</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold text-[#2B2C2D] leading-[1.06]">
+          Keep using the email tools your team already knows.
+        </h2>
+        <p class="mt-6 max-w-lg text-lg text-[#6F7173] leading-relaxed">
+          BYOS is designed to work with normal email workflows through standard protocols and a
+          Bridge, instead of locking your team into one interface.
+        </p>
+      </div>
+      <div class="grid grid-cols-2 gap-4" data-reveal style="--reveal-delay: 120ms">
+        {clients.map((c, i) => (
+          <div class="card-editorial p-6" data-reveal style={`--reveal-delay: ${i * 100}ms`}>
+            <div class="mb-4 h-10 w-10 rounded-xl border border-[#E2DFD8] bg-[#F4F2EC] flex items-center justify-center">
+              <span class="h-3 w-3 rounded-sm bg-[#9E725F]"></span>
+            </div>
+            <h3 class="font-display text-lg font-bold text-[#2B2C2D]">{c.name}</h3>
+            <p class="mt-0.5 text-xs text-[#6F7173]">{c.note}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  {/* 22 — Organization management (Soft Badge Tint) */}
+  <section class="py-24 sm:py-32 bg-[#F3ECE8] border-t border-[#E2DFD8]">
+    <div class="mx-auto max-w-7xl px-6 grid lg:grid-cols-2 gap-14 items-start">
+      <div data-reveal>
+        <span class="eyebrow">Administration</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold text-[#2B2C2D] leading-[1.06]">
+          One place for your entire organization.
+        </h2>
+        <p class="mt-6 max-w-lg text-lg text-[#6F7173] leading-relaxed">
+          Manage domains, mailboxes, storage, and policy from a single admin surface — with two
+          account modes that match how your business needs to operate.
+        </p>
+
+        <div class="mt-8 grid sm:grid-cols-2 gap-4">
+          <div class="rounded-[16px] border border-[#9E725F]/25 bg-white p-5">
+            <h3 class="font-display text-lg font-bold text-[#2B2C2D]">Organization-managed</h3>
+            <p class="mt-2 text-sm text-[#6F7173] leading-relaxed">
+              Designed for business continuity and authorized organizational recovery.
+            </p>
+          </div>
+          <div class="rounded-[16px] border border-[#E2DFD8] bg-white p-5">
+            <h3 class="font-display text-lg font-bold text-[#2B2C2D]">Private</h3>
+            <p class="mt-2 text-sm text-[#6F7173] leading-relaxed">
+              Designed for stronger separation from automatic administrator access.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Admin dashboard mock */}
+      <div data-reveal style="--reveal-delay: 120ms">
+        <div class="card-editorial overflow-hidden">
+          <div class="flex items-center justify-between border-b border-[#E2DFD8] px-5 py-3.5">
+            <span class="text-sm font-semibold text-[#2B2C2D]">Organization</span>
+            <span class="text-[11px] font-mono text-[#6F7173]">Admin console</span>
+          </div>
+          <div class="grid grid-cols-3 gap-px bg-[#E2DFD8]">
+            {adminItems.map((item) => (
+              <div class="bg-white p-4">
+                <div class="text-[11px] font-mono uppercase tracking-widest text-[#8B8E91]">{item}</div>
+                <div class="mt-1.5 h-1.5 w-8 rounded-full bg-[#F3ECE8]"></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {/* 23 — Recovery / freedom of exit */}
+  <section class="py-24 sm:py-32 border-t border-[#E2DFD8]">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="max-w-2xl" data-reveal>
+        <span class="eyebrow">Freedom of exit</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold text-[#2B2C2D] leading-[1.06]">
+          Your business data shouldn't become a hostage.
+        </h2>
+        <p class="mt-6 text-lg text-[#6F7173] leading-relaxed">
+          BYOS is designed with an independent recovery and export path so your mailbox is not
+          permanently dependent on the service.
+        </p>
+      </div>
+
+      <div class="mt-14 grid gap-4 md:grid-cols-4" data-reveal style="--reveal-delay: 100ms">
+        {[
+          { t: "Customer storage", d: "Your data already lives in storage you control." },
+          { t: "Recovery", d: "An independent path to reach it." },
+          { t: "Export", d: "Take your mailbox with you." },
+          { t: "Independent access", d: "Not locked to the platform." },
+        ].map((s, i) => (
+          <div class="relative card-editorial p-6" data-reveal style={`--reveal-delay: ${i * 100}ms`}>
+            <span class="text-[11px] font-mono uppercase tracking-widest text-[#9E725F]">{`0${i + 1}`}</span>
+            <h3 class="mt-3 font-display text-lg font-bold text-[#2B2C2D]">{s.t}</h3>
+            <p class="mt-2 text-sm text-[#6F7173] leading-relaxed">{s.d}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  {/* 24 — Security proof */}
+  <section id="security-proof" class="py-24 sm:py-32 bg-[#F0EEE9] border-t border-[#E2DFD8]">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="max-w-2xl" data-reveal>
+        <span class="eyebrow">Security</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold text-[#2B2C2D] leading-[1.06]">
+          Security you can actually inspect.
+        </h2>
+        <p class="mt-6 text-lg text-[#6F7173] leading-relaxed">
+          We publish the architecture and its boundaries so both business owners and technical
+          buyers can evaluate BYOS honestly. Independent security review is required before
+          production launch and is not yet complete.
+        </p>
+      </div>
+
+      <div class="mt-14 grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-reveal style="--reveal-delay: 100ms">
+        {securityDocs.map((doc, i) => (
+          <a
+            href="/security"
+            class="group card-editorial flex items-center justify-between p-5 card-hover-elevate"
+            data-reveal
+            style={`--reveal-delay: ${i * 80}ms`}
+          >
+            <span class="text-sm font-semibold text-[#2B2C2D] group-hover:text-[#9E725F] transition-colors">
+              {doc.label}
+            </span>
+            <span class={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${statusTone[doc.status]}`}>
+              {doc.status}
+            </span>
+          </a>
+        ))}
+      </div>
+
+      <div class="mt-8 flex flex-wrap gap-3" data-reveal>
+        <a href="/security" class="px-6 py-3 btn-primary text-sm font-semibold">Explore Security</a>
+        <a href="/docs" class="px-6 py-3 rounded-[10px] border border-[#E2DFD8] bg-white text-sm font-semibold text-[#2B2C2D] transition-all hover:border-[#9E725F]/40">Read the docs</a>
+      </div>
+    </div>
+  </section>
+
+  {/* 25 — Pricing */}
+  <section id="pricing-calc" class="scroll-mt-24 py-24 sm:py-32 border-t border-[#E2DFD8]">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="max-w-2xl mb-12" data-reveal>
+        <span class="eyebrow">Pricing</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold text-[#2B2C2D] leading-[1.06]">
+          One complete product. Better pricing as you grow.
+        </h2>
+        <p class="mt-6 text-lg text-[#6F7173] leading-relaxed">
+          No tiers to decode and no feature walls. Every seat gets the full product, and your rate
+          improves automatically as your team grows.
+        </p>
+      </div>
+      <div data-reveal style="--reveal-delay: 100ms">
+        <SeatCalculator client:visible />
+      </div>
+    </div>
+  </section>
+
+  {/* 26 — Migration */}
+  <section class="py-24 sm:py-32 bg-[#F0EEE9] border-t border-[#E2DFD8]">
+    <div class="mx-auto max-w-7xl px-6">
+      <div class="max-w-2xl" data-reveal>
+        <span class="eyebrow">Migration</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold text-[#2B2C2D] leading-[1.06]">
+          Switching shouldn't be the difficult part.
+        </h2>
+        <p class="mt-6 text-lg text-[#6F7173] leading-relaxed">
+          Four clear steps to move your business onto BYOS. We won't pretend it's one click — we'll
+          just make each step straightforward.
+        </p>
+      </div>
+
+      <div class="mt-14 grid gap-4 md:grid-cols-4">
+        {migrationSteps.map((s, i) => (
+          <div class="relative" data-reveal style={`--reveal-delay: ${i * 110}ms`}>
+            <div class="card-editorial h-full p-6">
+              <span class="font-display text-3xl font-extrabold text-[#E2DFD8]">{s.n}</span>
+              <h3 class="mt-2 font-display text-lg font-bold text-[#2B2C2D]">{s.title}</h3>
+              <p class="mt-2 text-sm text-[#6F7173] leading-relaxed">{s.body}</p>
+            </div>
+            {i < migrationSteps.length - 1 && (
+              <div class="hidden md:flex absolute top-1/2 -right-2.5 z-10 -translate-y-1/2 h-5 w-5 items-center justify-center rounded-full bg-[#9E725F] text-white text-xs" aria-hidden="true">&darr;</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  {/* 28 — Final CTA (Charcoal) */}
+  <section class="relative overflow-hidden bg-[#3C3D3E] text-[#F0EEE9]">
+    <div class="absolute left-1/2 top-0 h-72 w-[36rem] -translate-x-1/2 rounded-full blur-[130px] opacity-30 pointer-events-none" style="background-color:#C89F8D" aria-hidden="true"></div>
+    <div class="relative mx-auto max-w-3xl px-6 py-28 text-center">
+      <h2 class="font-display text-4xl sm:text-6xl font-extrabold leading-[1.04]" data-reveal>
+        Bring your business email under your control.
+      </h2>
+      <p class="mt-6 text-lg text-[#F0EEE9]/70 leading-relaxed" data-reveal style="--reveal-delay: 100ms">
+        Professional email infrastructure. Customer-controlled storage. Privacy designed into the
+        experience.
+      </p>
+      <div class="mt-10 flex flex-wrap items-center justify-center gap-4" data-reveal style="--reveal-delay: 160ms">
+        <a href={`${cpUrl}/register`} class="px-8 py-3.5 btn-primary text-base font-semibold">Get Started</a>
+        <a href="/security" class="px-7 py-3.5 rounded-[10px] border border-white/20 bg-white/5 text-base font-semibold text-[#F0EEE9] transition-all hover:bg-white/10">Explore Security</a>
       </div>
     </div>
   </section>

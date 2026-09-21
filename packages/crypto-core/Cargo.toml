@@ -23,6 +23,10 @@ path = "src/bin/native-crypto-worker.rs"
 [dependencies]
 # HPKE (RFC 9180)
 hpke = { version = "0.14", features = ["x25519", "aes"] }
+# X-Wing (ML-KEM-768 + X25519)
+ml-kem = { version = "0.3", features = ["hazmat", "zeroize", "getrandom"] }
+sha3 = "0.11"
+hmac = "0.12"
 # X25519 key agreement (hpke 0.14 requires x25519-dalek 3)
 x25519-dalek = { version = "3", features = ["static_secrets"] }
 # Ed25519 recovery authentication
@@ -66,6 +70,7 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
+hex = "0.4"
 
 [profile.release]
 opt-level = "s"

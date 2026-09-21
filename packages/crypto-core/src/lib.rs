@@ -20,6 +20,9 @@ use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
+pub mod xwing;
+pub mod xwing_hpke;
+
 // =============================================
 // Constants
 // =============================================
@@ -488,6 +491,45 @@ pub fn decrypt_message(
     aad: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
     aes_gcm_decrypt(content_key, encrypted_blob, aad)
+}
+
+/// Encrypt a message using X-Wing to wrap its fresh content key.
+///
+/// The storage blob keeps the existing version || nonce || ciphertext+tag
+/// format. The wrapped key is version(1) || X-Wing enc(1120) || HPKE ciphertext(48).
+pub fn encrypt_message_xwing(
+    mailbox_xwing_pk: &[u8],
+    message_seq: u64,
+    plaintext: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>, [u8; 12], Vec<u8>), CryptoError> {
+    if mailbox_xwing_pk.len() != xwing::ENCAPSULATION_KEY_SIZE {
+        return Err(CryptoError::InvalidFormat);
+    }
+
+    let mut content_key = [0u8; 32];
+    rand::fill(&mut content_key);
+    let aad = message_seq.to_be_bytes().to_vec();
+    let encrypted_blob = aes_gcm_encrypt(&content_key, plaintext, &aad)?;
+    let wrapped_key = xwing_hpke::seal(mailbox_xwing_pk, &content_key, &aad)?;
+    let iv = encrypted_blob[1..13]
+        .try_into()
+        .map_err(|_| CryptoError::InvalidFormat)?;
+
+    Ok((wrapped_key, encrypted_blob, iv, aad))
+}
+
+/// Decrypt a message encrypted by [`encrypt_message_xwing`].
+pub fn decrypt_message_xwing(
+    mailbox_xwing_sk: &[u8],
+    wrapped_key: &[u8],
+    encrypted_blob: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let content_key = xwing_hpke::open(mailbox_xwing_sk, wrapped_key, aad)?;
+    let content_key: [u8; 32] = content_key
+        .try_into()
+        .map_err(|_| CryptoError::DecryptionFailed)?;
+    decrypt_message(&content_key, encrypted_blob, aad)
 }
 
 // =============================================

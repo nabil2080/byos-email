@@ -9,9 +9,7 @@ export function StickyNav() {
   };
 
   const navLinks = [
-    { label: "Home", href: "/" },
     { label: "Features", href: "/#features" },
-    { label: "How It Works", href: "/#how-it-works" },
     { label: "Pricing", href: "/pricing" },
     { label: "Security", href: "/security" },
     { label: "Docs", href: "/docs" },
@@ -19,54 +17,48 @@ export function StickyNav() {
 
   onMount(() => {
     const onScroll = () => {
-      setShowSticky(window.scrollY > 120);
+      setShowSticky(window.scrollY > 140);
     };
-
     window.addEventListener("scroll", onScroll, { passive: true });
-
-    onCleanup(() => {
-      window.removeEventListener("scroll", onScroll);
-    });
+    onScroll();
+    onCleanup(() => window.removeEventListener("scroll", onScroll));
   });
 
   return (
     <div class="relative z-50">
       <nav
-        class={`fixed left-1/2 -translate-x-1/2 top-[15px] px-6 py-3.5 rounded-[22px] border border-[#E2DFD8] sticky-nav sticky-nav-shadow duration-500 w-full hidden lg:block transition-all max-w-[860px] ${
+        aria-label="Primary sticky"
+        class={`fixed left-1/2 -translate-x-1/2 top-[15px] px-6 py-3 rounded-[22px] border border-[#E2DFD8] sticky-nav duration-500 w-full hidden lg:block transition-all max-w-[880px] ${
           showSticky()
-            ? "opacity-100 translate-y-0 pointer-events-auto"
+            ? "opacity-100 translate-y-0 pointer-events-auto shadow-[0_10px_40px_-16px_rgba(43,44,45,0.22)]"
             : "opacity-0 -translate-y-4 pointer-events-none"
         }`}
         style={{
-          "background-color": "var(--background, #F0EEE9)",
+          "background-color": "rgba(240, 238, 233, 0.82)",
         }}
       >
-        {/* Navbar Row */}
         <div class="flex items-center justify-between px-2">
-          {/* Logo Badge */}
-          <a href="/" class="flex items-center gap-2 group shrink-0">
+          <a href="/" class="flex items-center gap-2 group shrink-0" aria-label="BYOS home">
             <div class="flex items-center justify-center bg-[#9E725F] text-white px-2 py-0.5 rounded-lg text-xs font-mono font-bold tracking-wider shadow-xs group-hover:bg-[#865E4D] transition-colors">
               BYOS
             </div>
-            <div class="flex flex-col">
+            <div class="flex flex-col leading-tight">
               <span class="font-bold text-xs tracking-tight text-[#2B2C2D]">Business Email</span>
-              <span class="text-[8px] font-mono uppercase tracking-widest text-[#9E725F] font-semibold">Zero Markup</span>
+              <span class="text-[8px] font-mono uppercase tracking-[0.2em] text-[#6F7173]">Your control</span>
             </div>
           </a>
 
-          {/* Center Navigation Links */}
-          <div class="flex items-center gap-5">
+          <div class="flex items-center gap-7">
             {navLinks.map((link) => (
               <a
                 href={link.href}
-                class="text-xs font-medium transition-colors text-[#2B2C2D] hover:text-[#9E725F] shine-effect py-1"
+                class="text-xs font-medium text-[#2B2C2D] transition-colors hover:text-[#9E725F] py-1"
               >
                 {link.label}
               </a>
             ))}
           </div>
 
-          {/* Right Action Controls */}
           <div class="flex items-center gap-3">
             <a
               href={`${cpUrl()}/login`}
@@ -76,9 +68,9 @@ export function StickyNav() {
             </a>
             <a
               href={`${cpUrl()}/register`}
-              class="px-4 py-1.5 text-xs font-semibold btn-primary shine-effect shadow-xs"
+              class="px-4 py-1.5 text-xs font-semibold btn-primary shadow-xs"
             >
-              Start Free Trial
+              Get Started
             </a>
           </div>
         </div>

@@ -1,8 +1,13 @@
-﻿import { createSignal, Show, onMount, onCleanup } from "solid-js";
+import { createSignal, Show, onMount, onCleanup } from "solid-js";
 
 export function MobileMenu() {
   const [isOpen, setIsOpen] = createSignal(false);
   let menuRef: HTMLDivElement | undefined;
+
+  const cpUrl = () => {
+    const envUrl = (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_CP_URL;
+    return envUrl || "http://127.0.0.1:3000";
+  };
 
   const toggleMenu = () => setIsOpen(!isOpen());
   const closeMenu = () => setIsOpen(false);
@@ -16,8 +21,6 @@ export function MobileMenu() {
   });
 
   const links = [
-    { label: "How It Works", href: "/#how-it-works" },
-    { label: "Cost Calculator", href: "/#pricing-calc" },
     { label: "Features", href: "/#features" },
     { label: "Pricing", href: "/pricing" },
     { label: "Security", href: "/security" },
@@ -25,13 +28,12 @@ export function MobileMenu() {
   ];
 
   return (
-    <div class="md:hidden relative" ref={menuRef}>
-      {/* Mobile Toggle Button */}
+    <div class="lg:hidden relative" ref={menuRef}>
       <button
         type="button"
         onClick={toggleMenu}
-        class="p-2 rounded-xl border border-[#E2DFD8] bg-white text-[#2B2C2D] hover:bg-[#FAF9F6] transition-colors focus:outline-none focus:ring-2 focus:ring-[#9E725F]/30 cursor-pointer"
-        aria-label="Toggle mobile menu"
+        class="p-2 rounded-xl border border-[#E2DFD8] bg-white text-[#2B2C2D] hover:bg-[#FAF9F6] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#9E725F]/40 cursor-pointer"
+        aria-label="Toggle menu"
         aria-expanded={isOpen()}
       >
         <Show
@@ -51,15 +53,14 @@ export function MobileMenu() {
         </Show>
       </button>
 
-      {/* Mobile Drawer Dropdown */}
       <Show when={isOpen()}>
-        <div class="fixed inset-x-0 top-[65px] bg-[#F0EEE9]/95 backdrop-blur-lg border-b border-[#E2DFD8] shadow-xl z-50 p-6 space-y-4 animate-in fade-in slide-in-from-top-2 duration-150">
-          <nav class="flex flex-col space-y-3">
+        <div class="fixed inset-x-0 top-[61px] bg-[#F0EEE9]/95 backdrop-blur-lg border-b border-[#E2DFD8] shadow-xl z-50 p-6 space-y-4">
+          <nav class="flex flex-col space-y-1" aria-label="Mobile">
             {links.map((link) => (
               <a
                 href={link.href}
                 onClick={closeMenu}
-                class="text-base font-semibold text-[#2B2C2D] hover:text-[#9E725F] transition-colors py-2 px-3 rounded-xl hover:bg-white/60"
+                class="text-base font-semibold text-[#2B2C2D] hover:text-[#9E725F] transition-colors py-2.5 px-3 rounded-xl hover:bg-white/60"
               >
                 {link.label}
               </a>
@@ -68,25 +69,22 @@ export function MobileMenu() {
 
           <div class="pt-4 border-t border-[#E2DFD8] flex flex-col gap-2.5">
             <a
-              href="http://127.0.0.1:3000/login"
+              href={`${cpUrl()}/login`}
               class="w-full text-center py-2.5 rounded-xl border border-[#E2DFD8] bg-white text-xs font-bold text-[#2B2C2D] hover:bg-[#FAF9F6] transition-colors shadow-2xs"
             >
-              Sign In to Control Panel
+              Sign In
             </a>
             <a
-              href="/pricing"
+              href={`${cpUrl()}/register`}
               class="w-full text-center py-2.5 rounded-xl bg-[#9E725F] text-white text-xs font-bold hover:bg-[#865E4D] transition-colors shadow-xs"
             >
-              Get Started →
+              Get Started
             </a>
           </div>
 
-          <div class="pt-2 flex items-center justify-between text-[11px] text-[#6F7173] font-mono">
-            <span class="flex items-center gap-1.5">
-              <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-              <span>All Systems Operational</span>
-            </span>
-            <span>0% Storage Markup</span>
+          <div class="pt-1 flex items-center gap-2 text-[11px] text-[#6F7173] font-mono">
+            <span class="h-1.5 w-1.5 rounded-full bg-[#9E725F]"></span>
+            <span>Your email. Your storage. Your control.</span>
           </div>
         </div>
       </Show>

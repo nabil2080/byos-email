@@ -1,0 +1,240 @@
+# BYOS PROJECT CONTEXT — READ BEFORE ANY TASK
+
+You are working on BYOS, a business email platform built around 
+customer-controlled storage and post-quantum end-to-end encryption. 
+This document gives you the state of the project as of 2026-09-21. 
+Read it fully before taking any task.
+
+## 1. WHAT BYOS IS
+
+BYOS is a business-email service where:
+
+- Customers provide their own persistent storage (S3, Google Drive, 
+  S3-compatible providers). BYOS never stores mailbox content on its 
+  own servers.
+- Internal BYOS-to-BYOS mail is end-to-end encrypted with post-quantum 
+  hybrid cryptography (X-Wing = X25519 + ML-KEM-768).
+- External mail (to Gmail, Outlook, etc.) uses traditional SMTP with 
+  a transient plaintext window, relayed through Amazon SES.
+- The product is priced by graduated per-seat brackets with a 10-seat 
+  minimum. No named plans. No feature gating.
+
+The pitch: "As private as Proton or Tuta, plus customer-controlled storage."
+
+## 2. ARCHITECTURE — KEY DECISIONS (FROZEN)
+
+| Layer | Technology | Why |
+|---|---|---|
+| Backend / infra | Go | Mail routing, workers, APIs, orchestration |
+| Client crypto | Rust + WebAssembly | Runs in browser, holds keys client-side |
+| Public website | Astro + SolidJS + TailwindCSS | Content-first, deployed on Cloudflare |
+| Dashboard + Webmail | SolidJS + Vite + TailwindCSS | Interactive authenticated apps |
+| Mail transfer | Postfix + Rspamd | Established SMTP infrastructure |
+| Outbound relay | Amazon SES | Clean IPs, tenant management, multi-tenant reputation isolation |
+| Web edge | Cloudflare | DNS, TLS, WAF, static assets |
+| Mail/backend hosting | Hetzner VPS | Linux, dedicated IPv4, port 25 open |
+| Persistent storage | Customer-controlled | S3, Google Drive, MinIO in local lab |
+| Local lab | Docker Compose | 10 services, all healthy |
+
+## 3. THE CANONICAL DOCUMENTS
+
+- **BYOS_V1_Prototype_Roadmap.md** — the canonical product + architecture 
+  plan. Sections P through 30 plus Appendices A–D. Do NOT change 
+  product-wide decisions without explicit user instruction.
+
+- **docs/crypto/envelope-v1-spec.md** — the cryptographic wire format 
+  spec. Frozen. Defines the JSON envelope used for E2E internal mail.
+
+- **docs/crypto/key-directory-spec.md** — the public key directory 
+  spec for internal mail. Newly written; not yet implemented.
+
+These documents are the source of truth. Read them before touching 
+related code.
+
+## 4. TWO CRYPTOGRAPHIC FORMATS (IMPORTANT)
+
+BYOS uses two distinct formats for two distinct purposes. Do NOT 
+confuse them.
+
+### Format 1 — Storage encryption (binary)
+
+- Purpose: at-rest encryption of inbound external mail (mail already 
+  received in plaintext by the inbound pipeline)
+- Format: `version(1 byte) || nonce(12 bytes) || ciphertext+tag(N bytes)`
+- Wrapped content key: stored in Postgres in 
+  `message_metadata.content_key_hpke_wrapped`
+- Object location: MinIO/S3 at `mailboxes/<mailbox_id>/<seq>.eml.enc`
+- Algorithm TODAY: X25519-only classical HPKE
+- Algorithm GOAL: X-Wing hybrid (this is the pending task — see §7)
+
+### Format 2 — End-to-end envelope (JSON)
+
+- Purpose: internal BYOS-to-BYOS mail where the outbound worker routes 
+  without decrypting
+- Format: canonical JSON with fields `v, alg, key_id, key_epoch, enc, 
+  nonce, ciphertext, sig`
+- Wrapped content key: embedded in the envelope's `enc` field
+- Algorithm: X-Wing hybrid KEM (X25519 + ML-KEM-768) via HPKE + AES-256-GCM
+- Used by: client (Rust/WASM) for internal mail composition
+- Status: spec complete, not yet wired into the pipeline
+
+## 5. WHAT HAS BEEN BUILT AND VERIFIED
+
+### Crypto core — COMPLETE AND VERIFIED
+
+Two independent implementations exist and pass byte-for-byte parity:
+
+- **Go crypto** at `crypto/` — verified against X-Wing draft-10 
+  Appendix C (3 vectors) and RFC 9180 Appendix A.1.1 (KEM + key 
+  schedule). All tests pass.
+- **Rust/WASM crypto** at `crypto-core/` — verified byte-for-byte 
+  identical to Go across 14 cross-language test vectors. Compiles 
+  to `wasm32-unknown-unknown`. Release WASM is ~545 KB.
+
+Both implementations support:
+- X-Wing hybrid KEM (correct combiner per draft-10, label `\.//^\`)
+- HPKE key schedule per RFC 9180
+- Ed25519 signing key primitive (used in recovery ceremonies, not 
+  yet wired into E2E mail)
+- Envelope canonical JSON serialization
+- AAD construction binding all metadata
+
+**Do not modify the crypto core without understanding the test 
+vectors.** Every change must still pass the external vectors.
+
+### Local lab — HEALTHY
+
+10 Docker services boot and reach healthy state:
+- postgres, redis, minio (with minio-init), postfix, rspamd
+- byos-api, byos-inbound-bridge, byos-mail-router, 
+  byos-storage-worker, byos-crypto-worker
+- byos-outbound-worker is profile-gated (opt-in with `--profile outbound`)
+
+### Step 3 — INBOUND VERTICAL SLICE — VERIFIED
+
+An email sent via SMTP was received by inbound-bridge, filtered by 
+Rspamd, routed by mail-router, encrypted by crypto-worker, and stored 
+by storage-worker in MinIO as an opaque binary blob. The blob was 
+successfully decrypted using the test private key, and the plaintext 
+matched the sent email exactly.
+
+This is the end-to-end proof that the pipeline works.
+
+## 6. THE ROADMAP AND PRIVACY CLAIM
+
+The roadmap now includes:
+
+- **Section P — Privacy Architecture**: two threats (present-day trust 
+  failure, future capture failure). Honest scope table of what BYOS 
+  can and cannot protect against.
+- **Section 7** — outbound split into Path A (internal E2E) and Path B 
+  (external via SES)
+- **Section 7.5** — Internal Mail End-to-End Encryption
+- **Section 7.6** — Two Cryptographic Formats
+- **Section 12** — X-Wing hybrid KEM, signing keys, key hierarchy
+- **Section 16** — accepted V1 leakage, including key substitution risk
+- **Section 18** — scheduled send via client-side pre-encryption
+- **Section 25** — graduated per-seat bracket pricing
+- **Appendix B** — locked product decisions
+
+The claim BYOS can honestly make:
+> "Internal BYOS mail is end-to-end encrypted with post-quantum hybrid 
+> cryptography. External mail uses the same protections as any provider 
+> using TLS and SMTP."
+
+## 7. CURRENT GAP — NEXT PRIORITY
+
+**Storage path uses X25519-only, not X-Wing.**
+
+This is the pending task. The crypto core supports X-Wing (verified), 
+but the storage pipeline still uses the classical X25519 path. This 
+means inbound external mail — the majority of a typical mailbox — is 
+NOT post-quantum safe at rest.
+
+Fixing this requires:
+1. Adding `encrypt_message_xwing` and `decrypt_message_xwing` to 
+   crypto-core
+2. Schema migration to widen `content_key_hpke_wrapped` (X-Wing wrapped 
+   keys are ~1170 bytes vs ~81 for X25519)
+3. Adding a `wrapped_key_algorithm` column to message_metadata
+4. Wiring native-crypto-worker to use X-Wing when available
+5. Adding `mailbox_xwing_pk` column to mailboxes
+6. Verifying end-to-end: send test email → stored blob uses X-Wing → 
+   decrypts correctly
+
+Estimated work: 2–4 days.
+
+## 8. IMMEDIATE REPO STATE
+
+Latest commits (as of last update):
+- `72d19a2` roadmap: document two crypto formats
+- (Earlier) Step 3 pipeline verified end-to-end
+
+Working tree should be clean. If not, report before proceeding.
+
+## 9. WORKING PRINCIPLES
+
+These are non-negotiable. Every task must respect them.
+
+1. **Spec before code.** For any crypto or architecture change, update 
+   the spec or roadmap first. Do not implement crypto without a 
+   spec that has been reviewed.
+
+2. **External verification.** Every crypto primitive must be validated 
+   against an external reference (IETF draft, RFC test vector, NIST 
+   known-answer test). Self-referential tests prove nothing.
+
+3. **Byte-exact cross-language parity.** When Go and Rust both 
+   implement the same algorithm, they must produce byte-identical 
+   output for the same inputs. Cross-language test vectors enforce this.
+
+4. **Don't break working code.** If a pipeline works, don't rewrite it 
+   without a specific reason. The X25519 path stays even after X-Wing 
+   is added, for backward compatibility.
+
+5. **No plaintext persistence.** The server must not write plaintext 
+   mailbox content to disk, database, or object storage — ever.
+
+6. **Honest claims.** The roadmap and docs must not overstate what 
+   BYOS protects. Section P exists to keep claims calibrated.
+
+## 10. HOW TO WORK WITH THE USER
+
+The user is a product-focused founder, not a cryptographer or 
+programmer. They understand the architecture at a high level and make 
+product decisions, but rely on the AI agent for implementation.
+
+- Explain decisions in plain language when asked.
+- Do not assume they can read Go, Rust, or cryptographic notation.
+- When something is complex, describe it in terms of what it does, 
+  not how it works.
+- If you need to make a judgment call that affects product decisions, 
+  ask. Do not silently change product behavior.
+- Prefer small, verifiable steps over large leaps. Report results with 
+  exact command output, not summaries.
+
+## 11. WHAT NOT TO DO
+
+- Do NOT invent new crypto primitives.
+- Do NOT modify the envelope spec without instruction.
+- Do NOT change the wire format of stored objects.
+- Do NOT commit broken or unverified code.
+- Do NOT skip external test vectors for "speed".
+- Do NOT claim something works without running it.
+- Do NOT propose architectural changes without consulting the roadmap.
+
+## 12. THE IMMEDIATE TASK
+
+The user will give you the next task after this context. It will 
+likely be: wire X-Wing into the storage pipeline (see §7).
+
+Before starting, verify:
+- You have read this document
+- You have read BYOS_V1_Prototype_Roadmap.md
+- You have read docs/crypto/envelope-v1-spec.md
+- You understand the difference between Format 1 and Format 2
+- You understand the crypto core is verified and not to be changed 
+  without re-verification
+
+When you are ready, respond with a brief summary (5 bullets or fewer) 
+of your understanding, then await the first task.

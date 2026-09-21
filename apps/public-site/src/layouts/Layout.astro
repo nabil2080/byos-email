@@ -9,12 +9,18 @@ import { DesktopNav } from "../components/layout/DesktopNav";
 interface Props {
   title: string;
   description?: string;
+  ogType?: string;
 }
 
-const { 
-  title, 
-  description = "Business Email You Actually Own. Connect your own S3 or R2 storage with zero-knowledge encryption." 
+const {
+  title,
+  description = "Professional business email with custom domains, powerful mailbox tools, customer-controlled storage, and privacy-focused architecture.",
+  ogType = "website",
 } = Astro.props;
+
+const siteName = "BYOS Business Email";
+const fullTitle = title.includes("BYOS") ? title : `${title} | ${siteName}`;
+const canonical = Astro.url?.pathname ?? "/";
 ---
 
 <!DOCTYPE html>
@@ -22,31 +28,59 @@ const {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{title} | BYOS Business Email</title>
+    <title>{fullTitle}</title>
     <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <meta name="theme-color" content="#F0EEE9" />
+
+    {/* Open Graph */}
+    <meta property="og:type" content={ogType} />
+    <meta property="og:site_name" content={siteName} />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:locale" content="en_US" />
+
+    {/* Twitter */}
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={description} />
+
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    {/* Premium modern sans-serif */}
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
   </head>
-  <body class="pt-4 bg-[#F0EEE9] text-[#3C3D3E] antialiased flex flex-col min-h-screen selection:bg-[#9E725F] selection:text-white relative">
+  <body
+    class="pt-4 bg-[#F0EEE9] text-[#3C3D3E] antialiased flex flex-col min-h-screen selection:bg-[#9E725F] selection:text-white relative font-sans"
+  >
     {/* Primary Hanging Desktop Navigation (Top of page on Desktop) */}
     <DesktopNav client:load />
 
-    {/* Floating Dynamic Sticky Navigation (Pill with Popover Menus & Search on Scroll) */}
+    {/* Floating Dynamic Sticky Navigation (Pill on Scroll) */}
     <StickyNav client:load />
 
-    {/* Mobile Navigation Header (Only visible on screens < lg down to 375px) */}
-    <header class="lg:hidden sticky top-0 z-40 border-b border-[#E2DFD8] bg-[#F0EEE9] backdrop-blur-md">
+    {/* Mobile Navigation Header (screens < lg) */}
+    <header
+      class="lg:hidden sticky top-0 z-40 border-b border-[#E2DFD8] bg-[#F0EEE9]/85 backdrop-blur-md supports-[backdrop-filter]:bg-[#F0EEE9]/70"
+    >
       <div class="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
-        <a href="/" class="flex items-center gap-2 group shrink-0">
-          <div class="flex items-center justify-center bg-[#9E725F] text-white px-2 py-0.5 rounded-lg text-xs font-mono font-bold tracking-wider shadow-xs group-hover:bg-[#865E4D] transition-colors">
+        <a href="/" class="flex items-center gap-2.5 group shrink-0" aria-label="BYOS home">
+          <div
+            class="flex items-center justify-center bg-[#9E725F] text-white px-2 py-0.5 rounded-lg text-xs font-mono font-bold tracking-wider shadow-xs group-hover:bg-[#865E4D] transition-colors"
+          >
             BYOS
           </div>
-          <div class="flex flex-col">
+          <div class="flex flex-col leading-tight">
             <span class="font-bold text-sm tracking-tight text-[#2B2C2D]">Business Email</span>
-            <span class="text-[9px] font-mono uppercase tracking-widest text-[#9E725F] font-semibold">Zero Markup</span>
+            <span class="text-[9px] font-mono uppercase tracking-[0.2em] text-[#6F7173]">Your control</span>
           </div>
         </a>
 
-        {/* User Auth Nav & Mobile Menu Drawer */}
         <div class="flex items-center gap-2">
           <HeaderUserNav client:load />
           <MobileMenu client:load />
@@ -59,7 +93,31 @@ const {
       <slot />
     </main>
 
-    {/* Enterprise Footer */}
+    {/* Footer */}
     <Footer client:load />
+
+    {/* Lightweight scroll reveal — CSS transforms + IntersectionObserver only */}
+    <script is:inline>
+      (() => {
+        const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        const els = document.querySelectorAll("[data-reveal], [data-reveal-line]");
+        if (reduce || !("IntersectionObserver" in window)) {
+          els.forEach((el) => el.classList.add("is-visible"));
+          return;
+        }
+        const io = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) {
+                entry.target.classList.add("is-visible");
+                io.unobserve(entry.target);
+              }
+            });
+          },
+          { threshold: 0.12, rootMargin: "0px 0px -8% 0px" }
+        );
+        els.forEach((el) => io.observe(el));
+      })();
+    </script>
   </body>
 </html>
