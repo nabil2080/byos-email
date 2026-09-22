@@ -12,13 +12,10 @@ export function DesktopNav() {
   ];
 
   return (
-    <div class="relative w-full">
+    <div class="relative w-full z-40">
       <nav
         aria-label="Primary"
-        class="desktop-nav absolute -top-[1px] left-1/2 -translate-x-1/2 z-30 px-6 py-6 hidden lg:block rounded-b-[30px] duration-500 w-full transition-all max-w-[880px]"
-        style={{
-          "background-color": "var(--background, #F0EEE9)",
-        }}
+        class="desktop-nav absolute top-0 left-1/2 -translate-x-1/2 z-40 px-6 py-3.5 hidden lg:block rounded-b-[24px] border-b border-x border-[#E2DFD8] bg-[#FBFAF7] shadow-xs duration-500 w-full transition-all max-w-[880px]"
       >
         <div class="flex items-center justify-between px-2">
           {/* Logo */}
