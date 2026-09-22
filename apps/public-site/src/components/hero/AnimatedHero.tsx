@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createSignal, For } from "solid-js";
 
 // NOTE FOR CODE REVIEWER: The site navigation is provided globally by DesktopNav in Layout.astro.
 // Top padding on header ensures DesktopNav sits cleanly above the hero section without overlapping hero titles or badges.
@@ -53,16 +53,16 @@ export function AnimatedHero() {
             <div class="mt-10 flex flex-wrap items-center gap-4">
               <a
                 href={`${cpUrl()}/register`}
-                class="px-8 py-3.5 btn-primary text-base font-semibold shadow-sm"
+                class="px-8 py-3.5 btn-primary text-base font-semibold shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9E725F] focus-visible:ring-offset-2"
               >
                 Get Started
               </a>
               <a
                 href="#how-it-works"
-                class="px-7 py-3.5 rounded-[10px] border border-[#E2DFD8] bg-white/80 text-base font-semibold text-[#2B2C2D] transition-all hover:bg-white hover:border-[#9E725F]/40 hover:shadow-xs flex items-center gap-2"
+                class="px-7 py-3.5 rounded-[10px] border border-[#E2DFD8] bg-white/80 text-base font-semibold text-[#2B2C2D] transition-all hover:bg-white hover:border-[#9E725F]/40 hover:shadow-xs flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9E725F] focus-visible:ring-offset-2"
               >
                 Explore Architecture
-                <svg class="h-4 w-4 text-[#9E725F]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg class="h-4 w-4 text-[#9E725F] stroke-2" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
                 </svg>
               </a>
@@ -71,15 +71,15 @@ export function AnimatedHero() {
             {/* Key feature pills */}
             <div class="mt-12 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs font-medium text-[#6F7173] border-t border-[#E2DFD8]/70 pt-6">
               <div class="flex items-center gap-2">
-                <span class="flex h-4 w-4 items-center justify-center rounded-full bg-[#9E725F]/15 text-[#9E725F] text-[10px] font-bold">✓</span>
+                <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[#9E725F]/15 text-[#9E725F] text-[10px] font-bold">✓</span>
                 <span>No Vendor Lock-in</span>
               </div>
               <div class="flex items-center gap-2">
-                <span class="flex h-4 w-4 items-center justify-center rounded-full bg-[#9E725F]/15 text-[#9E725F] text-[10px] font-bold">✓</span>
+                <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[#9E725F]/15 text-[#9E725F] text-[10px] font-bold">✓</span>
                 <span>Zero Feature-Gating</span>
               </div>
               <div class="flex items-center gap-2">
-                <span class="flex h-4 w-4 items-center justify-center rounded-full bg-[#9E725F]/15 text-[#9E725F] text-[10px] font-bold">✓</span>
+                <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[#9E725F]/15 text-[#9E725F] text-[10px] font-bold">✓</span>
                 <span>Standard SMTP/IMAP</span>
               </div>
             </div>
@@ -90,7 +90,7 @@ export function AnimatedHero() {
             <div class="card-editorial bg-white p-6 sm:p-7 shadow-sm border border-[#E2DFD8]">
               <div class="flex items-center justify-between border-b border-[#E2DFD8] pb-4">
                 <div class="flex items-center gap-2">
-                  <span class="h-2.5 w-2.5 rounded-full bg-[#9E725F]"></span>
+                  <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-[#9E725F]"></span>
                   <span class="text-xs font-mono font-bold uppercase tracking-wider text-[#2B2C2D]">
                     How BYOS Works
                   </span>
@@ -100,51 +100,54 @@ export function AnimatedHero() {
 
               {/* Stack of Steps */}
               <div class="mt-5 space-y-3">
-                {steps.map((s) => (
-                  <button
-                    type="button"
-                    onClick={() => setActiveStep(s.id)}
-                    class={`w-full text-left transition-all duration-200 rounded-xl p-4 border ${
-                      activeStep() === s.id
-                        ? "border-[#9E725F] bg-[#F3ECE8] shadow-xs"
-                        : "border-[#E2DFD8] bg-[#FBFAF7] hover:border-[#9E725F]/40 hover:bg-white"
-                    }`}
-                  >
-                    <div class="flex items-center justify-between">
-                      <div class="flex items-center gap-3">
+                <For each={steps}>
+                  {(s) => (
+                    <button
+                      type="button"
+                      aria-pressed={activeStep() === s.id}
+                      onClick={() => setActiveStep(s.id)}
+                      class={`w-full text-left transition-all duration-150 rounded-xl p-4 border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9E725F] focus-visible:ring-offset-2 ${
+                        activeStep() === s.id
+                          ? "border-[#9E725F] bg-[#F3ECE8] shadow-xs"
+                          : "border-[#E2DFD8] bg-[#FBFAF7] hover:border-[#9E725F]/40 hover:bg-white"
+                      }`}
+                    >
+                      <div class="flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-3 min-w-0">
+                          <span
+                            class={`text-xs font-mono font-bold shrink-0 ${
+                              activeStep() === s.id ? "text-[#9E725F]" : "text-[#8B8E91]"
+                            }`}
+                          >
+                            {s.num}
+                          </span>
+                          <span class="font-display font-bold text-sm text-[#2B2C2D] truncate">
+                            {s.title}
+                          </span>
+                        </div>
                         <span
-                          class={`text-xs font-mono font-bold ${
-                            activeStep() === s.id ? "text-[#9E725F]" : "text-[#8B8E91]"
+                          class={`shrink-0 text-[10px] font-mono px-2 py-0.5 rounded-md border ${
+                            activeStep() === s.id
+                              ? "border-[#9E725F]/30 bg-white text-[#865E4D] font-bold"
+                              : "border-[#E2DFD8] bg-white text-[#6F7173]"
                           }`}
                         >
-                          {s.num}
-                        </span>
-                        <span class="font-display font-bold text-sm text-[#2B2C2D]">
-                          {s.title}
+                          {s.tag}
                         </span>
                       </div>
-                      <span
-                        class={`text-[10px] font-mono px-2 py-0.5 rounded-md border ${
-                          activeStep() === s.id
-                            ? "border-[#9E725F]/30 bg-white text-[#865E4D] font-bold"
-                            : "border-[#E2DFD8] bg-white text-[#6F7173]"
-                        }`}
-                      >
-                        {s.tag}
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-xs text-[#6F7173] pl-7">
-                      {s.desc}
-                    </p>
-                  </button>
-                ))}
+                      <p class="mt-1.5 text-xs text-[#6F7173] pl-7">
+                        {s.desc}
+                      </p>
+                    </button>
+                  )}
+                </For>
               </div>
 
               {/* Detail Panel for selected step */}
               <div class="mt-5 rounded-xl border border-[#9E725F]/20 bg-[#F4F2EC] p-4 text-xs">
                 <div class="flex items-center justify-between text-[#865E4D] font-mono font-bold">
                   <span>STEP {steps[activeStep()].num} HIGHLIGHT</span>
-                  <span>{activeStep() === 3 ? "CUSTOMER OWNED" : "BYOS MANAGED"}</span>
+                  <span class="shrink-0">{activeStep() === 3 ? "CUSTOMER OWNED" : "BYOS MANAGED"}</span>
                 </div>
                 <p class="mt-1.5 text-[#3C3D3E] leading-relaxed">
                   {activeStep() === 0 && "Connect your company domain with standard MX & DKIM records in minutes."}

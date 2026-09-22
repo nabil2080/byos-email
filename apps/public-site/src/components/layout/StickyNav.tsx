@@ -28,10 +28,10 @@ export function StickyNav() {
     <div class="relative z-50">
       <nav
         aria-label="Primary sticky"
-        class={`fixed left-1/2 -translate-x-1/2 top-[15px] px-6 py-3 rounded-[22px] border border-[#E2DFD8] sticky-nav duration-300 w-full transition-all max-w-[880px] z-50 ${
+        class={`fixed left-1/2 -translate-x-1/2 top-[15px] px-6 py-3 rounded-[22px] border border-[#E2DFD8] sticky-nav duration-300 w-full transition-all max-w-[880px] z-50 hidden lg:block ${
           showSticky()
-            ? "lg:block opacity-100 translate-y-0 pointer-events-auto shadow-[0_10px_40px_-16px_rgba(43,44,45,0.22)]"
-            : "hidden opacity-0 -translate-y-8 pointer-events-none"
+            ? "opacity-100 translate-y-0 pointer-events-auto shadow-[0_10px_40px_-16px_rgba(43,44,45,0.22)]"
+            : "opacity-0 -translate-y-8 pointer-events-none"
         }`}
         style={{
           "background-color": "rgba(240, 238, 233, 0.92)",

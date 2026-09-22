@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createSignal, For } from "solid-js";
 
 export function PlatformShowcase() {
   const [tab, setTab] = createSignal<"webmail" | "domains" | "admin">("webmail");
@@ -32,10 +32,16 @@ export function PlatformShowcase() {
     { name: "Team Provisioning", desc: "User access & role policies", badge: "12 Users" },
   ];
 
+  const tabs: Array<{ id: "webmail" | "domains" | "admin"; label: string }> = [
+    { id: "webmail", label: "Webmail Client" },
+    { id: "domains", label: "Domains & Aliases" },
+    { id: "admin", label: "Admin Console" },
+  ];
+
   return (
     <div class="card-editorial bg-white p-6 sm:p-8 shadow-sm border border-[#E2DFD8]">
       {/* Tabs Header */}
-      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-[#E2DFD8] pb-6 gap-4">
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between border-b border-[#E2DFD8] pb-6 gap-4">
         <div>
           <span class="eyebrow">The Experience</span>
           <h3 class="mt-1 font-display text-2xl font-bold text-[#2B2C2D]">
@@ -43,46 +49,41 @@ export function PlatformShowcase() {
           </h3>
         </div>
 
-        <div class="inline-flex rounded-xl border border-[#E2DFD8] bg-[#F4F2EC] p-1 self-start sm:self-auto">
-          <button
-            type="button"
-            onClick={() => setTab("webmail")}
-            class={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
-              tab() === "webmail"
-                ? "bg-[#9E725F] text-white shadow-xs"
-                : "text-[#6F7173] hover:text-[#2B2C2D]"
-            }`}
-          >
-            Webmail Client
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("domains")}
-            class={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
-              tab() === "domains"
-                ? "bg-[#9E725F] text-white shadow-xs"
-                : "text-[#6F7173] hover:text-[#2B2C2D]"
-            }`}
-          >
-            Domains & Aliases
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("admin")}
-            class={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
-              tab() === "admin"
-                ? "bg-[#9E725F] text-white shadow-xs"
-                : "text-[#6F7173] hover:text-[#2B2C2D]"
-            }`}
-          >
-            Admin Console
-          </button>
+        <div
+          role="tablist"
+          aria-label="Platform Showcase Sections"
+          class="grid grid-cols-1 sm:grid-cols-3 gap-1.5 w-full sm:w-auto rounded-xl border border-[#E2DFD8] bg-[#F4F2EC] p-1.5"
+        >
+          <For each={tabs}>
+            {(t) => (
+              <button
+                type="button"
+                role="tab"
+                id={`tab-${t.id}`}
+                aria-controls={`panel-${t.id}`}
+                aria-selected={tab() === t.id}
+                onClick={() => setTab(t.id)}
+                class={`px-4 py-2.5 min-h-[44px] rounded-lg text-xs font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9E725F] focus-visible:ring-offset-2 ${
+                  tab() === t.id
+                    ? "bg-[#9E725F] text-white shadow-xs"
+                    : "text-[#6F7173] hover:text-[#2B2C2D]"
+                }`}
+              >
+                {t.label}
+              </button>
+            )}
+          </For>
         </div>
       </div>
 
       {/* Tab 1: Webmail Client */}
       {tab() === "webmail" && (
-        <div class="mt-6 rounded-2xl border border-[#E2DFD8] bg-[#FBFAF7] overflow-hidden shadow-xs">
+        <div
+          role="tabpanel"
+          id="panel-webmail"
+          aria-labelledby="tab-webmail"
+          class="mt-6 rounded-2xl border border-[#E2DFD8] bg-[#FBFAF7] overflow-hidden shadow-xs"
+        >
           <div class="flex items-center gap-2 border-b border-[#E2DFD8] bg-[#F4F2EC] px-4 py-3">
             <div class="flex gap-1.5">
               <span class="h-2.5 w-2.5 rounded-full bg-[#E2DFD8]"></span>
@@ -97,57 +98,70 @@ export function PlatformShowcase() {
             <div class="md:col-span-4 border-r border-[#E2DFD8] bg-[#F4F2EC]/50 p-3 space-y-1">
               <button
                 type="button"
-                class="w-full mb-3 px-3 py-2 btn-primary text-xs font-semibold rounded-lg flex items-center justify-center gap-2"
+                class="w-full mb-3 min-h-[44px] px-3 py-2 btn-primary text-xs font-semibold rounded-lg flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9E725F] focus-visible:ring-offset-2"
               >
-                <span>+</span> Compose Message
+                <svg
+                  class="h-4 w-4 stroke-2"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  aria-hidden="true"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+                Compose Message
               </button>
 
-              {mailboxNav.map((item) => (
-                <div
-                  class={`flex items-center justify-between rounded-lg px-3 py-2 text-xs font-medium cursor-pointer ${
-                    item.active
-                      ? "bg-[#9E725F] text-white font-semibold"
-                      : "text-[#3C3D3E] hover:bg-white/60"
-                  }`}
-                >
-                  <span>{item.label}</span>
-                  {item.count && (
-                    <span
-                      class={`text-[10px] font-mono px-1.5 py-0.5 rounded-md ${
-                        item.active ? "bg-white/20 text-white" : "bg-[#E2DFD8] text-[#6F7173]"
-                      }`}
-                    >
-                      {item.count}
-                    </span>
-                  )}
-                </div>
-              ))}
+              <For each={mailboxNav}>
+                {(item) => (
+                  <div
+                    class={`flex items-center justify-between rounded-lg px-3 py-2 text-xs font-medium cursor-pointer ${
+                      item.active
+                        ? "bg-[#9E725F] text-white font-semibold"
+                        : "text-[#3C3D3E] hover:bg-white/60"
+                    }`}
+                  >
+                    <span>{item.label}</span>
+                    {item.count && (
+                      <span
+                        class={`text-[10px] font-mono px-1.5 py-0.5 rounded-md ${
+                          item.active ? "bg-white/20 text-white" : "bg-[#E2DFD8] text-[#6F7173]"
+                        }`}
+                      >
+                        {item.count}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </For>
             </div>
 
             {/* Email list */}
             <div class="md:col-span-8 divide-y divide-[#E2DFD8] bg-white">
-              {emails.map((e) => (
-                <div class="flex items-center gap-3 px-4 py-3.5 hover:bg-[#F3ECE8]/40 cursor-pointer transition-colors">
-                  <span
-                    class={`h-2 w-2 rounded-full shrink-0 ${
-                      e.unread ? "bg-[#9E725F]" : "bg-transparent"
-                    }`}
-                  ></span>
-                  <div class="min-w-0 flex-1">
-                    <div class="flex items-center justify-between">
-                      <span
-                        class={`text-xs ${
-                          e.unread ? "font-bold text-[#2B2C2D]" : "font-medium text-[#3C3D3E]"
-                        }`}
-                      >
-                        {e.from}
-                      </span>
-                      <span class="text-[10px] font-mono text-[#8B8E91]">{e.time}</span>
+              <For each={emails}>
+                {(e) => (
+                  <div class="flex items-center gap-3 px-4 py-3.5 hover:bg-[#F3ECE8]/40 cursor-pointer transition-colors">
+                    <span
+                      class={`h-2 w-2 rounded-full shrink-0 ${
+                        e.unread ? "bg-[#9E725F]" : "bg-transparent"
+                      }`}
+                    ></span>
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center justify-between">
+                        <span
+                          class={`text-xs ${
+                            e.unread ? "font-bold text-[#2B2C2D]" : "font-medium text-[#3C3D3E]"
+                          }`}
+                        >
+                          {e.from}
+                        </span>
+                        <span class="text-[10px] font-mono text-[#8B8E91]">{e.time}</span>
+                      </div>
+                      <p class="truncate text-xs text-[#6F7173] mt-0.5">{e.subj}</p>
                     </div>
-                    <p class="truncate text-xs text-[#6F7173] mt-0.5">{e.subj}</p>
                   </div>
-                </div>
-              ))}
+                )}
+              </For>
             </div>
           </div>
         </div>
@@ -155,33 +169,40 @@ export function PlatformShowcase() {
 
       {/* Tab 2: Domains & Aliases */}
       {tab() === "domains" && (
-        <div class="mt-6 rounded-2xl border border-[#E2DFD8] bg-white overflow-hidden shadow-xs">
+        <div
+          role="tabpanel"
+          id="panel-domains"
+          aria-labelledby="tab-domains"
+          class="mt-6 rounded-2xl border border-[#E2DFD8] bg-white overflow-hidden shadow-xs"
+        >
           <div class="flex items-center justify-between border-b border-[#E2DFD8] bg-[#F4F2EC] px-5 py-3.5">
             <span class="text-xs font-mono font-bold uppercase tracking-wider text-[#2B2C2D]">
               Domain: acme.com
             </span>
-            <span class="rounded-full border border-[#9E725F]/30 bg-[#F3ECE8] px-3 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#865E4D]">
+            <span class="shrink-0 rounded-full border border-[#9E725F]/30 bg-[#F3ECE8] px-3 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#865E4D]">
               DNS Active & Verified
             </span>
           </div>
 
           <div class="divide-y divide-[#E2DFD8]">
-            {domainList.map((item) => (
-              <div class="flex items-center justify-between px-5 py-4 hover:bg-[#FBFAF7] transition-colors">
-                <div class="flex items-center gap-3">
-                  <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-[#F3ECE8] border border-[#9E725F]/20 text-[#9E725F] font-mono text-xs font-bold">
-                    @
+            <For each={domainList}>
+              {(item) => (
+                <div class="flex items-center justify-between px-5 py-4 hover:bg-[#FBFAF7] transition-colors">
+                  <div class="flex items-center gap-3">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-[#F3ECE8] border border-[#9E725F]/20 text-[#9E725F] font-mono text-xs font-bold shrink-0">
+                      @
+                    </div>
+                    <div>
+                      <div class="text-sm font-mono font-bold text-[#2B2C2D]">{item.addr}</div>
+                      <div class="text-xs text-[#6F7173]">{item.type}</div>
+                    </div>
                   </div>
-                  <div>
-                    <div class="text-sm font-mono font-bold text-[#2B2C2D]">{item.addr}</div>
-                    <div class="text-xs text-[#6F7173]">{item.type}</div>
-                  </div>
+                  <span class="shrink-0 text-[11px] font-mono uppercase tracking-wider text-[#865E4D] font-semibold">
+                    {item.status}
+                  </span>
                 </div>
-                <span class="text-[11px] font-mono uppercase tracking-wider text-[#865E4D] font-semibold">
-                  {item.status}
-                </span>
-              </div>
-            ))}
+              )}
+            </For>
           </div>
 
           <div class="border-t border-[#E2DFD8] bg-[#F4F2EC]/60 px-5 py-3 text-xs text-[#6F7173] flex justify-between items-center">
@@ -193,18 +214,25 @@ export function PlatformShowcase() {
 
       {/* Tab 3: Admin Console */}
       {tab() === "admin" && (
-        <div class="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {adminControls.map((ctrl) => (
-            <div class="rounded-2xl border border-[#E2DFD8] bg-[#FBFAF7] p-5 hover:border-[#9E725F]/40 transition-all">
-              <div class="flex items-center justify-between">
-                <h4 class="font-display text-base font-bold text-[#2B2C2D]">{ctrl.name}</h4>
-                <span class="rounded-md border border-[#9E725F]/20 bg-[#F3ECE8] px-2.5 py-0.5 text-[10px] font-mono font-bold text-[#865E4D]">
-                  {ctrl.badge}
-                </span>
+        <div
+          role="tabpanel"
+          id="panel-admin"
+          aria-labelledby="tab-admin"
+          class="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4"
+        >
+          <For each={adminControls}>
+            {(ctrl) => (
+              <div class="rounded-2xl border border-[#E2DFD8] bg-[#FBFAF7] p-5 hover:border-[#9E725F]/40 transition-all">
+                <div class="flex items-center justify-between gap-2">
+                  <h4 class="font-display text-base font-bold text-[#2B2C2D]">{ctrl.name}</h4>
+                  <span class="shrink-0 rounded-md border border-[#9E725F]/20 bg-[#F3ECE8] px-2.5 py-0.5 text-[10px] font-mono font-bold text-[#865E4D]">
+                    {ctrl.badge}
+                  </span>
+                </div>
+                <p class="mt-2 text-xs text-[#6F7173] leading-relaxed">{ctrl.desc}</p>
               </div>
-              <p class="mt-2 text-xs text-[#6F7173] leading-relaxed">{ctrl.desc}</p>
-            </div>
-          ))}
+            )}
+          </For>
         </div>
       )}
     </div>
