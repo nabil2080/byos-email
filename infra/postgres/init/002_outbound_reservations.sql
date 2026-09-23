@@ -44,6 +44,10 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='outbound_worker_login') THEN
     CREATE ROLE outbound_worker_login WITH LOGIN;
   END IF;
+  -- Note: dev-only password. Production deployments use a real secret.
+  -- If this migration has already run in an existing database, an ALTER won't
+  -- apply without a volume rebuild (`docker compose down -v`).
+  ALTER ROLE outbound_worker_login WITH PASSWORD 'byos_outbound_worker_dev';
 END $$;
 -- Login role inherits group privileges; production password via Docker secret /run/secrets/outbound_worker_db_password
 GRANT outbound_worker TO outbound_worker_login;

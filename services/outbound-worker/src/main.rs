@@ -598,14 +598,15 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
 
         // Recipient count check (per-message limit)
         let rcpt_count = count_recipients(&plaintext);
-        // Lookup plan for recipients limit
-        let (mailbox_plan, org_id) = match client.query_opt("SELECT plan, org_id::text FROM mailboxes WHERE id=$1", &[&Uuid::parse_str(&mailbox_id).unwrap()]).await {
+        // Lookup plan for recipients limit and local_part for envelope sender
+        let (mailbox_plan, org_id, local_part) = match client.query_opt("SELECT plan, org_id::text, local_part FROM mailboxes WHERE id=$1", &[&Uuid::parse_str(&mailbox_id).unwrap()]).await {
             Ok(Some(r)) => {
                 let p: String = r.get(0);
                 let oid: String = r.get(1);
-                (p, oid)
+                let lp: String = r.get(2);
+                (p, oid, lp)
             },
-            _ => ("solo".to_string(), "".to_string()),
+            _ => ("solo".to_string(), "".to_string(), "noreply".to_string()),
         };
         let recip_limit = get_limit(&mailbox_plan, "recipients", "recipients");
         if rcpt_count as i32 > recip_limit {
@@ -696,10 +697,11 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
                 continue;
             }
         };
-        let sender_addr: Address = match format!("noreply@{}", domain_name).parse() {
+        let sender_email = format!("{}@{}", local_part, domain_name);
+        let sender_addr: Address = match sender_email.parse() {
             Ok(a) => a,
             Err(e) => {
-                warn!("invalid sender domain {} {}: {}", delivery_id, domain_name, e);
+                warn!("invalid sender address {} {}: {}", delivery_id, sender_email, e);
                 client.execute("UPDATE outbound_queue SET status='bounced', failed_at=now(), attempts=attempts+1 WHERE id=$1", &[&Uuid::parse_str(&id).unwrap()]).await?;
                 continue;
             }

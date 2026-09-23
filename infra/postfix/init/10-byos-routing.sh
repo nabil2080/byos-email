@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 
 # Postfix configuration for OUTBOUND ONLY
 # Inbound mail is handled by dedicated inbound-bridge service
@@ -24,3 +25,34 @@ postconf -e 'submission_sasl_auth_enable = yes'
 postconf -e 'submission_sasl_security_options = noanonymous'
 postconf -e 'submission_sasl_type = dovecot'
 postconf -e 'submission_sasl_path = private/auth'
+
+# Configurable outbound relay: Direct MX (default), Mailpit, or SES
+if [ -n "$POSTFIX_RELAYHOST" ]; then
+    echo "Configuring Postfix relayhost: $POSTFIX_RELAYHOST"
+    postconf -e "relayhost = $POSTFIX_RELAYHOST"
+
+    case "$POSTFIX_RELAYHOST" in
+        *email-smtp*|*amazonaws.com*)
+            echo "SES relay mode detected ($POSTFIX_RELAYHOST)"
+            CREDS_FILE="/run/secrets/ses_smtp_credentials"
+            if [ ! -f "$CREDS_FILE" ] || [ ! -s "$CREDS_FILE" ]; then
+                echo "FATAL: SES relay configured ($POSTFIX_RELAYHOST) but credentials secret $CREDS_FILE not found or empty." >&2
+                exit 1
+            fi
+            cp "$CREDS_FILE" /etc/postfix/sasl_passwd
+            chmod 600 /etc/postfix/sasl_passwd
+            postmap hash:/etc/postfix/sasl_passwd
+            postconf -e 'smtp_sasl_auth_enable = yes'
+            postconf -e 'smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd'
+            postconf -e 'smtp_sasl_security_options = noanonymous'
+            postconf -e 'smtp_tls_security_level = encrypt'
+            echo "SES SASL credentials and TLS encryption configured"
+            ;;
+        *)
+            echo "Relay mode configured without SASL (e.g. Mailpit/local catcher)"
+            ;;
+    esac
+else
+    echo "No POSTFIX_RELAYHOST set; using direct MX delivery via DNS"
+    postconf -e 'relayhost ='
+fi

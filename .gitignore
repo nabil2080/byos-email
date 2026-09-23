@@ -42,6 +42,7 @@ target/
 infra/postgres/dev-bootstrap/
 # Docker secrets (contain private keys, never commit)
 infra/secrets/
+infra/secrets/ses_smtp_credentials.txt
 
 # Astro generated cache (contains local pid/startedAt dev artifacts)
 **/.astro/
