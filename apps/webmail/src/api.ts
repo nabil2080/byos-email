@@ -856,10 +856,17 @@ export async function saveRecoveryMethods(recoveryEmail: string, recoveryPhone: 
   });
 }
 
-export async function changeAccountPassword(newPassword: string): Promise<void> {
+export async function changeAccountPassword(
+  newPassword: string,
+  wrappedSkUser?: string
+): Promise<void> {
+  const payload: Record<string, string> = { new_password: newPassword };
+  if (wrappedSkUser) {
+    payload.wrapped_sk_user = wrappedSkUser;
+  }
   return apiRequest<void>("/v1/auth/change-password", {
     method: "POST",
-    body: JSON.stringify({ new_password: newPassword }),
+    body: JSON.stringify(payload),
   });
 }
 
@@ -1181,8 +1188,31 @@ export async function fetchRecoveryOptions(
     `/v1/auth/recovery/options?email=${encodeURIComponent(email)}`
   );
 }
+export interface KeyDirectoryRecord {
+  email_address: string;
+  key_id: string;
+  key_epoch: number;
+  xwing_public_key: string;
+  ed25519_signing_public_key: string;
+  signing_key_epoch: number;
+  status: string;
+  updated_at: string;
+}
 
+export async function lookupMailboxKeys(
+  email: string,
+): Promise<KeyDirectoryRecord> {
+  return apiRequest<KeyDirectoryRecord>(
+    `/v1/keys/${encodeURIComponent(email)}`,
+  );
+}
 
-
-
-
+export async function publishMailboxKeys(payload: {
+  xwing_public_key?: string;
+  ed25519_signing_public_key: string;
+}): Promise<{ status: string; key_epoch: number; signing_key_epoch: number }> {
+  return apiRequest("/v1/keys/me", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}

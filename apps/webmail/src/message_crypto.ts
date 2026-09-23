@@ -68,15 +68,20 @@ export function unlockMailboxKey(
   return sk;
 }
 
+export interface UnwrappedKeys {
+  mailboxSk: Uint8Array;
+  signingSeed: Uint8Array | null;
+}
+
 /**
  * Automate password-based key unwrapping on login via Argon2id.
- * Unwraps mailbox_sk using wasm_passphrase_unwrap_key without 24-word phrase entry.
+ * Unwraps mailbox_sk and signing_seed using wasm_passphrase_unwrap_key without 24-word phrase entry.
  */
-export function autoUnwrapMailboxKey(
+export function autoUnwrapKeys(
   wasm: typeof WasmCore,
   password: string,
   wrappedSkUser: string
-): Uint8Array {
+): UnwrappedKeys {
   const trimmed = wrappedSkUser.trim();
   if (!trimmed) {
     throw new Error("Missing wrapped_sk_user");
@@ -84,10 +89,11 @@ export function autoUnwrapMailboxKey(
 
   let saltHex = "";
   let envelopeHex = "";
+  let parsed: any = null;
 
   if (trimmed.startsWith("{")) {
     try {
-      const parsed = JSON.parse(trimmed);
+      parsed = JSON.parse(trimmed);
       saltHex = parsed.salt || parsed.salt_hex || "";
       envelopeHex = parsed.envelope || parsed.envelope_hex || "";
     } catch {
@@ -109,11 +115,39 @@ export function autoUnwrapMailboxKey(
   }
 
   const skHex = wasm.wasm_passphrase_unwrap_key(password, saltHex, envelopeHex);
-  const sk = hexToBytes(skHex);
-  if (sk.length !== 32) {
+  const mailboxSk = hexToBytes(skHex);
+  if (mailboxSk.length !== 32) {
     throw new Error("Unwrapped mailbox key is invalid length");
   }
-  return sk;
+
+  let signingSeed: Uint8Array | null = null;
+  if (parsed && parsed.signing_salt && parsed.signing_envelope) {
+    try {
+      const seedHex = wasm.wasm_passphrase_unwrap_key(
+        password,
+        parsed.signing_salt,
+        parsed.signing_envelope
+      );
+      const seed = hexToBytes(seedHex);
+      if (seed.length === 32) {
+        signingSeed = seed;
+      }
+    } catch (e) {
+      // Legacy user or corrupted payload — degrade gracefully
+      console.warn("Failed to unwrap signing seed; signing disabled", e);
+    }
+  }
+
+  return { mailboxSk, signingSeed };
+}
+
+/** Backwards-compatible convenience wrapper returning only mailboxSk */
+export function autoUnwrapMailboxKey(
+  wasm: typeof WasmCore,
+  password: string,
+  wrappedSkUser: string
+): Uint8Array {
+  return autoUnwrapKeys(wasm, password, wrappedSkUser).mailboxSk;
 }
 
 export function unwrapMailboxKeyWithRecoveryPhrase(

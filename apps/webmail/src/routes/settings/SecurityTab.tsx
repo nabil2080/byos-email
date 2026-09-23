@@ -22,6 +22,7 @@ import {
   listPasskeys,
   deletePasskey,
   reactivateHistoricalKeys,
+  fetchMailboxDetail,
 } from "../../api";
 import {
   unwrapMailboxKeyWithRecoveryPhrase,
@@ -33,6 +34,8 @@ import { generateQRCodeSVG } from "../../utils/qr";
 interface SecurityTabProps {
   mailbox: Mailbox;
   currentUser: UserMe | null;
+  mailboxKey?: Uint8Array | null;
+  signingSeed?: Uint8Array | null;
   onReactivateSuccess?: () => void;
 }
 
@@ -369,8 +372,98 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
         throw new Error(verifyRes.error || "Current password is incorrect.");
       }
 
-      // 2. Submit new password
-      await changeAccountPassword(next);
+      // 2. Resolve in-memory keys
+      let mbKeyBytes: Uint8Array | null = props.mailboxKey || null;
+      if (!mbKeyBytes && props.mailbox?.id) {
+        const savedHex = sessionStorage.getItem("byos_mailbox_sk_" + props.mailbox.id);
+        if (savedHex) {
+          mbKeyBytes = new Uint8Array(savedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+        }
+      }
+
+      let signSeedBytes: Uint8Array | null = props.signingSeed || null;
+      if (!signSeedBytes && props.mailbox?.id) {
+        const savedHex = sessionStorage.getItem("byos_signing_seed_" + props.mailbox.id);
+        if (savedHex) {
+          signSeedBytes = new Uint8Array(savedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+        }
+      }
+
+      let newWrappedPayload: string | undefined = undefined;
+
+      if (mbKeyBytes) {
+        // Fetch current mailbox detail to preserve recovery_root wrapped copies
+        let existingWrapped = props.mailbox?.wrapped_sk_user || props.currentUser?.wrapped_sk_user || "";
+        if (props.mailbox?.id) {
+          try {
+            const detail = await fetchMailboxDetail(props.mailbox.id);
+            if (detail?.wrapped_sk_user) {
+              existingWrapped = detail.wrapped_sk_user;
+            }
+          } catch (fetchErr) {
+            console.warn("Could not fetch mailbox detail before password change:", fetchErr);
+          }
+        }
+
+        let rootWrapped = "";
+        let signingRootWrapped = "";
+        if (existingWrapped && existingWrapped.startsWith("{")) {
+          try {
+            const parsed = JSON.parse(existingWrapped);
+            rootWrapped = parsed.root_wrapped || "";
+            signingRootWrapped = parsed.signing_root_wrapped || "";
+          } catch (parseErr) {
+            console.warn("Could not parse existing wrapped_sk_user:", parseErr);
+          }
+        }
+
+        try {
+          const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
+
+          // Fresh salt for mailbox key password wrap
+          const mbSalt = new Uint8Array(16);
+          crypto.getRandomValues(mbSalt);
+          const mbSaltHex = Array.from(mbSalt).map((b) => b.toString(16).padStart(2, "0")).join("");
+          const mbSkHex = Array.from(mbKeyBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+          const mbEnvelope = wasm.wasm_passphrase_wrap_key(next, mbSaltHex, mbSkHex);
+
+          let signingSaltHex = "";
+          let signingEnvelope = "";
+          if (signSeedBytes) {
+            const sSalt = new Uint8Array(16);
+            crypto.getRandomValues(sSalt);
+            signingSaltHex = Array.from(sSalt).map((b) => b.toString(16).padStart(2, "0")).join("");
+            const seedHex = Array.from(signSeedBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+            signingEnvelope = wasm.wasm_passphrase_wrap_key(next, signingSaltHex, seedHex);
+          }
+
+          const payloadObj: Record<string, string> = {
+            salt: mbSaltHex,
+            envelope: mbEnvelope,
+            root_wrapped: rootWrapped,
+          };
+          if (signingSaltHex && signingEnvelope) {
+            payloadObj.signing_salt = signingSaltHex;
+            payloadObj.signing_envelope = signingEnvelope;
+          }
+          if (signingRootWrapped) {
+            payloadObj.signing_root_wrapped = signingRootWrapped;
+          }
+
+          newWrappedPayload = JSON.stringify(payloadObj);
+        } catch (rewrapErr: any) {
+          console.error("Failed to re-wrap keys under new password:", rewrapErr);
+          throw new Error("Failed to re-wrap mailbox encryption keys under the new password. Password was not changed.");
+        }
+      } else {
+        console.warn("Mailbox key not available in memory; skipping key re-wrap during password change.");
+      }
+
+      // 3. Submit new password (with re-wrapped key material if available)
+      await changeAccountPassword(next, newWrappedPayload);
+      if (props.mailbox && newWrappedPayload) {
+        props.mailbox.wrapped_sk_user = newWrappedPayload;
+      }
       setChangePasswordModalOpen(false);
       setCurrentPasswordInput("");
       setNewPasswordInput("");

@@ -40,6 +40,7 @@ export const SetupAccount: Component = () => {
   const [derivedMailboxPk, setDerivedMailboxPk] = createSignal<string>("");
   const [derivedWrappedSkUser, setDerivedWrappedSkUser] = createSignal<string>("");
   const [rawMailboxSkHex, setRawMailboxSkHex] = createSignal<string>("");
+  const [rawSigningSeedHex, setRawSigningSeedHex] = createSignal<string>("");
 
   onMount(async () => {
     const params = new URLSearchParams(window.location.search);
@@ -138,15 +139,44 @@ export const SetupAccount: Component = () => {
       const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
       const passphraseEnvelope = wasm.wasm_passphrase_wrap_key(password(), saltHex, mailboxSkHex);
 
+      // 3. Derive signing seed and wrap twice (password + recovery_root)
+      const signingSeedHex = wasm.wasm_derive_signing_seed(
+        rootHex,
+        boxIdHex,
+        1,
+      );
+
+      const signingSalt = new Uint8Array(16);
+      crypto.getRandomValues(signingSalt);
+      const signingSaltHex = Array.from(signingSalt)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+
+      const signingEnvelope = wasm.wasm_passphrase_wrap_key(
+        password(),
+        signingSaltHex,
+        signingSeedHex,
+      );
+
+      const signingRootWrapped = wasm.wasm_wrap_signing_seed(
+        rootHex,
+        signingSeedHex,
+        boxIdHex,
+      );
+
       // Store payload supporting both password unwrap and recovery phrase unwrap
       const wrappedSkPayload = JSON.stringify({
         salt: saltHex,
         envelope: passphraseEnvelope,
         root_wrapped: rootWrappedHex,
+        signing_salt: signingSaltHex,
+        signing_envelope: signingEnvelope,
+        signing_root_wrapped: signingRootWrapped,
       });
 
       setDerivedWrappedSkUser(wrappedSkPayload);
       setRawMailboxSkHex(mailboxSkHex);
+      setRawSigningSeedHex(signingSeedHex);
       setStep(2);
     } catch (err: any) {
       setSubmitError(err?.message || "Failed to initialize cryptographic material.");
@@ -288,6 +318,10 @@ export const SetupAccount: Component = () => {
         sKeyHex = wasm.wasm_derive_search_key(mailboxSk);
         sessionStorage.setItem("byos_mailbox_sk_" + data.mailbox_id, mailboxSk);
         sessionStorage.setItem("byos_mailbox_skey_" + data.mailbox_id, sKeyHex);
+        const signingSeed = rawSigningSeedHex();
+        if (signingSeed) {
+          sessionStorage.setItem("byos_signing_seed_" + data.mailbox_id, signingSeed);
+        }
       }
       if (claimRes.token) {
         sessionStorage.setItem("byos_active_session_token", claimRes.token);

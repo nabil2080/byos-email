@@ -796,6 +796,39 @@ pub fn unwrap_mailbox_key(
     Ok(result)
 }
 
+pub const SIGNING_SEED_AAD_SUFFIX: &[u8] = b"signing-seed-v1";
+
+/// Wrap signing_seed with root_secret using AES-256-GCM.
+/// Envelope: version(1) || nonce(12) || ciphertext+tag
+pub fn wrap_signing_seed(
+    root_secret: &[u8; 32],
+    seed: &[u8; 32],
+    mailbox_id: &[u8; 16],
+) -> Result<Vec<u8>, CryptoError> {
+    let mut aad = Vec::with_capacity(16 + SIGNING_SEED_AAD_SUFFIX.len());
+    aad.extend_from_slice(mailbox_id);
+    aad.extend_from_slice(SIGNING_SEED_AAD_SUFFIX);
+    aes_gcm_encrypt(root_secret, seed, &aad)
+}
+
+/// Unwrap signing_seed using root_secret.
+pub fn unwrap_signing_seed(
+    root_secret: &[u8; 32],
+    wrapped: &[u8],
+    mailbox_id: &[u8; 16],
+) -> Result<[u8; 32], CryptoError> {
+    let mut aad = Vec::with_capacity(16 + SIGNING_SEED_AAD_SUFFIX.len());
+    aad.extend_from_slice(mailbox_id);
+    aad.extend_from_slice(SIGNING_SEED_AAD_SUFFIX);
+    let bytes = aes_gcm_decrypt(root_secret, wrapped, &aad)?;
+    if bytes.len() != 32 {
+        return Err(CryptoError::InvalidFormat);
+    }
+    let mut result = [0u8; 32];
+    result.copy_from_slice(&bytes);
+    Ok(result)
+}
+
 // =============================================
 // Outbound Delivery (client-side encryption, server-side decryption)
 // =============================================
@@ -1554,6 +1587,100 @@ pub fn sign_with_handle(
 #[wasm_bindgen]
 pub fn drop_signing_key(handle: SigningKeyHandle) {
     drop(handle);
+}
+
+#[wasm_bindgen]
+pub fn wasm_derive_signing_seed(
+    recovery_root_hex: &str,
+    mailbox_id_hex: &str,
+    key_epoch: u32,
+) -> Result<String, JsValue> {
+    let root = hex_decode_32(recovery_root_hex).map_err(|e| JsValue::from_str(&e))?;
+    let mb_bytes = hex_decode(mailbox_id_hex).map_err(|e| JsValue::from_str(&e))?;
+    let mb_id: [u8; 16] = mb_bytes
+        .try_into()
+        .map_err(|_| JsValue::from_str("mailbox_id must be 16 bytes"))?;
+    let signing_key = derive_signing_key(&root, &mb_id, key_epoch)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(hex_encode(&signing_key.to_bytes()))
+}
+
+#[wasm_bindgen]
+pub fn wasm_wrap_signing_seed(
+    recovery_root_hex: &str,
+    seed_hex: &str,
+    mailbox_id_hex: &str,
+) -> Result<String, JsValue> {
+    let root = hex_decode_32(recovery_root_hex).map_err(|e| JsValue::from_str(&e))?;
+    let seed = hex_decode_32(seed_hex).map_err(|e| JsValue::from_str(&e))?;
+    let mb_bytes = hex_decode(mailbox_id_hex).map_err(|e| JsValue::from_str(&e))?;
+    let mb_id: [u8; 16] = mb_bytes
+        .try_into()
+        .map_err(|_| JsValue::from_str("mailbox_id must be 16 bytes"))?;
+    let wrapped = wrap_signing_seed(&root, &seed, &mb_id)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(hex_encode(&wrapped))
+}
+
+#[wasm_bindgen]
+pub fn wasm_unwrap_signing_seed(
+    recovery_root_hex: &str,
+    wrapped_hex: &str,
+    mailbox_id_hex: &str,
+) -> Result<String, JsValue> {
+    let root = hex_decode_32(recovery_root_hex).map_err(|e| JsValue::from_str(&e))?;
+    let wrapped = hex_decode(wrapped_hex).map_err(|e| JsValue::from_str(&e))?;
+    let mb_bytes = hex_decode(mailbox_id_hex).map_err(|e| JsValue::from_str(&e))?;
+    let mb_id: [u8; 16] = mb_bytes
+        .try_into()
+        .map_err(|_| JsValue::from_str("mailbox_id must be 16 bytes"))?;
+    let unwrapped = unwrap_signing_seed(&root, &wrapped, &mb_id)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(hex_encode(&unwrapped))
+}
+
+#[wasm_bindgen]
+pub fn wasm_signing_public_key_from_seed(
+    seed_hex: &str,
+) -> Result<String, JsValue> {
+    let seed = hex_decode_32(seed_hex).map_err(|e| JsValue::from_str(&e))?;
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    Ok(hex_encode(&signing_public_key(&signing_key)))
+}
+
+#[wasm_bindgen]
+pub fn wasm_sign_with_seed(
+    seed_hex: &str,
+    aad_hex: &str,
+    ciphertext_hex: &str,
+) -> Result<String, JsValue> {
+    let seed = hex_decode_32(seed_hex).map_err(|e| JsValue::from_str(&e))?;
+    let aad = hex_decode(aad_hex).map_err(|e| JsValue::from_str(&e))?;
+    let ct = hex_decode(ciphertext_hex).map_err(|e| JsValue::from_str(&e))?;
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let sig = sign_message(&signing_key, &aad, &ct)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(hex_encode(&sig))
+}
+
+#[wasm_bindgen]
+pub fn wasm_verify_signature(
+    public_key_hex: &str,
+    aad_hex: &str,
+    ciphertext_hex: &str,
+    signature_hex: &str,
+) -> Result<bool, JsValue> {
+    let pk = hex_decode_32(public_key_hex).map_err(|e| JsValue::from_str(&e))?;
+    let aad = hex_decode(aad_hex).map_err(|e| JsValue::from_str(&e))?;
+    let ct = hex_decode(ciphertext_hex).map_err(|e| JsValue::from_str(&e))?;
+    let sig_bytes = hex_decode(signature_hex).map_err(|e| JsValue::from_str(&e))?;
+    let sig: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| JsValue::from_str("signature must be 64 bytes"))?;
+    match verify_message_signature(&pk, &sig, &aad, &ct) {
+        Ok(()) => Ok(true),
+        Err(_) => Ok(false),
+    }
 }
 
 // =============================================

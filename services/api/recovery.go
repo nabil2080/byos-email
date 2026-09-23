@@ -302,7 +302,8 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req struct {
-		NewPassword string `json:"new_password"`
+		NewPassword   string `json:"new_password"`
+		WrappedSkUser string `json:"wrapped_sk_user,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -311,6 +312,14 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 	if len(req.NewPassword) < 8 || len(req.NewPassword) > 128 {
 		http.Error(w, "password must be 8-128 characters", http.StatusBadRequest)
 		return
+	}
+	wrappedSkUser := strings.TrimSpace(req.WrappedSkUser)
+	if wrappedSkUser != "" {
+		var js map[string]interface{}
+		if err := json.Unmarshal([]byte(wrappedSkUser), &js); err != nil {
+			http.Error(w, "invalid wrapped_sk_user: must be valid JSON object", http.StatusBadRequest)
+			return
+		}
 	}
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -339,6 +348,13 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
+	}
+	if wrappedSkUser != "" {
+		_, err = tx.Exec(ctx, `UPDATE mailboxes SET wrapped_sk_user=$1, mailbox_sk_wrapped=$2, updated_at=NOW() WHERE user_id=$3 AND is_active=true`, wrappedSkUser, []byte(wrappedSkUser), userID)
+		if err != nil {
+			http.Error(w, "failed to update mailbox wrapped key", http.StatusInternalServerError)
+			return
+		}
 	}
 	// Revoke every other session so the forgotten/old credential's sessions
 	// die; the current session (this request's cookie) stays alive.

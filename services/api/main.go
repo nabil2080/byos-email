@@ -324,6 +324,11 @@ func main() {
 	http.HandleFunc("/v1/bridge/message-body", withSecurityHeaders(withCORS(bridgeMessageBodyHandler)))
 	http.HandleFunc("/v1/bridge/outbound/send", withSecurityHeaders(withCORS(bridgeOutboundSendHandler)))
 
+	// Key Directory Service
+	http.HandleFunc("GET /v1/keys/{email}", withSecurityHeaders(withCORS(keyLookupHandler)))
+	http.HandleFunc("GET /v1/keys/{email}/history", withSecurityHeaders(withCORS(keyHistoryHandler)))
+	http.HandleFunc("PUT /v1/keys/me", withSecurityHeaders(withCORS(keyPublishHandler)))
+
 	http.HandleFunc("/v1/organizations/{org_id}/storage/connection", withSecurityHeaders(withCORS(storageConnectionHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/storage/connection/test", withSecurityHeaders(withCORS(storageConnectionTestHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/storage/google-drive/authorize", withSecurityHeaders(withCORS(googleDriveAuthorizeHandler)))

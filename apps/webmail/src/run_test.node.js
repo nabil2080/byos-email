@@ -3,6 +3,7 @@ import { runTotpTests } from "./utils/totp.test.js";
 import { runDateTimeTests } from "./utils/dateTime.test.js";
 import { runFileTypeTests } from "./fileType.test.js";
 import { runMultiAccountTests } from "./multi_account.test.js";
+import { runPasswordRewrapTests } from "./password_rewrap.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -36,6 +37,12 @@ async function main() {
   console.log(`MULTI ACCOUNT TESTS: ${multiAccountRes.passed} passed, ${multiAccountRes.failed} failed\n`);
   totalPassed += multiAccountRes.passed;
   totalFailed += multiAccountRes.failed;
+
+  console.log("Running Password Rewrap Tests...");
+  const rewrapRes = runPasswordRewrapTests();
+  console.log(`PASSWORD REWRAP TESTS: ${rewrapRes.passed} passed, ${rewrapRes.failed} failed\n`);
+  totalPassed += rewrapRes.passed;
+  totalFailed += rewrapRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

@@ -63,10 +63,12 @@ import {
   reactivateHistoricalKeys,
   apiRequest,
   RecoveryOptionItem,
+  publishMailboxKeys,
 } from "./api";
 import {
   unlockMailboxKey,
   autoUnwrapMailboxKey,
+  autoUnwrapKeys,
   unwrapMailboxKeyWithRecoveryPhrase,
   decryptMessageEnvelope,
   encryptDraftEnvelope,
@@ -159,6 +161,7 @@ const App: Component = () => {
   // Mailbox key custody: in-memory only, derived per unlock from the recovery
   // phrase. Cleared on mailbox switch and lock. Never persisted or logged.
   const [mailboxKey, setMailboxKey] = createSignal<Uint8Array | null>(null);
+  const [signingSeed, setSigningSeed] = createSignal<Uint8Array | null>(null);
   const [searchKey, setSearchKey] = createSignal<string | null>(null);
   const [serverMatchedMsgIds, setServerMatchedMsgIds] = createSignal<string[]>([]);
   const [isSearchingTokens, setIsSearchingTokens] = createSignal(false);
@@ -904,6 +907,27 @@ const App: Component = () => {
     setSelectedIds(new Set<string>());
   }
 
+  async function publishSigningKeyOnce(boxId: string, seed: Uint8Array): Promise<void> {
+    const key = "byos_signing_pubkey_published_" + boxId;
+    if (typeof window === "undefined" || sessionStorage.getItem(key)) return;
+
+    try {
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      const seedHex = Array.from(seed, (b) => b.toString(16).padStart(2, "0")).join("");
+      const pubHex = wasm.wasm_signing_public_key_from_seed(seedHex);
+      const pubBytes = new Uint8Array(pubHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+      const pubB64 = bytesToBase64(pubBytes);
+
+      // Only publish Ed25519 for now. Note: the server currently requires xwing_public_key (1216 bytes),
+      // so this call may fail with 400 until X-Wing login generation is added or the server endpoint is relaxed.
+      // We catch any error to ensure login is never broken.
+      await publishMailboxKeys({ ed25519_signing_public_key: pubB64 });
+      sessionStorage.setItem(key, "1");
+    } catch (e) {
+      console.warn("Signing key publication failed (expected until X-Wing login generation is added):", e);
+    }
+  }
+
   async function bootstrapSession(user: UserMe, password?: string, sessionToken?: string) {
     setCurrentUser(user);
     const boxes = await fetchMailboxes(user.org_id);
@@ -941,7 +965,8 @@ const App: Component = () => {
       if (password && wrappedSk) {
         try {
           const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-          const skBytes = autoUnwrapMailboxKey(wasm, password, wrappedSk);
+          const unwrapped = autoUnwrapKeys(wasm, password, wrappedSk);
+          const skBytes = unwrapped.mailboxSk;
           currentSkHex = Array.from(skBytes, (b) => b.toString(16).padStart(2, "0")).join("");
           currentSKey = wasm.wasm_derive_search_key(currentSkHex);
           setMailboxKey(skBytes);
@@ -949,6 +974,16 @@ const App: Component = () => {
           setUnlockedBoxId(targetBox.id);
           sessionStorage.setItem("byos_mailbox_sk_" + targetBox.id, currentSkHex);
           sessionStorage.setItem("byos_mailbox_skey_" + targetBox.id, currentSKey);
+
+          if (unwrapped.signingSeed) {
+            setSigningSeed(unwrapped.signingSeed);
+            const seedHex = Array.from(unwrapped.signingSeed, (b) => b.toString(16).padStart(2, "0")).join("");
+            sessionStorage.setItem("byos_signing_seed_" + targetBox.id, seedHex);
+            publishSigningKeyOnce(targetBox.id, unwrapped.signingSeed);
+          } else {
+            setSigningSeed(null);
+            sessionStorage.removeItem("byos_signing_seed_" + targetBox.id);
+          }
         } catch (err) {
           console.warn("Auto-unwrap of mailbox key failed:", err);
         }
@@ -956,6 +991,7 @@ const App: Component = () => {
         // Restore from sessionStorage if user refreshed during an active session
         const savedSk = sessionStorage.getItem("byos_mailbox_sk_" + targetBox.id);
         const savedSKey = sessionStorage.getItem("byos_mailbox_skey_" + targetBox.id);
+        const savedSigningSeed = sessionStorage.getItem("byos_signing_seed_" + targetBox.id);
         if (savedSk) {
           try {
             const bytes = new Uint8Array(savedSk.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)));
@@ -964,9 +1000,18 @@ const App: Component = () => {
             setUnlockedBoxId(targetBox.id);
             currentSkHex = savedSk;
             currentSKey = savedSKey || "";
+
+            if (savedSigningSeed) {
+              const seedBytes = new Uint8Array(savedSigningSeed.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)));
+              setSigningSeed(seedBytes);
+              publishSigningKeyOnce(targetBox.id, seedBytes);
+            } else {
+              setSigningSeed(null);
+            }
           } catch {
             sessionStorage.removeItem("byos_mailbox_sk_" + targetBox.id);
             sessionStorage.removeItem("byos_mailbox_skey_" + targetBox.id);
+            sessionStorage.removeItem("byos_signing_seed_" + targetBox.id);
           }
         }
       }
@@ -1031,11 +1076,22 @@ const App: Component = () => {
           setUnlockedBoxId(account.id);
           sessionStorage.setItem("byos_mailbox_sk_" + account.id, account.mailboxSkHex);
           sessionStorage.setItem("byos_mailbox_skey_" + account.id, account.searchKeyHex);
+
+          // Restore signing seed if present
+          const savedSigningSeed = sessionStorage.getItem("byos_signing_seed_" + account.id);
+          if (savedSigningSeed) {
+            const seedBytes = new Uint8Array(savedSigningSeed.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+            setSigningSeed(seedBytes);
+            publishSigningKeyOnce(account.id, seedBytes);
+          } else {
+            setSigningSeed(null);
+          }
         } catch (err) {
           console.warn("Failed restoring mailbox key on switch:", err);
         }
       } else {
         setMailboxKey(null);
+        setSigningSeed(null);
         setSearchKey(null);
         setUnlockedBoxId(null);
       }
@@ -1551,6 +1607,15 @@ const App: Component = () => {
           if (vaultData.search_key_hex) {
             sessionStorage.setItem("byos_mailbox_skey_" + vaultData.mailbox_id, vaultData.search_key_hex);
           }
+          const savedSigningSeed = (vaultData as any).signing_seed_hex || sessionStorage.getItem("byos_signing_seed_" + vaultData.mailbox_id);
+          if (savedSigningSeed) {
+            const seedBytes = new Uint8Array(savedSigningSeed.match(/.{1,2}/g)!.map((b: string) => parseInt(b, 16)));
+            setSigningSeed(seedBytes);
+            sessionStorage.setItem("byos_signing_seed_" + vaultData.mailbox_id, savedSigningSeed);
+            publishSigningKeyOnce(vaultData.mailbox_id, seedBytes);
+          } else {
+            setSigningSeed(null);
+          }
         } catch (vaultErr) {
           console.warn("Failed restoring mailbox key from passkey vault:", vaultErr);
         }
@@ -1661,6 +1726,23 @@ const App: Component = () => {
       setUnlockedBoxId(box.id);
       sessionStorage.setItem("byos_mailbox_sk_" + box.id, currentSkHex);
       sessionStorage.setItem("byos_mailbox_skey_" + box.id, currentSKey);
+
+      const words = phrase.trim();
+      const rootHex = /^[0-9a-fA-F]{64}$/.test(words)
+        ? words
+        : wasm.wasm_recover_root_secret(words);
+      const boxIdHex = box.id.replace(/-/g, "").toLowerCase();
+      try {
+        const seedHex = wasm.wasm_derive_signing_seed(rootHex, boxIdHex, 1);
+        const seedBytes = new Uint8Array(seedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+        setSigningSeed(seedBytes);
+        sessionStorage.setItem("byos_signing_seed_" + box.id, seedHex);
+        publishSigningKeyOnce(box.id, seedBytes);
+      } catch (seedErr) {
+        console.warn("Failed deriving signing seed from recovery root:", seedErr);
+        setSigningSeed(null);
+      }
+
       await loadMailboxData(box.id);
     } catch (err: any) {
       setLoginError(err?.message || "Invalid recovery phrase or failed to unlock mailbox keys.");
@@ -1686,7 +1768,13 @@ const App: Component = () => {
       setConnectedAccounts([]);
       for (let i = sessionStorage.length - 1; i >= 0; i--) {
         const key = sessionStorage.key(i);
-        if (key && (key.startsWith("byos_mailbox_sk_") || key.startsWith("byos_mailbox_skey_"))) {
+        if (
+          key &&
+          (key.startsWith("byos_mailbox_sk_") ||
+            key.startsWith("byos_mailbox_skey_") ||
+            key.startsWith("byos_signing_seed_") ||
+            key.startsWith("byos_signing_pubkey_published_"))
+        ) {
           sessionStorage.removeItem(key);
         }
       }
@@ -1716,6 +1804,8 @@ const App: Component = () => {
     // 1. Remove target account keys from sessionStorage
     sessionStorage.removeItem("byos_mailbox_sk_" + targetId);
     sessionStorage.removeItem("byos_mailbox_skey_" + targetId);
+    sessionStorage.removeItem("byos_signing_seed_" + targetId);
+    sessionStorage.removeItem("byos_signing_pubkey_published_" + targetId);
 
     // 2. Best-effort server session revocation for target account
     if (targetAccount?.sessionToken) {
@@ -1966,6 +2056,7 @@ const App: Component = () => {
 
   function lockMailbox() {
     setMailboxKey(null);
+    setSigningSeed(null);
     setSearchKey(null);
     setServerMatchedMsgIds([]);
     setUnlockedBoxId(null);
@@ -3464,7 +3555,12 @@ const App: Component = () => {
               <FiltersTab mailbox={selectedMailbox()!} />
             </Show>
             <Show when={activeSettingsTab() === "security" && selectedMailbox()}>
-              <SecurityTab mailbox={selectedMailbox()!} currentUser={currentUser()} onReactivateSuccess={() => {
+              <SecurityTab
+                mailbox={selectedMailbox()!}
+                currentUser={currentUser()}
+                mailboxKey={mailboxKey()}
+                signingSeed={signingSeed()}
+                onReactivateSuccess={() => {
                 const box = selectedMailbox();
                 if (box) {
                   const updatedBox = { ...box, previous_wrapped_sk_user: undefined };

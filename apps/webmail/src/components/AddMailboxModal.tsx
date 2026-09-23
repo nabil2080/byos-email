@@ -1,6 +1,6 @@
 import { Component, createSignal, Show, For } from "solid-js";
 import { ConnectedAccount, login, verifyLogin2FA, sendLogin2FACode, LoginResponse, apiBase } from "../api";
-import { autoUnwrapMailboxKey } from "../message_crypto";
+import { autoUnwrapMailboxKey, autoUnwrapKeys } from "../message_crypto";
 
 interface AddMailboxModalProps {
   isOpen: boolean;
@@ -54,9 +54,14 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
     if (res.wrapped_sk_user) {
       try {
         const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
-        const skBytes = autoUnwrapMailboxKey(wasm, pass, res.wrapped_sk_user);
+        const unwrapped = autoUnwrapKeys(wasm, pass, res.wrapped_sk_user);
+        const skBytes = unwrapped.mailboxSk;
         skHex = Array.from(skBytes, (b) => b.toString(16).padStart(2, "0")).join("");
         searchKeyHex = wasm.wasm_derive_search_key(skHex);
+        if (unwrapped.signingSeed && res.mailbox_id) {
+          const seedHex = Array.from(unwrapped.signingSeed, (b) => b.toString(16).padStart(2, "0")).join("");
+          sessionStorage.setItem("byos_signing_seed_" + res.mailbox_id, seedHex);
+        }
       } catch (unwrapErr) {
         console.warn("Could not unwrap mailbox key with password:", unwrapErr);
       }
