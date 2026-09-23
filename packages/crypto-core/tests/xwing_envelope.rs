@@ -1,6 +1,7 @@
 use byos_crypto_core::{
-    marshal_canonical, unmarshal_canonical, wasm_open_xwing_envelope, wasm_seal_xwing_envelope,
-    xwing,
+    build_envelope_aad, marshal_canonical, sign_message, signing_public_key,
+    unmarshal_canonical, verify_message_signature, wasm_open_xwing_envelope,
+    wasm_seal_xwing_envelope, xwing, CryptoEnvelope, ALG_XWING,
 };
 
 fn make_keypair() -> (Vec<u8>, Vec<u8>) {
@@ -157,3 +158,98 @@ fn test_envelope_canonical_form() {
     let reserialized = marshal_canonical(&env).expect("marshal canonical");
     assert_eq!(json, reserialized);
 }
+
+#[test]
+fn test_cross_language_signed_vector() {
+    let out_path = std::path::Path::new("../../crypto/envelope/testdata/envelope_signed_rust.json");
+
+    if out_path.exists() {
+        let content = std::fs::read_to_string(out_path).expect("read existing vector");
+        let val: serde_json::Value = serde_json::from_str(&content).expect("parse vector json");
+        let envelope_json = val["envelope_json"].as_str().expect("envelope_json");
+        let sender_pk_hex = val["sender_ed25519_public_key_hex"].as_str().expect("sender_pk");
+        let recipient_seed_hex = val["recipient_xwing_seed_hex"].as_str().expect("recipient_seed");
+        let plaintext_hex = val["plaintext_hex"].as_str().expect("plaintext_hex");
+
+        // Verify opening in Rust
+        let opened_hex = wasm_open_xwing_envelope(recipient_seed_hex, envelope_json).expect("open envelope");
+        assert_eq!(opened_hex, plaintext_hex);
+
+        // Verify signature in Rust
+        let env = unmarshal_canonical(envelope_json).expect("unmarshal envelope");
+        let enc_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &env.enc).expect("decode enc");
+        let nonce_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &env.nonce).expect("decode nonce");
+        let ct_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &env.ciphertext).expect("decode ct");
+        let sig_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, env.sig.as_ref().expect("sig present")).expect("decode sig");
+
+        let mut nonce_arr = [0u8; 12];
+        nonce_arr.copy_from_slice(&nonce_bytes);
+        let aad = build_envelope_aad(env.v, &env.alg, &env.key_id, env.key_epoch, &enc_bytes, &nonce_arr).expect("build aad");
+        let sender_pk = hex::decode(sender_pk_hex).expect("decode sender pk");
+        let mut sender_pk_arr = [0u8; 32];
+        sender_pk_arr.copy_from_slice(&sender_pk);
+        let mut sig_arr = [0u8; 64];
+        sig_arr.copy_from_slice(&sig_bytes);
+
+        verify_message_signature(&sender_pk_arr, &sig_arr, &aad, &ct_bytes).expect("verify signature");
+        return;
+    }
+
+    // Generate new vector
+    let sender_seed = [0x33u8; 32];
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&sender_seed);
+    let sender_pk = signing_public_key(&signing_key);
+
+    let recipient_seed = [0x55u8; 32];
+    let recipient_pk = xwing::public_key_from_seed(&recipient_seed).expect("derive X-Wing public key");
+
+    let plaintext = b"Cross-language envelope signature verification test payload";
+
+    let (enc, ss) = xwing::encapsulate(&recipient_pk).expect("encapsulate");
+    let aead_key = byos_crypto_core::xwing_hpke::derive_aead_key(&ss).expect("derive aead key");
+    let nonce = [0x77u8; 12];
+    let key_id = "mbx_recipient_cross_lang";
+    let key_epoch = 1u32;
+
+    let aad = build_envelope_aad(1, ALG_XWING, key_id, key_epoch, &enc, &nonce).expect("build aad");
+    let ciphertext = byos_crypto_core::aes_gcm_encrypt_with_nonce(&aead_key, &nonce, plaintext, &aad).expect("aes gcm");
+
+    let sig = sign_message(&signing_key, &aad, &ciphertext).expect("sign");
+
+    use base64::Engine;
+    let b64 = &base64::engine::general_purpose::STANDARD;
+
+    let env = CryptoEnvelope {
+        v: 1,
+        alg: ALG_XWING.to_string(),
+        key_id: key_id.to_string(),
+        key_epoch,
+        enc: b64.encode(&enc),
+        nonce: b64.encode(&nonce),
+        ciphertext: b64.encode(&ciphertext),
+        sig: Some(b64.encode(&sig)),
+    };
+
+    let canonical_json = marshal_canonical(&env).expect("marshal canonical");
+
+    // Verify self-consistency in Rust
+    let opened_hex = wasm_open_xwing_envelope(&hex::encode(&recipient_seed), &canonical_json).expect("open envelope");
+    assert_eq!(opened_hex, hex::encode(plaintext));
+    verify_message_signature(&sender_pk, &sig, &aad, &ciphertext).expect("verify signature in rust");
+
+    let vector = serde_json::json!({
+        "envelope_json": canonical_json,
+        "sender_ed25519_public_key_hex": hex::encode(sender_pk),
+        "recipient_xwing_public_key_hex": hex::encode(recipient_pk),
+        "plaintext_hex": hex::encode(plaintext),
+        "recipient_xwing_seed_hex": hex::encode(recipient_seed),
+        "_warning": "TEST VECTOR — generated for cross-language verification. Not for production use."
+    });
+
+    if let Some(parent) = out_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(out_path, serde_json::to_string_pretty(&vector).expect("serialize vector"))
+        .expect("write vector file");
+}
+
