@@ -1,3 +1,13 @@
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() {
+    imp::main();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod imp {
 use std::sync::OnceLock;
 use axum::{
     extract::State,
@@ -80,7 +90,7 @@ struct DecryptOutboundResponse {
 type ApiResult<T> = Result<Json<T>, (StatusCode, String)>;
 
 #[tokio::main]
-async fn main() {
+pub(crate) async fn main() {
         let internal_key = if let Ok(path) = env::var("CRYPTO_WORKER_INTERNAL_KEY_FILE") {
         std::fs::read_to_string(&path).unwrap_or_default().trim().to_owned()
     } else {
@@ -258,4 +268,5 @@ fn decode_fixed_32(value: &str, field: &str) -> Result<[u8; 32], (StatusCode, St
 
 fn crypto_error(error: byos_crypto_core::CryptoError) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
+}
 }

@@ -1,9 +1,19 @@
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() -> std::process::ExitCode {
+    imp::main()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod imp {
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use byos_crypto_core::{aes_gcm_decrypt, canonical_aad, decrypt_outbound, encrypt_outbound, DkimKeypair, generate_x25519_keypair, hpke_open};
 use std::{env, process::ExitCode};
 use uuid::Uuid;
 
-fn main() -> ExitCode {
+pub fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -226,4 +236,5 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string()))
         .collect()
+}
 }

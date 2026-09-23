@@ -800,12 +800,22 @@ was used for each stored message.
 **E2E path (Format 2):** Spec complete at docs/crypto/envelope-v1-spec.md; 
 client-side encryption and outbound worker routing pending.
 
+**Signing keys (Ed25519):** primitive implemented in both Go and Rust with 
+cross-language test vector parity. Derivation uses HKDF-SHA256 with salt 
+`byos-mailbox-signing-v1` and info prefix `byos-mailbox-signing-ed25519-v1` 
+bound to mailbox ID and key epoch. Signatures cover AAD || ciphertext with 
+standard RFC 8032 Ed25519. WASM boundary exposed via SigningKeyHandle with 
+zeroization on drop. Not yet wired into the envelope `sig` field or the key 
+directory.
+
 **Known architectural debt:** Two Rust crypto crates exist — root 
 `crypto-core/` and `packages/crypto-core/`. X-Wing is present in both as 
 of commit `aa656b6`. Consolidation is scheduled post-V1. Additionally, 
 `packages/crypto-core/src/bin/native-crypto-worker.rs` is registered as 
 two bin targets (`native-crypto-worker` and `byos-native-crypto-worker`); 
 consolidate to one name during cleanup.
+- Rust crypto crate's internal error codes (CryptoError::code()) do not map one-to-one with envelope spec error codes. Reconcile during crate consolidation.
+- Root crypto-core/testdata and crypto/core/testdata may contain duplicate vector files. Consolidate to root testdata/ during cleanup.
 
 #### **Implementation gates still to resolve** 
 

@@ -44,7 +44,7 @@ type ContentKeyAead = AesGcm256;
 // Errors
 // =============================================
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CryptoError {
     InvalidFormat,
     UnsupportedVersion,
@@ -54,6 +54,31 @@ pub enum CryptoError {
     InvalidMnemonic,
     InvalidHPKE,
     InvalidAesGcm,
+    SignatureInvalid,
+    SigningKeyDerivationFailed,
+    SigningFailed,
+}
+
+impl CryptoError {
+    // NOTE: These numeric codes are the crypto crate's internal error 
+    // identifiers. They are distinct from the envelope spec's error codes 
+    // (docs/crypto/envelope-v1-spec.md), which are used at the WASM boundary 
+    // and in cross-language tests. Do not assume one-to-one mapping.
+    pub fn code(&self) -> u32 {
+        match self {
+            CryptoError::UnsupportedVersion => 1001,
+            CryptoError::DecryptionFailed => 1006,
+            CryptoError::SignatureInvalid => 1011,
+            CryptoError::SigningKeyDerivationFailed => 1014,
+            CryptoError::SigningFailed => 1015,
+            CryptoError::InvalidFormat => 1004,
+            CryptoError::EncryptionFailed => 1020,
+            CryptoError::KeyDerivationFailed => 1021,
+            CryptoError::InvalidMnemonic => 1022,
+            CryptoError::InvalidHPKE => 1023,
+            CryptoError::InvalidAesGcm => 1024,
+        }
+    }
 }
 
 impl std::fmt::Display for CryptoError {
@@ -67,9 +92,14 @@ impl std::fmt::Display for CryptoError {
             CryptoError::InvalidMnemonic => write!(f, "invalid mnemonic"),
             CryptoError::InvalidHPKE => write!(f, "invalid HPKE operation"),
             CryptoError::InvalidAesGcm => write!(f, "invalid AES-GCM operation"),
+            CryptoError::SignatureInvalid => write!(f, "signature invalid"),
+            CryptoError::SigningKeyDerivationFailed => write!(f, "signing key derivation failed"),
+            CryptoError::SigningFailed => write!(f, "signing failed"),
         }
     }
 }
+
+impl std::error::Error for CryptoError {}
 
 // =============================================
 // HKDF-SHA256 Derivation
@@ -132,6 +162,69 @@ pub fn verify_recovery_message(pk: &[u8; 32], message: &[u8], signature: &[u8; 6
         .map_err(|_| CryptoError::InvalidFormat)?;
     let sig = ed25519_dalek::Signature::from_bytes(signature);
     verifying_key.verify(message, &sig).map_err(|_| CryptoError::InvalidFormat)
+}
+
+// =============================================
+// Mailbox Signing Keys (Ed25519)
+// =============================================
+
+pub const MAILBOX_SIGNING_SALT: &[u8] = b"byos-mailbox-signing-v1";
+pub const MAILBOX_SIGNING_INFO_PREFIX: &[u8] = b"byos-mailbox-signing-ed25519-v1";
+
+/// Derive mailbox Ed25519 signing key from recovery root secret.
+pub fn derive_signing_key(
+    recovery_root: &[u8; 32],
+    mailbox_id: &[u8; 16],
+    key_epoch: u32,
+) -> Result<ed25519_dalek::SigningKey, CryptoError> {
+    let mut info = Vec::with_capacity(MAILBOX_SIGNING_INFO_PREFIX.len() + 16 + 4);
+    info.extend_from_slice(MAILBOX_SIGNING_INFO_PREFIX);
+    info.extend_from_slice(mailbox_id);
+    info.extend_from_slice(&key_epoch.to_be_bytes());
+
+    let hk = Hkdf::<Sha256>::new(Some(MAILBOX_SIGNING_SALT), recovery_root);
+    let mut seed = [0u8; 32];
+    hk.expand(&info, &mut seed)
+        .map_err(|_| CryptoError::SigningKeyDerivationFailed)?;
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    Ok(signing_key)
+}
+
+/// Get the 32-byte Ed25519 public key from a signing key.
+pub fn signing_public_key(signing_key: &ed25519_dalek::SigningKey) -> [u8; 32] {
+    signing_key.verifying_key().to_bytes()
+}
+
+/// Sign a message (AAD || ciphertext) using the Ed25519 signing key.
+pub fn sign_message(
+    signing_key: &ed25519_dalek::SigningKey,
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Result<[u8; 64], CryptoError> {
+    let mut payload = Vec::with_capacity(aad.len() + ciphertext.len());
+    payload.extend_from_slice(aad);
+    payload.extend_from_slice(ciphertext);
+    let signature = signing_key.sign(&payload);
+    Ok(signature.to_bytes())
+}
+
+/// Verify an Ed25519 message signature over (AAD || ciphertext).
+pub fn verify_message_signature(
+    signing_public_key: &[u8; 32],
+    signature: &[u8; 64],
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Result<(), CryptoError> {
+    use ed25519_dalek::Verifier;
+    let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(signing_public_key)
+        .map_err(|_| CryptoError::SignatureInvalid)?;
+    let sig = ed25519_dalek::Signature::from_bytes(signature);
+    let mut payload = Vec::with_capacity(aad.len() + ciphertext.len());
+    payload.extend_from_slice(aad);
+    payload.extend_from_slice(ciphertext);
+    verifying_key
+        .verify(&payload, &sig)
+        .map_err(|_| CryptoError::SignatureInvalid)
 }
 
 // =============================================
@@ -1367,6 +1460,100 @@ pub fn wasm_decrypt_outbound(
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     Ok(BASE64.encode(plaintext))
+}
+
+// =============================================
+// WASM Mailbox Signing Key Handle
+// =============================================
+
+#[wasm_bindgen]
+pub struct SigningKeyHandle {
+    key: zeroize::Zeroizing<[u8; 32]>, // Ed25519 seed
+}
+
+#[wasm_bindgen]
+impl SigningKeyHandle {
+    /// Load a signing key handle from recovery root, mailbox ID, and epoch.
+    #[wasm_bindgen(js_name = loadSigningKeyFromRoot)]
+    pub fn load_from_root(
+        recovery_root: &[u8],
+        mailbox_id: &[u8],
+        key_epoch: u32,
+    ) -> Result<SigningKeyHandle, JsValue> {
+        if recovery_root.len() != 32 {
+            return Err(JsValue::from_str("recovery_root must be 32 bytes"));
+        }
+        if mailbox_id.len() != 16 {
+            return Err(JsValue::from_str("mailbox_id must be 16 bytes"));
+        }
+        let root: [u8; 32] = recovery_root
+            .try_into()
+            .map_err(|_| JsValue::from_str("recovery_root must be 32 bytes"))?;
+        let mb_id: [u8; 16] = mailbox_id
+            .try_into()
+            .map_err(|_| JsValue::from_str("mailbox_id must be 16 bytes"))?;
+
+        let signing_key = derive_signing_key(&root, &mb_id, key_epoch)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let seed = signing_key.to_bytes();
+        Ok(SigningKeyHandle {
+            key: zeroize::Zeroizing::new(seed),
+        })
+    }
+
+    /// Get the 32-byte public key.
+    #[wasm_bindgen(js_name = signingPublicKey)]
+    pub fn public_key(&self) -> Result<Vec<u8>, JsValue> {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&self.key);
+        Ok(signing_public_key(&signing_key).to_vec())
+    }
+
+    /// Sign AAD || ciphertext, returning 64-byte signature.
+    #[wasm_bindgen(js_name = sign)]
+    pub fn sign(
+        &self,
+        aad: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, JsValue> {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&self.key);
+        let sig = sign_message(&signing_key, aad, ciphertext)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(sig.to_vec())
+    }
+}
+
+/// Standalone helper to load a signing key handle from recovery root.
+#[wasm_bindgen]
+pub fn load_signing_key_from_root(
+    recovery_root: &[u8],
+    mailbox_id: &[u8],
+    key_epoch: u32,
+) -> Result<SigningKeyHandle, JsValue> {
+    SigningKeyHandle::load_from_root(recovery_root, mailbox_id, key_epoch)
+}
+
+/// Standalone helper to get the public key from a SigningKeyHandle.
+#[wasm_bindgen]
+pub fn signing_public_key_from_handle(
+    handle: &SigningKeyHandle,
+) -> Result<Vec<u8>, JsValue> {
+    handle.public_key()
+}
+
+/// Standalone helper to sign with a SigningKeyHandle.
+#[wasm_bindgen]
+pub fn sign_with_handle(
+    handle: &SigningKeyHandle,
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, JsValue> {
+    handle.sign(aad, ciphertext)
+}
+
+/// Drop a SigningKeyHandle explicitly, zeroizing its private key memory.
+#[wasm_bindgen]
+pub fn drop_signing_key(handle: SigningKeyHandle) {
+    drop(handle);
 }
 
 // =============================================
