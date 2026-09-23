@@ -637,6 +637,40 @@ export function wasm_hpke_seal(recipient_pk_hex, plaintext_hex, aad_hex) {
 }
 
 /**
+ * @param {string} recipient_xwing_sk_seed_hex
+ * @param {string} envelope_json
+ * @returns {string}
+ */
+export function wasm_open_xwing_envelope(recipient_xwing_sk_seed_hex, envelope_json) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(recipient_xwing_sk_seed_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(envelope_json, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len1 = WASM_VECTOR_LEN;
+        wasm.wasm_open_xwing_envelope(retptr, ptr0, len0, ptr1, len1);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr3 = r0;
+        var len3 = r1;
+        if (r3) {
+            ptr3 = 0; len3 = 0;
+            throw takeObject(r2);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export3(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
  * Unwrap with a principal passphrase (hex in/out). Fails closed on wrong
  * passphrase, wrong salt, or tampering.
  * @param {string} passphrase
@@ -814,6 +848,44 @@ export function wasm_recovery_auth_sign(root_secret_hex, message_hex) {
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
         wasm.__wbindgen_export3(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * @param {string} recipient_xwing_pk_hex
+ * @param {string} key_id
+ * @param {number} key_epoch
+ * @param {string} plaintext_hex
+ * @returns {string}
+ */
+export function wasm_seal_xwing_envelope(recipient_xwing_pk_hex, key_id, key_epoch, plaintext_hex) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(recipient_xwing_pk_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(key_id, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(plaintext_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len2 = WASM_VECTOR_LEN;
+        wasm.wasm_seal_xwing_envelope(retptr, ptr0, len0, ptr1, len1, key_epoch, ptr2, len2);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr4 = r0;
+        var len4 = r1;
+        if (r3) {
+            ptr4 = 0; len4 = 0;
+            throw takeObject(r2);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export3(deferred5_0, deferred5_1, 1);
     }
 }
 

@@ -77,6 +77,8 @@ export function wasm_hpke_open(recipient_sk_hex: string, wrapped_hex: string, aa
 
 export function wasm_hpke_seal(recipient_pk_hex: string, plaintext_hex: string, aad_hex: string): string;
 
+export function wasm_open_xwing_envelope(recipient_xwing_sk_seed_hex: string, envelope_json: string): string;
+
 /**
  * Unwrap with a principal passphrase (hex in/out). Fails closed on wrong
  * passphrase, wrong salt, or tampering.
@@ -105,6 +107,8 @@ export function wasm_recovery_auth_pk_from_root(root_secret_hex: string): string
  * 64-byte signature as hex. The signing key never leaves WASM memory.
  */
 export function wasm_recovery_auth_sign(root_secret_hex: string, message_hex: string): string;
+
+export function wasm_seal_xwing_envelope(recipient_xwing_pk_hex: string, key_id: string, key_epoch: number, plaintext_hex: string): string;
 
 export function wasm_sign_with_seed(seed_hex: string, aad_hex: string, ciphertext_hex: string): string;
 

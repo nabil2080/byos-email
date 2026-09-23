@@ -19,6 +19,7 @@ use rsa::signature::{RandomizedSigner as _, SignatureEncoding as _, Signer as _}
 use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use serde::{Deserialize, Serialize};
 
 pub mod xwing;
 pub mod xwing_hpke;
@@ -27,6 +28,7 @@ pub mod xwing_hpke;
 // Constants
 // =============================================
 
+pub const ALG_XWING: &str = "HPKE-XWing-AES256GCM-v1";
 pub const MNEMONIC_SALT: &[u8] = b"byos-mnemonic-v1";
 pub const SEARCH_KEY_SALT: &[u8] = b"byos-search-key-v1";
 pub const ROOT_SECRET_INFO: &[u8] = b"byos-root-v1";
@@ -57,6 +59,11 @@ pub enum CryptoError {
     SignatureInvalid,
     SigningKeyDerivationFailed,
     SigningFailed,
+    // New variants for envelope operations per BYOS-SPEC-CRYPTO-ENV-V1
+    InvalidKeyLength,
+    InvalidNonceLength,
+    InvalidBase64,
+    UnsupportedAlgorithm,
 }
 
 impl CryptoError {
@@ -67,7 +74,11 @@ impl CryptoError {
     pub fn code(&self) -> u32 {
         match self {
             CryptoError::UnsupportedVersion => 1001,
+            CryptoError::UnsupportedAlgorithm => 1002,
+            CryptoError::InvalidBase64 => 1003,
+            CryptoError::InvalidNonceLength => 1004,
             CryptoError::DecryptionFailed => 1006,
+            CryptoError::InvalidKeyLength => 1007,
             CryptoError::SignatureInvalid => 1011,
             CryptoError::SigningKeyDerivationFailed => 1014,
             CryptoError::SigningFailed => 1015,
@@ -95,6 +106,10 @@ impl std::fmt::Display for CryptoError {
             CryptoError::SignatureInvalid => write!(f, "signature invalid"),
             CryptoError::SigningKeyDerivationFailed => write!(f, "signing key derivation failed"),
             CryptoError::SigningFailed => write!(f, "signing failed"),
+            CryptoError::InvalidKeyLength => write!(f, "invalid key length"),
+            CryptoError::InvalidNonceLength => write!(f, "invalid nonce length"),
+            CryptoError::InvalidBase64 => write!(f, "invalid base64"),
+            CryptoError::UnsupportedAlgorithm => write!(f, "unsupported algorithm"),
         }
     }
 }
@@ -403,6 +418,44 @@ pub fn aes_gcm_decrypt(
             nonce,
             aes_gcm::aead::Payload {
                 msg: ciphertext,
+                aad,
+            },
+        )
+        .map_err(|_| CryptoError::DecryptionFailed)
+}
+
+/// Encrypt with explicit nonce: returns ciphertext || tag
+pub fn aes_gcm_encrypt_with_nonce(
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    plaintext: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| CryptoError::InvalidAesGcm)?;
+    cipher
+        .encrypt(
+            GenericArray::from_slice(nonce),
+            aes_gcm::aead::Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|_| CryptoError::EncryptionFailed)
+}
+
+/// Decrypt with explicit nonce from ciphertext || tag
+pub fn aes_gcm_decrypt_with_nonce(
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    ciphertext_with_tag: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| CryptoError::InvalidAesGcm)?;
+    cipher
+        .decrypt(
+            GenericArray::from_slice(nonce),
+            aes_gcm::aead::Payload {
+                msg: ciphertext_with_tag,
                 aad,
             },
         )
@@ -1217,10 +1270,307 @@ pub fn dkim_sign(
 }
 
 // =============================================
+// Envelope Operations (BYOS-SPEC-CRYPTO-ENV-V1)
+// =============================================
+
+/// CryptoEnvelope defines the version 1 cryptographic envelope wire format
+/// specified in BYOS-SPEC-CRYPTO-ENV-V1 §2.1.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CryptoEnvelope {
+    pub alg: String,
+    pub ciphertext: String,
+    pub enc: String,
+    pub key_epoch: u32,
+    pub key_id: String,
+    pub nonce: String,
+    #[serde(default)]
+    pub sig: Option<String>,
+    pub v: u8,
+}
+
+/// Builds the v1 envelope AAD per BYOS-SPEC-CRYPTO-ENV-V1 §3.1.
+///
+/// Layout (byte offsets):
+///   [0]       v (1 byte)
+///   [1]       alg_len (1 byte)
+///   [2..2+n]  alg (UTF-8, n bytes)
+///   [pos]     key_id_len (1 byte)
+///   [..+m]    key_id (UTF-8, m bytes)
+///   [pos]     key_epoch (4 bytes, big-endian)
+///   [pos]     enc_len (4 bytes, big-endian)
+///   [..+k]    enc (raw bytes, k bytes)
+///   [pos]     nonce_len (1 byte, = 12)
+///   [..+12]   nonce (12 raw bytes)
+pub fn build_envelope_aad(
+    v: u8,
+    alg: &str,
+    key_id: &str,
+    key_epoch: u32,
+    enc: &[u8],
+    nonce: &[u8; 12],
+) -> Result<Vec<u8>, CryptoError> {
+    let alg_bytes = alg.as_bytes();
+    if alg_bytes.len() > 255 {
+        return Err(CryptoError::InvalidFormat);
+    }
+    let key_id_bytes = key_id.as_bytes();
+    if key_id_bytes.len() > 255 {
+        return Err(CryptoError::InvalidFormat);
+    }
+    if enc.len() > u32::MAX as usize {
+        return Err(CryptoError::InvalidFormat);
+    }
+
+    let total = 1
+        + 1 + alg_bytes.len()
+        + 1 + key_id_bytes.len()
+        + 4
+        + 4 + enc.len()
+        + 1 + 12;
+
+    let mut aad = Vec::with_capacity(total);
+    aad.push(v);
+    aad.push(alg_bytes.len() as u8);
+    aad.extend_from_slice(alg_bytes);
+    aad.push(key_id_bytes.len() as u8);
+    aad.extend_from_slice(key_id_bytes);
+    aad.extend_from_slice(&key_epoch.to_be_bytes());
+    aad.extend_from_slice(&(enc.len() as u32).to_be_bytes());
+    aad.extend_from_slice(enc);
+    aad.push(12u8);
+    aad.extend_from_slice(nonce);
+    Ok(aad)
+}
+
+fn write_json_string(buf: &mut Vec<u8>, s: &str) {
+    use std::fmt::Write as _;
+    buf.push(b'"');
+    for &c in s.as_bytes() {
+        match c {
+            b'"' => buf.extend_from_slice(b"\\\""),
+            b'\\' => buf.extend_from_slice(b"\\\\"),
+            0x08 => buf.extend_from_slice(b"\\b"),
+            0x0c => buf.extend_from_slice(b"\\f"),
+            b'\n' => buf.extend_from_slice(b"\\n"),
+            b'\r' => buf.extend_from_slice(b"\\r"),
+            b'\t' => buf.extend_from_slice(b"\\t"),
+            b if b < 0x20 => {
+                let mut esc = String::new();
+                let _ = write!(esc, "\\u{:04x}", b);
+                buf.extend_from_slice(esc.as_bytes());
+            }
+            b => buf.push(b),
+        }
+    }
+    buf.push(b'"');
+}
+
+/// Serializes env into canonical JSON per BYOS-SPEC-CRYPTO-ENV-V1 §2.2
+/// with strictly ordered keys:
+/// "alg" -> "ciphertext" -> "enc" -> "key_epoch" -> "key_id" -> "nonce" -> "sig" -> "v"
+pub fn marshal_canonical(env: &CryptoEnvelope) -> Result<String, CryptoError> {
+    let mut buf = Vec::with_capacity(256 + env.ciphertext.len() + env.enc.len());
+    buf.push(b'{');
+
+    // 1. alg
+    buf.extend_from_slice(b"\"alg\":");
+    write_json_string(&mut buf, &env.alg);
+    buf.push(b',');
+
+    // 2. ciphertext
+    buf.extend_from_slice(b"\"ciphertext\":");
+    write_json_string(&mut buf, &env.ciphertext);
+    buf.push(b',');
+
+    // 3. enc
+    buf.extend_from_slice(b"\"enc\":");
+    write_json_string(&mut buf, &env.enc);
+    buf.push(b',');
+
+    // 4. key_epoch
+    buf.extend_from_slice(b"\"key_epoch\":");
+    buf.extend_from_slice(env.key_epoch.to_string().as_bytes());
+    buf.push(b',');
+
+    // 5. key_id
+    buf.extend_from_slice(b"\"key_id\":");
+    write_json_string(&mut buf, &env.key_id);
+    buf.push(b',');
+
+    // 6. nonce
+    buf.extend_from_slice(b"\"nonce\":");
+    write_json_string(&mut buf, &env.nonce);
+    buf.push(b',');
+
+    // 7. sig
+    buf.extend_from_slice(b"\"sig\":");
+    match &env.sig {
+        Some(s) => write_json_string(&mut buf, s),
+        None => buf.extend_from_slice(b"null"),
+    }
+    buf.push(b',');
+
+    // 8. v
+    buf.extend_from_slice(b"\"v\":");
+    buf.extend_from_slice(env.v.to_string().as_bytes());
+
+    buf.push(b'}');
+    String::from_utf8(buf).map_err(|_| CryptoError::InvalidFormat)
+}
+
+/// Parses and validates canonical envelope JSON per BYOS-SPEC-CRYPTO-ENV-V1 §2.1.
+pub fn unmarshal_canonical(json_str: &str) -> Result<CryptoEnvelope, CryptoError> {
+    if json_str.is_empty() {
+        return Err(CryptoError::InvalidFormat);
+    }
+
+    let raw_val: serde_json::Value =
+        serde_json::from_str(json_str).map_err(|_| CryptoError::InvalidFormat)?;
+
+    let map = raw_val.as_object().ok_or(CryptoError::InvalidFormat)?;
+
+    const REQUIRED_FIELDS: [&str; 8] = [
+        "alg",
+        "ciphertext",
+        "enc",
+        "key_epoch",
+        "key_id",
+        "nonce",
+        "sig",
+        "v",
+    ];
+
+    for field in REQUIRED_FIELDS {
+        if !map.contains_key(field) {
+            return Err(CryptoError::InvalidFormat);
+        }
+    }
+
+    let env: CryptoEnvelope =
+        serde_json::from_value(raw_val).map_err(|_| CryptoError::InvalidFormat)?;
+
+    if env.v != 1 {
+        return Err(CryptoError::UnsupportedVersion);
+    }
+    if env.key_epoch == 0 {
+        return Err(CryptoError::InvalidFormat);
+    }
+    if env.alg != ALG_XWING {
+        return Err(CryptoError::UnsupportedAlgorithm);
+    }
+
+    Ok(env)
+}
+
+// =============================================
 // WASM Bindings
 // =============================================
 
 use wasm_bindgen::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+fn to_js_err<E: std::fmt::Display>(e: E) -> JsValue {
+    JsValue::from_str(&e.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn to_js_err<E: std::fmt::Display>(_e: E) -> JsValue {
+    JsValue::NULL
+}
+
+#[wasm_bindgen]
+pub fn wasm_seal_xwing_envelope(
+    recipient_xwing_pk_hex: &str,
+    key_id: &str,
+    key_epoch: u32,
+    plaintext_hex: &str,
+) -> Result<String, JsValue> {
+    let pk = hex_decode(recipient_xwing_pk_hex).map_err(to_js_err)?;
+    if pk.len() != 1216 {
+        return Err(to_js_err(CryptoError::InvalidKeyLength));
+    }
+    let plaintext = hex_decode(plaintext_hex).map_err(to_js_err)?;
+
+    let (enc, ss) = xwing::encapsulate(&pk).map_err(to_js_err)?;
+
+    let aead_key = xwing_hpke::derive_aead_key(&ss).map_err(to_js_err)?;
+
+    let mut nonce = [0u8; 12];
+    rand::fill(&mut nonce);
+
+    let aad = build_envelope_aad(
+        1,
+        ALG_XWING,
+        key_id,
+        key_epoch,
+        &enc,
+        &nonce,
+    ).map_err(to_js_err)?;
+
+    let ciphertext = aes_gcm_encrypt_with_nonce(&aead_key, &nonce, &plaintext, &aad)
+        .map_err(to_js_err)?;
+
+    let env = CryptoEnvelope {
+        v: 1,
+        alg: ALG_XWING.to_string(),
+        key_id: key_id.to_string(),
+        key_epoch,
+        enc: BASE64.encode(&enc),
+        nonce: BASE64.encode(nonce),
+        ciphertext: BASE64.encode(&ciphertext),
+        sig: None,
+    };
+
+    let json = marshal_canonical(&env).map_err(to_js_err)?;
+    Ok(json)
+}
+
+#[wasm_bindgen]
+pub fn wasm_open_xwing_envelope(
+    recipient_xwing_sk_seed_hex: &str,
+    envelope_json: &str,
+) -> Result<String, JsValue> {
+    let seed = hex_decode(recipient_xwing_sk_seed_hex).map_err(to_js_err)?;
+    if seed.len() != 32 {
+        return Err(to_js_err(CryptoError::InvalidKeyLength));
+    }
+
+    let env = unmarshal_canonical(envelope_json).map_err(to_js_err)?;
+
+    if env.v != 1 {
+        return Err(to_js_err(CryptoError::UnsupportedVersion));
+    }
+    if env.alg != ALG_XWING {
+        return Err(to_js_err(CryptoError::UnsupportedAlgorithm));
+    }
+
+    let enc = BASE64.decode(&env.enc).map_err(|_| to_js_err(CryptoError::InvalidBase64))?;
+    let nonce_bytes = BASE64.decode(&env.nonce).map_err(|_| to_js_err(CryptoError::InvalidBase64))?;
+    let ciphertext = BASE64.decode(&env.ciphertext).map_err(|_| to_js_err(CryptoError::InvalidBase64))?;
+
+    if nonce_bytes.len() != 12 {
+        return Err(to_js_err(CryptoError::InvalidNonceLength));
+    }
+    let mut nonce = [0u8; 12];
+    nonce.copy_from_slice(&nonce_bytes);
+
+    let aad = build_envelope_aad(
+        env.v,
+        &env.alg,
+        &env.key_id,
+        env.key_epoch,
+        &enc,
+        &nonce,
+    ).map_err(to_js_err)?;
+
+    let ss = xwing::decapsulate(&seed, &enc).map_err(to_js_err)?;
+    let aead_key = xwing_hpke::derive_aead_key(&ss).map_err(to_js_err)?;
+
+    let plaintext = aes_gcm_decrypt_with_nonce(&aead_key, &nonce, &ciphertext, &aad)
+        .map_err(to_js_err)?;
+
+    Ok(hex_encode(&plaintext))
+}
 
 #[wasm_bindgen]
 pub fn wasm_derive_root_secret(entropy_hex: &str) -> Result<String, JsValue> {
@@ -1919,6 +2269,69 @@ fn test_decrypt_outbound_invalid_format() {
         let envelope = aes_gcm_encrypt(&key, plaintext, b"").unwrap();
         assert_eq!(envelope[0], AES_GCM_ENVELOPE_VERSION);
         assert_eq!(envelope.len(), 1 + 12 + plaintext.len() + 16);
+    }
+
+    #[test]
+    fn test_aes_gcm_with_nonce_roundtrip() {
+        let key = [0x42u8; 32];
+        let nonce = [0x01u8; 12];
+        let plaintext = b"envelope payload test";
+        let aad = b"envelope aad";
+
+        let ct = aes_gcm_encrypt_with_nonce(&key, &nonce, plaintext, aad).unwrap();
+        assert_eq!(ct.len(), plaintext.len() + 16); // ciphertext + tag
+
+        let pt = aes_gcm_decrypt_with_nonce(&key, &nonce, &ct, aad).unwrap();
+        assert_eq!(pt, plaintext);
+    }
+
+    #[test]
+    fn test_aes_gcm_with_nonce_wrong_aad_fails() {
+        let key = [0x42u8; 32];
+        let nonce = [0x01u8; 12];
+        let plaintext = b"test";
+        let ct = aes_gcm_encrypt_with_nonce(&key, &nonce, plaintext, b"correct aad").unwrap();
+        let result = aes_gcm_decrypt_with_nonce(&key, &nonce, &ct, b"wrong aad");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_aes_gcm_with_nonce_wrong_key_fails() {
+        let key = [0x42u8; 32];
+        let wrong_key = [0x43u8; 32];
+        let nonce = [0x01u8; 12];
+        let plaintext = b"test";
+        let ct = aes_gcm_encrypt_with_nonce(&key, &nonce, plaintext, b"aad").unwrap();
+        let result = aes_gcm_decrypt_with_nonce(&wrong_key, &nonce, &ct, b"aad");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_envelope_aad_layout() {
+        let v = 1u8;
+        let alg = "HPKE-XWing-AES256GCM-v1";
+        let key_id = "mbx_test";
+        let key_epoch = 1u32;
+        let enc = vec![0xAA; 1120];
+        let nonce = [0xBBu8; 12];
+
+        let aad = build_envelope_aad(v, alg, key_id, key_epoch, &enc, &nonce).unwrap();
+
+        // Manually construct the expected AAD
+        let mut expected = Vec::new();
+        expected.push(1u8);
+        expected.push(alg.len() as u8);
+        expected.extend_from_slice(alg.as_bytes());
+        expected.push(key_id.len() as u8);
+        expected.extend_from_slice(key_id.as_bytes());
+        expected.extend_from_slice(&1u32.to_be_bytes());
+        expected.extend_from_slice(&(1120u32).to_be_bytes());
+        expected.extend_from_slice(&vec![0xAA; 1120]);
+        expected.push(12u8);
+        expected.extend_from_slice(&[0xBBu8; 12]);
+
+        assert_eq!(aad, expected);
+        assert_eq!(aad.len(), 1 + 1 + 23 + 1 + 8 + 4 + 4 + 1120 + 1 + 12);
     }
 
     #[test]
