@@ -19,7 +19,6 @@ BYOS provides email infrastructure + mailbox experience + routing + encryption +
 - Send and receive normal internet email with Gmail, Outlook, Yahoo, and other providers. 
 - Use custom domains, business mailboxes, aliases, contacts, folders, labels, rules, attachments, signatures, and scheduled sending. 
 - Use BYOS webmail and support standard desktop clients through SMTP/IMAP compatibility and the planned Bridge architecture. 
-- Support organization-managed and private mailbox modes. 
 - Keep persistent mailbox content encrypted in customer-controlled storage. 
 - Give every paid seat the same core product rather than artificial feature walls. 
 
@@ -162,27 +161,34 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 
 #### **Organization hierarchy** 
 
-Organization |-- Owners |-- Administrators |-- Users |-- Mailboxes |-- Domains |-- Aliases |-- Storage connections |-- Policies `-- Billing 
+Organization
+|-- Owners
+|-- Administrators
+|-- Users
+|   |-- Individual Mailboxes (user-controlled)
+|   |-- Storage connections (user-controlled)
+|   |-- Aliases
+|   `-- Recovery material
+|-- Domains
+`-- Billing
+
+Mailboxes and storage are owned by users, not the organization. The organization owns the domain and billing relationship only.
 
 User and mailbox are separate concepts. A single employee can have multiple addresses that share a mailbox, while organization-level policies apply independently of mailbox-level encryption state. 
 
-#### **Mailbox privacy modes** 
+**Mailbox model**
 
-|**Mode**|**Meaning**|**Admin capability**|
-|---|---|---|
-|Organization-managed|Business-controlled mailbox with<br>authorized organizational<br>recovery/access.|Can recover and act according to<br>organization policy.|
-|Private|Mailbox where the organization does not<br>have automatic decryption capability.|Can block/archive/delete, but cannot<br>automaticallyrecover or export contents.|
+Every mailbox is an Individual User Mailbox: user-controlled, user-recoverable, and inaccessible to the organization that pays for the seat. The organization owns the domain and manages billing, but has no access to mailbox content, encryption keys, or recovery material.
 
 #### **Employee termination** 
 
-Terminate -> disable authentication 
+Terminate -> disable authentication
+- -> disable SMTP submission
+- -> disable IMAP/Bridge access
+- -> user retains mailbox access via their own credentials until data retention policy expires
+- -> user must export their data before the retention window closes
 
-- -> disable SMTP submission 
-- -> disable IMAP/Bridge access 
-- -> preserve mailbox 
-- -> apply retention policy -> transfer / archive / delete according to mailbox mode and policy 
-
-**POLICY:** Private mailbox transfer/export is not an administrator capability in V1. The organization may request that the user export information before termination. 
+**POLICY:** Employee mailbox transfer/export is not an organization capability. The organization may request the user export their mailbox before the account is disabled. Organizations are responsible for notifying terminated employees of the export window. 
 
 BYOS V1 Roadmap  |  Page 6 
 
@@ -671,7 +677,7 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 
 #### **Business onboarding** 
 
-- Create organization -> Add domain -> Choose organization storage -> Connect storage -> Create users -> Create mailboxes -> Apply privacy policy -> Mailbox ready 
+- Create organization -> Add domain -> Connect storage -> Create users -> Create mailboxes -> Mailbox ready 
 
 #### **Storage modes** 
 
@@ -749,8 +755,7 @@ Customer-controlled storage
 - A stable recovery root survives ordinary mailbox-key rotation. 
 - Per-message content keys are random and are wrapped for the current mailbox public key. 
 - Persistent mailbox content is encrypted before customer storage. 
-- Organization-managed mailboxes have an authorized organization recovery path. 
-- Private mailboxes do not have automatic administrator decryption. 
+- Every mailbox is user-controlled. Neither BYOS nor the organization that pays for the seat has any decryption path to mailbox content. 
 - Authentication is separate from encryption keys. 
 - The server transiently processes inbound plaintext before encryption, but must not persist plaintext mailbox content. 
 
@@ -820,7 +825,6 @@ consolidate to one name during cleanup.
 #### **Implementation gates still to resolve** 
 
 - Recovery-root rotation when root material is compromised 
-- Whether organization-managed employees receive independent mailbox recovery material 
 - Cryptographic revocation behavior for removed recovery principals 
 - Live-mail concurrency during long key rotations 
 - Exact recovery mnemonic encoding/versioning 
@@ -830,34 +834,31 @@ BYOS V1 Roadmap  |  Page 18
 
 BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP 
 
-**SECTION 13** 
+**SECTION 13**
 
-### **Organization-Managed vs Private Mailbox** 
+### **Mailbox Model**
 
-|**Property**|**Organization-managed**|**Private**|
-|---|---|---|
-|Normal user access|Yes|Yes|
-|Device-based decryption|Yes|Yes|
-|Organization recovery|Yes|No automatic recovery|
-|Admin export|Yes, subject to policy|No automatic export|
-|Transfer after employee leaves|Yes, via authorized recovery/re-key flow|No admin transfer without user<br>cooperation|
-|Business continuity|Strong|Dependent on user-controlled recovery|
+Every BYOS mailbox is an Individual User Mailbox. The distinction between organization-managed and private mailboxes does not exist in V1.
 
-#### **Mailbox creation UI** 
+**Implications**
 
-###### Mailbox privacy 
+- Mailbox encryption keys are derived from the user's own recovery root.
+- No organization recovery principal has access to any mailbox.
+- Termination disables access but does not transfer content.
+- Users must export their data before the retention window closes.
+- Organization admins have no cryptographic path to mailbox content.
 
-###### (o) Organization-managed 
+**Why this design**
 
-Admin can access/recover according to organization policy. 
+Requiring every mailbox to be user-controlled is a stronger privacy commitment than offering organization recovery. It means:
+- BYOS cannot read mail (server never has keys)
+- Customer IT admins cannot read employee mail
+- Legal discovery cannot target BYOS for plaintext (nothing to hand over)
+- Users own their data at every layer
 
-###### (o) Private 
+The trade-off is that organizations cannot access terminated employees' mail without the employee's cooperation. This is stated clearly in the product documentation and onboarding flow.
 
-Employee controls mailbox decryption; admin cannot automatically read it. 
-
-**DESIGN:** Privacy mode should be treated as a cryptographic state. In V1, changing between private and organization-managed should require an explicit cryptographic migration/re-key flow, not a silent database flag flip. 
-
-BYOS V1 Roadmap  |  Page 19 
+BYOS V1 Roadmap | Page 18a 
 
 BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP 
 
@@ -893,7 +894,7 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 
 PRIVATE device OR recovery material -> recover current mailbox keys 
 
-ORGANIZATION-MANAGED authorized organization recovery principal -> recover mailbox according to policy 
+Every mailbox is recovered by the user's own recovery material. No organization recovery principal exists in V1. 
 
 #### **Stable recovery root** 
 
@@ -1187,7 +1188,7 @@ Customer storage + recovery material | v Independent recovery/export application
 - Works without a live SaaS dependency 
 - Exports mailbox data 
 - Respects encryption and recovery rules 
-- Supports organization-managed archive/recovery use cases 
+- Supports user-driven export and recovery 
 - Has explicit documentation and test vectors 
 
 **TRUST:** The export path is part of the product promise, not merely an internal engineering utility. 
@@ -1202,19 +1203,23 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 
 #### **Pricing philosophy**
 
-Every seat receives the same complete BYOS email product. Customers pay per seat, with the per-seat price declining as seat count grows through graduated marginal brackets. There are no named plans and no artificial feature walls.
+Every seat receives the same complete BYOS email product. Customers can start with a single seat and scale up through graduated brackets. Customers pay per seat, with the per-seat price declining as seat count grows through graduated marginal brackets. There are no named plans and no artificial feature walls.
 
 #### **Graduated bracket pricing**
 
 | Seats | Per-seat/month | Notes |
 |---|---:|---|
-| 1–10 | $3.00 | Minimum subscription is 10 seats |
+| 1–10 | $3.00 | |
 | 11–25 | $2.85 | Marginal rate on seats 11–25 only |
 | 26–50 | $2.71 | Marginal rate on seats 26–50 only |
 | 51–100 | $2.57 | Marginal rate on seats 51–100 only |
 | 101+ | $2.44 | Custom pricing available for large organizations |
 
-Bracket semantics are graduated and marginal, like income tax brackets. A 25-seat organization pays:
+Bracket semantics are graduated and marginal, like income tax brackets. A 1-seat customer pays:
+
+- 1 × $3.00 = $3.00/month
+
+A 25-seat organization pays:
 
 - 10 seats × $3.00 = $30.00
 - 15 seats × $2.85 = $42.75
@@ -1247,11 +1252,11 @@ Annual billing is 10 months upfront, equivalent to a 16.7% discount. The annual 
 - Scheduled Send
 - 2FA
 - Google/Microsoft sign-in
-- Organization controls
+- Individual user mailbox (user-controlled, user-recoverable)
 
 #### **What varies with seat count**
 
-- Per-seat price (via graduated bracket)
+- Per-seat price (via graduated bracket; single seat allowed)
 - Organization resource caps (domains, aliases — tied to seat_count)
 - Support and contract terms for 101+ seats
 
@@ -1433,7 +1438,6 @@ Public Website: Astro + SolidJS + TailwindCSS + Vite (via Astro) Dashboard: Soli
 - Mailboxes 
 - Domains 
 - Aliases 
-- Privacy modes 
 - Storage management 
 - Termination/recovery 
 - Security events 
@@ -1550,7 +1554,7 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 |---|---|
 |Product model|Full business email + customer-controlled persistent storage.|
 |BYOS|Organization, individual, and hybrid storage supported.|
-|Pricing|Graduated per-seat brackets, 10-seat minimum, no named plans|
+|Pricing|Graduated per-seat brackets, single-seat minimum, no named plans, no feature gating|
 |Frontend split|Astro + SolidJS + TailwindCSS public website; SolidJS + Vite + TailwindCSS dashboard and mailbox.|
 |Infrastructure language|Go.|
 |Client crypto|Rust/WASM.|
@@ -1565,12 +1569,12 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 |Key directory trust|Server-hosted, trust-the-server in V1|
 |Key transparency|V1.5 backlog item|
 |Attachment limit|40 MB total message size in V1.|
-|Mailbox modes|Organization-managed + Private.|
+|Mailbox model|Individual User Mailbox. User-controlled and user-recovered. No organization recovery path.|
+|Organization role|Owns domain and billing; has no access to mailbox content or keys.|
 |Scheduled Send|V1; client-side pre-encryption; works while client is offline.|
 |SMTP/IMAP|Standard interoperability required; Bridge architecture planned.|
 |Search|Client-oriented privacy model with acknowledged token/access-pattern leakage in V1.|
 |Recovery|Separate account recovery from mailbox recovery; stable recovery-root model.|
-|Organization recovery|Multiple authorized recovery principals; exact revocation behavior must be explicit.|
 |Outbound safety|Unified trust/reputation engine for webmail, SMTP clients, and approved APIs.|
 |Exit|Independent mailbox export/recovery capability.|
 
@@ -1590,7 +1594,7 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 |Outbound (Path A)|Internal BYOS-to-BYOS mail is end-to-end encrypted; outbound worker does not decrypt.|
 |Outbound (Path B)|External delivery works with SPF/DKIM/DMARC/PTR/TLS and<br>trust controls via SES.|
 |BYOS|Customer storage can be connected, health-checked, recovered,<br>and changed.|
-|Organization|Admins/users/domains/mailboxes/privacy modes/termination<br>behave correctly.|
+|Organization|Admins/users/domains/mailboxes/termination<br>behave correctly.|
 |Webmail|Core mailbox functions work with local decrypt/search<br>architecture.|
 |Client compatibility|SMTP/IMAP Bridge architecture is stable and protocol-<br>compatible.|
 |Reliability|Backups restore; storage/queue/server failures have tested<br>behavior.|
@@ -1622,6 +1626,7 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 - Advanced enterprise compliance features. 
 - Private-information-retrieval or stronger search-privacy techniques if justified by demand. 
 - Ciphertext length padding to reduce plaintext size leakage [V2 backlog] 
+- Organization-managed mailbox model (deferred — V1 is individual only) 
 
 BYOS V1 Roadmap  |  Page 41 
 
