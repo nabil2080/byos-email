@@ -1104,6 +1104,11 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 - Recovery protection 
 - Storage credential rotation 
 - Least-privilege storage access 
+- Password change requires client-side re-wrapping of the mailbox key and 
+  signing seed under the new password. The client performs this re-wrap 
+  and submits the updated wrapped_sk_user alongside the new password; the 
+  server stores both atomically. Failure to re-wrap locks the user out of 
+  their mailbox key on next password login. 
 
 #### **Browser trust** 
 
