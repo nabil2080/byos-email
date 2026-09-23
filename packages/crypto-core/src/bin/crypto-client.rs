@@ -17,12 +17,14 @@ fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("generate") => generate(),
+        Some("generate-xwing") => generate_xwing(),
         Some("generate-dkim") => generate_dkim(&args[1..]),
         Some("decrypt") => decrypt(&args[1..]),
+        Some("decrypt-xwing") => decrypt_xwing(&args[1..]),
         Some("encrypt-outbound") => encrypt_outbound_cli(&args[1..]),
         Some("decrypt-outbound") => decrypt_outbound_cli(&args[1..]),
         Some("decrypt-outbound-json") => decrypt_outbound_json_cli(),
-        _ => Err("usage: byos-crypto-client generate | generate-dkim <selector> | decrypt <mailbox-id> <message-seq> <secret-key-b64> <wrapped-key-b64> <ciphertext-b64> | encrypt-outbound <outbound-pk-b64> <mailbox-id> <outbox-seq> <plaintext-b64> | decrypt-outbound <outbound-sk-b64> <mailbox-id> <outbox-seq> <wrapped-b64> <ciphertext-b64> | decrypt-outbound-json".to_owned()),
+        _ => Err("usage: byos-crypto-client generate | generate-xwing | generate-dkim <selector> | decrypt <mailbox-id> <message-seq> <secret-key-b64> <wrapped-key-b64> <ciphertext-b64> | decrypt-xwing <mailbox-id> <message-seq> <seed-hex> <wrapped-key-b64> <ciphertext-b64> | encrypt-outbound <outbound-pk-b64> <mailbox-id> <outbox-seq> <plaintext-b64> | decrypt-outbound <outbound-sk-b64> <mailbox-id> <outbox-seq> <wrapped-b64> <ciphertext-b64> | decrypt-outbound-json".to_owned()),
     }
 }
 
@@ -33,6 +35,21 @@ fn generate() -> Result<(), String> {
         serde_json::json!({
             "secret_key": BASE64.encode(secret_key),
             "public_key": BASE64.encode(public_key),
+        })
+    );
+    Ok(())
+}
+
+fn generate_xwing() -> Result<(), String> {
+    let mut seed = [0u8; 32];
+    rand::fill(&mut seed);
+    let pk = byos_crypto_core::xwing::public_key_from_seed(&seed).map_err(|e| e.to_string())?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "private_seed_hex": hex_encode(&seed),
+            "public_key_b64": BASE64.encode(&pk),
+            "public_key_hex": hex_encode(&pk),
         })
     );
     Ok(())
@@ -79,6 +96,32 @@ fn decrypt(args: &[String]) -> Result<(), String> {
         .map_err(|_| "wrapped content key did not decrypt to 32 bytes".to_owned())?;
     let plaintext =
         aes_gcm_decrypt(&content_key, &ciphertext, &aad).map_err(|error| error.to_string())?;
+
+    println!("{}", BASE64.encode(plaintext));
+    Ok(())
+}
+
+fn decrypt_xwing(args: &[String]) -> Result<(), String> {
+    if args.len() != 5 {
+        return Err("decrypt-xwing requires mailbox-id, message-seq, seed-hex, wrapped-key-b64, and ciphertext-b64".to_owned());
+    }
+
+    let mailbox_id = Uuid::parse_str(&args[0])
+        .map_err(|_| "mailbox-id must be a UUID".to_owned())?
+        .into_bytes();
+    let message_seq = args[1]
+        .parse::<u64>()
+        .map_err(|_| "message-seq must be an unsigned integer".to_owned())?;
+    let seed_vec = hex_decode(&args[2])?;
+    if seed_vec.len() != 32 {
+        return Err("seed must be 32 bytes hex".to_owned());
+    }
+    let seed: [u8; 32] = seed_vec.try_into().unwrap();
+    let wrapped_key = decode(&args[3], "wrapped-key")?;
+    let ciphertext = decode(&args[4], "ciphertext")?;
+    let aad = canonical_aad(&mailbox_id, message_seq, 1);
+    let plaintext = byos_crypto_core::decrypt_message_xwing(&seed, &wrapped_key, &ciphertext, &aad)
+        .map_err(|e| e.to_string())?;
 
     println!("{}", BASE64.encode(plaintext));
     Ok(())
@@ -169,4 +212,18 @@ fn decode(value: &str, field: &str) -> Result<Vec<u8>, String> {
     BASE64
         .decode(value)
         .map_err(|_| format!("{field} must be base64"))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
+    if s.len() % 2 != 0 {
+        return Err("invalid hex length".to_owned());
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string()))
+        .collect()
 }

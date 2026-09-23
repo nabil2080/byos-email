@@ -29,19 +29,19 @@ GRANT SELECT (id, org_id, email, display_name, is_active, created_at, updated_at
 GRANT SELECT (id, org_id, user_id, domain_id, local_part, mode, root_secret_id, mailbox_pk, is_active, created_at, updated_at) ON mailboxes TO role_support_agent;
 
 -- Grant safe column-level SELECT on domains (excluding dkim_private_key_enc)
-GRANT SELECT (id, org_id, name, is_verified, dkim_selector, dkim_public_key, created_at, updated_at) ON domains TO role_support_agent;
+GRANT SELECT (id, org_id, name, is_verified, dkim_selector, dkim_public_key, created_at) ON domains TO role_support_agent;
 
 -- Grant safe column-level SELECT on root_secrets (excluding root_secret_wrapped)
 GRANT SELECT (id, version, created_at) ON root_secrets TO role_support_agent;
 
 -- Grant safe metadata SELECT on message_metadata (excluding content_key_hpke_wrapped, encryption_iv)
-GRANT SELECT (id, org_id, mailbox_id, sender, recipient, subject_hash, created_at) ON message_metadata TO role_support_agent;
+GRANT SELECT (id, mailbox_id, domain_id, message_seq, direction, sender, recipients, received_at) ON message_metadata TO role_support_agent;
 
 -- Grant safe column-level SELECT on drafts (excluding encrypted_envelope)
-GRANT SELECT (id, org_id, mailbox_id, created_at, updated_at) ON drafts TO role_support_agent;
+GRANT SELECT (id, mailbox_id, subject, created_at, updated_at) ON drafts TO role_support_agent;
 
 -- Grant safe SELECT on organizations, plans, and storage connections metadata
-GRANT SELECT (id, name, org_recovery_pk, default_storage_connection_id, created_at, updated_at) ON organizations TO role_support_agent;
+GRANT SELECT (id, name, default_storage_connection_id, created_at, updated_at) ON organizations TO role_support_agent;
 GRANT SELECT ON storage_connections TO role_support_agent;
 REVOKE SELECT (credentials_enc) ON storage_connections FROM role_support_agent;
 

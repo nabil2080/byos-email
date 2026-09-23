@@ -20,6 +20,10 @@ path = "src/bin/crypto-client.rs"
 name = "byos-native-crypto-worker"
 path = "src/bin/native-crypto-worker.rs"
 
+[[bin]]
+name = "native-crypto-worker"
+path = "src/bin/native-crypto-worker.rs"
+
 [dependencies]
 # HPKE (RFC 9180)
 hpke = { version = "0.14", features = ["x25519", "aes"] }

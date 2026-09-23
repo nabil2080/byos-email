@@ -3,6 +3,7 @@ FROM rustlang/rust:nightly-slim AS builder
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
+COPY crypto-core crypto-core
 COPY packages/crypto-core/Cargo.toml packages/crypto-core/Cargo.toml
 COPY packages/crypto-core/src packages/crypto-core/src
 

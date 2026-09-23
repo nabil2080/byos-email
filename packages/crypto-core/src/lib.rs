@@ -499,7 +499,9 @@ pub fn decrypt_message(
 /// format. The wrapped key is version(1) || X-Wing enc(1120) || HPKE ciphertext(48).
 pub fn encrypt_message_xwing(
     mailbox_xwing_pk: &[u8],
+    mailbox_id: &[u8; 16],
     message_seq: u64,
+    _storage_object_id: &str,
     plaintext: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>, [u8; 12], Vec<u8>), CryptoError> {
     if mailbox_xwing_pk.len() != xwing::ENCAPSULATION_KEY_SIZE {
@@ -508,7 +510,7 @@ pub fn encrypt_message_xwing(
 
     let mut content_key = [0u8; 32];
     rand::fill(&mut content_key);
-    let aad = message_seq.to_be_bytes().to_vec();
+    let aad = canonical_aad(mailbox_id, message_seq, ENCRYPTION_VERSION).to_vec();
     let encrypted_blob = aes_gcm_encrypt(&content_key, plaintext, &aad)?;
     let wrapped_key = xwing_hpke::seal(mailbox_xwing_pk, &content_key, &aad)?;
     let iv = encrypted_blob[1..13]
@@ -530,6 +532,140 @@ pub fn decrypt_message_xwing(
         .try_into()
         .map_err(|_| CryptoError::DecryptionFailed)?;
     decrypt_message(&content_key, encrypted_blob, aad)
+}
+
+// =============================================
+// Storage Encryption Dispatch
+// =============================================
+
+// IMPORTANT: Both wrapped key formats begin with version byte 0x01.
+// The wrapped_key_algorithm column is the ONLY way to distinguish them.
+// Do not attempt to dispatch on the wrapped key bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptOutput {
+    pub ciphertext: Vec<u8>,
+    pub content_key_hpke_wrapped: Vec<u8>,
+    pub encryption_iv: [u8; 12],
+    pub bundle_hash: [u8; 32],
+    pub wrapped_key_algorithm: &'static str,
+    pub aad: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EncryptError {
+    BadRequest(String),
+    Internal(String),
+}
+
+impl std::fmt::Display for EncryptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EncryptError::BadRequest(s) => write!(f, "{s}"),
+            EncryptError::Internal(s) => write!(f, "{s}"),
+        }
+    }
+}
+
+impl std::error::Error for EncryptError {}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct EncryptRequest {
+    pub mailbox_id: String,
+    pub message_seq: u64,
+    pub mailbox_public_key: String,
+    pub plaintext: String,
+    pub storage_object_id: String,
+    pub mailbox_sk_version: u32,
+    #[serde(default)]
+    pub mailbox_xwing_public_key: Option<String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_mailbox_id_for_payload(value: &str) -> Result<[u8; 16], EncryptError> {
+    uuid::Uuid::parse_str(value).map(uuid::Uuid::into_bytes).map_err(|_| {
+        EncryptError::BadRequest("mailbox_id must be a UUID".to_owned())
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_b64(value: &str, field: &str) -> Result<Vec<u8>, EncryptError> {
+    BASE64
+        .decode(value)
+        .map_err(|_| EncryptError::BadRequest(format!("{field} must be base64")))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_fixed_32_for_payload(value: &str, field: &str) -> Result<[u8; 32], EncryptError> {
+    let bytes = decode_b64(value, field)?;
+    bytes.try_into().map_err(|_| {
+        EncryptError::BadRequest(format!("{field} must decode to 32 bytes"))
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_xwing_public_key(value: &str) -> Result<Vec<u8>, EncryptError> {
+    let bytes = decode_b64(value, "mailbox_xwing_public_key")?;
+    if bytes.len() != 1216 {
+        return Err(EncryptError::BadRequest(format!(
+            "mailbox_xwing_public_key must decode to 1216 bytes, got {}",
+            bytes.len()
+        )));
+    }
+    Ok(bytes)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn encrypt_payload(
+    request: &EncryptRequest,
+) -> Result<EncryptOutput, EncryptError> {
+    let mailbox_id = parse_mailbox_id_for_payload(&request.mailbox_id)?;
+    let plaintext = decode_b64(&request.plaintext, "plaintext")?;
+
+    if request.storage_object_id.is_empty() {
+        return Err(EncryptError::BadRequest(
+            "storage_object_id is required".to_owned(),
+        ));
+    }
+
+    let (content_key_hpke_wrapped, ciphertext, iv, aad, algorithm) =
+        match request.mailbox_xwing_public_key.as_deref() {
+            Some(key_b64) if !key_b64.is_empty() => {
+                let xwing_pk = decode_xwing_public_key(key_b64)?;
+                let (wrapped, ct, iv, aad) =
+                    encrypt_message_xwing(&xwing_pk, &mailbox_id, request.message_seq, &request.storage_object_id, &plaintext)
+                        .map_err(|e| EncryptError::Internal(e.to_string()))?;
+                (wrapped, ct, iv, aad, "HPKE-XWing-AES256GCM-v1")
+            }
+            _ => {
+                let mailbox_public_key =
+                    decode_fixed_32_for_payload(&request.mailbox_public_key, "mailbox_public_key")?;
+                let (content_key, ct, iv, aad) =
+                    encrypt_message(&mailbox_id, request.message_seq, &plaintext)
+                        .map_err(|e| EncryptError::Internal(e.to_string()))?;
+                let wrapped = hpke_seal(&mailbox_public_key, &content_key, &aad)
+                    .map_err(|e| EncryptError::Internal(e.to_string()))?;
+                (wrapped, ct, iv, aad, "HPKE-X25519-AES256GCM-v1")
+            }
+        };
+
+    let bundle_hash = canonical_bundle_hash(
+        request.storage_object_id.as_bytes(),
+        &ciphertext,
+        &content_key_hpke_wrapped,
+        ENCRYPTION_VERSION,
+        request.mailbox_sk_version,
+        &iv,
+        AAD_VERSION,
+    );
+
+    Ok(EncryptOutput {
+        ciphertext,
+        content_key_hpke_wrapped,
+        encryption_iv: iv,
+        bundle_hash,
+        wrapped_key_algorithm: algorithm,
+        aad,
+    })
 }
 
 // =============================================

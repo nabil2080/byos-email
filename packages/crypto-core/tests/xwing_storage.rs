@@ -35,14 +35,15 @@ fn xwing_storage_round_trip() {
     let seed = [0x42u8; 32];
     let public_key = public_key_from_seed(&seed).expect("derive X-Wing public key");
     let plaintext = b"X-Wing storage round-trip";
+    let mailbox_id = [0x01u8; 16];
 
     let (wrapped_key, blob, iv, aad) =
-        encrypt_message_xwing(&public_key, 7, plaintext).expect("encrypt X-Wing message");
+        encrypt_message_xwing(&public_key, &mailbox_id, 7, "storage/obj", plaintext).expect("encrypt X-Wing message");
 
     assert_eq!(wrapped_key.len(), 1 + 1120 + 48);
     assert_eq!(blob[0], 1);
     assert_eq!(iv.len(), 12);
-    assert_eq!(aad, 7u64.to_be_bytes());
+    assert_eq!(aad.len(), 29);
 
     let recovered =
         decrypt_message_xwing(&seed, &wrapped_key, &blob, &aad).expect("decrypt X-Wing message");

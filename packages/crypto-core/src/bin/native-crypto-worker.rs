@@ -7,7 +7,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use byos_crypto_core::{
-    canonical_bundle_hash, encrypt_message, encrypt_outbound, hpke_seal, AAD_VERSION, ENCRYPTION_VERSION,
+    encrypt_outbound, encrypt_payload, EncryptRequest, AAD_VERSION, ENCRYPTION_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::{env, net::SocketAddr};
@@ -19,16 +19,6 @@ static OUTBOUND_SK: OnceLock<[u8; 32]> = OnceLock::new();
 #[derive(Clone, Default)]
 struct AppState;
 
-#[derive(Deserialize)]
-struct EncryptRequest {
-    mailbox_id: String,
-    message_seq: u64,
-    mailbox_public_key: String,
-    plaintext: String,
-    storage_object_id: String,
-    mailbox_sk_version: u32,
-}
-
 #[derive(Serialize)]
 struct EncryptResponse {
     ciphertext: String,
@@ -37,6 +27,7 @@ struct EncryptResponse {
     bundle_hash: String,
     encryption_version: u32,
     aad_version: u8,
+    wrapped_key_algorithm: String,
 }
 
 
@@ -135,38 +126,19 @@ async fn encrypt(
     State(_state): State<AppState>,
     Json(request): Json<EncryptRequest>,
 ) -> ApiResult<EncryptResponse> {
-    let mailbox_id = parse_mailbox_id(&request.mailbox_id)?;
-    let mailbox_public_key = decode_fixed_32(&request.mailbox_public_key, "mailbox_public_key")?;
-    let plaintext = decode(&request.plaintext, "plaintext")?;
-
-    if request.storage_object_id.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "storage_object_id is required".to_owned(),
-        ));
-    }
-
-    let (content_key, ciphertext, iv, aad) =
-        encrypt_message(&mailbox_id, request.message_seq, &plaintext).map_err(crypto_error)?;
-    let content_key_hpke_wrapped =
-        hpke_seal(&mailbox_public_key, &content_key, &aad).map_err(crypto_error)?;
-    let bundle_hash = canonical_bundle_hash(
-        request.storage_object_id.as_bytes(),
-        &ciphertext,
-        &content_key_hpke_wrapped,
-        ENCRYPTION_VERSION,
-        request.mailbox_sk_version,
-        &iv,
-        AAD_VERSION,
-    );
+    let output = encrypt_payload(&request).map_err(|e| match e {
+        byos_crypto_core::EncryptError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+        byos_crypto_core::EncryptError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+    })?;
 
     Ok(Json(EncryptResponse {
-        ciphertext: BASE64.encode(ciphertext),
-        content_key_hpke_wrapped: BASE64.encode(content_key_hpke_wrapped),
-        encryption_iv: BASE64.encode(iv),
-        bundle_hash: BASE64.encode(bundle_hash),
+        ciphertext: BASE64.encode(output.ciphertext),
+        content_key_hpke_wrapped: BASE64.encode(output.content_key_hpke_wrapped),
+        encryption_iv: BASE64.encode(output.encryption_iv),
+        bundle_hash: BASE64.encode(output.bundle_hash),
         encryption_version: ENCRYPTION_VERSION,
         aad_version: AAD_VERSION,
+        wrapped_key_algorithm: output.wrapped_key_algorithm.to_string(),
     }))
 }
 

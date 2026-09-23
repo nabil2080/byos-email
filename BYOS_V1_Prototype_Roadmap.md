@@ -542,7 +542,7 @@ for storage in customer-controlled storage.
 - Purpose: encrypt at-rest for storage
 - Format: `version(1) || nonce(12) || ciphertext+tag(N)`
 - Wrapped content key: stored separately in `message_metadata.content_key_hpke_wrapped` in Postgres
-- Algorithm: DHKEM(X25519, HKDF-SHA256) + AES-256-GCM
+- Algorithm: X-Wing hybrid KEM (X25519 + ML-KEM-768) via HPKE + AES-256-GCM (with X25519 fallback)
 - Used by: `crypto-worker` (server-side), for all inbound mail
 
 **Format 2 — End-to-end envelope (JSON)**
@@ -790,14 +790,22 @@ Stable recovery root secret
 
 The crypto core is implemented in both Go (server) and Rust/WASM (client). Both implementations are verified byte-for-byte identical across 14 cross-language test vectors. External verification includes X-Wing draft-10 Appendix C and RFC 9180 Appendix A.1.1.
 
-**Storage path (Format 1):** implemented and verified end-to-end in Step 3.
-Uses X25519-only classical HPKE for content key wrapping. The hybrid X-Wing
-path is implemented in crypto-core and verified against external test
-vectors but is not yet wired into the storage pipeline.
+**Storage path (Format 1):** Uses X-Wing hybrid KEM (X25519 + ML-KEM-768) 
+for new mail when the mailbox has an X-Wing public key registered 
+(`mailboxes.mailbox_xwing_pk` is not null). Falls back to X25519-only HPKE 
+for backward compatibility with mailboxes that predate migration 035. The 
+`message_metadata.wrapped_key_algorithm` column records which algorithm 
+was used for each stored message.
 
-**E2E path (Format 2):** spec complete at docs/crypto/envelope-v1-spec.md;
-implementation of the client-side encryption and outbound worker routing
-is pending.
+**E2E path (Format 2):** Spec complete at docs/crypto/envelope-v1-spec.md; 
+client-side encryption and outbound worker routing pending.
+
+**Known architectural debt:** Two Rust crypto crates exist — root 
+`crypto-core/` and `packages/crypto-core/`. X-Wing is present in both as 
+of commit `aa656b6`. Consolidation is scheduled post-V1. Additionally, 
+`packages/crypto-core/src/bin/native-crypto-worker.rs` is registered as 
+two bin targets (`native-crypto-worker` and `byos-native-crypto-worker`); 
+consolidate to one name during cleanup.
 
 #### **Implementation gates still to resolve** 
 
@@ -910,6 +918,7 @@ For privacy-sensitive fields such as subject terms, the client can compute keyed
 |Timing|Accepted; search time and API activity remain visible.|
 |Outbound plaintext (external mail only)|Accepted. The outbound worker decrypts external mail for DKIM signing and SES delivery. Internal BYOS-to-BYOS mail is end-to-end encrypted and never decrypted by BYOS infrastructure. External mail cannot be E2E due to SMTP limitations.|
 |Key substitution attack|Accepted in V1. The server hosts the public key directory. A compromised or coerced server could substitute a different public key for a recipient, causing the sender to encrypt to the server instead. V1.5 mitigation: append-only key transparency log.|
+|Storage encryption algorithm|Now X-Wing hybrid for new mail (X25519 + ML-KEM-768); X25519-only for pre-migration rows. Migration 035 adds `wrapped_key_algorithm` to track which algorithm each row uses.|
 
 **WORDING:** Do not claim that the server cannot tell two searches use the same word/token. The correct statement is that the server does not receive the plaintext search term. 
 
@@ -1178,7 +1187,7 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 
 #### **Pricing philosophy**
 
-Every seat receives the same complete BYOS email product. Customers pay per seat, with the per-seat price declining as seat count grows through graduated marginal brackets. There are no named plans and no artificial feature walls. The minimum subscription is 10 seats.
+Every seat receives the same complete BYOS email product. Customers pay per seat, with the per-seat price declining as seat count grows through graduated marginal brackets. There are no named plans and no artificial feature walls.
 
 #### **Graduated bracket pricing**
 

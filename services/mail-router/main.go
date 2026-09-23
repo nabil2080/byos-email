@@ -112,15 +112,17 @@ type mailboxRoute struct {
 	MailboxPK        []byte
 	MailboxSKVersion int32
 	ObjectPrefix     string
+	MailboxXWingPK   []byte
 }
 
 type cryptoEncryptRequest struct {
-	MailboxID        string `json:"mailbox_id"`
-	MessageSeq       int64  `json:"message_seq"`
-	MailboxPublicKey string `json:"mailbox_public_key"`
-	Plaintext        string `json:"plaintext"`
-	StorageObjectID  string `json:"storage_object_id"`
-	MailboxSKVersion int32  `json:"mailbox_sk_version"`
+	MailboxID             string `json:"mailbox_id"`
+	MessageSeq            int64  `json:"message_seq"`
+	MailboxPublicKey      string `json:"mailbox_public_key"`
+	Plaintext             string `json:"plaintext"`
+	StorageObjectID       string `json:"storage_object_id"`
+	MailboxSKVersion      int32  `json:"mailbox_sk_version"`
+	MailboxXWingPublicKey string `json:"mailbox_xwing_public_key,omitempty"`
 }
 
 type cryptoEncryptResponse struct {
@@ -130,6 +132,7 @@ type cryptoEncryptResponse struct {
 	BundleHash            string `json:"bundle_hash"`
 	EncryptionVersion     int32  `json:"encryption_version"`
 	AADVersion            int16  `json:"aad_version"`
+	WrappedKeyAlgorithm   string `json:"wrapped_key_algorithm"`
 }
 
 type storageStoreRequest struct {
@@ -403,16 +406,21 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 		return StoredMessage{}, err
 	}
 
+	wrappedKeyAlg := cryptoResp.WrappedKeyAlgorithm
+	if wrappedKeyAlg == "" {
+		wrappedKeyAlg = "HPKE-X25519-AES256GCM-v1"
+	}
+
 	// No duplicate - insert new message
 	err = tx.QueryRow(ctx, `
 		INSERT INTO message_metadata (
 			mailbox_id, domain_id, message_seq, direction, delivery_identity, sender, recipients,
-			storage_object_id, content_key_hpke_wrapped, mailbox_sk_version, encryption_version,
+			storage_object_id, content_key_hpke_wrapped, wrapped_key_algorithm, mailbox_sk_version, encryption_version,
 			encryption_iv, aad_version, bundle_hash, status
-		) VALUES ($1, $2, $3, 'received', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'received')
+		) VALUES ($1, $2, $3, 'received', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'received')
 		RETURNING id`,
 		route.MailboxID, route.DomainID, messageSeq, deliveryIdentity[:], normalizeAddress(envelopeFrom), normalizedRecipients,
-		storageObjectID, wrappedKey, route.MailboxSKVersion, cryptoResp.EncryptionVersion, iv, cryptoResp.AADVersion, bundleHash,
+		storageObjectID, wrappedKey, wrappedKeyAlg, route.MailboxSKVersion, cryptoResp.EncryptionVersion, iv, cryptoResp.AADVersion, bundleHash,
 	).Scan(&messageID)
 	if err != nil {
 		return StoredMessage{}, fmt.Errorf("insert message metadata: %w", err)
@@ -459,6 +467,9 @@ func (a *App) encryptMessage(ctx context.Context, route mailboxRoute, messageSeq
 		Plaintext:        base64.StdEncoding.EncodeToString(rawMessage),
 		StorageObjectID:  storageObjectID,
 		MailboxSKVersion: route.MailboxSKVersion,
+	}
+	if len(route.MailboxXWingPK) > 0 {
+		payload.MailboxXWingPublicKey = base64.StdEncoding.EncodeToString(route.MailboxXWingPK)
 	}
 	var resp cryptoEncryptResponse
 	if err := postJSON(ctx, a.httpClient, a.cfg.CryptoWorkerURL+"/v1/encrypt", payload, &resp, nil); err != nil {
@@ -658,7 +669,7 @@ func envOrDefault(key, def string) string {
 func lookupMailboxRoute(ctx context.Context, tx pgx.Tx, domain, localPart string) (mailboxRoute, error) {
 	var route mailboxRoute
 	err := tx.QueryRow(ctx, `
-		SELECT m.id::text, d.id::text, m.mailbox_pk, m.mailbox_sk_version, ms.object_prefix
+		SELECT m.id::text, d.id::text, m.mailbox_pk, m.mailbox_sk_version, ms.object_prefix, m.mailbox_xwing_pk
 		FROM mailboxes m
 		JOIN domains d ON d.id = m.domain_id
 		JOIN mailbox_storage ms ON ms.mailbox_id = m.id
@@ -667,7 +678,7 @@ func lookupMailboxRoute(ctx context.Context, tx pgx.Tx, domain, localPart string
 		  AND m.is_active = true
 		  AND ms.status = 'active'
 		LIMIT 1`, domain, localPart,
-	).Scan(&route.MailboxID, &route.DomainID, &route.MailboxPK, &route.MailboxSKVersion, &route.ObjectPrefix)
+	).Scan(&route.MailboxID, &route.DomainID, &route.MailboxPK, &route.MailboxSKVersion, &route.ObjectPrefix, &route.MailboxXWingPK)
 	if err == nil {
 		if len(route.MailboxPK) != 32 {
 			return mailboxRoute{}, fmt.Errorf("mailbox public key for %s@%s must be 32 bytes", localPart, domain)
@@ -684,7 +695,7 @@ func lookupMailboxRoute(ctx context.Context, tx pgx.Tx, domain, localPart string
 		JOIN storage_connections sc ON sc.id = ms.storage_connection_id
 		WHERE lower(d.name) = lower($1)
 		  AND lower(m.local_part) = lower($2)
-		LIMIT 1`, domain, localPart).Scan(&scStatus)
+		  LIMIT 1`, domain, localPart).Scan(&scStatus)
 	if err2 == nil && (scStatus == "deleted" || scStatus == "error") {
 		return mailboxRoute{}, ErrStorageDisconnected
 	}
@@ -713,7 +724,7 @@ func (a *App) lookupMailboxRoutesBatch(ctx context.Context, recipients []string)
 	}
 
 	rows, err := a.pool.Query(ctx, `
-		SELECT lower(d.name), lower(m.local_part), m.id::text, d.id::text, m.mailbox_pk, m.mailbox_sk_version, ms.object_prefix
+		SELECT lower(d.name), lower(m.local_part), m.id::text, d.id::text, m.mailbox_pk, m.mailbox_sk_version, ms.object_prefix, m.mailbox_xwing_pk
 		FROM unnest($1::text[], $2::text[]) AS r(domain, local_part)
 		JOIN domains d ON lower(d.name) = r.domain
 		JOIN mailboxes m ON m.domain_id = d.id AND lower(m.local_part) = r.local_part
@@ -730,7 +741,7 @@ func (a *App) lookupMailboxRoutesBatch(ctx context.Context, recipients []string)
 	for rows.Next() {
 		var dom, lp string
 		var route mailboxRoute
-		if err := rows.Scan(&dom, &lp, &route.MailboxID, &route.DomainID, &route.MailboxPK, &route.MailboxSKVersion, &route.ObjectPrefix); err != nil {
+		if err := rows.Scan(&dom, &lp, &route.MailboxID, &route.DomainID, &route.MailboxPK, &route.MailboxSKVersion, &route.ObjectPrefix, &route.MailboxXWingPK); err != nil {
 			return nil, fmt.Errorf("scan mailbox route: %w", err)
 		}
 		if len(route.MailboxPK) == 32 {
