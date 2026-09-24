@@ -80,6 +80,7 @@ export interface MessageBodyResponse {
   bundle_hash: string;
   encryption_version: number;
   message_seq: number;
+  xwing_envelope_json?: string;
 }
 
 export interface MailboxDetail {

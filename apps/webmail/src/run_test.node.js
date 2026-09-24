@@ -5,6 +5,7 @@ import { runFileTypeTests } from "./fileType.test.js";
 import { runMultiAccountTests } from "./multi_account.test.js";
 import { runPasswordRewrapTests } from "./password_rewrap.test.js";
 import { runPathAComposeTests } from "./path_a_compose.test.js";
+import { runPathAReadTests } from "./path_a_read.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -50,6 +51,12 @@ async function main() {
   console.log(`PATH A COMPOSE TESTS: ${pathARes.passed} passed, ${pathARes.failed} failed\n`);
   totalPassed += pathARes.passed;
   totalFailed += pathARes.failed;
+
+  console.log("Running Path A Read Tests...");
+  const pathAReadRes = await runPathAReadTests();
+  console.log(`PATH A READ TESTS: ${pathAReadRes.passed} passed, ${pathAReadRes.failed} failed\n`);
+  totalPassed += pathAReadRes.passed;
+  totalFailed += pathAReadRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

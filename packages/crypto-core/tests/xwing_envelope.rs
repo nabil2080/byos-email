@@ -1,8 +1,8 @@
 use byos_crypto_core::{
     build_envelope_aad, marshal_canonical, sign_message, signing_public_key,
-    unmarshal_canonical, verify_message_signature, wasm_open_xwing_envelope,
-    wasm_seal_xwing_envelope, wasm_seal_xwing_envelope_signed, wasm_verify_signature,
-    xwing, CryptoEnvelope, ALG_XWING,
+    unmarshal_canonical, verify_message_signature, wasm_build_envelope_aad_hex,
+    wasm_open_xwing_envelope, wasm_seal_xwing_envelope, wasm_seal_xwing_envelope_signed,
+    wasm_verify_signature, xwing, CryptoEnvelope, ALG_XWING,
 };
 
 fn make_keypair() -> (Vec<u8>, Vec<u8>) {
@@ -510,5 +510,27 @@ fn test_seal_xwing_envelope_signed_wrong_recipient_key_length_rejected() {
         &hex::encode(sender_seed),
     );
     assert!(res1217.is_err());
+}
+
+#[test]
+fn test_wasm_build_envelope_aad_matches_direct() {
+    let v = 1u8;
+    let alg = "HPKE-XWing-AES256GCM-v1";
+    let key_id = "mbx_test";
+    let key_epoch = 1u32;
+    let enc = vec![0xAA; 1120];
+    let nonce = [0xBBu8; 12];
+
+    let direct = build_envelope_aad(v, alg, key_id, key_epoch, &enc, &nonce).unwrap();
+    let via_wasm = wasm_build_envelope_aad_hex(
+        v,
+        alg,
+        key_id,
+        key_epoch,
+        &hex::encode(&enc),
+        &hex::encode(&nonce),
+    ).unwrap();
+
+    assert_eq!(hex::decode(via_wasm).unwrap(), direct);
 }
 

@@ -9,6 +9,7 @@ export interface ReadingPaneProps {
   message: DisplayMessage;
   isDecrypting: boolean;
   decryptedContent: string | null;
+  senderVerification?: { verified: boolean; error?: string } | null;
   attachments: AttachmentItem[];
   downloadingAttachmentId: string | null;
   onDownloadAttachment: (att: AttachmentItem) => void;
@@ -718,6 +719,18 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                   <span class="text-[#6E7075] dark:text-[#878A8E] font-mono text-[11px] truncate">
                     &lt;{senderEmail()}&gt;
                   </span>
+                  <Show when={props.senderVerification}>
+                    <Show when={props.senderVerification?.verified}>
+                      <span class="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 px-2 py-0.5 rounded-full shadow-2xs">
+                        ✓ Verified sender
+                      </span>
+                    </Show>
+                    <Show when={!props.senderVerification?.verified}>
+                      <span class="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 px-2 py-0.5 rounded-full shadow-2xs">
+                        ⚠ Unverified sender
+                      </span>
+                    </Show>
+                  </Show>
                 </div>
 
                 {/* Recipient summary pill with interactive dropdown */}
@@ -858,6 +871,17 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               <div class="h-3 bg-[#F0EEE9] dark:bg-[#26282E] rounded-md w-full" />
               <div class="h-3 bg-[#F0EEE9] dark:bg-[#26282E] rounded-md w-5/6" />
               <div class="h-3 bg-[#F0EEE9] dark:bg-[#26282E] rounded-md w-2/3" />
+            </div>
+          </Show>
+
+          <Show when={props.senderVerification && !props.senderVerification.verified}>
+            <div class="mb-4 p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-300 text-xs flex items-start gap-2">
+              <span class="text-sm leading-none mt-0.5">⚠</span>
+              <div>
+                <span class="font-semibold">Sender signature could not be verified</span>
+                {props.senderVerification?.error ? `: ${props.senderVerification.error}` : ""}.
+                {" "}This message may not be from who it claims to be from.
+              </div>
             </div>
           </Show>
 

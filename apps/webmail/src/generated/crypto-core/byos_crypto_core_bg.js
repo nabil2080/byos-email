@@ -262,6 +262,48 @@ export function wasm_aes_gcm_encrypt(key_hex, plaintext_hex, aad_hex) {
 }
 
 /**
+ * @param {number} v
+ * @param {string} alg
+ * @param {string} key_id
+ * @param {number} key_epoch
+ * @param {string} enc_hex
+ * @param {string} nonce_hex
+ * @returns {string}
+ */
+export function wasm_build_envelope_aad_hex(v, alg, key_id, key_epoch, enc_hex, nonce_hex) {
+    let deferred6_0;
+    let deferred6_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(alg, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(key_id, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(enc_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(nonce_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len3 = WASM_VECTOR_LEN;
+        wasm.wasm_build_envelope_aad_hex(retptr, v, ptr0, len0, ptr1, len1, key_epoch, ptr2, len2, ptr3, len3);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr5 = r0;
+        var len5 = r1;
+        if (r3) {
+            ptr5 = 0; len5 = 0;
+            throw takeObject(r2);
+        }
+        deferred6_0 = ptr5;
+        deferred6_1 = len5;
+        return getStringFromWasm0(ptr5, len5);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export3(deferred6_0, deferred6_1, 1);
+    }
+}
+
+/**
  * Build canonical AES-GCM AAD for the browser (hex in/out).
  * aad = mailbox_id(16) || message_seq(8 BE) || encryption_version(4 BE) || aad_version(1).
  * Client-side AAD MUST come from this export — frozen §13.3 forbids a

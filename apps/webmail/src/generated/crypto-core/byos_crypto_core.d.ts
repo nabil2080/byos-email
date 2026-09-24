@@ -43,6 +43,8 @@ export function wasm_aes_gcm_decrypt(key_hex: string, envelope_hex: string, aad_
 
 export function wasm_aes_gcm_encrypt(key_hex: string, plaintext_hex: string, aad_hex: string): string;
 
+export function wasm_build_envelope_aad_hex(v: number, alg: string, key_id: string, key_epoch: number, enc_hex: string, nonce_hex: string): string;
+
 /**
  * Build canonical AES-GCM AAD for the browser (hex in/out).
  * aad = mailbox_id(16) || message_seq(8 BE) || encryption_version(4 BE) || aad_version(1).

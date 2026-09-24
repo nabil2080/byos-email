@@ -88,6 +88,7 @@ import {
   hexToBase64,
   bytesToHex,
   base64ToBytes,
+  decryptPathAEnvelope,
 } from "./message_crypto";
 import { loadSignature, saveSignature, applySignature } from "./signature";
 import { SetupAccount } from "./routes/setup-account";
@@ -332,6 +333,10 @@ const App: Component = () => {
   const [editablePlaintext, setEditablePlaintext] = createSignal<string | null>(null);
   // Message plaintext for reply/forward quoting. Same discipline: success-only.
   const [messagePlaintext, setMessagePlaintext] = createSignal<string | null>(null);
+  const [senderVerification, setSenderVerification] = createSignal<{
+    verified: boolean;
+    error?: string;
+  } | null>(null);
   const [isLoading, setIsLoading] = createSignal(true);
   const [messageAttachments, setMessageAttachments] = createSignal<AttachmentItem[]>([]);
   const [downloadingAttachment, setDownloadingAttachment] = createSignal<string | null>(null);
@@ -2527,6 +2532,7 @@ const App: Component = () => {
     setEditablePlaintext(null);
     setMessagePlaintext(null);
     setMessageAttachments([]);
+    setSenderVerification(null);
 
     // Mark as read (optimistic + persist)
     if (!msg.read) {
@@ -2586,23 +2592,45 @@ const App: Component = () => {
         setMessageAttachments(msgAttachments);
       }
 
-      // Decrypt locally when unlocked. The key, phrase, and plaintext never
-      // leave the browser; failures show a generic message, never key material.
-      const key = mailboxKey();
-      if (!key || unlockedBoxId() !== box.id || msg.messageSeq === undefined) {
-        if (seq === currentDecryptSeq) {
-          setDecryptedContent("Mailbox is locked. Please sign in with your password to decrypt this message.");
-          setIsDecrypting(false);
+      let plaintext: string;
+      if (body.xwing_envelope_json && body.xwing_envelope_json.trim()) {
+        const seed = xwingSeed();
+        if (!seed) {
+          throw new Error(
+            "This message is end-to-end encrypted. Please log out and log back in to load your X-Wing key.",
+          );
         }
-        return;
+        const result = await decryptPathAEnvelope(
+          body.xwing_envelope_json,
+          msg.sender,
+          seed,
+        );
+        plaintext = result.plaintext;
+        if (seq === currentDecryptSeq) {
+          setSenderVerification({
+            verified: result.senderVerified,
+            error: result.senderVerifyError,
+          });
+        }
+      } else {
+        // Decrypt locally when unlocked. The key, phrase, and plaintext never
+        // leave the browser; failures show a generic message, never key material.
+        const key = mailboxKey();
+        if (!key || unlockedBoxId() !== box.id || msg.messageSeq === undefined) {
+          if (seq === currentDecryptSeq) {
+            setDecryptedContent("Mailbox is locked. Please sign in with your password to decrypt this message.");
+            setIsDecrypting(false);
+          }
+          return;
+        }
+        const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+        plaintext = decryptMessageEnvelope(wasm, key, box.id, {
+          message_seq: msg.messageSeq,
+          encryption_version: body.encryption_version,
+          encrypted_body: body.encrypted_body,
+          content_key_hpke_wrapped: body.content_key_hpke_wrapped,
+        });
       }
-      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-      const plaintext = decryptMessageEnvelope(wasm, key, box.id, {
-        message_seq: msg.messageSeq,
-        encryption_version: body.encryption_version,
-        encrypted_body: body.encrypted_body,
-        content_key_hpke_wrapped: body.content_key_hpke_wrapped,
-      });
 
       let extractedSubject = msg.subject;
       let extractedBody = plaintext;
@@ -4020,6 +4048,7 @@ const App: Component = () => {
                 message={selectedMsg()!}
                 isDecrypting={isDecrypting()}
                 decryptedContent={decryptedContent()}
+                senderVerification={senderVerification()}
                 attachments={messageAttachments()}
                 downloadingAttachmentId={downloadingAttachment()}
                 onDownloadAttachment={handleDownloadAttachment}

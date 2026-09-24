@@ -1712,6 +1712,28 @@ pub fn wasm_open_xwing_envelope(
 }
 
 #[wasm_bindgen]
+pub fn wasm_build_envelope_aad_hex(
+    v: u8,
+    alg: &str,
+    key_id: &str,
+    key_epoch: u32,
+    enc_hex: &str,
+    nonce_hex: &str,
+) -> Result<String, JsValue> {
+    let enc_bytes = hex_decode(enc_hex).map_err(to_js_err)?;
+    let nonce_bytes = hex_decode(nonce_hex).map_err(to_js_err)?;
+    if nonce_bytes.len() != 12 {
+        return Err(to_js_err(CryptoError::InvalidNonceLength));
+    }
+    let mut nonce_arr = [0u8; 12];
+    nonce_arr.copy_from_slice(&nonce_bytes);
+
+    let aad = build_envelope_aad(v, alg, key_id, key_epoch, &enc_bytes, &nonce_arr)
+        .map_err(to_js_err)?;
+    Ok(hex_encode(&aad))
+}
+
+#[wasm_bindgen]
 pub fn wasm_derive_root_secret(entropy_hex: &str) -> Result<String, JsValue> {
     let entropy_bytes = hex_decode(entropy_hex).map_err(|e| JsValue::from_str(&e))?;
     if entropy_bytes.len() != 32 {

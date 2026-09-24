@@ -1,6 +1,7 @@
 import { bytesToHex, hexToBytes } from "./attachment_crypto";
 export { bytesToHex, hexToBytes };
 import type * as WasmCore from "./generated/crypto-core/byos_crypto_core.js";
+import { lookupMailboxKeys, type KeyDirectoryRecord } from "./api";
 
 // Client-side message/draft envelope handling (Section 12).
 //
@@ -376,3 +377,93 @@ export function extractKeywords(text: string): string[] {
     .filter((w) => w.length >= 2 && w.length <= 64);
   return Array.from(new Set(words));
 }
+
+/** Extracts clean email address from "Name <user@domain.com>" or plain "user@domain.com". */
+export function extractCleanEmail(sender: string): string {
+  const match = sender.match(/<([^>]+)>/);
+  return (match ? match[1] : sender).trim();
+}
+
+export interface PathADecryptResult {
+  plaintext: string;
+  senderVerified: boolean;
+  senderVerifyError?: string;
+}
+
+export interface PathAReadDeps {
+  lookupMailboxKeys?: (email: string) => Promise<KeyDirectoryRecord>;
+  wasm?: typeof WasmCore;
+}
+
+export async function decryptPathAEnvelope(
+  envelopeJson: string,
+  senderEmail: string,
+  recipientXWingSeed: Uint8Array,
+  deps?: PathAReadDeps,
+): Promise<PathADecryptResult> {
+  const wasm = deps?.wasm ?? (await import("./generated/crypto-core/byos_crypto_core.js"));
+  const recipientSeedHex = bytesToHex(recipientXWingSeed);
+
+  // 1. Decrypt
+  let plaintextHex: string;
+  try {
+    plaintextHex = wasm.wasm_open_xwing_envelope(recipientSeedHex, envelopeJson);
+  } catch (e) {
+    throw new Error(
+      `Failed to decrypt end-to-end message: ${e instanceof Error ? e.message : "unknown"}`,
+    );
+  }
+  const plaintext = new TextDecoder().decode(hexToBytes(plaintextHex));
+
+  // 2. Verify
+  let senderVerified = false;
+  let senderVerifyError: string | undefined;
+  try {
+    const lookupFn = deps?.lookupMailboxKeys ?? lookupMailboxKeys;
+    const cleanSender = extractCleanEmail(senderEmail);
+    const senderRecord = await lookupFn(cleanSender);
+
+    if (!senderRecord || !senderRecord.ed25519_signing_public_key) {
+      senderVerifyError = "Sender has no published signing key";
+    } else {
+      const senderPkHex = bytesToHex(
+        base64ToBytes(senderRecord.ed25519_signing_public_key),
+      );
+      const env = JSON.parse(envelopeJson);
+      if (!env.sig) {
+        senderVerifyError = "Envelope has no signature";
+      } else {
+        const encBytes = base64ToBytes(env.enc);
+        const nonceBytes = base64ToBytes(env.nonce);
+        const ctBytes = base64ToBytes(env.ciphertext);
+        const sigBytes = base64ToBytes(env.sig);
+
+        const aadHex = wasm.wasm_build_envelope_aad_hex(
+          env.v,
+          env.alg,
+          env.key_id,
+          env.key_epoch,
+          bytesToHex(encBytes),
+          bytesToHex(nonceBytes),
+        );
+
+        const verified = wasm.wasm_verify_signature(
+          senderPkHex,
+          aadHex,
+          bytesToHex(ctBytes),
+          bytesToHex(sigBytes),
+        );
+
+        senderVerified = verified;
+        if (!verified) {
+          senderVerifyError = "Signature does not match sender";
+        }
+      }
+    }
+  } catch (e) {
+    senderVerifyError = e instanceof Error ? e.message : "verification error";
+  }
+
+  return { plaintext, senderVerified, senderVerifyError };
+}
+

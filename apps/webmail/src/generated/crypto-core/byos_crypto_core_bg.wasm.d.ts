@@ -11,6 +11,7 @@ export const signingkeyhandle_sign: (a: number, b: number, c: number, d: number,
 export const signingkeyhandle_signingPublicKey: (a: number, b: number) => void;
 export const wasm_aes_gcm_decrypt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const wasm_aes_gcm_encrypt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+export const wasm_build_envelope_aad_hex: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
 export const wasm_canonical_aad: (a: number, b: number, c: number, d: bigint, e: number) => void;
 export const wasm_decrypt_outbound: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: bigint, i: number, j: number) => void;
 export const wasm_derive_root_secret: (a: number, b: number, c: number) => void;
