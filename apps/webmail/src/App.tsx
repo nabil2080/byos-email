@@ -90,7 +90,7 @@ import {
   base64ToBytes,
   decryptPathAEnvelope,
 } from "./message_crypto";
-import { loadSignature, saveSignature, applySignature, applySignatureHtml } from "./signature";
+import { loadSignature, loadSignatureHtml, saveSignature, applySignature, applySignatureHtml } from "./signature";
 import { parseMime, getHeader } from "./mime";
 import { SetupAccount } from "./routes/setup-account";
 import { SettingsLayout, SettingsTabId } from "./routes/settings/SettingsLayout";
@@ -2880,18 +2880,15 @@ const App: Component = () => {
     clearComposeForm();
     const box = selectedMailbox();
     if (box) {
-      const sig = loadSignature(box.id);
-      if (sig) {
-        setComposeBody(`\n\n-- \n${sig}`);
-        const escaped = sig
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;");
-        const sigHtml = escaped
-          .split("\n")
-          .map((line) => `<p>${line || "<br>"}</p>`)
-          .join("");
-        setComposeBodyHtml(`<p><br></p><div class="byos-signature"><p>-- </p>${sigHtml}</div>`);
+      const sigPlain = loadSignature(box.id);
+      const sigHtml = loadSignatureHtml(box.id);
+      if (sigPlain) {
+        setComposeBody(`\n\n-- \n${sigPlain}`);
+      }
+      if (sigHtml) {
+        setComposeBodyHtml(
+          `<p><br></p><div class="byos-signature"><p>-- </p>${sigHtml}</div>`,
+        );
       }
     }
     setComposeOpen(true);
@@ -2974,9 +2971,10 @@ const App: Component = () => {
 
     setComposeStatus("Preparing encrypted message…");
     try {
-      const sig = loadSignature(box.id);
-      const signedBody = applySignature(body, sig);
-      const htmlBody = applySignatureHtml(composeBodyHtml(), sig);
+      const sigPlain = loadSignature(box.id);
+      const sigHtml = loadSignatureHtml(box.id);
+      const signedBody = applySignature(body, sigPlain);
+      const htmlBody = applySignatureHtml(composeBodyHtml(), sigHtml);
 
       let trackingToken: string | undefined;
       if (composeTrackOpens()) {

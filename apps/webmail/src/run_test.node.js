@@ -7,6 +7,7 @@ import { runPasswordRewrapTests } from "./password_rewrap.test.js";
 import { runPathAComposeTests } from "./path_a_compose.test.js";
 import { runPathAReadTests } from "./path_a_read.test.js";
 import { runMimeTests } from "./mime.test.js";
+import { runSignatureTests } from "./signature.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -64,6 +65,12 @@ async function main() {
   console.log(`MIME PARSER TESTS: ${mimeRes.passed} passed, ${mimeRes.failed} failed\n`);
   totalPassed += mimeRes.passed;
   totalFailed += mimeRes.failed;
+
+  console.log("Running Signature Tests...");
+  const sigRes = runSignatureTests();
+  console.log(`SIGNATURE TESTS: ${sigRes.passed} passed, ${sigRes.failed} failed\n`);
+  totalPassed += sigRes.passed;
+  totalFailed += sigRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

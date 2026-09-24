@@ -7,7 +7,7 @@ import {
   updateMailboxSettings,
   fetchMailboxAliases,
 } from "../../api";
-import { saveSignature } from "../../signature";
+import { saveSignature, saveSignatureHtml } from "../../signature";
 import { ProfileAvatar } from "../../components/ProfileAvatar";
 import { RichTextEditor } from "../../components/RichTextEditor";
 import DOMPurify from "dompurify";
@@ -160,6 +160,7 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
         avatar_url: avatarUrl(),
       });
       saveSignature(props.mailbox.id, signaturePlain());
+      saveSignatureHtml(props.mailbox.id, DOMPurify.sanitize(signatureHtml()));
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
     } catch (err: any) {
