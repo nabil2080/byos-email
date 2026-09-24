@@ -137,5 +137,58 @@ export function runSignatureTests(): { passed: number; failed: number } {
     );
   });
 
+  // 9. Server hydration writes both keys to localStorage
+  test("9. Server hydration writes both keys to localStorage", () => {
+    mockStorage.clear();
+    const serverSettings = {
+      signature_plain: "Plain text",
+      signature_html: "<b>HTML text</b>",
+    };
+    if (serverSettings.signature_plain !== undefined) {
+      saveSignature("box1", serverSettings.signature_plain);
+    }
+    if (serverSettings.signature_html !== undefined) {
+      saveSignatureHtml("box1", serverSettings.signature_html);
+    }
+    assert(loadSignature("box1") === "Plain text", "Hydrated plain matches");
+    assert(loadSignatureHtml("box1") === "<b>HTML text</b>", "Hydrated HTML matches");
+  });
+
+  // 10. Server hydration with empty signature_html removes the key (does not leave stale data)
+  test("10. Server hydration with empty signature_html removes the key", () => {
+    mockStorage.clear();
+    saveSignatureHtml("box1", "<p>Stale HTML</p>");
+    assert(loadSignatureHtml("box1") === "<p>Stale HTML</p>", "Initial setup");
+    const serverSettings = {
+      signature_plain: "Updated plain",
+      signature_html: "",
+    };
+    if (serverSettings.signature_plain !== undefined) {
+      saveSignature("box1", serverSettings.signature_plain);
+    }
+    if (serverSettings.signature_html !== undefined) {
+      saveSignatureHtml("box1", serverSettings.signature_html);
+    }
+    assert(mockStorage.getItem("byos.signature.html.box1") === null, "Stale HTML was removed");
+    assert(loadSignatureHtml("box1") === "<p>Updated plain</p>", "Falls back to updated plain");
+  });
+
+  // 11. Server hydration with only signature_plain leaves signature_html absent
+  test("11. Server hydration with only signature_plain leaves signature_html absent", () => {
+    mockStorage.clear();
+    const serverSettings = {
+      signature_plain: "Solo plain",
+      signature_html: undefined as string | undefined,
+    };
+    if (serverSettings.signature_plain !== undefined) {
+      saveSignature("box1", serverSettings.signature_plain);
+    }
+    if (serverSettings.signature_html !== undefined) {
+      saveSignatureHtml("box1", serverSettings.signature_html);
+    }
+    assert(mockStorage.getItem("byos.signature.html.box1") === null, "HTML key should remain absent");
+    assert(loadSignatureHtml("box1") === "<p>Solo plain</p>", "Falls back to plain conversion");
+  });
+
   return { passed, failed };
 }

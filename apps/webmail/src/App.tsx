@@ -90,7 +90,7 @@ import {
   base64ToBytes,
   decryptPathAEnvelope,
 } from "./message_crypto";
-import { loadSignature, loadSignatureHtml, saveSignature, applySignature, applySignatureHtml } from "./signature";
+import { loadSignature, loadSignatureHtml, saveSignature, saveSignatureHtml, applySignature, applySignatureHtml } from "./signature";
 import { parseMime, getHeader } from "./mime";
 import { SetupAccount } from "./routes/setup-account";
 import { SettingsLayout, SettingsTabId } from "./routes/settings/SettingsLayout";
@@ -2287,6 +2287,15 @@ const App: Component = () => {
           if (s.week_start) {
             setWeekStart(s.week_start as "sunday" | "monday" | "saturday");
             if (typeof window !== "undefined") localStorage.setItem("byos_week_start", s.week_start);
+          }
+          if (s.signature_plain !== undefined) {
+            saveSignature(mailboxId, s.signature_plain);
+          }
+          if (s.signature_html !== undefined) {
+            saveSignatureHtml(mailboxId, s.signature_html);
+          }
+          if (selectedMailbox()?.id === mailboxId) {
+            refreshSignature(mailboxId);
           }
         })
         .catch(() => {});
