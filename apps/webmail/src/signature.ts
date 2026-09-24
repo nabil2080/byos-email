@@ -43,5 +43,22 @@ export function saveSignature(mailboxId: string, text: string): void {
 export function applySignature(plaintext: string, signature: string): string {
   const sig = signature.trim();
   if (!sig) return plaintext;
+  if (plaintext.includes(`-- \n${sig}`)) return plaintext;
   return `${plaintext}\n\n-- \n${sig}`;
+}
+
+export function applySignatureHtml(html: string, signature: string): string {
+  const sig = signature.trim();
+  if (!sig) return html;
+  if (html.includes("byos-signature") || html.includes(`-- </p><p>${sig}`)) return html;
+  // Escape signature for HTML safety, preserve line breaks
+  const escaped = sig
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const sigHtml = escaped
+    .split("\n")
+    .map((line) => `<p>${line || "<br>"}</p>`)
+    .join("");
+  return `${html}<div class="byos-signature"><br>-- <br>${sigHtml}</div>`;
 }

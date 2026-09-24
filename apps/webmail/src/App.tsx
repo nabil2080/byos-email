@@ -90,7 +90,8 @@ import {
   base64ToBytes,
   decryptPathAEnvelope,
 } from "./message_crypto";
-import { loadSignature, saveSignature, applySignature } from "./signature";
+import { loadSignature, saveSignature, applySignature, applySignatureHtml } from "./signature";
+import { parseMime, getHeader } from "./mime";
 import { SetupAccount } from "./routes/setup-account";
 import { SettingsLayout, SettingsTabId } from "./routes/settings/SettingsLayout";
 import { SignaturesTab } from "./routes/settings/SignaturesTab";
@@ -2633,16 +2634,23 @@ const App: Component = () => {
       }
 
       let extractedSubject = msg.subject;
-      let extractedBody = plaintext;
-      const subMatch = plaintext.match(/^Subject:\s*(.*)$/im);
-      if (subMatch && subMatch[1]) {
-        extractedSubject = subMatch[1].trim();
+      const headerEnd = plaintext.search(/\r?\n\r?\n/);
+      const rawHeaders = headerEnd !== -1 ? plaintext.slice(0, headerEnd) : "";
+      const headerSubject = getHeader(rawHeaders, "subject");
+      if (headerSubject) {
+        extractedSubject = headerSubject.trim();
+      } else {
+        const subMatch = plaintext.match(/^Subject:\s*(.*)$/im);
+        if (subMatch && subMatch[1]) {
+          extractedSubject = subMatch[1].trim();
+        }
       }
-      const bodyParts = plaintext.split(/\r?\n\r?\n/);
-      if (bodyParts.length > 1) {
-        extractedBody = bodyParts.slice(1).join("\n\n");
-      }
-      const extractedSnippet = extractedBody.trim().slice(0, 100).replace(/\s+/g, " ");
+
+      const parsed = parseMime(plaintext);
+      const displayContent = parsed.textHtml || parsed.textPlain || plaintext;
+      const quoteContent = parsed.textPlain || parsed.textHtml || plaintext;
+
+      const extractedSnippet = quoteContent.trim().slice(0, 100).replace(/\s+/g, " ");
 
       sessionStorage.setItem("byos_msg_subject_" + msg.id, extractedSubject);
       sessionStorage.setItem("byos_msg_snippet_" + msg.id, extractedSnippet);
@@ -2659,8 +2667,8 @@ const App: Component = () => {
         setMessages((prev) =>
           prev.map((m) => (m.id === msg.id ? updatedMsg : m))
         );
-        setDecryptedContent(extractedBody.trim() || plaintext);
-        setMessagePlaintext(extractedBody.trim() || plaintext);
+        setDecryptedContent(displayContent);
+        setMessagePlaintext(quoteContent);
         setIsDecrypting(false);
       }
 
@@ -2868,6 +2876,27 @@ const App: Component = () => {
     setEditingDraft(null);
   }
 
+  function startNewCompose() {
+    clearComposeForm();
+    const box = selectedMailbox();
+    if (box) {
+      const sig = loadSignature(box.id);
+      if (sig) {
+        setComposeBody(`\n\n-- \n${sig}`);
+        const escaped = sig
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        const sigHtml = escaped
+          .split("\n")
+          .map((line) => `<p>${line || "<br>"}</p>`)
+          .join("");
+        setComposeBodyHtml(`<p><br></p><div class="byos-signature"><p>-- </p>${sigHtml}</div>`);
+      }
+    }
+    setComposeOpen(true);
+  }
+
   function startEditDraft(msg: DisplayMessage, plaintext: string) {
     setComposeTo(msg.recipient === "(no recipient)" ? "" : msg.recipient);
     setComposeSubject(msg.subject === "(no subject)" ? "" : msg.subject);
@@ -2945,8 +2974,9 @@ const App: Component = () => {
 
     setComposeStatus("Preparing encrypted message…");
     try {
-      const signedBody = applySignature(body, loadSignature(box.id));
-      const htmlBody = composeBodyHtml();
+      const sig = loadSignature(box.id);
+      const signedBody = applySignature(body, sig);
+      const htmlBody = applySignatureHtml(composeBodyHtml(), sig);
 
       let trackingToken: string | undefined;
       if (composeTrackOpens()) {
@@ -3937,11 +3967,7 @@ const App: Component = () => {
             folderCounts={folderCounts()}
             customFolderCounts={customFolderCounts()}
             labelCounts={labelCounts()}
-            onCompose={() => {
-              setComposeAttachments([]);
-              setEditingDraft(null);
-              setComposeOpen(true);
-            }}
+            onCompose={startNewCompose}
             onOpenContacts={openContacts}
             onOpenImport={() => setImportEmailsModalOpen(true)}
             onOpenSettings={() => {

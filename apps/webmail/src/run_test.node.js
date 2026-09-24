@@ -6,6 +6,7 @@ import { runMultiAccountTests } from "./multi_account.test.js";
 import { runPasswordRewrapTests } from "./password_rewrap.test.js";
 import { runPathAComposeTests } from "./path_a_compose.test.js";
 import { runPathAReadTests } from "./path_a_read.test.js";
+import { runMimeTests } from "./mime.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -57,6 +58,12 @@ async function main() {
   console.log(`PATH A READ TESTS: ${pathAReadRes.passed} passed, ${pathAReadRes.failed} failed\n`);
   totalPassed += pathAReadRes.passed;
   totalFailed += pathAReadRes.failed;
+
+  console.log("Running MIME Parser Tests...");
+  const mimeRes = runMimeTests();
+  console.log(`MIME PARSER TESTS: ${mimeRes.passed} passed, ${mimeRes.failed} failed\n`);
+  totalPassed += mimeRes.passed;
+  totalFailed += mimeRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {
