@@ -129,8 +129,8 @@ fn print_sql(
     );
     println!();
 
-    // Cleanup mailboxes
-    println!("-- 3. Cleanup prior mailboxes for idempotency");
+    // Cleanup child tables, mailboxes, and users
+    println!("-- 3. Cleanup prior mailboxes and child records for idempotency");
     let id_list = mailboxes
         .iter()
         .map(|m| format!("'{}'::uuid", m.mailbox_id))
@@ -141,11 +141,41 @@ fn print_sql(
         .map(|m| format!("'{}'", m.local_part))
         .collect::<Vec<_>>()
         .join(", ");
+    let user_id_list = mailboxes
+        .iter()
+        .map(|m| format!("'{}'::uuid", m.user_id))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let user_email_list = mailboxes
+        .iter()
+        .map(|m| format!("'{}@{}'", m.local_part, m.domain))
+        .collect::<Vec<_>>()
+        .join(", ");
 
+    let target_mb = format!(
+        "SELECT id FROM mailboxes WHERE id IN ({}) OR (domain_id = (SELECT id FROM domains WHERE name = '{}') AND local_part IN ({}))",
+        id_list, domain, local_list
+    );
+    let target_users = format!(
+        "SELECT id FROM users WHERE id IN ({}) OR email IN ({})",
+        user_id_list, user_email_list
+    );
+
+    println!("DELETE FROM delivery_log WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM outbound_queue WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM outbound_reservations WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM message_metadata WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM mailbox_storage WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM search_index WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM scheduled_messages WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM auto_reply_rules WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM device_mailbox_access WHERE mailbox_id IN ({});", target_mb);
     println!(
         "DELETE FROM mailboxes\nWHERE id IN ({})\n   OR (domain_id = (SELECT id FROM domains WHERE name = '{}') AND local_part IN ({}));",
         id_list, domain, local_list
     );
+    println!("DELETE FROM audit_log WHERE user_id IN ({});", target_users);
+    println!("DELETE FROM users WHERE id IN ({}) OR email IN ({});", user_id_list, user_email_list);
     println!();
 
     // Users and mailboxes
@@ -187,7 +217,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut password = "test-password-123".to_string();
     let mut domain = "byos.local".to_string();
     let mut local_part = "alice".to_string();
-    let mut mailbox_id = "a0000000-0000-0000-0000-000000000001".to_string();
+    let mut mailbox_id = "c0000000-0000-0000-0000-000000000001".to_string();
     let mut recovery_root_hex: Option<String> = None;
 
     let mut i = 1;
@@ -255,12 +285,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut mailboxes = Vec::new();
 
     if is_pair {
+        // IMPORTANT: These UUIDs must not collide with any UUID used by the 
+        // services/api test suite. The test suite performs cleanup DELETEs on 
+        // its own fixtures. If the seed tool uses the same IDs, running tests 
+        // will wipe the dev environment.
+
         // Alice
         let mut alice_root = [0u8; 32];
         alice_root[31] = 0x01;
         mailboxes.push(derive_mailbox(
-            "a0000000-0000-0000-0000-000000000001",
-            "00000000-0000-0000-0000-000000000ccc",
+            "c0000000-0000-0000-0000-000000000001",
+            "cccccccc-0000-0000-0000-000000000002",
             "alice",
             &domain,
             &alice_root,
@@ -271,8 +306,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut bob_root = [0u8; 32];
         bob_root[31] = 0x02;
         mailboxes.push(derive_mailbox(
-            "a0000000-0000-0000-0000-000000000002",
-            "00000000-0000-0000-0000-000000000ddd",
+            "c0000000-0000-0000-0000-000000000002",
+            "cccccccc-0000-0000-0000-000000000003",
             "bob",
             &domain,
             &bob_root,
@@ -290,7 +325,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             arr
         };
 
-        let user_id = "00000000-0000-0000-0000-000000000ccc";
+        let user_id = "cccccccc-0000-0000-0000-000000000002";
         mailboxes.push(derive_mailbox(
             &mailbox_id,
             user_id,
