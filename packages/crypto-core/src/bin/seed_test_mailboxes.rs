@@ -174,12 +174,6 @@ fn print_sql(
         );
         println!();
 
-        println!("-- Storage mapping for: {}", mb.mailbox_id);
-        println!(
-            "INSERT INTO mailbox_storage (mailbox_id, storage_connection_id, object_prefix, status)\nVALUES (\n  '{}'::uuid,\n  'ffffffff-0000-0000-0000-000000000001'::uuid,\n  'mailboxes/{}',\n  'active'\n)\nON CONFLICT (mailbox_id) DO NOTHING;",
-            mb.mailbox_id, mb.mailbox_id
-        );
-        println!();
     }
 
     println!("COMMIT;");
