@@ -24,6 +24,10 @@ path = "src/bin/native-crypto-worker.rs"
 name = "native-crypto-worker"
 path = "src/bin/native-crypto-worker.rs"
 
+[[bin]]
+name = "seed-test-mailboxes"
+path = "src/bin/seed_test_mailboxes.rs"
+
 [dependencies]
 # HPKE (RFC 9180)
 hpke = { version = "0.14", features = ["x25519", "aes"] }
@@ -73,6 +77,8 @@ axum = "0.7"
 base64 = "0.22"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 uuid = { version = "1", features = ["v4"] }
+bcrypt = "0.15"
+hex = "0.4"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
