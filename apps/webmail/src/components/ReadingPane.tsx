@@ -875,12 +875,21 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
           </Show>
 
           <Show when={props.senderVerification && !props.senderVerification.verified}>
-            <div class="mb-4 p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-300 text-xs flex items-start gap-2">
+            <div role="alert" class="mb-4 p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-300 text-xs flex items-start gap-2">
               <span class="text-sm leading-none mt-0.5">⚠</span>
               <div>
-                <span class="font-semibold">Sender signature could not be verified</span>
-                {props.senderVerification?.error ? `: ${props.senderVerification.error}` : ""}.
-                {" "}This message may not be from who it claims to be from.
+                <p class="font-semibold">
+                  <Show 
+                    when={props.senderVerification?.error?.includes("outside BYOS")} 
+                    fallback={"Sender could not be verified"}
+                  >
+                    External sender
+                  </Show>
+                </p>
+                <p class="mt-0.5">
+                  {props.senderVerification?.error || 
+                   "This message could not be cryptographically verified against the sender's public key."}
+                </p>
               </div>
             </div>
           </Show>

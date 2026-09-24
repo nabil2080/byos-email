@@ -151,5 +151,24 @@ export async function runPathAReadTests(): Promise<{ passed: number; failed: num
     assert(extractCleanEmail("  alice@byos.local  ") === "alice@byos.local", "trimmed email");
   });
 
+  // 8. decryptPathAEnvelope handles unknown_mailbox error with a friendly message
+  await test("8. decryptPathAEnvelope handles unknown_mailbox error with a friendly message", async () => {
+    const res = await decryptPathAEnvelope(
+      RUST_VECTOR.envelope_json,
+      "external@gmail.com",
+      recipientSeed,
+      {
+        lookupMailboxKeys: async () => {
+          throw new Error('{"error":"unknown_mailbox","message":"unknown mailbox"}');
+        },
+      }
+    );
+    assert(!res.senderVerified, "senderVerified should be false");
+    assert(
+      res.senderVerifyError === "This message came from outside BYOS. Its sender cannot be cryptographically verified.",
+      `unexpected error: ${res.senderVerifyError}`
+    );
+  });
+
   return { passed, failed };
 }

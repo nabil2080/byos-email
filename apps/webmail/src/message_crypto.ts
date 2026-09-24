@@ -461,7 +461,21 @@ export async function decryptPathAEnvelope(
       }
     }
   } catch (e) {
-    senderVerifyError = e instanceof Error ? e.message : "verification error";
+    const msg = e instanceof Error ? e.message : String(e);
+    // apiRequest throws the raw response body for non-2xx. When the 
+    // sender is not in the key directory (external address or unknown 
+    // BYOS user), the server returns {"error":"unknown_mailbox"...}.
+    // Surface a readable message instead of raw JSON.
+    if (
+      msg.includes("unknown_mailbox") ||
+      msg.includes("unknown mailbox") ||
+      msg.includes("not found")
+    ) {
+      senderVerifyError =
+        "This message came from outside BYOS. Its sender cannot be cryptographically verified.";
+    } else {
+      senderVerifyError = msg;
+    }
   }
 
   return { plaintext, senderVerified, senderVerifyError };

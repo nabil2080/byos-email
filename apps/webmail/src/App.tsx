@@ -1169,7 +1169,22 @@ const App: Component = () => {
       targetBox = boxes.find((b) => b.id === impersonateMailboxId());
     }
     if (!targetBox && boxes.length > 0) {
-      targetBox = boxes[0];
+      // User's own mailbox is missing. Do NOT silently fall back to 
+      // another mailbox — that would show one user another user's mail.
+      console.error(
+        "No mailbox found for authenticated user; refusing to fall back",
+        {
+          userId: user.id,
+          expectedMailboxId: user.mailbox_id,
+          availableBoxes: boxes.map((b) => b.id),
+        },
+      );
+      setErrorMessage(
+        "Your mailbox could not be found. Please contact support or log in again.",
+      );
+      setSelectedMailbox(null);
+      setUnlockedBoxId(null);
+      return;
     }
 
     if (targetBox) {
