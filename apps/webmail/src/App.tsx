@@ -3069,6 +3069,12 @@ const App: Component = () => {
           setComposeStatus("Message delivered securely.");
           setComposeOpen(false);
           clearComposeForm();
+          // Refresh the message list so the sent copy appears in the Sent folder.
+          // Without this, the server has the message but the client's in-memory
+          // list is stale until the user reloads or manually refreshes.
+          loadMailboxData(box.id).catch((err) => {
+            console.warn("Failed to refresh mailbox after send:", err);
+          });
           return;
         }
 
@@ -3140,6 +3146,9 @@ const App: Component = () => {
       setComposeStatus(scheduledTime() ? "Encrypted message scheduled." : "Encrypted message queued for delivery.");
       setComposeOpen(false);
       clearComposeForm();
+      loadMailboxData(box.id).catch((err) => {
+        console.warn("Failed to refresh mailbox after send:", err);
+      });
     } catch (err) {
       setErrorMessage(`Failed to send securely: ${err instanceof Error ? err.message : "unknown error"}`);
       setComposeStatus(null);
