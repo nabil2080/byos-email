@@ -396,7 +396,7 @@ export const RichTextEditor: Component<RichTextEditorProps> = (props) => {
             contenteditable="true"
             onInput={syncContent}
             data-placeholder={props.placeholder || "Write your message here…"}
-            class={`w-full h-full p-3.5 bg-white dark:bg-[#1E2025] text-xs sm:text-sm text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none overflow-y-auto leading-relaxed break-words font-sans empty:before:content-[attr(data-placeholder)] empty:before:text-[#878A8E] empty:before:pointer-events-none ${
+            class={`rich-text-editor-content w-full h-full p-3.5 bg-white dark:bg-[#1E2025] text-xs sm:text-sm text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none overflow-y-auto leading-relaxed break-words font-sans empty:before:content-[attr(data-placeholder)] empty:before:text-[#878A8E] empty:before:pointer-events-none ${
               props.contentClass || ""
             }`}
             style={{

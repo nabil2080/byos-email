@@ -88,3 +88,33 @@ select:disabled {
   background: #B2826F;
 }
 
+/* Preserve inline image flow and table display inside message bodies
+   and signatures. Tailwind v4 preflight sets img { display: block }
+   globally, which breaks inline icons in email signatures. */
+.byos-signature img,
+.rich-text-editor-content img,
+.reading-pane-content img {
+  display: inline-block;
+  vertical-align: middle;
+  max-width: 100%;
+  height: auto;
+}
+
+.byos-signature table,
+.rich-text-editor-content table,
+.reading-pane-content table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.byos-signature td,
+.byos-signature th,
+.rich-text-editor-content td,
+.rich-text-editor-content th,
+.reading-pane-content td,
+.reading-pane-content th {
+  display: table-cell;
+  vertical-align: inherit;
+}
+
+
