@@ -319,7 +319,7 @@ func main() {
 	http.HandleFunc("/v1/outbound/send", withSecurityHeaders(withCORS(outboundSendHandler)))
 	http.HandleFunc("/v1/outbound/schedule", withSecurityHeaders(withCORS(outboundScheduleHandler)))
 	http.HandleFunc("/v1/outbound/scheduled/cancel", withSecurityHeaders(withCORS(outboundScheduledCancelHandler)))
-	http.HandleFunc("POST /v1/outbound/send-internal", withSecurityHeaders(withCORS(internalSendHandler)))
+	http.HandleFunc("/v1/outbound/send-internal", withSecurityHeaders(withCORS(internalSendHandler)))
 	http.HandleFunc("/v1/bridge/authenticate", withSecurityHeaders(withCORS(bridgeAuthenticateHandler)))
 	http.HandleFunc("/v1/bridge/messages", withSecurityHeaders(withCORS(bridgeMessagesHandler)))
 	http.HandleFunc("/v1/bridge/message-body", withSecurityHeaders(withCORS(bridgeMessageBodyHandler)))
