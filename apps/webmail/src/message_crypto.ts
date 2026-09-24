@@ -1,4 +1,5 @@
 import { bytesToHex, hexToBytes } from "./attachment_crypto";
+export { bytesToHex, hexToBytes };
 import type * as WasmCore from "./generated/crypto-core/byos_crypto_core.js";
 
 // Client-side message/draft envelope handling (Section 12).
@@ -41,6 +42,10 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(chars.join(""));
 }
 
+export function hexToBase64(hex: string): string {
+  return bytesToBase64(hexToBytes(hex));
+}
+
 /** Derive the in-memory mailbox key. Throws with safe messages on bad input. */
 export function unlockMailboxKey(
   wasm: typeof WasmCore,
@@ -71,11 +76,12 @@ export function unlockMailboxKey(
 export interface UnwrappedKeys {
   mailboxSk: Uint8Array;
   signingSeed: Uint8Array | null;
+  xwingSeed: Uint8Array | null;
 }
 
 /**
  * Automate password-based key unwrapping on login via Argon2id.
- * Unwraps mailbox_sk and signing_seed using wasm_passphrase_unwrap_key without 24-word phrase entry.
+ * Unwraps mailbox_sk, signing_seed, and xwing_seed using wasm_passphrase_unwrap_key without 24-word phrase entry.
  */
 export function autoUnwrapKeys(
   wasm: typeof WasmCore,
@@ -138,7 +144,24 @@ export function autoUnwrapKeys(
     }
   }
 
-  return { mailboxSk, signingSeed };
+  let xwingSeed: Uint8Array | null = null;
+  if (parsed && parsed.xwing_salt && parsed.xwing_envelope) {
+    try {
+      const seedHex = wasm.wasm_passphrase_unwrap_key(
+        password,
+        parsed.xwing_salt,
+        parsed.xwing_envelope,
+      );
+      const seed = hexToBytes(seedHex);
+      if (seed.length === 32) {
+        xwingSeed = seed;
+      }
+    } catch (e) {
+      console.warn("Failed to unwrap X-Wing seed; Path A read disabled", e);
+    }
+  }
+
+  return { mailboxSk, signingSeed, xwingSeed };
 }
 
 /** Backwards-compatible convenience wrapper returning only mailboxSk */

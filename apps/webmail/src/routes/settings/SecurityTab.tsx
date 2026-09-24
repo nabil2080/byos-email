@@ -36,6 +36,7 @@ interface SecurityTabProps {
   currentUser: UserMe | null;
   mailboxKey?: Uint8Array | null;
   signingSeed?: Uint8Array | null;
+  xwingSeed?: Uint8Array | null;
   onReactivateSuccess?: () => void;
 }
 
@@ -389,6 +390,14 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
         }
       }
 
+      let xwingSeedBytes: Uint8Array | null = props.xwingSeed || null;
+      if (!xwingSeedBytes && props.mailbox?.id) {
+        const savedHex = sessionStorage.getItem("byos_xwing_seed_" + props.mailbox.id);
+        if (savedHex) {
+          xwingSeedBytes = new Uint8Array(savedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+        }
+      }
+
       let newWrappedPayload: string | undefined = undefined;
 
       if (mbKeyBytes) {
@@ -407,11 +416,13 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
 
         let rootWrapped = "";
         let signingRootWrapped = "";
+        let xwingRootWrapped = "";
         if (existingWrapped && existingWrapped.startsWith("{")) {
           try {
             const parsed = JSON.parse(existingWrapped);
             rootWrapped = parsed.root_wrapped || "";
             signingRootWrapped = parsed.signing_root_wrapped || "";
+            xwingRootWrapped = parsed.xwing_root_wrapped || "";
           } catch (parseErr) {
             console.warn("Could not parse existing wrapped_sk_user:", parseErr);
           }
@@ -437,6 +448,16 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
             signingEnvelope = wasm.wasm_passphrase_wrap_key(next, signingSaltHex, seedHex);
           }
 
+          let xwingSaltHex = "";
+          let xwingEnvelope = "";
+          if (xwingSeedBytes) {
+            const xSalt = new Uint8Array(16);
+            crypto.getRandomValues(xSalt);
+            xwingSaltHex = Array.from(xSalt).map((b) => b.toString(16).padStart(2, "0")).join("");
+            const seedHex = Array.from(xwingSeedBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+            xwingEnvelope = wasm.wasm_passphrase_wrap_key(next, xwingSaltHex, seedHex);
+          }
+
           const payloadObj: Record<string, string> = {
             salt: mbSaltHex,
             envelope: mbEnvelope,
@@ -448,6 +469,13 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
           }
           if (signingRootWrapped) {
             payloadObj.signing_root_wrapped = signingRootWrapped;
+          }
+          if (xwingSaltHex && xwingEnvelope) {
+            payloadObj.xwing_salt = xwingSaltHex;
+            payloadObj.xwing_envelope = xwingEnvelope;
+          }
+          if (xwingRootWrapped) {
+            payloadObj.xwing_root_wrapped = xwingRootWrapped;
           }
 
           newWrappedPayload = JSON.stringify(payloadObj);

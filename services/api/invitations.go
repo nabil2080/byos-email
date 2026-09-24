@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -404,6 +405,7 @@ func invitationClaimHandler(w http.ResponseWriter, r *http.Request) {
 		Salt            string `json:"salt"`
 		WrappedSkUser   string `json:"wrapped_sk_user"`
 		MailboxPk       string `json:"mailbox_pk"`
+		XWingPK         string `json:"xwing_pk,omitempty"`
 		TwoFactorMethod string `json:"two_factor_method"` // "totp", "phone", "email"
 		TOTPSecret      string `json:"totp_secret"`
 		RecoveryEmail   string `json:"recovery_email"`
@@ -501,6 +503,20 @@ func invitationClaimHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var xwingPkBytes []byte
+	if rawXWingPK := strings.TrimSpace(req.XWingPK); rawXWingPK != "" {
+		decoded, err := base64.StdEncoding.DecodeString(rawXWingPK)
+		if err != nil {
+			http.Error(w, "invalid base64 xwing_pk", http.StatusBadRequest)
+			return
+		}
+		if len(decoded) != 1216 {
+			http.Error(w, "xwing_pk must be exactly 1216 bytes", http.StatusBadRequest)
+			return
+		}
+		xwingPkBytes = decoded
+	}
+
 	var userID string
 	err = tx.QueryRow(ctx, `SELECT user_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&userID)
 	if err != nil {
@@ -530,7 +546,7 @@ func invitationClaimHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update mailbox: status 'active', set mailbox_pk and wrapped_sk_user
+	// Update mailbox: status 'active', set mailbox_pk, wrapped_sk_user, and mailbox_xwing_pk
 	pkBytes, _ := hex.DecodeString(finalMailboxPk)
 	skWrappedBytes, _ := hex.DecodeString(wrappedSkUser)
 	if len(skWrappedBytes) == 0 {
@@ -538,9 +554,10 @@ func invitationClaimHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err = tx.Exec(ctx, `
 		UPDATE mailboxes
-		SET status='active', is_active=true, mailbox_pk=$1, wrapped_sk_user=$2, mailbox_sk_wrapped=$3, updated_at=now()
+		SET status='active', is_active=true, mailbox_pk=$1, wrapped_sk_user=$2, mailbox_sk_wrapped=$3,
+		    mailbox_xwing_pk=COALESCE($5, mailbox_xwing_pk), updated_at=now()
 		WHERE id=$4
-	`, pkBytes, wrappedSkUser, skWrappedBytes, mailboxID)
+	`, pkBytes, wrappedSkUser, skWrappedBytes, mailboxID, xwingPkBytes)
 	if err != nil {
 		log.Printf("failed to activate mailbox: %v", err)
 		http.Error(w, "failed to activate mailbox", http.StatusInternalServerError)

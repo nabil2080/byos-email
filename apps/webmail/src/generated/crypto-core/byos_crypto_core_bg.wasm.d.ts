@@ -16,6 +16,7 @@ export const wasm_decrypt_outbound: (a: number, b: number, c: number, d: number,
 export const wasm_derive_root_secret: (a: number, b: number, c: number) => void;
 export const wasm_derive_search_key: (a: number, b: number, c: number) => void;
 export const wasm_derive_signing_seed: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+export const wasm_derive_xwing_seed: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const wasm_encrypt_outbound: (a: number, b: number, c: number, d: number, e: number, f: bigint, g: number, h: number) => void;
 export const wasm_generate_keypair: (a: number) => void;
 export const wasm_generate_mnemonic: (a: number) => void;
@@ -34,9 +35,12 @@ export const wasm_sign_with_seed: (a: number, b: number, c: number, d: number, e
 export const wasm_signing_public_key_from_seed: (a: number, b: number, c: number) => void;
 export const wasm_unwrap_mailbox_key: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const wasm_unwrap_signing_seed: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+export const wasm_unwrap_xwing_seed: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const wasm_verify_signature: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const wasm_wrap_mailbox_key: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const wasm_wrap_signing_seed: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+export const wasm_wrap_xwing_seed: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+export const wasm_xwing_public_key_from_seed: (a: number, b: number, c: number) => void;
 export const __wbindgen_export: (a: number) => void;
 export const __wbindgen_add_to_stack_pointer: (a: number) => number;
 export const __wbindgen_export2: (a: number, b: number) => number;

@@ -1,6 +1,6 @@
 import { Component, createSignal, onMount, For, Show } from "solid-js";
 import { verifyInvitation, claimInvitation, VerifyInvitationResponse, updateMailboxSettings } from "../api";
-import { mailboxIdHex } from "../message_crypto";
+import { mailboxIdHex, hexToBase64 } from "../message_crypto";
 import { generateQRCodeSVG } from "../utils/qr";
 import { generateTOTPSecret, formatTOTPSecret, verifyTOTPClient } from "../utils/totp";
 
@@ -41,6 +41,8 @@ export const SetupAccount: Component = () => {
   const [derivedWrappedSkUser, setDerivedWrappedSkUser] = createSignal<string>("");
   const [rawMailboxSkHex, setRawMailboxSkHex] = createSignal<string>("");
   const [rawSigningSeedHex, setRawSigningSeedHex] = createSignal<string>("");
+  const [derivedXWingPk, setDerivedXWingPk] = createSignal<string>("");
+  const [rawXWingSeedHex, setRawXWingSeedHex] = createSignal<string>("");
 
   onMount(async () => {
     const params = new URLSearchParams(window.location.search);
@@ -164,6 +166,30 @@ export const SetupAccount: Component = () => {
         boxIdHex,
       );
 
+      // 4. Derive X-Wing seed and wrap twice
+      const xwingSeedHex = wasm.wasm_derive_xwing_seed(rootHex, boxIdHex, 1);
+
+      const xwingSalt = new Uint8Array(16);
+      crypto.getRandomValues(xwingSalt);
+      const xwingSaltHex = Array.from(xwingSalt)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+
+      const xwingEnvelope = wasm.wasm_passphrase_wrap_key(
+        password(),
+        xwingSaltHex,
+        xwingSeedHex,
+      );
+
+      const xwingRootWrapped = wasm.wasm_wrap_xwing_seed(
+        rootHex,
+        xwingSeedHex,
+        boxIdHex,
+      );
+
+      const xwingPkHex = wasm.wasm_xwing_public_key_from_seed(xwingSeedHex);
+      setDerivedXWingPk(xwingPkHex);
+
       // Store payload supporting both password unwrap and recovery phrase unwrap
       const wrappedSkPayload = JSON.stringify({
         salt: saltHex,
@@ -172,11 +198,15 @@ export const SetupAccount: Component = () => {
         signing_salt: signingSaltHex,
         signing_envelope: signingEnvelope,
         signing_root_wrapped: signingRootWrapped,
+        xwing_salt: xwingSaltHex,
+        xwing_envelope: xwingEnvelope,
+        xwing_root_wrapped: xwingRootWrapped,
       });
 
       setDerivedWrappedSkUser(wrappedSkPayload);
       setRawMailboxSkHex(mailboxSkHex);
       setRawSigningSeedHex(signingSeedHex);
+      setRawXWingSeedHex(xwingSeedHex);
       setStep(2);
     } catch (err: any) {
       setSubmitError(err?.message || "Failed to initialize cryptographic material.");
@@ -303,6 +333,7 @@ export const SetupAccount: Component = () => {
         token: rawToken(),
         password: password(),
         mailbox_pk: pk,
+        xwing_pk: derivedXWingPk() ? hexToBase64(derivedXWingPk()) : undefined,
         wrapped_sk_user: wrappedSk,
         two_factor_method: twoFactorMethod(),
         totp_secret: twoFactorMethod() === "totp" ? totpSecret() : undefined,
@@ -321,6 +352,10 @@ export const SetupAccount: Component = () => {
         const signingSeed = rawSigningSeedHex();
         if (signingSeed) {
           sessionStorage.setItem("byos_signing_seed_" + data.mailbox_id, signingSeed);
+        }
+        const xwingSeed = rawXWingSeedHex();
+        if (xwingSeed) {
+          sessionStorage.setItem("byos_xwing_seed_" + data.mailbox_id, xwingSeed);
         }
       }
       if (claimRes.token) {

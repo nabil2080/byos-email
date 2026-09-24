@@ -243,6 +243,39 @@ pub fn verify_message_signature(
 }
 
 // =============================================
+// Mailbox X-Wing Keys
+// =============================================
+
+pub const MAILBOX_XWING_SALT: &[u8] = b"byos-xwing-seed-v1";
+pub const MAILBOX_XWING_INFO_PREFIX: &[u8] = b"byos-xwing-seed-v1";
+
+/// Derives a 32-byte X-Wing seed from recovery_root.
+///
+/// HKDF-SHA256:
+///   salt = b"byos-xwing-seed-v1"
+///   info = b"byos-xwing-seed-v1" || mailbox_id (16 bytes) || key_epoch (4 bytes, big-endian)
+///   length = 32 bytes
+///
+/// Domain separation from derive_signing_key (which uses "byos-mailbox-signing-v1"
+/// and "byos-mailbox-signing-ed25519-v1").
+pub fn derive_xwing_seed(
+    recovery_root: &[u8; 32],
+    mailbox_id: &[u8; 16],
+    key_epoch: u32,
+) -> Result<[u8; 32], CryptoError> {
+    let mut info = Vec::with_capacity(MAILBOX_XWING_INFO_PREFIX.len() + 16 + 4);
+    info.extend_from_slice(MAILBOX_XWING_INFO_PREFIX);
+    info.extend_from_slice(mailbox_id);
+    info.extend_from_slice(&key_epoch.to_be_bytes());
+
+    let hk = Hkdf::<Sha256>::new(Some(MAILBOX_XWING_SALT), recovery_root);
+    let mut seed = [0u8; 32];
+    hk.expand(&info, &mut seed)
+        .map_err(|_| CryptoError::KeyDerivationFailed)?;
+    Ok(seed)
+}
+
+// =============================================
 // Recovery-principal passphrase wrapping (Section 15)
 // =============================================
 //
@@ -873,6 +906,39 @@ pub fn unwrap_signing_seed(
     let mut aad = Vec::with_capacity(16 + SIGNING_SEED_AAD_SUFFIX.len());
     aad.extend_from_slice(mailbox_id);
     aad.extend_from_slice(SIGNING_SEED_AAD_SUFFIX);
+    let bytes = aes_gcm_decrypt(root_secret, wrapped, &aad)?;
+    if bytes.len() != 32 {
+        return Err(CryptoError::InvalidFormat);
+    }
+    let mut result = [0u8; 32];
+    result.copy_from_slice(&bytes);
+    Ok(result)
+}
+
+pub const XWING_SEED_AAD_SUFFIX: &[u8] = b"xwing-seed-v1";
+
+/// Wrap xwing_seed with root_secret using AES-256-GCM.
+/// Envelope: version(1) || nonce(12) || ciphertext+tag
+pub fn wrap_xwing_seed(
+    root_secret: &[u8; 32],
+    seed: &[u8; 32],
+    mailbox_id: &[u8; 16],
+) -> Result<Vec<u8>, CryptoError> {
+    let mut aad = Vec::with_capacity(16 + XWING_SEED_AAD_SUFFIX.len());
+    aad.extend_from_slice(mailbox_id);
+    aad.extend_from_slice(XWING_SEED_AAD_SUFFIX);
+    aes_gcm_encrypt(root_secret, seed, &aad)
+}
+
+/// Unwrap xwing_seed using root_secret.
+pub fn unwrap_xwing_seed(
+    root_secret: &[u8; 32],
+    wrapped: &[u8],
+    mailbox_id: &[u8; 16],
+) -> Result<[u8; 32], CryptoError> {
+    let mut aad = Vec::with_capacity(16 + XWING_SEED_AAD_SUFFIX.len());
+    aad.extend_from_slice(mailbox_id);
+    aad.extend_from_slice(XWING_SEED_AAD_SUFFIX);
     let bytes = aes_gcm_decrypt(root_secret, wrapped, &aad)?;
     if bytes.len() != 32 {
         return Err(CryptoError::InvalidFormat);
@@ -2104,6 +2170,66 @@ pub fn wasm_verify_signature(
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
     }
+}
+
+#[wasm_bindgen]
+pub fn wasm_derive_xwing_seed(
+    recovery_root_hex: &str,
+    mailbox_id_hex: &str,
+    key_epoch: u32,
+) -> Result<String, JsValue> {
+    let root = hex_decode_32(recovery_root_hex).map_err(|e| JsValue::from_str(&e))?;
+    let mb_bytes = hex_decode(mailbox_id_hex).map_err(|e| JsValue::from_str(&e))?;
+    let mb_id: [u8; 16] = mb_bytes
+        .try_into()
+        .map_err(|_| JsValue::from_str("mailbox_id must be 16 bytes"))?;
+    let seed = derive_xwing_seed(&root, &mb_id, key_epoch)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(hex_encode(&seed))
+}
+
+#[wasm_bindgen]
+pub fn wasm_xwing_public_key_from_seed(
+    seed_hex: &str,
+) -> Result<String, JsValue> {
+    let seed = hex_decode_32(seed_hex).map_err(|e| JsValue::from_str(&e))?;
+    let pk = xwing::public_key_from_seed(&seed)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(hex_encode(&pk))
+}
+
+#[wasm_bindgen]
+pub fn wasm_wrap_xwing_seed(
+    recovery_root_hex: &str,
+    seed_hex: &str,
+    mailbox_id_hex: &str,
+) -> Result<String, JsValue> {
+    let root = hex_decode_32(recovery_root_hex).map_err(|e| JsValue::from_str(&e))?;
+    let seed = hex_decode_32(seed_hex).map_err(|e| JsValue::from_str(&e))?;
+    let mb_bytes = hex_decode(mailbox_id_hex).map_err(|e| JsValue::from_str(&e))?;
+    let mb_id: [u8; 16] = mb_bytes
+        .try_into()
+        .map_err(|_| JsValue::from_str("mailbox_id must be 16 bytes"))?;
+    let wrapped = wrap_xwing_seed(&root, &seed, &mb_id)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(hex_encode(&wrapped))
+}
+
+#[wasm_bindgen]
+pub fn wasm_unwrap_xwing_seed(
+    recovery_root_hex: &str,
+    wrapped_hex: &str,
+    mailbox_id_hex: &str,
+) -> Result<String, JsValue> {
+    let root = hex_decode_32(recovery_root_hex).map_err(|e| JsValue::from_str(&e))?;
+    let wrapped = hex_decode(wrapped_hex).map_err(|e| JsValue::from_str(&e))?;
+    let mb_bytes = hex_decode(mailbox_id_hex).map_err(|e| JsValue::from_str(&e))?;
+    let mb_id: [u8; 16] = mb_bytes
+        .try_into()
+        .map_err(|_| JsValue::from_str("mailbox_id must be 16 bytes"))?;
+    let unwrapped = unwrap_xwing_seed(&root, &wrapped, &mb_id)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(hex_encode(&unwrapped))
 }
 
 // =============================================

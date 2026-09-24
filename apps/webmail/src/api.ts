@@ -653,6 +653,7 @@ export interface ClaimInvitationRequest {
   salt?: string;
   wrapped_sk_user: string;
   mailbox_pk?: string;
+  xwing_pk?: string;
   two_factor_method?: "totp" | "phone" | "email";
   totp_secret?: string;
   recovery_email?: string;

@@ -441,6 +441,41 @@ export function wasm_derive_signing_seed(recovery_root_hex, mailbox_id_hex, key_
 }
 
 /**
+ * @param {string} recovery_root_hex
+ * @param {string} mailbox_id_hex
+ * @param {number} key_epoch
+ * @returns {string}
+ */
+export function wasm_derive_xwing_seed(recovery_root_hex, mailbox_id_hex, key_epoch) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(recovery_root_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(mailbox_id_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len1 = WASM_VECTOR_LEN;
+        wasm.wasm_derive_xwing_seed(retptr, ptr0, len0, ptr1, len1, key_epoch);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr3 = r0;
+        var len3 = r1;
+        if (r3) {
+            ptr3 = 0; len3 = 0;
+            throw takeObject(r2);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export3(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
  * @param {string} outbound_delivery_pk_b64
  * @param {string} mailbox_id_hex
  * @param {bigint} message_seq
@@ -1085,6 +1120,43 @@ export function wasm_unwrap_signing_seed(recovery_root_hex, wrapped_hex, mailbox
 }
 
 /**
+ * @param {string} recovery_root_hex
+ * @param {string} wrapped_hex
+ * @param {string} mailbox_id_hex
+ * @returns {string}
+ */
+export function wasm_unwrap_xwing_seed(recovery_root_hex, wrapped_hex, mailbox_id_hex) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(recovery_root_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(wrapped_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(mailbox_id_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len2 = WASM_VECTOR_LEN;
+        wasm.wasm_unwrap_xwing_seed(retptr, ptr0, len0, ptr1, len1, ptr2, len2);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr4 = r0;
+        var len4 = r1;
+        if (r3) {
+            ptr4 = 0; len4 = 0;
+            throw takeObject(r2);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export3(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
  * @param {string} public_key_hex
  * @param {string} aad_hex
  * @param {string} ciphertext_hex
@@ -1186,6 +1258,74 @@ export function wasm_wrap_signing_seed(recovery_root_hex, seed_hex, mailbox_id_h
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
         wasm.__wbindgen_export3(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
+ * @param {string} recovery_root_hex
+ * @param {string} seed_hex
+ * @param {string} mailbox_id_hex
+ * @returns {string}
+ */
+export function wasm_wrap_xwing_seed(recovery_root_hex, seed_hex, mailbox_id_hex) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(recovery_root_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(seed_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(mailbox_id_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len2 = WASM_VECTOR_LEN;
+        wasm.wasm_wrap_xwing_seed(retptr, ptr0, len0, ptr1, len1, ptr2, len2);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr4 = r0;
+        var len4 = r1;
+        if (r3) {
+            ptr4 = 0; len4 = 0;
+            throw takeObject(r2);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export3(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
+ * @param {string} seed_hex
+ * @returns {string}
+ */
+export function wasm_xwing_public_key_from_seed(seed_hex) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(seed_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.wasm_xwing_public_key_from_seed(retptr, ptr0, len0);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr2 = r0;
+        var len2 = r1;
+        if (r3) {
+            ptr2 = 0; len2 = 0;
+            throw takeObject(r2);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
     }
 }
 export function __wbg___wbindgen_throw_bb96b2010945f0bc(arg0, arg1) {

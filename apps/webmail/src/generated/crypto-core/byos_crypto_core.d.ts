@@ -65,6 +65,8 @@ export function wasm_derive_search_key(root_secret_hex: string): string;
 
 export function wasm_derive_signing_seed(recovery_root_hex: string, mailbox_id_hex: string, key_epoch: number): string;
 
+export function wasm_derive_xwing_seed(recovery_root_hex: string, mailbox_id_hex: string, key_epoch: number): string;
+
 export function wasm_encrypt_outbound(outbound_delivery_pk_b64: string, mailbox_id_hex: string, message_seq: bigint, plaintext_b64: string): string;
 
 export function wasm_generate_keypair(): string;
@@ -134,8 +136,14 @@ export function wasm_unwrap_mailbox_key(root_secret_hex: string, wrapped_hex: st
 
 export function wasm_unwrap_signing_seed(recovery_root_hex: string, wrapped_hex: string, mailbox_id_hex: string): string;
 
+export function wasm_unwrap_xwing_seed(recovery_root_hex: string, wrapped_hex: string, mailbox_id_hex: string): string;
+
 export function wasm_verify_signature(public_key_hex: string, aad_hex: string, ciphertext_hex: string, signature_hex: string): boolean;
 
 export function wasm_wrap_mailbox_key(root_secret_hex: string, mailbox_sk_hex: string, mailbox_id_hex: string): string;
 
 export function wasm_wrap_signing_seed(recovery_root_hex: string, seed_hex: string, mailbox_id_hex: string): string;
+
+export function wasm_wrap_xwing_seed(recovery_root_hex: string, seed_hex: string, mailbox_id_hex: string): string;
+
+export function wasm_xwing_public_key_from_seed(seed_hex: string): string;

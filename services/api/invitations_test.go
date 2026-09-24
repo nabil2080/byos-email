@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -385,5 +386,97 @@ func TestImpersonation(t *testing.T) {
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("expected 403 Forbidden for member impersonation, got %d", rec.Code)
 		}
+	}
+}
+
+func TestClaimInvitationWithXWingPK(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	orgID, _, adminID, _ := createTestOrgAndUsers(t, db)
+	createTestStorage(t, db, orgID)
+	domainName := "xwing-claim-" + uuid.New().String() + ".com"
+	createTestDomain(t, db, orgID, domainName)
+	adminToken := createTestSession(t, db, adminID)
+
+	// 1. Create a private mailbox invitation
+	inviteBody, _ := json.Marshal(map[string]interface{}{
+		"address":      "alice@" + domainName,
+		"privacy_mode": "private",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/mailboxes/invite", bytes.NewReader(inviteBody))
+	req.SetPathValue("org_id", orgID)
+	req.AddCookie(&http.Cookie{Name: "byos_session", Value: adminToken})
+	rec := httptest.NewRecorder()
+	mailboxInviteHandler(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var inviteResp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &inviteResp)
+	inviteURL := inviteResp["invite_url"].(string)
+	rawToken := inviteURL[len(inviteURL)-64:]
+
+	dummyClientPk := hex.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	dummyWrappedSkUser := `{"salt":"0123456789abcdef0123456789abcdef","envelope":"test"}`
+	xwingPkBytes := bytes.Repeat([]byte{0x77}, 1216)
+	xwingPkB64 := base64.StdEncoding.EncodeToString(xwingPkBytes)
+
+	// 2. Claim with valid 1216-byte XWingPK
+	claimBody, _ := json.Marshal(map[string]interface{}{
+		"token":           rawToken,
+		"password":        "SuperSecretPassword123!",
+		"mailbox_pk":      dummyClientPk,
+		"xwing_pk":        xwingPkB64,
+		"wrapped_sk_user": dummyWrappedSkUser,
+	})
+	claimReq := httptest.NewRequest(http.MethodPost, "/v1/auth/invitations/claim", bytes.NewReader(claimBody))
+	rec = httptest.NewRecorder()
+	invitationClaimHandler(rec, claimReq)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 claim, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var cResp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &cResp)
+
+	// Verify mailbox_xwing_pk column in database
+	var storedXWingPK []byte
+	err := db.QueryRow(`SELECT mailbox_xwing_pk FROM mailboxes WHERE id=$1`, cResp["mailbox_id"]).Scan(&storedXWingPK)
+	if err != nil {
+		t.Fatalf("failed to query mailbox_xwing_pk: %v", err)
+	}
+	if len(storedXWingPK) != 1216 || !bytes.Equal(storedXWingPK, xwingPkBytes) {
+		t.Fatalf("expected 1216 bytes stored xwing pk, got len=%d", len(storedXWingPK))
+	}
+
+	// 3. Test invalid length XWingPK rejected with 400
+	// Create another invitation
+	inviteBody2, _ := json.Marshal(map[string]interface{}{
+		"address":      "bob@" + domainName,
+		"privacy_mode": "private",
+	})
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/mailboxes/invite", bytes.NewReader(inviteBody2))
+	req2.SetPathValue("org_id", orgID)
+	req2.AddCookie(&http.Cookie{Name: "byos_session", Value: adminToken})
+	rec2 := httptest.NewRecorder()
+	mailboxInviteHandler(rec2, req2)
+	json.Unmarshal(rec2.Body.Bytes(), &inviteResp)
+	inviteURL2 := inviteResp["invite_url"].(string)
+	rawToken2 := inviteURL2[len(inviteURL2)-64:]
+
+	badClaimBody, _ := json.Marshal(map[string]interface{}{
+		"token":           rawToken2,
+		"password":        "SuperSecretPassword123!",
+		"mailbox_pk":      dummyClientPk,
+		"xwing_pk":        base64.StdEncoding.EncodeToString([]byte("too-short")),
+		"wrapped_sk_user": dummyWrappedSkUser,
+	})
+	badReq := httptest.NewRequest(http.MethodPost, "/v1/auth/invitations/claim", bytes.NewReader(badClaimBody))
+	badRec := httptest.NewRecorder()
+	invitationClaimHandler(badRec, badReq)
+
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for bad length xwing_pk, got %d: %s", badRec.Code, badRec.Body.String())
 	}
 }
