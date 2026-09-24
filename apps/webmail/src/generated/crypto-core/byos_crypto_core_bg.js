@@ -890,6 +890,59 @@ export function wasm_seal_xwing_envelope(recipient_xwing_pk_hex, key_id, key_epo
 }
 
 /**
+ * Produces a fully signed Path A envelope in a single call.
+ *
+ * Given a recipient's X-Wing public key, message metadata, plaintext,
+ * and the sender's Ed25519 signing seed, this function:
+ *   1. Encapsulates to the recipient's X-Wing public key
+ *   2. Derives the AEAD key and encrypts the plaintext
+ *   3. Builds the canonical envelope AAD
+ *   4. Signs AAD || ciphertext with the sender's Ed25519 seed
+ *   5. Marshals to canonical JSON with a populated sig field
+ *
+ * The recipient's public key must be 1216 bytes. The sender's signing
+ * seed must be 32 bytes.
+ * @param {string} recipient_xwing_pk_hex
+ * @param {string} key_id
+ * @param {number} key_epoch
+ * @param {string} plaintext_hex
+ * @param {string} sender_signing_seed_hex
+ * @returns {string}
+ */
+export function wasm_seal_xwing_envelope_signed(recipient_xwing_pk_hex, key_id, key_epoch, plaintext_hex, sender_signing_seed_hex) {
+    let deferred6_0;
+    let deferred6_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(recipient_xwing_pk_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(key_id, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(plaintext_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(sender_signing_seed_hex, wasm.__wbindgen_export2, wasm.__wbindgen_export4);
+        const len3 = WASM_VECTOR_LEN;
+        wasm.wasm_seal_xwing_envelope_signed(retptr, ptr0, len0, ptr1, len1, key_epoch, ptr2, len2, ptr3, len3);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr5 = r0;
+        var len5 = r1;
+        if (r3) {
+            ptr5 = 0; len5 = 0;
+            throw takeObject(r2);
+        }
+        deferred6_0 = ptr5;
+        deferred6_1 = len5;
+        return getStringFromWasm0(ptr5, len5);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export3(deferred6_0, deferred6_1, 1);
+    }
+}
+
+/**
  * @param {string} seed_hex
  * @param {string} aad_hex
  * @param {string} ciphertext_hex

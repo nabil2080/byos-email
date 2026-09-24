@@ -29,6 +29,7 @@ export const wasm_recover_root_secret: (a: number, b: number, c: number) => void
 export const wasm_recovery_auth_pk_from_root: (a: number, b: number, c: number) => void;
 export const wasm_recovery_auth_sign: (a: number, b: number, c: number, d: number, e: number) => void;
 export const wasm_seal_xwing_envelope: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+export const wasm_seal_xwing_envelope_signed: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
 export const wasm_sign_with_seed: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const wasm_signing_public_key_from_seed: (a: number, b: number, c: number) => void;
 export const wasm_unwrap_mailbox_key: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;

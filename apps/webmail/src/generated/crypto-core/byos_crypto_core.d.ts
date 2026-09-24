@@ -110,6 +110,22 @@ export function wasm_recovery_auth_sign(root_secret_hex: string, message_hex: st
 
 export function wasm_seal_xwing_envelope(recipient_xwing_pk_hex: string, key_id: string, key_epoch: number, plaintext_hex: string): string;
 
+/**
+ * Produces a fully signed Path A envelope in a single call.
+ *
+ * Given a recipient's X-Wing public key, message metadata, plaintext,
+ * and the sender's Ed25519 signing seed, this function:
+ *   1. Encapsulates to the recipient's X-Wing public key
+ *   2. Derives the AEAD key and encrypts the plaintext
+ *   3. Builds the canonical envelope AAD
+ *   4. Signs AAD || ciphertext with the sender's Ed25519 seed
+ *   5. Marshals to canonical JSON with a populated sig field
+ *
+ * The recipient's public key must be 1216 bytes. The sender's signing
+ * seed must be 32 bytes.
+ */
+export function wasm_seal_xwing_envelope_signed(recipient_xwing_pk_hex: string, key_id: string, key_epoch: number, plaintext_hex: string, sender_signing_seed_hex: string): string;
+
 export function wasm_sign_with_seed(seed_hex: string, aad_hex: string, ciphertext_hex: string): string;
 
 export function wasm_signing_public_key_from_seed(seed_hex: string): string;

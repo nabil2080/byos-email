@@ -1525,6 +1525,79 @@ pub fn wasm_seal_xwing_envelope(
     Ok(json)
 }
 
+/// Produces a fully signed Path A envelope in a single call.
+///
+/// Given a recipient's X-Wing public key, message metadata, plaintext,
+/// and the sender's Ed25519 signing seed, this function:
+///   1. Encapsulates to the recipient's X-Wing public key
+///   2. Derives the AEAD key and encrypts the plaintext
+///   3. Builds the canonical envelope AAD
+///   4. Signs AAD || ciphertext with the sender's Ed25519 seed
+///   5. Marshals to canonical JSON with a populated sig field
+///
+/// The recipient's public key must be 1216 bytes. The sender's signing 
+/// seed must be 32 bytes.
+#[wasm_bindgen]
+pub fn wasm_seal_xwing_envelope_signed(
+    recipient_xwing_pk_hex: &str,
+    key_id: &str,
+    key_epoch: u32,
+    plaintext_hex: &str,
+    sender_signing_seed_hex: &str,
+) -> Result<String, JsValue> {
+    let pk = hex_decode(recipient_xwing_pk_hex).map_err(to_js_err)?;
+    if pk.len() != 1216 {
+        return Err(to_js_err(CryptoError::InvalidKeyLength));
+    }
+    let plaintext = hex_decode(plaintext_hex).map_err(to_js_err)?;
+    let seed_bytes = hex_decode(sender_signing_seed_hex).map_err(to_js_err)?;
+    if seed_bytes.len() != 32 {
+        return Err(to_js_err(CryptoError::InvalidKeyLength));
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&seed_bytes);
+
+    let (enc, ss) = xwing::encapsulate(&pk).map_err(to_js_err)?;
+
+    let aead_key = xwing_hpke::derive_aead_key(&ss).map_err(to_js_err)?;
+
+    let mut nonce = [0u8; 12];
+    rand::fill(&mut nonce);
+
+    let aad = build_envelope_aad(
+        1,
+        ALG_XWING,
+        key_id,
+        key_epoch,
+        &enc,
+        &nonce,
+    ).map_err(to_js_err)?;
+
+    let ciphertext = aes_gcm_encrypt_with_nonce(&aead_key, &nonce, &plaintext, &aad)
+        .map_err(to_js_err)?;
+
+    use ed25519_dalek::Signer;
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let mut to_sign = Vec::with_capacity(aad.len() + ciphertext.len());
+    to_sign.extend_from_slice(&aad);
+    to_sign.extend_from_slice(&ciphertext);
+    let sig = signing_key.sign(&to_sign);
+
+    let env = CryptoEnvelope {
+        v: 1,
+        alg: ALG_XWING.to_string(),
+        key_id: key_id.to_string(),
+        key_epoch,
+        enc: BASE64.encode(&enc),
+        nonce: BASE64.encode(nonce),
+        ciphertext: BASE64.encode(&ciphertext),
+        sig: Some(BASE64.encode(sig.to_bytes())),
+    };
+
+    let json = marshal_canonical(&env).map_err(to_js_err)?;
+    Ok(json)
+}
+
 #[wasm_bindgen]
 pub fn wasm_open_xwing_envelope(
     recipient_xwing_sk_seed_hex: &str,

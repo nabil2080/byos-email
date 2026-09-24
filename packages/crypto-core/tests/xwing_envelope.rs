@@ -1,7 +1,8 @@
 use byos_crypto_core::{
     build_envelope_aad, marshal_canonical, sign_message, signing_public_key,
     unmarshal_canonical, verify_message_signature, wasm_open_xwing_envelope,
-    wasm_seal_xwing_envelope, xwing, CryptoEnvelope, ALG_XWING,
+    wasm_seal_xwing_envelope, wasm_seal_xwing_envelope_signed, wasm_verify_signature,
+    xwing, CryptoEnvelope, ALG_XWING,
 };
 
 fn make_keypair() -> (Vec<u8>, Vec<u8>) {
@@ -251,5 +252,263 @@ fn test_cross_language_signed_vector() {
     }
     std::fs::write(out_path, serde_json::to_string_pretty(&vector).expect("serialize vector"))
         .expect("write vector file");
+}
+
+#[test]
+fn test_seal_xwing_envelope_signed_round_trip() {
+    // Generate a fixed recipient X-Wing keypair and a fixed sender seed
+    let mut recipient_seed = [0u8; 32];
+    recipient_seed[0] = 0x55;
+    let recipient_pk = xwing::public_key_from_seed(&recipient_seed).unwrap();
+
+    let mut sender_seed = [0u8; 32];
+    sender_seed[0] = 0x33;
+    let sender_sk = ed25519_dalek::SigningKey::from_bytes(&sender_seed);
+    let sender_pk = sender_sk.verifying_key();
+
+    let plaintext = b"Path A E2E test message";
+    let key_id = "a0000000-0000-0000-0000-000000000001";
+
+    let json = wasm_seal_xwing_envelope_signed(
+        &hex::encode(&recipient_pk),
+        key_id,
+        1,
+        &hex::encode(plaintext),
+        &hex::encode(sender_seed),
+    ).unwrap();
+
+    // Envelope must parse and have non-null sig
+    let env: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(env["sig"].is_string());
+    assert_eq!(env["v"], 1);
+    assert_eq!(env["alg"], "HPKE-XWing-AES256GCM-v1");
+    assert_eq!(env["key_id"], key_id);
+
+    // Round-trip: decrypt with recipient seed
+    let recovered_hex = wasm_open_xwing_envelope(
+        &hex::encode(&recipient_seed),
+        &json,
+    ).unwrap();
+    let recovered = hex::decode(&recovered_hex).unwrap();
+    assert_eq!(recovered, plaintext);
+
+    // Verify the sig via wasm_verify_signature
+    let canonical_env = unmarshal_canonical(&json).unwrap();
+    let enc_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &canonical_env.enc).unwrap();
+    let nonce_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &canonical_env.nonce).unwrap();
+    let ct_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &canonical_env.ciphertext).unwrap();
+    let sig_b64 = canonical_env.sig.unwrap();
+    let sig_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &sig_b64).unwrap();
+
+    let mut nonce_arr = [0u8; 12];
+    nonce_arr.copy_from_slice(&nonce_bytes);
+    let aad = build_envelope_aad(
+        canonical_env.v,
+        &canonical_env.alg,
+        &canonical_env.key_id,
+        canonical_env.key_epoch,
+        &enc_bytes,
+        &nonce_arr,
+    ).unwrap();
+
+    let verified = wasm_verify_signature(
+        &hex::encode(sender_pk.to_bytes()),
+        &hex::encode(&aad),
+        &hex::encode(&ct_bytes),
+        &hex::encode(&sig_bytes),
+    ).unwrap();
+    assert!(verified);
+}
+
+#[test]
+fn test_seal_xwing_envelope_signed_different_sender_fails_verify() {
+    let mut recipient_seed = [0u8; 32];
+    recipient_seed[0] = 0x55;
+    let recipient_pk = xwing::public_key_from_seed(&recipient_seed).unwrap();
+
+    let sender_a_seed = [0x33u8; 32];
+    let sender_b_seed = [0x44u8; 32];
+    let sender_b_sk = ed25519_dalek::SigningKey::from_bytes(&sender_b_seed);
+    let sender_b_pk = sender_b_sk.verifying_key();
+
+    let plaintext = b"Path A E2E test message";
+    let key_id = "a0000000-0000-0000-0000-000000000001";
+
+    let json = wasm_seal_xwing_envelope_signed(
+        &hex::encode(&recipient_pk),
+        key_id,
+        1,
+        &hex::encode(plaintext),
+        &hex::encode(sender_a_seed),
+    ).unwrap();
+
+    let canonical_env = unmarshal_canonical(&json).unwrap();
+    let enc_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &canonical_env.enc).unwrap();
+    let nonce_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &canonical_env.nonce).unwrap();
+    let ct_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &canonical_env.ciphertext).unwrap();
+    let sig_b64 = canonical_env.sig.unwrap();
+    let sig_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &sig_b64).unwrap();
+
+    let mut nonce_arr = [0u8; 12];
+    nonce_arr.copy_from_slice(&nonce_bytes);
+    let aad = build_envelope_aad(
+        canonical_env.v,
+        &canonical_env.alg,
+        &canonical_env.key_id,
+        canonical_env.key_epoch,
+        &enc_bytes,
+        &nonce_arr,
+    ).unwrap();
+
+    let verified = wasm_verify_signature(
+        &hex::encode(sender_b_pk.to_bytes()),
+        &hex::encode(&aad),
+        &hex::encode(&ct_bytes),
+        &hex::encode(&sig_bytes),
+    ).unwrap();
+    assert!(!verified);
+}
+
+#[test]
+fn test_seal_xwing_envelope_signed_tamper_ciphertext() {
+    let mut recipient_seed = [0u8; 32];
+    recipient_seed[0] = 0x55;
+    let recipient_pk = xwing::public_key_from_seed(&recipient_seed).unwrap();
+    let sender_seed = [0x33u8; 32];
+
+    let json = wasm_seal_xwing_envelope_signed(
+        &hex::encode(&recipient_pk),
+        "a0000000-0000-0000-0000-000000000001",
+        1,
+        &hex::encode(b"tamper test"),
+        &hex::encode(sender_seed),
+    ).unwrap();
+
+    let mut env = unmarshal_canonical(&json).unwrap();
+    let mut ct_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &env.ciphertext,
+    ).unwrap();
+    ct_bytes[0] ^= 0x01;
+    env.ciphertext = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &ct_bytes);
+    let tampered_json = marshal_canonical(&env).unwrap();
+
+    let result = wasm_open_xwing_envelope(&hex::encode(&recipient_seed), &tampered_json);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_seal_xwing_envelope_signed_wrong_recipient() {
+    let mut recipient_a_seed = [0u8; 32];
+    recipient_a_seed[0] = 0x55;
+    let recipient_a_pk = xwing::public_key_from_seed(&recipient_a_seed).unwrap();
+
+    let mut recipient_b_seed = [0u8; 32];
+    recipient_b_seed[0] = 0x66;
+
+    let sender_seed = [0x33u8; 32];
+
+    let json = wasm_seal_xwing_envelope_signed(
+        &hex::encode(&recipient_a_pk),
+        "a0000000-0000-0000-0000-000000000001",
+        1,
+        &hex::encode(b"secret message"),
+        &hex::encode(sender_seed),
+    ).unwrap();
+
+    let result = wasm_open_xwing_envelope(&hex::encode(&recipient_b_seed), &json);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_seal_xwing_envelope_signed_empty_plaintext() {
+    let recipient_seed = [0u8; 32];
+    let recipient_pk = xwing::public_key_from_seed(&recipient_seed).unwrap();
+    let sender_seed = [0x33u8; 32];
+
+    let json = wasm_seal_xwing_envelope_signed(
+        &hex::encode(&recipient_pk),
+        "a0000000-0000-0000-0000-000000000001",
+        1,
+        "",
+        &hex::encode(sender_seed),
+    ).unwrap();
+
+    let env: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(env["sig"].is_string());
+    assert!(!env["ciphertext"].as_str().unwrap().is_empty());
+
+    let recovered_hex = wasm_open_xwing_envelope(&hex::encode(&recipient_seed), &json).unwrap();
+    assert_eq!(recovered_hex, "");
+}
+
+#[test]
+fn test_seal_xwing_envelope_signed_empty_seed_rejected() {
+    let recipient_seed = [0u8; 32];
+    let recipient_pk = xwing::public_key_from_seed(&recipient_seed).unwrap();
+
+    let result = wasm_seal_xwing_envelope_signed(
+        &hex::encode(&recipient_pk),
+        "a0000000-0000-0000-0000-000000000001",
+        1,
+        &hex::encode(b"test"),
+        "",
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_seal_xwing_envelope_signed_wrong_seed_length_rejected() {
+    let recipient_seed = [0u8; 32];
+    let recipient_pk = xwing::public_key_from_seed(&recipient_seed).unwrap();
+
+    // 31-byte seed
+    let seed_31 = vec![0x33u8; 31];
+    let res31 = wasm_seal_xwing_envelope_signed(
+        &hex::encode(&recipient_pk),
+        "a0000000-0000-0000-0000-000000000001",
+        1,
+        &hex::encode(b"test"),
+        &hex::encode(&seed_31),
+    );
+    assert!(res31.is_err());
+
+    // 33-byte seed
+    let seed_33 = vec![0x33u8; 33];
+    let res33 = wasm_seal_xwing_envelope_signed(
+        &hex::encode(&recipient_pk),
+        "a0000000-0000-0000-0000-000000000001",
+        1,
+        &hex::encode(b"test"),
+        &hex::encode(&seed_33),
+    );
+    assert!(res33.is_err());
+}
+
+#[test]
+fn test_seal_xwing_envelope_signed_wrong_recipient_key_length_rejected() {
+    let sender_seed = [0x33u8; 32];
+
+    // 1215-byte recipient key
+    let pk_1215 = vec![0x55u8; 1215];
+    let res1215 = wasm_seal_xwing_envelope_signed(
+        &hex::encode(&pk_1215),
+        "a0000000-0000-0000-0000-000000000001",
+        1,
+        &hex::encode(b"test"),
+        &hex::encode(sender_seed),
+    );
+    assert!(res1215.is_err());
+
+    // 1217-byte recipient key
+    let pk_1217 = vec![0x55u8; 1217];
+    let res1217 = wasm_seal_xwing_envelope_signed(
+        &hex::encode(&pk_1217),
+        "a0000000-0000-0000-0000-000000000001",
+        1,
+        &hex::encode(b"test"),
+        &hex::encode(sender_seed),
+    );
+    assert!(res1217.is_err());
 }
 
