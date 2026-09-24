@@ -64,6 +64,11 @@ import {
   apiRequest,
   RecoveryOptionItem,
   publishMailboxKeys,
+  lookupMailboxKeys,
+  sendInternal,
+  KeyDirectoryRecord,
+  InternalSendRequest,
+  InternalSendResponse,
 } from "./api";
 import {
   unlockMailboxKey,
@@ -82,6 +87,7 @@ import {
   bytesToBase64,
   hexToBase64,
   bytesToHex,
+  base64ToBytes,
 } from "./message_crypto";
 import { loadSignature, saveSignature, applySignature } from "./signature";
 import { SetupAccount } from "./routes/setup-account";
@@ -132,6 +138,182 @@ interface DisplayMessage {
     firstOpenedAt?: string;
     lastOpenedAt?: string;
   };
+}
+
+export function buildMimeString(params: {
+  to: string;
+  subject: string;
+  signedBody: string;
+  htmlBody: string;
+  trackingToken?: string;
+  body?: string;
+}): string {
+  const { to, subject, signedBody, htmlBody, trackingToken, body } = params;
+  const trackingPixelHtml = trackingToken
+    ? `<img src="${getTrackingPixelUrl(trackingToken)}" alt="" width="1" height="1" style="display:none !important; width:1px; height:1px; border:0;" />`
+    : "";
+
+  const isHtml = body !== undefined ? htmlBody !== body : htmlBody !== signedBody;
+  if (htmlBody && htmlBody.trim() && isHtml) {
+    const fullHtml = trackingPixelHtml ? `${htmlBody}\r\n${trackingPixelHtml}` : htmlBody;
+    const boundary = "----=_Part_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+    return [
+      `To: ${to}`,
+      `Subject: ${subject}`,
+      "MIME-Version: 1.0",
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      signedBody,
+      `--${boundary}`,
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      fullHtml,
+      `--${boundary}--`,
+    ].join("\r\n");
+  } else if (trackingPixelHtml) {
+    const boundary = "----=_Part_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+    const autoHtml = `<div style="font-family: sans-serif; font-size: 14px; color: #1a1a1a; white-space: pre-wrap;">${signedBody}</div>\r\n${trackingPixelHtml}`;
+    return [
+      `To: ${to}`,
+      `Subject: ${subject}`,
+      "MIME-Version: 1.0",
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      signedBody,
+      `--${boundary}`,
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      autoHtml,
+      `--${boundary}--`,
+    ].join("\r\n");
+  } else {
+    return [
+      `To: ${to}`,
+      `Subject: ${subject}`,
+      "Content-Type: text/plain; charset=utf-8",
+      "MIME-Version: 1.0",
+      "",
+      signedBody,
+    ].join("\r\n");
+  }
+}
+
+export type PathAResult =
+  | { kind: "sent"; messageId: string }
+  | { kind: "failed"; error: string }
+  | { kind: "fallback" };
+
+export interface PathADeps {
+  lookupMailboxKeys?: (email: string) => Promise<KeyDirectoryRecord>;
+  sendInternal?: (req: InternalSendRequest) => Promise<InternalSendResponse>;
+  sealSignedEnvelope?: (
+    recipientXwingPkHex: string,
+    keyId: string,
+    keyEpoch: number,
+    plaintextHex: string,
+    senderSigningSeedHex: string,
+  ) => Promise<string> | string;
+}
+
+export async function tryPathASend(
+  params: {
+    recipient: string;
+    senderMailboxId: string;
+    mimeMessage: string;
+    signingSeed: Uint8Array;
+  },
+  deps?: PathADeps,
+): Promise<PathAResult> {
+  const { recipient, senderMailboxId, mimeMessage, signingSeed } = params;
+  const lookupFn = deps?.lookupMailboxKeys ?? lookupMailboxKeys;
+  const sendFn = deps?.sendInternal ?? sendInternal;
+
+  // 1. Look up recipient keys
+  let record: KeyDirectoryRecord;
+  try {
+    record = await lookupFn(recipient);
+  } catch {
+    // 404 (external) or network error → silent fallback
+    return { kind: "fallback" };
+  }
+
+  // 2. Validate the record
+  if (
+    !record ||
+    record.status !== "active" ||
+    !record.xwing_public_key ||
+    !record.key_id ||
+    !record.key_epoch
+  ) {
+    // BYOS user without X-Wing keys published yet → fallback to Path B
+    console.warn("Recipient has no usable X-Wing key; using Path B");
+    return { kind: "fallback" };
+  }
+
+  // 3. Convert base64 xwing_public_key → hex
+  let xwingPkHex: string;
+  try {
+    const bytes = base64ToBytes(record.xwing_public_key);
+    if (bytes.length !== 1216) {
+      console.warn("Recipient X-Wing key has wrong length; using Path B");
+      return { kind: "fallback" };
+    }
+    xwingPkHex = bytesToHex(bytes);
+  } catch {
+    return { kind: "fallback" };
+  }
+
+  // 4. Assemble signed envelope
+  let envelopeJson: string;
+  try {
+    const plaintextHex = bytesToHex(new TextEncoder().encode(mimeMessage));
+    const signingSeedHex = bytesToHex(signingSeed);
+    if (deps?.sealSignedEnvelope) {
+      envelopeJson = await deps.sealSignedEnvelope(
+        xwingPkHex,
+        record.key_id,
+        record.key_epoch,
+        plaintextHex,
+        signingSeedHex,
+      );
+    } else {
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      envelopeJson = wasm.wasm_seal_xwing_envelope_signed(
+        xwingPkHex,
+        record.key_id,
+        record.key_epoch,
+        plaintextHex,
+        signingSeedHex,
+      );
+    }
+  } catch (e) {
+    // Local crypto failure — treat as a real failure, not a fallback.
+    return {
+      kind: "failed",
+      error: `Local encryption failed: ${e instanceof Error ? e.message : "unknown"}`,
+    };
+  }
+
+  // 5. Submit to server. No fallback after this point.
+  try {
+    const resp = await sendFn({
+      envelope_json: envelopeJson,
+      recipient,
+      sender_mailbox_id: senderMailboxId,
+    });
+    return { kind: "sent", messageId: resp.message_id };
+  } catch (e) {
+    return {
+      kind: "failed",
+      error: e instanceof Error ? e.message : "internal delivery failed",
+    };
+  }
 }
 
 const App: Component = () => {
@@ -2735,12 +2917,6 @@ const App: Component = () => {
 
     setComposeStatus("Preparing encrypted message…");
     try {
-      const [pubkey, reservation] = await Promise.all([
-        fetchOutboundPubkey(),
-        prepareOutbound(box.id),
-      ]);
-      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-      const mailboxIdHex = box.id.replace(/-/g, "");
       const signedBody = applySignature(body, loadSignature(box.id));
       const htmlBody = composeBodyHtml();
 
@@ -2757,59 +2933,59 @@ const App: Component = () => {
         }
       }
 
-      let mimeMessage: string;
-      const trackingPixelHtml = trackingToken
-        ? `<img src="${getTrackingPixelUrl(trackingToken)}" alt="" width="1" height="1" style="display:none !important; width:1px; height:1px; border:0;" />`
-        : "";
+      const mimeMessage = buildMimeString({
+        to,
+        subject,
+        signedBody,
+        htmlBody,
+        trackingToken,
+        body,
+      });
 
-      if (htmlBody && htmlBody.trim() && htmlBody !== body) {
-        const fullHtml = trackingPixelHtml ? `${htmlBody}\r\n${trackingPixelHtml}` : htmlBody;
-        const boundary = "----=_Part_" + Date.now() + "_" + Math.random().toString(36).slice(2);
-        mimeMessage = [
-          `To: ${to}`,
-          `Subject: ${subject}`,
-          "MIME-Version: 1.0",
-          `Content-Type: multipart/alternative; boundary="${boundary}"`,
-          "",
-          `--${boundary}`,
-          "Content-Type: text/plain; charset=utf-8",
-          "",
-          signedBody,
-          `--${boundary}`,
-          "Content-Type: text/html; charset=utf-8",
-          "",
-          fullHtml,
-          `--${boundary}--`,
-        ].join("\r\n");
-      } else if (trackingPixelHtml) {
-        const boundary = "----=_Part_" + Date.now() + "_" + Math.random().toString(36).slice(2);
-        const autoHtml = `<div style="font-family: sans-serif; font-size: 14px; color: #1a1a1a; white-space: pre-wrap;">${signedBody}</div>\r\n${trackingPixelHtml}`;
-        mimeMessage = [
-          `To: ${to}`,
-          `Subject: ${subject}`,
-          "MIME-Version: 1.0",
-          `Content-Type: multipart/alternative; boundary="${boundary}"`,
-          "",
-          `--${boundary}`,
-          "Content-Type: text/plain; charset=utf-8",
-          "",
-          signedBody,
-          `--${boundary}`,
-          "Content-Type: text/html; charset=utf-8",
-          "",
-          autoHtml,
-          `--${boundary}--`,
-        ].join("\r\n");
-      } else {
-        mimeMessage = [
-          `To: ${to}`,
-          `Subject: ${subject}`,
-          "Content-Type: text/plain; charset=utf-8",
-          "MIME-Version: 1.0",
-          "",
-          signedBody,
-        ].join("\r\n");
+      // Path A routing
+      const hasAttachments = composeAttachments().length > 0;
+      const isScheduled = Boolean(scheduledTime());
+      const senderSeed = signingSeed();
+
+      const singleRecipient = !to.includes(",") && !to.includes(";");
+
+      if (!isScheduled && !hasAttachments && singleRecipient && senderSeed) {
+        setComposeStatus("Delivering via end-to-end encrypted Path A…");
+
+        const result = await tryPathASend({
+          recipient: to,
+          senderMailboxId: box.id,
+          mimeMessage,
+          signingSeed: senderSeed,
+        });
+
+        if (result.kind === "sent") {
+          setComposeStatus("Message delivered securely.");
+          setComposeOpen(false);
+          clearComposeForm();
+          return;
+        }
+
+        if (result.kind === "failed") {
+          // Do NOT fall back to Path B — the server may have already stored 
+          // the envelope. Falling back would risk duplicate delivery.
+          setErrorMessage(
+            `Internal encrypted delivery failed: ${result.error}. Message was not sent.`,
+          );
+          setComposeStatus(null);
+          return;
+        }
+
+        // kind === "fallback" → fall through to Path B
+        setComposeStatus("Preparing encrypted message…");
       }
+
+      const [pubkey, reservation] = await Promise.all([
+        fetchOutboundPubkey(),
+        prepareOutbound(box.id),
+      ]);
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      const mailboxIdHex = box.id.replace(/-/g, "");
 
       const plaintextB64 = bytesToBase64(new TextEncoder().encode(mimeMessage));
       const encrypted = JSON.parse(

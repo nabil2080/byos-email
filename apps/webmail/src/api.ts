@@ -1217,3 +1217,25 @@ export async function publishMailboxKeys(payload: {
     body: JSON.stringify(payload),
   });
 }
+
+export interface InternalSendRequest {
+  envelope_json: string;
+  recipient: string;
+  sender_mailbox_id: string;
+}
+
+export interface InternalSendResponse {
+  delivery_id: string;
+  message_id: string;
+  status: "delivered" | "already_delivered";
+  message_seq: number;
+}
+
+export async function sendInternal(
+  req: InternalSendRequest,
+): Promise<InternalSendResponse> {
+  return apiRequest<InternalSendResponse>("/v1/outbound/send-internal", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
