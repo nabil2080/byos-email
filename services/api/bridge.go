@@ -155,6 +155,12 @@ func bridgeMessageBodyHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var loadErr *messageBodyLoadError
 		if errors.As(err, &loadErr) {
+			if strings.HasPrefix(loadErr.msg, "{") {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(loadErr.status)
+				_, _ = w.Write([]byte(loadErr.msg))
+				return
+			}
 			http.Error(w, loadErr.msg, loadErr.status)
 			return
 		}

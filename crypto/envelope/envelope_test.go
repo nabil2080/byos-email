@@ -213,8 +213,9 @@ func TestMarshalCanonicalExcludesExtraFields(t *testing.T) {
 }
 
 // TestSigNonNullBehaviorV1 tests §7 forward-compatibility requirements:
-// 1. Valid base64 sig is accepted with err == nil and logs an observable warning.
+// 1. Valid base64 64-byte sig is accepted with err == nil and logs an observable warning/info.
 // 2. Invalid base64 sig is rejected with code 1003 (InvalidBase64).
+// 3. Wrong length sig is rejected with code 1011 (InvalidSignature).
 func TestSigNonNullBehaviorV1(t *testing.T) {
 	t.Run("ValidBase64SigAcceptedWithWarning", func(t *testing.T) {
 		var capturedWarning string
@@ -224,7 +225,7 @@ func TestSigNonNullBehaviorV1(t *testing.T) {
 		defer func() { envelope.WarnLogger = nil }()
 
 		env := makeValidX25519Envelope()
-		validSig := base64.StdEncoding.EncodeToString([]byte("valid_ed25519_signature_64_bytes_test_data"))
+		validSig := base64.StdEncoding.EncodeToString(make([]byte, 64))
 		env.Sig = &validSig
 
 		err := envelope.Validate(env)
@@ -248,6 +249,21 @@ func TestSigNonNullBehaviorV1(t *testing.T) {
 		envErr, ok := err.(*envelope.EnvelopeError)
 		if !ok || envErr.Code != envelope.ErrCodeInvalidBase64 {
 			t.Fatalf("Expected ErrCodeInvalidBase64 (1003), got %v", err)
+		}
+	})
+
+	t.Run("WrongLengthSigRejected_1011", func(t *testing.T) {
+		env := makeValidX25519Envelope()
+		shortSig := base64.StdEncoding.EncodeToString([]byte("too_short_sig"))
+		env.Sig = &shortSig
+
+		err := envelope.Validate(env)
+		if err == nil {
+			t.Fatalf("Expected validation error for wrong length sig, got nil")
+		}
+		envErr, ok := err.(*envelope.EnvelopeError)
+		if !ok || envErr.Code != envelope.ErrCodeInvalidSignature {
+			t.Fatalf("Expected ErrCodeInvalidSignature (1011), got %v", err)
 		}
 	})
 }

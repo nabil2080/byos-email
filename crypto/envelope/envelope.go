@@ -149,7 +149,7 @@ func (env *CryptoEnvelope) DecodeBase64() (*DecodedPayload, error) {
 	}
 
 	var rawSig []byte
-	if env.Sig != nil {
+	if env.Sig != nil && *env.Sig != "" {
 		decodedSig, err := b64.DecodeString(*env.Sig)
 		if err != nil {
 			return nil, NewEnvelopeError(ErrCodeInvalidBase64, fmt.Sprintf("invalid base64 in sig: %v", err))
@@ -227,14 +227,16 @@ func Validate(env *CryptoEnvelope) error {
 	}
 
 	// 9. Signature check (§7)
-	// In V1, sig is null. Non-null sig is tolerated for forward compatibility, but must be valid base64.
-	// Log a warning when a non-null sig is encountered.
-	if env.Sig != nil {
-		msg := fmt.Sprintf("V1 envelope contains non-null sig (len=%d); signature ignored per V1 forward-compatibility policy", len(*env.Sig))
+	// In V1, sig is null, empty, or a 64-byte Ed25519 signature for Path A.
+	if env.Sig != nil && *env.Sig != "" {
+		if len(decoded.RawSig) != 64 {
+			return NewEnvelopeError(ErrCodeInvalidSignature, fmt.Sprintf("invalid signature length %d bytes, expected 64", len(decoded.RawSig)))
+		}
+		msg := fmt.Sprintf("V1 envelope contains non-null sig (len=%d); caller should verify", len(*env.Sig))
 		if WarnLogger != nil {
 			WarnLogger("%s", msg)
 		} else {
-			log.Printf("[WARN] %s", msg)
+			log.Printf("[INFO] %s", msg)
 		}
 	}
 

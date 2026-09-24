@@ -142,15 +142,16 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type MessageBodyResponse struct {
-	EncryptedBody         string `json:"encrypted_body"`
-	ContentKeyHPKEWrapped string `json:"content_key_hpke_wrapped"`
-	EncryptionIV          string `json:"encryption_iv"`
+	EncryptedBody         string `json:"encrypted_body,omitempty"`
+	ContentKeyHPKEWrapped string `json:"content_key_hpke_wrapped,omitempty"`
+	EncryptionIV          string `json:"encryption_iv,omitempty"`
 	AADVersion            int    `json:"aad_version"`
-	BundleHash            string `json:"bundle_hash"`
+	BundleHash            string `json:"bundle_hash,omitempty"`
 	EncryptionVersion     int    `json:"encryption_version"`
 	// MessageSeq is operational metadata the client needs to reconstruct
 	// canonical AAD via wasm_canonical_aad. It carries no key material.
-	MessageSeq int64 `json:"message_seq"`
+	MessageSeq        int64  `json:"message_seq"`
+	XWingEnvelopeJSON string `json:"xwing_envelope_json,omitempty"`
 }
 
 type messageBodyLoadError struct {
@@ -173,17 +174,23 @@ func loadEncryptedMessageBody(ctx context.Context, conn *pgx.Conn, mailboxID, me
 	var wrapped, iv, hash []byte
 	var encryptionVersion, aadVersion int
 	var messageSeq int64
+	var wrappedKeyAlg string
 	err := conn.QueryRow(ctx, `
 		SELECT storage_object_id, content_key_hpke_wrapped, encryption_iv,
-		       aad_version, bundle_hash, encryption_version, message_seq
+		       aad_version, bundle_hash, encryption_version, message_seq,
+		       COALESCE(wrapped_key_algorithm, 'HPKE-X25519-AES256GCM-v1')
 		FROM message_metadata
 		WHERE id=$1 AND mailbox_id=$2
-	`, messageID, mailboxID).Scan(&storageObjectID, &wrapped, &iv, &aadVersion, &hash, &encryptionVersion, &messageSeq)
+	`, messageID, mailboxID).Scan(&storageObjectID, &wrapped, &iv, &aadVersion, &hash, &encryptionVersion, &messageSeq, &wrappedKeyAlg)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, &messageBodyLoadError{status: http.StatusNotFound, msg: "message not found", err: err}
 		}
 		return nil, &messageBodyLoadError{status: http.StatusNotFound, msg: "message not found", err: err}
+	}
+
+	if wrappedKeyAlg != "HPKE-XWing-AES256GCM-v1" && wrappedKeyAlg != "HPKE-X25519-AES256GCM-v1" {
+		return nil, &messageBodyLoadError{status: http.StatusInternalServerError, msg: `{"error":"unknown_wrapped_key_algorithm"}`, err: fmt.Errorf("unknown wrapped_key_algorithm: %s", wrappedKeyAlg)}
 	}
 
 	storageURL := storageWorkerURL()
@@ -215,6 +222,15 @@ func loadEncryptedMessageBody(ctx context.Context, conn *pgx.Conn, mailboxID, me
 	rawBody, _, err := decodeStorageRetrieveBody(resp.Body)
 	if err != nil {
 		return nil, &messageBodyLoadError{status: http.StatusBadGateway, msg: "storage returned invalid payload", err: err}
+	}
+
+	if wrappedKeyAlg == "HPKE-XWing-AES256GCM-v1" {
+		return &MessageBodyResponse{
+			XWingEnvelopeJSON: string(rawBody),
+			AADVersion:        aadVersion,
+			EncryptionVersion: encryptionVersion,
+			MessageSeq:        messageSeq,
+		}, nil
 	}
 
 	return &MessageBodyResponse{
@@ -270,6 +286,12 @@ func messageBodyHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var loadErr *messageBodyLoadError
 		if errors.As(err, &loadErr) {
+			if strings.HasPrefix(loadErr.msg, "{") {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(loadErr.status)
+				_, _ = w.Write([]byte(loadErr.msg))
+				return
+			}
 			http.Error(w, loadErr.msg, loadErr.status)
 			return
 		}
