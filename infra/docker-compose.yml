@@ -116,7 +116,9 @@ services:
     restart: "no"
 
   api:
-    build: ../services/api
+    build:
+      context: ..
+      dockerfile: services/api/Dockerfile
     container_name: byos-api
     ports:
       - "127.0.0.1:8080:8080"
