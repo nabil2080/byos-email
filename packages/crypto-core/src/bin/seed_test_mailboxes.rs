@@ -1,4 +1,8 @@
 use std::error::Error;
+use argon2::{
+    password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
+    Algorithm, Argon2, Params, Version,
+};
 use byos_crypto_core::{
     derive_signing_key, derive_xwing_seed, generate_x25519_keypair,
     wrap_mailbox_key, wrap_recovery_principal_key, wrap_signing_seed, wrap_xwing_seed,
@@ -89,6 +93,18 @@ fn derive_mailbox(
     })
 }
 
+fn hash_password(password: &str) -> Result<String, Box<dyn Error>> {
+    let params = Params::new(65536, 3, 2, Some(32)).map_err(|e| format!("{:?}", e))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = argon2
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| format!("{:?}", e))?
+        .to_string();
+    Ok(hash)
+}
+
 fn print_sql(
     mailboxes: &[MailboxSeed],
     password: &str,
@@ -96,7 +112,7 @@ fn print_sql(
     org_id: &str,
     domain_id: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let password_hash = bcrypt::hash(password, 10)?;
+    let password_hash = hash_password(password)?;
 
     println!("BEGIN;");
     println!();
@@ -293,4 +309,25 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     print_sql(&mailboxes, &password, &domain, org_id, domain_id)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_format_matches_server_expectation() {
+        let hash = hash_password("test-password-123").unwrap();
+        let parts: Vec<&str> = hash.split('$').collect();
+        assert_eq!(
+            parts.len(),
+            6,
+            "expected 6 parts, got {}: {}",
+            parts.len(),
+            hash
+        );
+        assert_eq!(parts[1], "argon2id");
+        assert_eq!(parts[2], "v=19");
+        println!("Hash: {}", hash);
+    }
 }

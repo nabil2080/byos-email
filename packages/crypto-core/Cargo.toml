@@ -77,7 +77,7 @@ axum = "0.7"
 base64 = "0.22"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 uuid = { version = "1", features = ["v4"] }
-bcrypt = "0.15"
+argon2 = "0.5"
 hex = "0.4"
 
 [dev-dependencies]
