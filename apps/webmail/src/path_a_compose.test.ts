@@ -226,5 +226,39 @@ export async function runPathAComposeTests(): Promise<{ passed: number; failed: 
     assert(rich.includes("Plain body"), "rich plain body included");
   });
 
+  // 9. tryPathASend with senderXwingSeed produces sender_envelope_json in send payload
+  await test("9. tryPathASend with senderXwingSeed produces sender_envelope_json in send payload", async () => {
+    let capturedReq: InternalSendRequest | null = null;
+    const validSenderXwingSeed = new Uint8Array(32);
+    validSenderXwingSeed.fill(0x77);
+
+    const res = await tryPathASend(
+      {
+        recipient: "alice@example.com",
+        senderMailboxId: "box-1",
+        mimeMessage: "Subject: hi\r\n\r\nBody",
+        signingSeed: validSigningSeed,
+        senderXwingSeed: validSenderXwingSeed,
+      },
+      {
+        lookupMailboxKeys: async () => baseRecord,
+        sealSignedEnvelope: async (_pk, keyId) => JSON.stringify({ v: 1, key_id: keyId, sig: "mock-sig" }),
+        sendInternal: async (req) => {
+          capturedReq = req;
+          return {
+            delivery_id: "del-uuid-1",
+            message_id: "msg-uuid-1",
+            status: "delivered",
+            message_seq: 10,
+          };
+        },
+      }
+    );
+    assert(res.kind === "sent", `expected kind 'sent', got ${res.kind}`);
+    assert(capturedReq !== null, "sendInternal should have been called");
+    assert(typeof capturedReq!.sender_envelope_json === "string", "sender_envelope_json is present");
+    assert(capturedReq!.sender_envelope_json!.includes("box-1"), "sender_envelope_json has sender key_id");
+  });
+
   return { passed, failed };
 }

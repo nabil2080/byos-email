@@ -229,10 +229,11 @@ export async function tryPathASend(
     senderMailboxId: string;
     mimeMessage: string;
     signingSeed: Uint8Array;
+    senderXwingSeed?: Uint8Array;
   },
   deps?: PathADeps,
 ): Promise<PathAResult> {
-  const { recipient, senderMailboxId, mimeMessage, signingSeed } = params;
+  const { recipient, senderMailboxId, mimeMessage, signingSeed, senderXwingSeed } = params;
   const lookupFn = deps?.lookupMailboxKeys ?? lookupMailboxKeys;
   const sendFn = deps?.sendInternal ?? sendInternal;
 
@@ -271,8 +272,9 @@ export async function tryPathASend(
     return { kind: "fallback" };
   }
 
-  // 4. Assemble signed envelope
+  // 4. Assemble signed envelopes
   let envelopeJson: string;
+  let senderEnvelopeJson: string | undefined;
   try {
     const plaintextHex = bytesToHex(new TextEncoder().encode(mimeMessage));
     const signingSeedHex = bytesToHex(signingSeed);
@@ -284,6 +286,15 @@ export async function tryPathASend(
         plaintextHex,
         signingSeedHex,
       );
+      if (senderXwingSeed) {
+        senderEnvelopeJson = await deps.sealSignedEnvelope(
+          "mock-sender-xwing-pk",
+          senderMailboxId,
+          1,
+          plaintextHex,
+          signingSeedHex,
+        );
+      }
     } else {
       const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
       envelopeJson = wasm.wasm_seal_xwing_envelope_signed(
@@ -293,6 +304,18 @@ export async function tryPathASend(
         plaintextHex,
         signingSeedHex,
       );
+      if (senderXwingSeed) {
+        const senderXwingPkHex = wasm.wasm_xwing_public_key_from_seed(
+          bytesToHex(senderXwingSeed),
+        );
+        senderEnvelopeJson = wasm.wasm_seal_xwing_envelope_signed(
+          senderXwingPkHex,
+          senderMailboxId,
+          1, // TODO: use sender's real key_epoch when rotation is implemented
+          plaintextHex,
+          signingSeedHex,
+        );
+      }
     }
   } catch (e) {
     // Local crypto failure — treat as a real failure, not a fallback.
@@ -306,6 +329,7 @@ export async function tryPathASend(
   try {
     const resp = await sendFn({
       envelope_json: envelopeJson,
+      sender_envelope_json: senderEnvelopeJson,
       recipient,
       sender_mailbox_id: senderMailboxId,
     });
@@ -3011,10 +3035,11 @@ const App: Component = () => {
       const hasAttachments = composeAttachments().length > 0;
       const isScheduled = Boolean(scheduledTime());
       const senderSeed = signingSeed();
+      const senderXwing = xwingSeed();
 
       const singleRecipient = !to.includes(",") && !to.includes(";");
 
-      if (!isScheduled && !hasAttachments && singleRecipient && senderSeed) {
+      if (!isScheduled && !hasAttachments && singleRecipient && senderSeed && senderXwing) {
         setComposeStatus("Delivering via end-to-end encrypted Path A…");
 
         const result = await tryPathASend({
@@ -3022,6 +3047,7 @@ const App: Component = () => {
           senderMailboxId: box.id,
           mimeMessage,
           signingSeed: senderSeed,
+          senderXwingSeed: senderXwing,
         });
 
         if (result.kind === "sent") {

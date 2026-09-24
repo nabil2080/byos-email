@@ -20,9 +20,10 @@ import (
 )
 
 type InternalSendRequest struct {
-	EnvelopeJSON    string `json:"envelope_json"`
-	Recipient       string `json:"recipient"`
-	SenderMailboxID string `json:"sender_mailbox_id"`
+	EnvelopeJSON       string `json:"envelope_json"`
+	SenderEnvelopeJSON string `json:"sender_envelope_json,omitempty"`
+	Recipient          string `json:"recipient"`
+	SenderMailboxID    string `json:"sender_mailbox_id"`
 }
 
 type InternalSendResponse struct {
@@ -132,15 +133,16 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Validate sender owns the mailbox
 	var senderOrgID string
+	var senderDomainID string
 	var senderLocalPart string
 	var senderDomainName string
 	var senderEd25519PK []byte
 	err = conn.QueryRow(ctx, `
-		SELECT m.org_id::text, m.local_part, d.name, m.mailbox_ed25519_pk
+		SELECT m.org_id::text, m.local_part, d.name, m.mailbox_ed25519_pk, d.id::text
 		FROM mailboxes m
 		JOIN domains d ON d.id = m.domain_id
 		WHERE m.id = $1 AND m.user_id = $2 AND m.is_active = true
-	`, req.SenderMailboxID, userID).Scan(&senderOrgID, &senderLocalPart, &senderDomainName, &senderEd25519PK)
+	`, req.SenderMailboxID, userID).Scan(&senderOrgID, &senderLocalPart, &senderDomainName, &senderEd25519PK, &senderDomainID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeInternalSendError(w, http.StatusForbidden, "not_sender_mailbox")
@@ -216,6 +218,35 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 	if err := envelope.VerifyEnvelopeSignature(senderEd25519PK, env); err != nil {
 		writeInternalSendError(w, http.StatusBadRequest, "invalid_signature")
 		return
+	}
+
+	var senderEnv *envelope.CryptoEnvelope
+	if strings.TrimSpace(req.SenderEnvelopeJSON) != "" {
+		senderEnv, err = envelope.UnmarshalCanonical([]byte(req.SenderEnvelopeJSON))
+		if err != nil {
+			writeInternalSendError(w, http.StatusBadRequest, "invalid_sender_envelope")
+			return
+		}
+		if senderEnv.V != 1 {
+			writeInternalSendError(w, http.StatusBadRequest, "unsupported_sender_version")
+			return
+		}
+		if senderEnv.Alg != "HPKE-XWing-AES256GCM-v1" {
+			writeInternalSendError(w, http.StatusBadRequest, "unsupported_sender_algorithm")
+			return
+		}
+		if senderEnv.KeyID != req.SenderMailboxID {
+			writeInternalSendError(w, http.StatusBadRequest, "sender_key_id_mismatch")
+			return
+		}
+		if senderEnv.KeyEpoch == 0 {
+			writeInternalSendError(w, http.StatusBadRequest, "invalid_sender_key_epoch")
+			return
+		}
+		if err := envelope.VerifyEnvelopeSignature(senderEd25519PK, senderEnv); err != nil {
+			writeInternalSendError(w, http.StatusBadRequest, "invalid_sender_signature")
+			return
+		}
 	}
 
 	// 10. Transaction begins
@@ -311,6 +342,56 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		writeInternalSendError(w, http.StatusInternalServerError, "database_insert_failed")
 		return
+	}
+
+	if req.SenderEnvelopeJSON != "" {
+		// Allocate sender sequence
+		var senderMessageSeq int64
+		if err := tx.QueryRow(ctx, "SELECT nextval('mailbox_message_seq')").Scan(&senderMessageSeq); err != nil {
+			writeInternalSendError(w, http.StatusInternalServerError, "sequence_allocation_failed")
+			return
+		}
+
+		senderDeliveryIdentity := sha256.Sum256([]byte(req.SenderEnvelopeJSON))
+		senderStorageObjectID := fmt.Sprintf("mailboxes/%s/%020d.eml.enc", req.SenderMailboxID, senderMessageSeq)
+
+		if err := storeInternalEnvelope(ctx, req.SenderMailboxID, senderStorageObjectID, senderMessageSeq, []byte(req.SenderEnvelopeJSON)); err != nil {
+			writeInternalSendError(w, http.StatusBadGateway, "sender_storage_failed")
+			return
+		}
+
+		// TODO: read sender's current key_epoch from mailboxes table when key
+		// rotation is implemented. For now, rotation is not supported and epoch
+		// is always 1.
+		var senderMessageID string
+		err = tx.QueryRow(ctx, `
+			INSERT INTO message_metadata (
+				mailbox_id, domain_id, message_seq, direction, folder, delivery_identity,
+				sender, recipients, has_attachments, attachment_count,
+				storage_object_id, content_key_hpke_wrapped,
+				mailbox_sk_version, encryption_version, encryption_iv, aad_version,
+				bundle_hash, status, wrapped_key_algorithm, is_read, sent_at
+			) VALUES (
+				$1, $2, $3, 'sent', 'sent', $4,
+				$5, $6, false, 0,
+				$7, $8,
+				$9, $10, $11, $12,
+				$13, 'sent', $14, true, now()
+			) RETURNING id::text
+		`,
+			req.SenderMailboxID, senderDomainID, senderMessageSeq, senderDeliveryIdentity[:],
+			senderEmail, []string{cleanRecipient},
+			senderStorageObjectID, []byte{},
+			int(senderEnv.KeyEpoch), int(senderEnv.V), []byte{}, 1,
+			senderDeliveryIdentity[:],
+			"HPKE-XWing-AES256GCM-v1",
+		).Scan(&senderMessageID)
+		if err != nil {
+			writeInternalSendError(w, http.StatusInternalServerError, "sender_insert_failed")
+			return
+		}
+
+		_ = senderMessageID // available if we want to return it later
 	}
 
 	// 16. Commit

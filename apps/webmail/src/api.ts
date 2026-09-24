@@ -1221,6 +1221,7 @@ export async function publishMailboxKeys(payload: {
 
 export interface InternalSendRequest {
   envelope_json: string;
+  sender_envelope_json?: string;
   recipient: string;
   sender_mailbox_id: string;
 }
