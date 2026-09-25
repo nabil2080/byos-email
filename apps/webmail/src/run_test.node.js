@@ -13,6 +13,7 @@ import { runMboxStreamTests } from "./mbox_stream.test.js";
 import { runMboxLabelsTests } from "./mbox_labels.test.js";
 import { runImportQueueTests } from "./import_queue.test.js";
 import { runThreadingTests } from "./threading.test.js";
+import { runUndoSendTests } from "./undo_send.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -106,6 +107,12 @@ async function main() {
   console.log(`CONVERSATION THREADING TESTS: ${threadingRes.passed} passed, ${threadingRes.failed} failed\n`);
   totalPassed += threadingRes.passed;
   totalFailed += threadingRes.failed;
+
+  console.log("Running Undo Send Tests...");
+  const undoSendRes = await runUndoSendTests();
+  console.log(`UNDO SEND TESTS: ${undoSendRes.passed} passed, ${undoSendRes.failed} failed\n`);
+  totalPassed += undoSendRes.passed;
+  totalFailed += undoSendRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

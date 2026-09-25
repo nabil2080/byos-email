@@ -95,6 +95,7 @@ import {
   decryptPathAEnvelope,
 } from "./message_crypto";
 import { loadSignature, loadSignatureHtml, saveSignature, saveSignatureHtml, applySignature, applySignatureHtml, formatQuotedHtml } from "./signature";
+import { PendingSend, buildPendingSendPayload, restoreComposeState } from "./undo_send";
 import { parseMime, getHeader } from "./mime";
 import { SetupAccount } from "./routes/setup-account";
 import { SettingsLayout, SettingsTabId } from "./routes/settings/SettingsLayout";
@@ -422,6 +423,7 @@ const App: Component = () => {
   const [composeAttachments, setComposeAttachments] = createSignal<AttachmentItem[]>([]);
   // When set, saving updates this draft (optimistic version) instead of creating.
   const [editingDraft, setEditingDraft] = createSignal<{ id: string; version: number } | null>(null);
+  const [pendingSend, setPendingSend] = createSignal<PendingSend | null>(null);
 
   // Settings suite & Layout preferences
   const [settingsOpen, setSettingsOpen] = createSignal(false);
@@ -986,13 +988,44 @@ const App: Component = () => {
   // Multi-Mailbox state & toast notifications
   const [connectedAccounts, setConnectedAccounts] = createSignal<ConnectedAccount[]>([]);
   const [addMailboxModalOpen, setAddMailboxModalOpen] = createSignal(false);
-  const [toastMessage, setToastMessage] = createSignal<string | null>(null);
-  let toastTimer: any = null;
+  interface ToastItem {
+    id: string;
+    message: string;
+    action?: {
+      label: string;
+      onClick: () => void;
+    };
+  }
+  const [toasts, setToasts] = createSignal<ToastItem[]>([]);
+
+  function addToast(toast: ToastItem & { duration?: number }) {
+    setToasts((prev) => [...prev.filter((t) => t.id !== toast.id), toast]);
+    if (toast.duration) {
+      setTimeout(() => {
+        removeToast(toast.id);
+      }, toast.duration);
+    }
+  }
+
+  function removeToast(id: string) {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }
+
+  function updateToast(id: string, message: string) {
+    setToasts((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, message } : t))
+    );
+  }
 
   function showToast(msg: string) {
-    if (toastTimer) clearTimeout(toastTimer);
-    setToastMessage(msg);
-    toastTimer = setTimeout(() => setToastMessage(null), 3500);
+    const id = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2) + Date.now().toString(36);
+    addToast({
+      id,
+      message: msg,
+      duration: 3500,
+    });
   }
 
   // Custom Folders & Labels state
@@ -1545,6 +1578,25 @@ const App: Component = () => {
       console.warn("Failed loading user/mailbox data on mount:", err);
     } finally {
       setIsLoading(false);
+    }
+
+    // Check for pending send (Undo Send V1)
+    const rawPending = typeof window !== "undefined" ? sessionStorage.getItem("byos_pending_send") : null;
+    if (rawPending) {
+      try {
+        const payload: PendingSend = JSON.parse(rawPending);
+        if (Date.now() >= payload.expiresAt) {
+          // Expired while the tab was closed — send immediately
+          sessionStorage.removeItem("byos_pending_send");
+          executeSend(payload);
+        } else {
+          // Still in the window — resume the countdown
+          setPendingSend(payload);
+          showUndoToast(payload);
+        }
+      } catch {
+        sessionStorage.removeItem("byos_pending_send");
+      }
     }
   });
 
@@ -3141,37 +3193,99 @@ const App: Component = () => {
     setComposeOpen(true);
   }
 
-  async function handleSend(e: Event) {
-    e.preventDefault();
-    const to = composeTo().trim();
-    const subject = composeSubject().trim();
-    const body = composeBody();
-    if (!to || !subject || !body.trim()) return;
-
-    setErrorMessage(null);
+  function prepareSendPayload(): PendingSend | null {
     const box = selectedMailbox();
+    if (!box) return null;
+    return buildPendingSendPayload({
+      to: composeTo(),
+      subject: composeSubject(),
+      body: composeBody(),
+      bodyHtml: composeBodyHtml(),
+      boxId: box.id,
+      signatureApplied: composeSignatureApplied(),
+      sigPlain: loadSignature(box.id),
+      sigHtml: loadSignatureHtml(box.id),
+      attachments: composeAttachments(),
+      scheduledTime: scheduledTime(),
+      trackOpens: composeTrackOpens(),
+    });
+  }
 
-    if (!box) {
-      setErrorMessage("Select a mailbox before sending.");
-      return;
+  function restoreComposeFromPayload(payload: PendingSend) {
+    restoreComposeState(payload, {
+      setTo: setComposeTo,
+      setSubject: setComposeSubject,
+      setBody: setComposeBody,
+      setBodyHtml: setComposeBodyHtml,
+      setAttachments: setComposeAttachments,
+      setScheduledTime: setScheduledTime,
+      setTrackOpens: setComposeTrackOpens,
+      setSignatureApplied: setComposeSignatureApplied,
+      setOpen: setComposeOpen,
+    });
+  }
+
+  let undoIntervalTimer: any = null;
+
+  function showUndoToast(payload: PendingSend) {
+    const toastId = payload.id;
+    if (undoIntervalTimer) {
+      clearInterval(undoIntervalTimer);
+      undoIntervalTimer = null;
     }
+
+    const initialRemaining = Math.max(1, Math.ceil((payload.expiresAt - Date.now()) / 1000));
+
+    addToast({
+      id: toastId,
+      message: `Sending in ${initialRemaining}…`,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          if (undoIntervalTimer) {
+            clearInterval(undoIntervalTimer);
+            undoIntervalTimer = null;
+          }
+          setPendingSend(null);
+          try {
+            sessionStorage.removeItem("byos_pending_send");
+          } catch {}
+          removeToast(toastId);
+          restoreComposeFromPayload(payload);
+        },
+      },
+    });
+
+    undoIntervalTimer = setInterval(() => {
+      const remaining = Math.ceil((payload.expiresAt - Date.now()) / 1000);
+      if (remaining <= 0) {
+        clearInterval(undoIntervalTimer);
+        undoIntervalTimer = null;
+        removeToast(toastId);
+        setPendingSend(null);
+        try {
+          sessionStorage.removeItem("byos_pending_send");
+        } catch {}
+        executeSend(payload);
+      } else {
+        updateToast(toastId, `Sending in ${remaining}…`);
+      }
+    }, 250);
+  }
+
+  async function executeSend(payload: PendingSend) {
+    const box = mailboxes().find((b) => b.id === payload.mailboxId) || selectedMailbox() || { id: payload.mailboxId };
+    if (!box || !box.id) return;
 
     setComposeStatus("Preparing encrypted message…");
     try {
-      const sigPlain = loadSignature(box.id);
-      const sigHtml = loadSignatureHtml(box.id);
-      let signedBody = body;
-      let htmlBody = composeBodyHtml();
-
-      if (!composeSignatureApplied()) {
-        signedBody = applySignature(body, sigPlain);
-        htmlBody = applySignatureHtml(composeBodyHtml(), sigHtml);
-        // Note: do NOT setComposeSignatureApplied(true) here.
-        // The form is about to be cleared on success.
-      }
+      const to = payload.recipient;
+      const subject = payload.subject;
+      const signedBody = payload.bodyPlaintext;
+      const htmlBody = payload.bodyHtml;
 
       let trackingToken: string | undefined;
-      if (composeTrackOpens()) {
+      if (payload.trackOpens) {
         trackingToken = (typeof crypto !== "undefined" && crypto.randomUUID)
           ? crypto.randomUUID().replace(/-/g, "")
           : Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -3189,12 +3303,12 @@ const App: Component = () => {
         signedBody,
         htmlBody,
         trackingToken,
-        body,
+        body: signedBody,
       });
 
       // Path A routing
-      const hasAttachments = composeAttachments().length > 0;
-      const isScheduled = Boolean(scheduledTime());
+      const hasAttachments = (payload.attachments || []).length > 0;
+      const isScheduled = Boolean(payload.scheduledTime);
       const senderSeed = signingSeed();
       const senderXwing = xwingSeed();
 
@@ -3213,11 +3327,7 @@ const App: Component = () => {
 
         if (result.kind === "sent") {
           setComposeStatus("Message delivered securely.");
-          setComposeOpen(false);
-          clearComposeForm();
-          // Refresh the message list so the sent copy appears in the Sent folder.
-          // Without this, the server has the message but the client's in-memory
-          // list is stale until the user reloads or manually refreshes.
+          showToast("Message sent.");
           loadMailboxData(box.id).catch((err) => {
             console.warn("Failed to refresh mailbox after send:", err);
           });
@@ -3225,12 +3335,11 @@ const App: Component = () => {
         }
 
         if (result.kind === "failed") {
-          // Do NOT fall back to Path B — the server may have already stored 
-          // the envelope. Falling back would risk duplicate delivery.
           setErrorMessage(
-            `Internal encrypted delivery failed: ${result.error}. Message was not sent.`,
+            `Internal encrypted delivery failed: ${result.error}. Message was not sent.`
           );
           setComposeStatus(null);
+          showToast(`Send failed: ${result.error}`);
           return;
         }
 
@@ -3258,9 +3367,9 @@ const App: Component = () => {
         throw new Error("Crypto core returned an incomplete outbound envelope");
       }
 
-      const attIDs = composeAttachments().map((a) => a.id);
+      const attIDs = (payload.attachments || []).map((a: any) => a.id);
 
-      if (scheduledTime()) {
+      if (payload.scheduledTime) {
         await scheduleOutbound({
           reservation_id: reservation.reservation_id,
           mailbox_id: box.id,
@@ -3271,7 +3380,7 @@ const App: Component = () => {
           encryption_version: reservation.encryption_version,
           aad_version: reservation.aad_version,
           encryption_iv: encrypted.iv,
-          scheduled_at: new Date(scheduledTime()).toISOString(),
+          scheduled_at: new Date(payload.scheduledTime).toISOString(),
           attachment_ids: attIDs.length > 0 ? attIDs : undefined,
         });
       } else {
@@ -3289,16 +3398,38 @@ const App: Component = () => {
         });
       }
 
-      setComposeStatus(scheduledTime() ? "Encrypted message scheduled." : "Encrypted message queued for delivery.");
-      setComposeOpen(false);
-      clearComposeForm();
+      setComposeStatus(payload.scheduledTime ? "Encrypted message scheduled." : "Encrypted message queued for delivery.");
+      showToast(payload.scheduledTime ? "Message scheduled." : "Message sent.");
       loadMailboxData(box.id).catch((err) => {
         console.warn("Failed to refresh mailbox after send:", err);
       });
     } catch (err) {
       setErrorMessage(`Failed to send securely: ${err instanceof Error ? err.message : "unknown error"}`);
       setComposeStatus(null);
+      showToast(`Send failed: ${err instanceof Error ? err.message : "unknown error"}`);
     }
+  }
+
+  async function handleSend(e: Event) {
+    e.preventDefault();
+    if (pendingSend()) return; // ignore double-send
+
+    const payload = prepareSendPayload();
+    if (!payload) {
+      setErrorMessage("Fill in recipient, subject, and body.");
+      return;
+    }
+
+    setPendingSend(payload);
+    try {
+      sessionStorage.setItem("byos_pending_send", JSON.stringify(payload));
+    } catch {}
+
+    // Close the compose drawer and clear the form immediately
+    setComposeOpen(false);
+    clearComposeForm();
+
+    showUndoToast(payload);
   }
 
   async function handleSaveDraft() {
@@ -4521,15 +4652,35 @@ const App: Component = () => {
         }}
       />
 
-      {/* ── Global Notification Toast ── */}
-      <Show when={toastMessage()}>
-        <div class="fixed bottom-6 right-6 z-50 bg-[#3C3D3E] text-white px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2.5 text-xs font-sans border border-[#E2DFD8]/20 animate-fade-in">
-          <svg class="w-4 h-4 stroke-[#A27561] fill-none stroke-2 flex-shrink-0" viewBox="0 0 24 24">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-          <span>{toastMessage()}</span>
-        </div>
-      </Show>
+      {/* ── Global Notification Toasts ── */}
+      <div
+        class="fixed bottom-6 right-6 z-50 flex flex-col gap-2 pointer-events-none"
+        role="region"
+        aria-label="Notifications"
+      >
+        <For each={toasts()}>
+          {(toast) => (
+            <div
+              role="status"
+              class="pointer-events-auto bg-[#3C3D3E] text-white px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-3 text-xs font-sans border border-[#E2DFD8]/20 animate-fade-in"
+            >
+              <svg class="w-4 h-4 stroke-[#A27561] fill-none stroke-2 flex-shrink-0" viewBox="0 0 24 24">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <span>{toast.message}</span>
+              <Show when={toast.action}>
+                <button
+                  type="button"
+                  onClick={toast.action!.onClick}
+                  class="ml-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-[#A27561] hover:bg-[#8F6452] text-white transition focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 cursor-pointer"
+                >
+                  {toast.action!.label}
+                </button>
+              </Show>
+            </div>
+          )}
+        </For>
+      </div>
       </div>
     </Show>
     </Show>
