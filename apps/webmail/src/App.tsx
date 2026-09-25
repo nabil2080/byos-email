@@ -406,6 +406,8 @@ const App: Component = () => {
   const [composeSubject, setComposeSubject] = createSignal("");
   const [composeBody, setComposeBody] = createSignal("");
   const [composeBodyHtml, setComposeBodyHtml] = createSignal("");
+  const [composeSignatureApplied, setComposeSignatureApplied] =
+    createSignal<boolean>(false);
   const [scheduledTime, setScheduledTime] = createSignal("");
   const [composeTrackOpens, setComposeTrackOpens] = createSignal(false);
   const [composeStatus, setComposeStatus] = createSignal<string | null>(null);
@@ -2922,6 +2924,7 @@ const App: Component = () => {
     setComposeTrackOpens(false);
     setComposeAttachments([]);
     setEditingDraft(null);
+    setComposeSignatureApplied(false);
   }
 
   function startNewCompose() {
@@ -2938,6 +2941,9 @@ const App: Component = () => {
           `<p><br></p><div class="byos-signature"><p>-- </p>${sigHtml}</div>`,
         );
       }
+      if (sigPlain || sigHtml) {
+        setComposeSignatureApplied(true);
+      }
     }
     setComposeOpen(true);
   }
@@ -2949,6 +2955,10 @@ const App: Component = () => {
     setScheduledTime("");
     setComposeAttachments([]);
     setEditingDraft({ id: msg.id, version: msg.version ?? 1 });
+    const box = selectedMailbox();
+    const sigPlain = box ? loadSignature(box.id) : "";
+    const hasSig = sigPlain ? plaintext.includes(`-- \n${sigPlain}`) : false;
+    setComposeSignatureApplied(hasSig);
     setComposeOpen(true);
   }
 
@@ -2978,6 +2988,7 @@ const App: Component = () => {
     setScheduledTime("");
     setComposeAttachments([]);
     setEditingDraft(null);
+    setComposeSignatureApplied(false);
     setComposeOpen(true);
   }
 
@@ -2999,6 +3010,7 @@ const App: Component = () => {
     setScheduledTime("");
     setComposeAttachments([]);
     setEditingDraft(null);
+    setComposeSignatureApplied(false);
     setComposeOpen(true);
   }
 
@@ -3021,8 +3033,15 @@ const App: Component = () => {
     try {
       const sigPlain = loadSignature(box.id);
       const sigHtml = loadSignatureHtml(box.id);
-      const signedBody = applySignature(body, sigPlain);
-      const htmlBody = applySignatureHtml(composeBodyHtml(), sigHtml);
+      let signedBody = body;
+      let htmlBody = composeBodyHtml();
+
+      if (!composeSignatureApplied()) {
+        signedBody = applySignature(body, sigPlain);
+        htmlBody = applySignatureHtml(composeBodyHtml(), sigHtml);
+        // Note: do NOT setComposeSignatureApplied(true) here.
+        // The form is about to be cleared on success.
+      }
 
       let trackingToken: string | undefined;
       if (composeTrackOpens()) {

@@ -57,17 +57,11 @@ export function clearSignature(mailboxId: string): void {
 export function applySignature(plaintext: string, signature: string): string {
   const sig = signature.trim();
   if (!sig) return plaintext;
-  if (plaintext.includes(`-- \n${sig}`)) return plaintext;
   return `${plaintext}\n\n-- \n${sig}`;
 }
 
-/**
- * Appends the HTML signature to the HTML body. The signature HTML is 
- * already sanitized at Settings save time; do NOT escape it here.
- */
 export function applySignatureHtml(html: string, signatureHtml: string): string {
   const sig = signatureHtml.trim();
   if (!sig) return html;
-  if (html.includes("byos-signature")) return html;
   return `${html}<div class="byos-signature"><br>-- <br>${sig}</div>`;
 }

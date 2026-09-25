@@ -8,6 +8,7 @@ import { runPathAComposeTests } from "./path_a_compose.test.js";
 import { runPathAReadTests } from "./path_a_read.test.js";
 import { runMimeTests } from "./mime.test.js";
 import { runSignatureTests } from "./signature.test.js";
+import { runReplySignatureTests } from "./reply_signature.test.js";
 import { runMboxStreamTests } from "./mbox_stream.test.js";
 import { runMboxLabelsTests } from "./mbox_labels.test.js";
 import { runImportQueueTests } from "./import_queue.test.js";
@@ -74,6 +75,12 @@ async function main() {
   console.log(`SIGNATURE TESTS: ${sigRes.passed} passed, ${sigRes.failed} failed\n`);
   totalPassed += sigRes.passed;
   totalFailed += sigRes.failed;
+
+  console.log("Running Reply Signature Tests...");
+  const replySigRes = runReplySignatureTests();
+  console.log(`REPLY SIGNATURE TESTS: ${replySigRes.passed} passed, ${replySigRes.failed} failed\n`);
+  totalPassed += replySigRes.passed;
+  totalFailed += replySigRes.failed;
 
   console.log("Running Mbox Stream Tests...");
   const mboxStreamRes = await runMboxStreamTests();

@@ -112,29 +112,27 @@ export function runSignatureTests(): { passed: number; failed: number } {
     assert(mockStorage.getItem("byos.signature.html.box1") === null, "HTML key should be removed");
   });
 
-  // 7. applySignature skips if signature already present
-  test("7. applySignature skips if signature already present", () => {
-    const original = "Hello World\n\n-- \nAlice";
-    const result = applySignature(original, "Alice");
-    assert(result === original, "applySignature should not duplicate if already present");
+  // 7. applySignature appends signature to plaintext
+  test("7. applySignature appends signature to plaintext", () => {
+    const msg = "Hello World";
+    const result = applySignature(msg, "Alice");
+    assert(result === "Hello World\n\n-- \nAlice", "applySignature should append signature");
 
-    const newMsg = "Hello World";
-    const resultNew = applySignature(newMsg, "Alice");
-    assert(resultNew === "Hello World\n\n-- \nAlice", "applySignature should append if not present");
+    const empty = applySignature(msg, "   ");
+    assert(empty === msg, "applySignature should return original text if signature is empty");
   });
 
-  // 8. applySignatureHtml skips if byos-signature div already present
-  test("8. applySignatureHtml skips if byos-signature div already present", () => {
-    const htmlWithSig = '<p>Hello World</p><div class="byos-signature"><p>-- </p><b>Alice</b></div>';
-    const result1 = applySignatureHtml(htmlWithSig, "<b>Alice</b>");
-    assert(result1 === htmlWithSig, "applySignatureHtml should not duplicate if byos-signature present");
-
+  // 8. applySignatureHtml appends byos-signature div to HTML
+  test("8. applySignatureHtml appends byos-signature div to HTML", () => {
     const htmlWithoutSig = "<p>Hello World</p>";
-    const result2 = applySignatureHtml(htmlWithoutSig, "<b>Alice</b>");
+    const result = applySignatureHtml(htmlWithoutSig, "<b>Alice</b>");
     assert(
-      result2 === '<p>Hello World</p><div class="byos-signature"><br>-- <br><b>Alice</b></div>',
-      `Unexpected applySignatureHtml result: ${result2}`
+      result === '<p>Hello World</p><div class="byos-signature"><br>-- <br><b>Alice</b></div>',
+      `Unexpected applySignatureHtml result: ${result}`
     );
+
+    const empty = applySignatureHtml(htmlWithoutSig, "   ");
+    assert(empty === htmlWithoutSig, "applySignatureHtml should return original html if signature is empty");
   });
 
   // 9. Server hydration writes both keys to localStorage
