@@ -3284,16 +3284,16 @@ const App: Component = () => {
       trash: 0,
     };
     for (const m of messages()) {
-      if (m.folder === "trash") {
-        counts.trash++;
-      } else {
+      if (!m.read) {
         if (m.folder === "inbox") {
           // Exclude messages in custom folders from inbox count
-          if (!m.folderId) {
+          if (!m.folderId || m.folderId === "") {
             counts.inbox++;
           }
-        } else if (counts[m.folder] !== undefined) {
-          counts[m.folder]++;
+        } else if (m.folder === "archive") {
+          counts.archive++;
+        } else if (m.folder === "spam") {
+          counts.spam++;
         }
       }
     }

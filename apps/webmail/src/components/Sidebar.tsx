@@ -233,7 +233,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           {(["inbox", "sent", "drafts", "archive", "spam", "trash"] as Folder[]).map((f) => {
             const isActive = () => props.currentFolder === f;
             const isDropTarget = () => dragOverTarget() === f;
-            const count = () => props.folderCounts[f] || 0;
+            const count = () => (props.folderCounts ? props.folderCounts[f] || 0 : 0);
 
             return (
               <button

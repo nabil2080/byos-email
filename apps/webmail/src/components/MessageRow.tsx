@@ -174,7 +174,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
               <span
                 class={`truncate font-sans text-sm ${
                   props.message.read
-                    ? "font-medium text-[#2B2C2D] dark:text-[#E2DFD8]"
+                    ? "font-normal text-[#878A8E] dark:text-[#8A8E94]"
                     : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
                 }`}
               >
@@ -209,7 +209,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
               <span
                 class={`truncate block ${
                   props.message.read
-                    ? "font-medium text-[#2B2C2D] dark:text-[#E2DFD8]"
+                    ? "font-normal text-[#2B2C2D] dark:text-[#E2DFD8]"
                     : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
                 }`}
               >
@@ -384,7 +384,9 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                 <ProfileAvatar email={props.message.sender} size="xs" />
                 <span
                   class={`truncate min-w-0 font-sans text-sm ${
-                    props.message.read ? "font-medium text-[#2B2C2D] dark:text-[#E2DFD8]" : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                    props.message.read
+                      ? "font-normal text-[#878A8E] dark:text-[#8A8E94]"
+                      : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
                   }`}
                 >
                   {props.message.sender}
@@ -505,7 +507,9 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
               </Show>
               <span
                 class={`truncate min-w-0 text-[13px] flex-1 ${
-                  props.message.read ? "font-medium text-[#2B2C2D] dark:text-[#E2DFD8]" : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                  props.message.read
+                    ? "font-normal text-[#2B2C2D] dark:text-[#E2DFD8]"
+                    : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
                 }`}
               >
                 {props.message.subject || "(No subject)"}
