@@ -300,6 +300,11 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// NOTE: Path A mail does not populate message_id, in_reply_to, or 
+	// thread_id because those headers live inside the encrypted envelope 
+	// and are inaccessible to the server. Replies to Path A mail therefore 
+	// start new threads. Cross-message threading for Path A is deferred 
+	// to V2 (see Appendix D).
 	// 15. INSERT INTO message_metadata
 	var messageID string
 	err = tx.QueryRow(ctx, `

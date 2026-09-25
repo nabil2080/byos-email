@@ -411,16 +411,31 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 		wrappedKeyAlg = "HPKE-X25519-AES256GCM-v1"
 	}
 
+	var msgID, inReplyTo, references string
+	if parsedMsg, parseErr := mail.ReadMessage(bytes.NewReader(rawMessage)); parseErr == nil && parsedMsg != nil {
+		msgID = normalizeMsgID(parsedMsg.Header.Get("Message-ID"))
+		inReplyTo = normalizeMsgID(parsedMsg.Header.Get("In-Reply-To"))
+		references = parsedMsg.Header.Get("References")
+	}
+
+	threadID, err := ComputeThreadID(ctx, tx, route.MailboxID, inReplyTo, references)
+	if err != nil {
+		log.Printf("[WARN] compute thread_id failed for mailbox=%s: %v", route.MailboxID, err)
+		threadID = ""
+	}
+
 	// No duplicate - insert new message
 	err = tx.QueryRow(ctx, `
 		INSERT INTO message_metadata (
 			mailbox_id, domain_id, message_seq, direction, delivery_identity, sender, recipients,
 			storage_object_id, content_key_hpke_wrapped, wrapped_key_algorithm, mailbox_sk_version, encryption_version,
-			encryption_iv, aad_version, bundle_hash, status
-		) VALUES ($1, $2, $3, 'received', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'received')
+			encryption_iv, aad_version, bundle_hash, status,
+			message_id, in_reply_to, thread_id
+		) VALUES ($1, $2, $3, 'received', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'received', NULLIF($15, ''), NULLIF($16, ''), COALESCE(NULLIF($17, '')::uuid, gen_random_uuid()))
 		RETURNING id`,
 		route.MailboxID, route.DomainID, messageSeq, deliveryIdentity[:], normalizeAddress(envelopeFrom), normalizedRecipients,
 		storageObjectID, wrappedKey, wrappedKeyAlg, route.MailboxSKVersion, cryptoResp.EncryptionVersion, iv, cryptoResp.AADVersion, bundleHash,
+		msgID, inReplyTo, threadID,
 	).Scan(&messageID)
 	if err != nil {
 		return StoredMessage{}, fmt.Errorf("insert message metadata: %w", err)

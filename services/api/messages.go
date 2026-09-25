@@ -683,7 +683,12 @@ func messageImportHandler(w http.ResponseWriter, r *http.Request) {
 	var hasAttachments bool
 	var attachmentCount int
 
+	var msgID, inReplyTo, references string
 	if parseErr == nil && msg != nil {
+		msgID = normalizeMsgID(msg.Header.Get("Message-ID"))
+		inReplyTo = normalizeMsgID(msg.Header.Get("In-Reply-To"))
+		references = msg.Header.Get("References")
+
 		if fromHdr := msg.Header.Get("From"); fromHdr != "" {
 			if parsedAddr, err := mail.ParseAddress(fromHdr); err == nil {
 				sender = parsedAddr.Address
@@ -865,26 +870,46 @@ func messageImportHandler(w http.ResponseWriter, r *http.Request) {
 		folder = folder[:32]
 	}
 
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		http.Error(w, "database transaction failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	threadID, err := ComputeThreadID(ctx, tx, mailboxID, inReplyTo, references)
+	if err != nil {
+		log.Printf("[WARN] compute thread_id failed: %v", err)
+		threadID = ""
+	}
+
 	var messageID string
-	err = conn.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO message_metadata (
 			mailbox_id, domain_id, message_seq, direction, delivery_identity, sender, recipients,
 			has_attachments, attachment_count, storage_object_id, content_key_hpke_wrapped,
 			mailbox_sk_version, encryption_version, encryption_iv, aad_version, bundle_hash,
-			received_at, status, folder, is_read
+			received_at, status, folder, is_read,
+			message_id, in_reply_to, thread_id
 		) VALUES (
 			$1, $2, $3, 'received', $4, $5, $6,
 			$7, $8, $9, $10,
 			$11, $12, $13, $14, $15,
-			$16, 'received', $17, $18
+			$16, 'received', $17, $18,
+			NULLIF($19, ''), NULLIF($20, ''), COALESCE(NULLIF($21, '')::uuid, gen_random_uuid())
 		) RETURNING id::text`,
 		mailboxID, domainID, messageSeq, deliveryID[:], strings.ToLower(strings.TrimSpace(sender)), recipients,
 		hasAttachments, attachmentCount, storageObjectID, wrappedKeyBytes,
 		mailboxSKVersion, cryptoResult.EncryptionVersion, ivBytes, cryptoResult.AADVersion, bundleHashBytes,
 		receivedAt, folder, req.IsRead,
+		msgID, inReplyTo, threadID,
 	).Scan(&messageID)
 	if err != nil {
 		http.Error(w, "failed to insert message metadata: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		http.Error(w, "failed to commit message metadata: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
