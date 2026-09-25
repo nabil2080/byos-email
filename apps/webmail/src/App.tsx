@@ -115,6 +115,8 @@ import { AddMailboxModal } from "./components/AddMailboxModal";
 import { CreateLabelModal } from "./components/modals/CreateLabelModal";
 import { CreateFolderModal } from "./components/modals/CreateFolderModal";
 import { ImportEmailsModal } from "./components/modals/ImportEmailsModal";
+import { ShortcutsHelp } from "./components/ShortcutsHelp";
+import { ShortcutHandler, isTextInputElement, matchShortcut } from "./keyboard_shortcuts";
 import { formatMessageDate } from "./utils/dateTime";
 
 type Folder = "inbox" | "sent" | "drafts" | "archive" | "spam" | "trash";
@@ -359,6 +361,7 @@ const App: Component = () => {
   const [viewMode, setViewMode] = createSignal<"threads" | "flat">("threads");
   const [searchQuery, setSearchQuery] = createSignal("");
   const [composeOpen, setComposeOpen] = createSignal(false);
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = createSignal(false);
   const [isDecrypting, setIsDecrypting] = createSignal(false);
   const [decryptedContent, setDecryptedContent] = createSignal<string | null>(null);
   // Plaintext available for editing. Set ONLY on successful decrypt — the
@@ -1508,12 +1511,132 @@ const App: Component = () => {
     window.location.href = "http://127.0.0.1:3000/dashboard/mailboxes";
   }
 
+  function focusSearch() {
+    const input = document.getElementById("webmail-search-input") as HTMLInputElement | null;
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  }
+
+  function navigateList(direction: 1 | -1) {
+    const list = sortedMessages();
+    if (list.length === 0) return;
+    const currentId = selectedMsg()?.id;
+    if (!currentId) {
+      const target = direction === 1 ? list[0] : list[list.length - 1];
+      openMessage(target);
+      return;
+    }
+    const idx = list.findIndex((m) => m.id === currentId);
+    if (idx === -1) {
+      const target = direction === 1 ? list[0] : list[list.length - 1];
+      openMessage(target);
+      return;
+    }
+    const next = list[idx + direction];
+    if (next) openMessage(next);
+  }
+
+  function closeAllModals() {
+    if (shortcutsHelpOpen()) {
+      setShortcutsHelpOpen(false);
+      return;
+    }
+    if (composeOpen()) {
+      setComposeOpen(false);
+      return;
+    }
+    if (settingsOpen()) {
+      setSettingsOpen(false);
+      return;
+    }
+    if (contactsOpen()) {
+      setContactsOpen(false);
+      return;
+    }
+    if (addMailboxModalOpen()) {
+      setAddMailboxModalOpen(false);
+      return;
+    }
+    if (createFolderModalOpen()) {
+      setCreateFolderModalOpen(false);
+      return;
+    }
+    if (importEmailsModalOpen()) {
+      setImportEmailsModalOpen(false);
+      return;
+    }
+    if (createLabelModalOpen()) {
+      setCreateLabelModalOpen(false);
+      return;
+    }
+    if (document.activeElement instanceof HTMLElement && isTextInputElement(document.activeElement)) {
+      document.activeElement.blur();
+      return;
+    }
+    if (selectedMsg()) {
+      setSelectedMsg(null);
+      return;
+    }
+    if (selectedIds().size > 0) {
+      setSelectedIds(new Set<string>());
+      return;
+    }
+  }
+
+  const shortcuts: ShortcutHandler[] = [
+    { key: "c", description: "Compose", action: () => startNewCompose() },
+    {
+      key: "r",
+      description: "Reply",
+      action: () => {
+        const msg = selectedMsg();
+        if (msg) startReply(msg);
+      },
+    },
+    {
+      key: "a",
+      description: "Reply all",
+      action: () => {
+        const msg = selectedMsg();
+        if (msg) startReply(msg);
+      },
+    },
+    {
+      key: "f",
+      description: "Forward",
+      action: () => {
+        const msg = selectedMsg();
+        if (msg) startForward(msg);
+      },
+    },
+    {
+      key: "e",
+      description: "Archive",
+      action: () => {
+        const msg = selectedMsg();
+        if (msg) handleArchiveMessage(msg);
+      },
+    },
+    { key: "j", description: "Next message", action: () => navigateList(1) },
+    { key: "k", description: "Previous message", action: () => navigateList(-1) },
+    { key: "/", description: "Search", action: () => focusSearch() },
+    { key: "?", shift: true, description: "Show help", action: () => setShortcutsHelpOpen(true) },
+    { key: "Escape", description: "Close", action: () => closeAllModals(), firesInInput: true },
+  ];
+
   function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      if (selectedMsg()) {
-        setSelectedMsg(null);
-      } else if (selectedIds().size > 0) {
-        setSelectedIds(new Set<string>());
+    // Ignore if modifier keys are held (browser shortcuts win)
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // Ignore if focus is in a text input unless firesInInput
+    const inInput = isTextInputElement(document.activeElement);
+    for (const s of shortcuts) {
+      if (matchShortcut(e, s)) {
+        if (inInput && !s.firesInInput) continue;
+        e.preventDefault();
+        s.action();
+        return;
       }
     }
   }
@@ -4650,6 +4773,12 @@ const App: Component = () => {
             showToast("Emails successfully imported");
           }
         }}
+      />
+
+      {/* ── Shortcuts Help Modal ── */}
+      <ShortcutsHelp
+        open={shortcutsHelpOpen()}
+        onClose={() => setShortcutsHelpOpen(false)}
       />
 
       {/* ── Global Notification Toasts ── */}
