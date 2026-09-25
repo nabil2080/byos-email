@@ -3,7 +3,7 @@ import { StorageStatusPill } from "./StorageStatusPill";
 import { UserMe, Mailbox, ConnectedAccount, MailboxFolder, MailboxLabel } from "../api";
 import { AccountSwitcher } from "./AccountSwitcher";
 
-export type Folder = "inbox" | "sent" | "drafts" | "archive" | "spam" | "trash";
+export type Folder = "inbox" | "sent" | "drafts" | "archive" | "spam" | "trash" | "snoozed";
 
 interface SidebarProps {
   currentUser: UserMe | null;
@@ -83,6 +83,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
     archive: "Archive",
     spam: "Spam",
     trash: "Trash",
+    snoozed: "Snoozed",
   };
 
   function renderFolderIcon(f: Folder) {
@@ -124,6 +125,13 @@ export const Sidebar: Component<SidebarProps> = (props) => {
             <circle cx="12" cy="12" r="10" />
             <line x1="12" y1="8" x2="12" y2="12" />
             <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+        );
+      case "snoozed":
+        return (
+          <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5] flex-shrink-0" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
           </svg>
         );
       case "trash":
@@ -266,7 +274,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       <div class="flex-1 min-h-0 overflow-y-auto px-2 py-1 space-y-3 custom-scrollbar relative z-10">
         {/* Navigation Folders List */}
         <nav class="space-y-0.5">
-          {(["inbox", "sent", "drafts", "archive", "spam", "trash"] as Folder[]).map((f) => {
+          {(["inbox", "sent", "drafts", "archive", "spam", "snoozed", "trash"] as Folder[]).map((f) => {
             const isActive = () => props.currentFolder === f;
             const isDropTarget = () => dragOverTarget() === f;
             const count = () => (props.folderCounts ? props.folderCounts[f] || 0 : 0);

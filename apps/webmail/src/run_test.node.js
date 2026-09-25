@@ -15,6 +15,7 @@ import { runImportQueueTests } from "./import_queue.test.js";
 import { runThreadingTests } from "./threading.test.js";
 import { runUndoSendTests } from "./undo_send.test.js";
 import { runKeyboardShortcutsTests } from "./keyboard_shortcuts.test.js";
+import { runSnoozeTests } from "./snooze.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -120,6 +121,12 @@ async function main() {
   console.log(`KEYBOARD SHORTCUTS TESTS: ${keyboardRes.passed} passed, ${keyboardRes.failed} failed\n`);
   totalPassed += keyboardRes.passed;
   totalFailed += keyboardRes.failed;
+
+  console.log("Running Snooze Tests...");
+  const snoozeRes = runSnoozeTests();
+  console.log(`SNOOZE TESTS: ${snoozeRes.passed} passed, ${snoozeRes.failed} failed\n`);
+  totalPassed += snoozeRes.passed;
+  totalFailed += snoozeRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

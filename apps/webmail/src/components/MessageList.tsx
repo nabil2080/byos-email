@@ -91,6 +91,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
     archive: "Archive",
     spam: "Spam",
     trash: "Trash",
+    snoozed: "Snoozed",
   };
 
   const isAllSelectedRead = () => {

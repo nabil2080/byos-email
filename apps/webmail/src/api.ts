@@ -71,6 +71,8 @@ export interface MessageMetadata {
   label_ids?: string[];
   is_read?: boolean;
   is_starred?: boolean;
+  snoozed_until?: string;
+  size_bytes?: number;
 }
 
 export interface ThreadSummary {
@@ -512,9 +514,23 @@ export async function fetchMailboxDetail(mailboxId: string): Promise<MailboxDeta
   return apiRequest<MailboxDetail>(`/v1/mailboxes/${mailboxId}`);
 }
 
-export async function fetchMessages(mailboxId: string): Promise<MessageMetadata[]> {
-  const res = await apiRequest<{ messages: MessageMetadata[] }>(`/v1/mailboxes/${mailboxId}/messages`);
+export async function fetchMessages(mailboxId: string, folder?: string): Promise<MessageMetadata[]> {
+  const url = folder
+    ? `/v1/mailboxes/${mailboxId}/messages?folder=${encodeURIComponent(folder)}`
+    : `/v1/mailboxes/${mailboxId}/messages`;
+  const res = await apiRequest<{ messages: MessageMetadata[] }>(url);
   return res.messages || [];
+}
+
+export async function snoozeMessage(
+  mailboxId: string,
+  messageId: string,
+  snoozedUntil: string | null,
+): Promise<{ snoozed_until: string | null }> {
+  return apiRequest(`/v1/mailboxes/${mailboxId}/messages/${messageId}/snooze`, {
+    method: "POST",
+    body: JSON.stringify({ snoozed_until: snoozedUntil }),
+  });
 }
 
 export async function fetchThreads(
@@ -940,6 +956,54 @@ export interface FilterRulesJSON {
   match: "all" | "any";
   conditions: FilterCondition[];
   actions: FilterActions;
+}
+
+export interface MailRule {
+  id: string;
+  mailbox_id: string;
+  name: string;
+  enabled: boolean;
+  priority: number;
+  match_sender?: string | null;
+  match_recipient?: string | null;
+  match_has_attachments?: boolean | null;
+  match_min_size_bytes?: number | null;
+  action_type: "move" | "label" | "mark_read" | "delete";
+  action_folder?: string | null;
+  action_label_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchRules(mailboxId: string): Promise<MailRule[]> {
+  return apiRequest<MailRule[]>(`/v1/mailboxes/${mailboxId}/rules`);
+}
+
+export async function createRule(
+  mailboxId: string,
+  rule: Partial<MailRule>
+): Promise<MailRule> {
+  return apiRequest<MailRule>(`/v1/mailboxes/${mailboxId}/rules`, {
+    method: "POST",
+    body: JSON.stringify(rule),
+  });
+}
+
+export async function updateRule(
+  mailboxId: string,
+  ruleId: string,
+  rule: Partial<MailRule>
+): Promise<MailRule> {
+  return apiRequest<MailRule>(`/v1/mailboxes/${mailboxId}/rules/${ruleId}`, {
+    method: "PUT",
+    body: JSON.stringify(rule),
+  });
+}
+
+export async function deleteRule(mailboxId: string, ruleId: string): Promise<void> {
+  return apiRequest<void>(`/v1/mailboxes/${mailboxId}/rules/${ruleId}`, {
+    method: "DELETE",
+  });
 }
 
 export interface FilterItem {

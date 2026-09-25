@@ -44,6 +44,8 @@ type MessageMetadataResponse struct {
 	LabelIDs              []string `json:"label_ids"`
 	IsRead                bool     `json:"is_read"`
 	IsStarred             bool     `json:"is_starred"`
+	SnoozedUntil          *string  `json:"snoozed_until,omitempty"`
+	SizeBytes             int64    `json:"size_bytes"`
 }
 
 type ThreadSummary struct {
@@ -91,21 +93,76 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := conn.Query(ctx, `
-		SELECT m.id::text, m.message_seq, m.direction, m.sender, m.recipients, m.storage_object_id,
-		       m.content_key_hpke_wrapped, m.encryption_version, m.encryption_iv,
-		       m.aad_version, m.bundle_hash, m.received_at, m.sent_at, m.status,
-		       m.has_attachments, m.attachment_count,
-		       COALESCE(m.folder, 'inbox'), COALESCE(m.folder_id::text, ''),
-		       COALESCE(ARRAY_AGG(ml.label_id::text) FILTER (WHERE ml.label_id IS NOT NULL), ARRAY[]::text[]) as label_ids,
-		       COALESCE(m.is_read, false),
-		       COALESCE(m.is_starred, false)
-		FROM message_metadata m
-		LEFT JOIN message_labels ml ON ml.message_id = m.id
-		WHERE m.mailbox_id=$1
-		GROUP BY m.id
-		ORDER BY COALESCE(m.sent_at, m.received_at) DESC
-		LIMIT 100`, mailboxID)
+	folderFilter := strings.TrimSpace(r.URL.Query().Get("folder"))
+	var rows pgx.Rows
+	if folderFilter == "snoozed" {
+		rows, err = conn.Query(ctx, `
+			SELECT m.id::text, m.message_seq, m.direction, m.sender, m.recipients, m.storage_object_id,
+			       m.content_key_hpke_wrapped, m.encryption_version, m.encryption_iv,
+			       m.aad_version, m.bundle_hash, m.received_at, m.sent_at, m.status,
+			       m.has_attachments, m.attachment_count,
+			       COALESCE(m.folder, 'inbox'), COALESCE(m.folder_id::text, ''),
+			       COALESCE(ARRAY_AGG(ml.label_id::text) FILTER (WHERE ml.label_id IS NOT NULL), ARRAY[]::text[]) as label_ids,
+			       COALESCE(m.is_read, false),
+			       COALESCE(m.is_starred, false),
+			       m.snoozed_until,
+			       COALESCE(m.size_bytes, 0)
+			FROM message_metadata m
+			LEFT JOIN message_labels ml ON ml.message_id = m.id
+			WHERE m.mailbox_id = $1
+			  AND m.snoozed_until IS NOT NULL
+			  AND m.snoozed_until > now()
+			GROUP BY m.id
+			ORDER BY m.snoozed_until ASC, COALESCE(m.sent_at, m.received_at) DESC
+			LIMIT 100`, mailboxID)
+	} else if folderFilter != "" {
+		rows, err = conn.Query(ctx, `
+			SELECT m.id::text, m.message_seq, m.direction, m.sender, m.recipients, m.storage_object_id,
+			       m.content_key_hpke_wrapped, m.encryption_version, m.encryption_iv,
+			       m.aad_version, m.bundle_hash, m.received_at, m.sent_at, m.status,
+			       m.has_attachments, m.attachment_count,
+			       COALESCE(m.folder, 'inbox'), COALESCE(m.folder_id::text, ''),
+			       COALESCE(ARRAY_AGG(ml.label_id::text) FILTER (WHERE ml.label_id IS NOT NULL), ARRAY[]::text[]) as label_ids,
+			       COALESCE(m.is_read, false),
+			       COALESCE(m.is_starred, false),
+			       m.snoozed_until,
+			       COALESCE(m.size_bytes, 0)
+			FROM message_metadata m
+			LEFT JOIN message_labels ml ON ml.message_id = m.id
+			WHERE m.mailbox_id = $1
+			  AND m.folder = $2
+			  AND (
+			    m.folder IN ('sent', 'trash')
+			    OR m.snoozed_until IS NULL
+			    OR m.snoozed_until <= now()
+			  )
+			GROUP BY m.id
+			ORDER BY COALESCE(m.sent_at, m.received_at) DESC
+			LIMIT 100`, mailboxID, folderFilter)
+	} else {
+		rows, err = conn.Query(ctx, `
+			SELECT m.id::text, m.message_seq, m.direction, m.sender, m.recipients, m.storage_object_id,
+			       m.content_key_hpke_wrapped, m.encryption_version, m.encryption_iv,
+			       m.aad_version, m.bundle_hash, m.received_at, m.sent_at, m.status,
+			       m.has_attachments, m.attachment_count,
+			       COALESCE(m.folder, 'inbox'), COALESCE(m.folder_id::text, ''),
+			       COALESCE(ARRAY_AGG(ml.label_id::text) FILTER (WHERE ml.label_id IS NOT NULL), ARRAY[]::text[]) as label_ids,
+			       COALESCE(m.is_read, false),
+			       COALESCE(m.is_starred, false),
+			       m.snoozed_until,
+			       COALESCE(m.size_bytes, 0)
+			FROM message_metadata m
+			LEFT JOIN message_labels ml ON ml.message_id = m.id
+			WHERE m.mailbox_id = $1
+			  AND (
+			    m.folder IN ('sent', 'trash')
+			    OR m.snoozed_until IS NULL
+			    OR m.snoozed_until <= now()
+			  )
+			GROUP BY m.id
+			ORDER BY COALESCE(m.sent_at, m.received_at) DESC
+			LIMIT 100`, mailboxID)
+	}
 	if err != nil {
 		http.Error(w, "failed to query messages", http.StatusInternalServerError)
 		return
@@ -120,10 +177,11 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 		var sentAt *time.Time
 		var folder, folderIDStr string
 		var labelIDs []string
+		var snoozedUntil *time.Time
 		if err := rows.Scan(&m.ID, &m.MessageSeq, &m.Direction, &m.Sender, &m.Recipients, &m.StorageObjectID,
 			&wrapped, &m.EncryptionVersion, &iv, &m.AADVersion, &hash,
 			&receivedAt, &sentAt, &m.Status, &m.HasAttachments, &m.AttachmentCount,
-			&folder, &folderIDStr, &labelIDs, &m.IsRead, &m.IsStarred); err != nil {
+			&folder, &folderIDStr, &labelIDs, &m.IsRead, &m.IsStarred, &snoozedUntil, &m.SizeBytes); err != nil {
 			http.Error(w, "failed to read message metadata", http.StatusInternalServerError)
 			return
 		}
@@ -135,6 +193,10 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 		if sentAt != nil {
 			formatted := sentAt.Format(time.RFC3339)
 			m.SentAt = &formatted
+		}
+		if snoozedUntil != nil {
+			formatted := snoozedUntil.Format(time.RFC3339)
+			m.SnoozedUntil = &formatted
 		}
 		m.Sender = strings.TrimSpace(m.Sender)
 		m.Folder = folder
@@ -310,7 +372,9 @@ func threadDetailHandler(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(m.folder, 'inbox'), COALESCE(m.folder_id::text, ''),
 		       COALESCE(ARRAY_AGG(ml.label_id::text) FILTER (WHERE ml.label_id IS NOT NULL), ARRAY[]::text[]) as label_ids,
 		       COALESCE(m.is_read, false),
-		       COALESCE(m.is_starred, false)
+		       COALESCE(m.is_starred, false),
+		       m.snoozed_until,
+		       COALESCE(m.size_bytes, 0)
 		FROM message_metadata m
 		LEFT JOIN message_labels ml ON ml.message_id = m.id
 		WHERE m.mailbox_id=$1 AND m.thread_id=$2
@@ -330,10 +394,11 @@ func threadDetailHandler(w http.ResponseWriter, r *http.Request) {
 		var sentAt *time.Time
 		var folder, folderIDStr string
 		var labelIDs []string
+		var snoozedUntil *time.Time
 		if err := rows.Scan(&m.ID, &m.MessageSeq, &m.Direction, &m.Sender, &m.Recipients, &m.StorageObjectID,
 			&wrapped, &m.EncryptionVersion, &iv, &m.AADVersion, &hash,
 			&receivedAt, &sentAt, &m.Status, &m.HasAttachments, &m.AttachmentCount,
-			&folder, &folderIDStr, &labelIDs, &m.IsRead, &m.IsStarred); err != nil {
+			&folder, &folderIDStr, &labelIDs, &m.IsRead, &m.IsStarred, &snoozedUntil, &m.SizeBytes); err != nil {
 			http.Error(w, "failed to read message metadata", http.StatusInternalServerError)
 			return
 		}
@@ -345,6 +410,10 @@ func threadDetailHandler(w http.ResponseWriter, r *http.Request) {
 		if sentAt != nil {
 			formatted := sentAt.Format(time.RFC3339)
 			m.SentAt = &formatted
+		}
+		if snoozedUntil != nil {
+			formatted := snoozedUntil.Format(time.RFC3339)
+			m.SnoozedUntil = &formatted
 		}
 		m.Sender = strings.TrimSpace(m.Sender)
 		m.Folder = folder
@@ -1155,6 +1224,7 @@ func messageImportHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	storageResp.Body.Close()
 
+	sizeBytes := int64(len(rawMessage))
 	folder := strings.TrimSpace(req.Folder)
 	if folder == "" {
 		folder = "inbox"
@@ -1163,6 +1233,7 @@ func messageImportHandler(w http.ResponseWriter, r *http.Request) {
 	if len(folder) > 32 {
 		folder = folder[:32]
 	}
+	isRead := req.IsRead
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -1177,6 +1248,22 @@ func messageImportHandler(w http.ResponseWriter, r *http.Request) {
 		threadID = ""
 	}
 
+	folderOverride, labelIDs, ruleMarkRead, deleteMessage, ruleErr := EvaluateRules(
+		ctx, tx, mailboxID, sender, recipients, sizeBytes, hasAttachments,
+	)
+	if ruleErr != nil {
+		log.Printf("[WARN] EvaluateRules failed for mailbox=%s: %v", mailboxID, ruleErr)
+	} else {
+		if deleteMessage {
+			folder = "trash"
+		} else if folderOverride != "" {
+			folder = folderOverride
+		}
+		if ruleMarkRead {
+			isRead = true
+		}
+	}
+
 	var messageID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO message_metadata (
@@ -1184,24 +1271,32 @@ func messageImportHandler(w http.ResponseWriter, r *http.Request) {
 			has_attachments, attachment_count, storage_object_id, content_key_hpke_wrapped,
 			mailbox_sk_version, encryption_version, encryption_iv, aad_version, bundle_hash,
 			received_at, status, folder, is_read,
-			message_id, in_reply_to, thread_id
+			message_id, in_reply_to, thread_id,
+			size_bytes
 		) VALUES (
 			$1, $2, $3, 'received', $4, $5, $6,
 			$7, $8, $9, $10,
 			$11, $12, $13, $14, $15,
 			$16, 'received', $17, $18,
-			NULLIF($19, ''), NULLIF($20, ''), COALESCE(NULLIF($21, '')::uuid, gen_random_uuid())
+			NULLIF($19, ''), NULLIF($20, ''), COALESCE(NULLIF($21, '')::uuid, gen_random_uuid()),
+			$22
 		) RETURNING id::text`,
 		mailboxID, domainID, messageSeq, deliveryID[:], strings.ToLower(strings.TrimSpace(sender)), recipients,
 		hasAttachments, attachmentCount, storageObjectID, wrappedKeyBytes,
 		mailboxSKVersion, cryptoResult.EncryptionVersion, ivBytes, cryptoResult.AADVersion, bundleHashBytes,
-		receivedAt, folder, req.IsRead,
+		receivedAt, folder, isRead,
 		msgID, inReplyTo, threadID,
+		sizeBytes,
 	).Scan(&messageID)
 	if err != nil {
 		http.Error(w, "failed to insert message metadata: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	for _, labelID := range labelIDs {
+		_, _ = tx.Exec(ctx, `INSERT INTO message_labels (message_id, label_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, messageID, labelID)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		http.Error(w, "failed to commit message metadata: "+err.Error(), http.StatusInternalServerError)
 		return

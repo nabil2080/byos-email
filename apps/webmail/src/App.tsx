@@ -29,6 +29,7 @@ import {
   attachMessageLabel,
   detachMessageLabel,
   setMessageRead,
+  snoozeMessage,
   deleteAttachment,
   fetchMessages,
   fetchMessageBody,
@@ -118,8 +119,9 @@ import { ImportEmailsModal } from "./components/modals/ImportEmailsModal";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { ShortcutHandler, isTextInputElement, matchShortcut } from "./keyboard_shortcuts";
 import { formatMessageDate } from "./utils/dateTime";
+import { formatSnoozeTime } from "./snooze";
 
-type Folder = "inbox" | "sent" | "drafts" | "archive" | "spam" | "trash";
+type Folder = "inbox" | "sent" | "drafts" | "archive" | "spam" | "trash" | "snoozed";
 
 interface DisplayMessage {
   id: string;
@@ -136,6 +138,7 @@ interface DisplayMessage {
   date: string;
   read: boolean;
   starred: boolean;
+  snoozedUntil?: string;
   isRealApi?: boolean;
   messageId?: string; // For attachment filtering
   hasAttachments?: boolean;
@@ -628,6 +631,65 @@ const App: Component = () => {
     if (undoAction()?.timer) clearTimeout(undoAction()!.timer);
     const timer = setTimeout(() => setUndoAction(null), 5000);
     setUndoAction({ messageId: msg.id, previousFolder: origFolder, timer });
+  }
+
+  function handleSnoozeMessage(msg: DisplayMessage, until: Date) {
+    const box = selectedMailbox();
+    if (!box) return;
+
+    const untilISO = until.toISOString();
+    const prevSnooze = msg.snoozedUntil;
+
+    // Optimistically update message
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === msg.id ? { ...m, snoozedUntil: untilISO, read: false } : m
+      )
+    );
+
+    if (selectedMsg()?.id === msg.id) {
+      setSelectedMsg(null);
+    }
+
+    snoozeMessage(box.id, msg.id, untilISO)
+      .then(() => {
+        const timeLabel = formatSnoozeTime(until);
+        const toastId = (typeof crypto !== "undefined" && crypto.randomUUID)
+          ? crypto.randomUUID()
+          : Math.random().toString(36).slice(2) + Date.now().toString(36);
+        addToast({
+          id: toastId,
+          message: `Snoozed until ${timeLabel}.`,
+          duration: 6000,
+          action: {
+            label: "Undo",
+            onClick: () => {
+              removeToast(toastId);
+              snoozeMessage(box.id, msg.id, null)
+                .then(() => {
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === msg.id ? { ...m, snoozedUntil: prevSnooze, read: false } : m
+                    )
+                  );
+                  showToast("Snooze cancelled.");
+                })
+                .catch((err) => {
+                  showToast(`Failed to undo snooze: ${err instanceof Error ? err.message : "unknown error"}`);
+                });
+            },
+          },
+        });
+      })
+      .catch((err) => {
+        // Rollback
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msg.id ? { ...m, snoozedUntil: prevSnooze } : m
+          )
+        );
+        showToast(`Failed to snooze: ${err instanceof Error ? err.message : "unknown error"}`);
+      });
   }
 
   function handleTrashMessage(msg: DisplayMessage) {
@@ -2458,6 +2520,7 @@ const App: Component = () => {
           date: formatMessageDate(m.sent_at || m.received_at, timeFormat(), language()),
           read: m.is_read ?? false,
           starred: m.is_starred ?? false,
+          snoozedUntil: m.snoozed_until,
           isRealApi: true,
           hasAttachments: m.has_attachments || msgAtts.length > 0,
           attachmentCount: attCount,
@@ -2647,17 +2710,28 @@ const App: Component = () => {
   const filteredMessages = () => {
     const q = searchQuery().toLowerCase().trim();
     const matchedIds = new Set(serverMatchedMsgIds());
+    const now = Date.now();
     return messages().filter((m) => {
+      const isSnoozed = Boolean(m.snoozedUntil && new Date(m.snoozedUntil).getTime() > now);
+      const cur = currentFolder();
+
+      if (cur === "snoozed") {
+        if (!isSnoozed) return false;
+      } else if (isSnoozed && m.folder !== "sent" && m.folder !== "trash") {
+        return false;
+      }
+
       let matchFolder = false;
       const customFolder = activeCustomFolder();
       const label = activeLabel();
 
-      if (customFolder) {
+      if (cur === "snoozed") {
+        matchFolder = true;
+      } else if (customFolder) {
         matchFolder = m.folderId === customFolder.id && m.folder !== "trash";
       } else if (label) {
         matchFolder = Boolean(m.labelIds?.includes(label.id)) && m.folder !== "trash";
       } else {
-        const cur = currentFolder();
         if (cur === "inbox") {
           matchFolder = (!m.folderId || m.folderId === "") && (!m.folder || m.folder === "inbox");
         } else {
@@ -3698,6 +3772,7 @@ const App: Component = () => {
     archive: "Archive",
     spam: "Spam",
     trash: "Trash",
+    snoozed: "Snoozed",
   };
 
   const folderCounts = () => {
@@ -3708,8 +3783,15 @@ const App: Component = () => {
       archive: 0,
       spam: 0,
       trash: 0,
+      snoozed: 0,
     };
+    const now = Date.now();
     for (const m of messages()) {
+      const isSnoozed = Boolean(m.snoozedUntil && new Date(m.snoozedUntil).getTime() > now);
+      if (isSnoozed) {
+        counts.snoozed++;
+        continue;
+      }
       if (!m.read) {
         if (m.folder === "inbox") {
           // Exclude messages in custom folders from inbox count
@@ -4662,6 +4744,7 @@ const App: Component = () => {
                 onPrev={handlePrevMessage}
                 onNext={handleNextMessage}
                 onArchive={handleArchiveMessage}
+                onSnooze={handleSnoozeMessage}
                 onSpam={(msg) => {
                   setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, folder: "spam" } : m)));
                   setSelectedMsg(null);

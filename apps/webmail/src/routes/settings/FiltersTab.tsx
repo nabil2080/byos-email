@@ -1,14 +1,15 @@
 import { Component, createSignal, onMount, For, Show } from "solid-js";
 import {
   Mailbox,
-  FilterItem,
+  MailRule,
+  MailboxLabel,
   AddressRuleItem,
-  FilterCondition,
-  FilterRulesJSON,
-  fetchFilters,
-  createFilter,
-  updateFilter,
-  deleteFilter,
+  fetchRules,
+  createRule,
+  updateRule,
+  deleteRule,
+  fetchLabels,
+  fetchMessages,
   fetchAddressRules,
   createAddressRule,
   deleteAddressRule,
@@ -23,47 +24,50 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
   const [error, setError] = createSignal<string | null>(null);
   const [successMsg, setSuccessMsg] = createSignal<string | null>(null);
 
-  // Filters State
-  const [filters, setFilters] = createSignal<FilterItem[]>([]);
-  const [customFilterModalOpen, setCustomFilterModalOpen] = createSignal(false);
-  const [sieveFilterModalOpen, setSieveFilterModalOpen] = createSignal(false);
-  const [savingFilter, setSavingFilter] = createSignal(false);
+  // Mail Rules State
+  const [rules, setRules] = createSignal<MailRule[]>([]);
+  const [labels, setLabels] = createSignal<MailboxLabel[]>([]);
+  const [ruleModalOpen, setRuleModalOpen] = createSignal(false);
+  const [savingRule, setSavingRule] = createSignal(false);
 
-  // Custom Filter Builder State
-  const [editingFilterId, setEditingFilterId] = createSignal<string | null>(null);
-  const [filterName, setFilterName] = createSignal("");
-  const [filterMatch, setFilterMatch] = createSignal<"all" | "any">("all");
-  const [filterConditions, setFilterConditions] = createSignal<FilterCondition[]>([
-    { field: "from", comparator: "contains", value: "" },
-  ]);
-  const [actionMoveFolder, setActionMoveFolder] = createSignal("archive");
-  const [actionApplyMove, setActionApplyMove] = createSignal(false);
-  const [actionMarkRead, setActionMarkRead] = createSignal(false);
-  const [actionStar, setActionStar] = createSignal(false);
+  // Create / Edit Rule Form State
+  const [editingRuleId, setEditingRuleId] = createSignal<string | null>(null);
+  const [ruleName, setRuleName] = createSignal("");
+  const [ruleEnabled, setRuleEnabled] = createSignal(true);
+  const [matchSender, setMatchSender] = createSignal("");
+  const [matchRecipient, setMatchRecipient] = createSignal("");
+  const [matchAttachments, setMatchAttachments] = createSignal<"any" | "yes" | "no">("any");
+  const [matchMinSizeKB, setMatchMinSizeKB] = createSignal<string>("");
+  const [actionType, setActionType] = createSignal<"move" | "label" | "mark_read" | "delete">("move");
+  const [actionFolder, setActionFolder] = createSignal("archive");
+  const [actionLabelId, setActionLabelId] = createSignal("");
 
-  // Sieve Filter Builder State
-  const [sieveFilterName, setSieveFilterName] = createSignal("");
-  const [sieveScript, setSieveScript] = createSignal(
-    `require ["fileinto", "imap4flags"];\n\nif header :contains "subject" "receipt" {\n    fileinto "Receipts";\n    setflag "\\\\Seen";\n}`
-  );
+  // Test Rule State
+  const [testingRule, setTestingRule] = createSignal(false);
+  const [testResult, setTestResult] = createSignal<string | null>(null);
 
   // Address Rules (Spam, Block, Allow) State
   const [activeRuleTab, setActiveRuleTab] = createSignal<"spam" | "block" | "allow">("spam");
   const [addressRules, setAddressRules] = createSignal<AddressRuleItem[]>([]);
-  const [addRuleModalOpen, setAddRuleModalOpen] = createSignal(false);
+  const [addAddressModalOpen, setAddAddressModalOpen] = createSignal(false);
   const [newRuleListType, setNewRuleListType] = createSignal<"spam" | "block" | "allow">("spam");
   const [newRuleValue, setNewRuleValue] = createSignal("");
-  const [savingRule, setSavingRule] = createSignal(false);
+  const [savingAddressRule, setSavingAddressRule] = createSignal(false);
 
   async function loadData() {
     try {
       setLoading(true);
-      const [fList, rList] = await Promise.all([
-        fetchFilters(props.mailbox.id),
+      const [rulesList, labelsList, addressRulesList] = await Promise.all([
+        fetchRules(props.mailbox.id),
+        fetchLabels(props.mailbox.id),
         fetchAddressRules(props.mailbox.id),
       ]);
-      setFilters(fList);
-      setAddressRules(rList);
+      setRules(rulesList);
+      setLabels(labelsList);
+      setAddressRules(addressRulesList);
+      if (labelsList.length > 0 && !actionLabelId()) {
+        setActionLabelId(labelsList[0].id);
+      }
     } catch (err: any) {
       setError(err?.message || "Failed to load filters and rules.");
     } finally {
@@ -80,143 +84,171 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
     setTimeout(() => setSuccessMsg(null), 3500);
   }
 
-  // ── Custom Filter Actions ──
-  function handleAddCondition() {
-    setFilterConditions((prev) => [...prev, { field: "from", comparator: "contains", value: "" }]);
-  }
-
-  function handleRemoveCondition(index: number) {
-    setFilterConditions((prev) => prev.filter((_, i) => i !== index));
-  }
-
-  function handleUpdateCondition(index: number, key: keyof FilterCondition, val: any) {
-    setFilterConditions((prev) =>
-      prev.map((c, i) => (i === index ? { ...c, [key]: val } : c))
-    );
-  }
-
-  function openCreateCustomFilter() {
-    setEditingFilterId(null);
-    setFilterName("");
-    setFilterMatch("all");
-    setFilterConditions([{ field: "from", comparator: "contains", value: "" }]);
-    setActionApplyMove(false);
-    setActionMoveFolder("archive");
-    setActionMarkRead(false);
-    setActionStar(false);
-    setCustomFilterModalOpen(true);
-  }
-
-  function openEditCustomFilter(item: FilterItem) {
-    setEditingFilterId(item.id);
-    setFilterName(item.name);
-    if (item.rules_json) {
-      setFilterMatch(item.rules_json.match || "all");
-      setFilterConditions(
-        item.rules_json.conditions?.length
-          ? item.rules_json.conditions
-          : [{ field: "from", comparator: "contains", value: "" }]
-      );
-      if (item.rules_json.actions?.folder) {
-        setActionApplyMove(true);
-        setActionMoveFolder(item.rules_json.actions.folder);
-      } else {
-        setActionApplyMove(false);
-      }
-      setActionMarkRead(Boolean(item.rules_json.actions?.mark_read));
-      setActionStar(Boolean(item.rules_json.actions?.star));
+  // ── Mail Rules Actions ──
+  function openCreateRule() {
+    setEditingRuleId(null);
+    setRuleName("");
+    setRuleEnabled(true);
+    setMatchSender("");
+    setMatchRecipient("");
+    setMatchAttachments("any");
+    setMatchMinSizeKB("");
+    setActionType("move");
+    setActionFolder("archive");
+    if (labels().length > 0) {
+      setActionLabelId(labels()[0].id);
+    } else {
+      setActionLabelId("");
     }
-    setCustomFilterModalOpen(true);
+    setTestResult(null);
+    setRuleModalOpen(true);
   }
 
-  async function handleSaveCustomFilter(e: Event) {
+  function openEditRule(rule: MailRule) {
+    setEditingRuleId(rule.id);
+    setRuleName(rule.name);
+    setRuleEnabled(rule.enabled);
+    setMatchSender(rule.match_sender || "");
+    setMatchRecipient(rule.match_recipient || "");
+    if (rule.match_has_attachments === true) {
+      setMatchAttachments("yes");
+    } else if (rule.match_has_attachments === false) {
+      setMatchAttachments("no");
+    } else {
+      setMatchAttachments("any");
+    }
+    setMatchMinSizeKB(
+      rule.match_min_size_bytes != null && rule.match_min_size_bytes > 0
+        ? Math.round(rule.match_min_size_bytes / 1024).toString()
+        : ""
+    );
+    setActionType(rule.action_type);
+    setActionFolder(rule.action_folder || "archive");
+    setActionLabelId(rule.action_label_id || (labels()[0]?.id || ""));
+    setTestResult(null);
+    setRuleModalOpen(true);
+  }
+
+  async function handleToggleRuleEnabled(rule: MailRule) {
+    try {
+      const updated = await updateRule(props.mailbox.id, rule.id, {
+        enabled: !rule.enabled,
+      });
+      setRules((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+    } catch (err: any) {
+      setError(err?.message || "Failed to toggle rule.");
+    }
+  }
+
+  async function handleDeleteRule(rule: MailRule) {
+    if (!confirm(`Delete rule "${rule.name}"?`)) return;
+    try {
+      await deleteRule(props.mailbox.id, rule.id);
+      setRules((prev) => prev.filter((r) => r.id !== rule.id));
+      showSuccess(`Rule "${rule.name}" deleted.`);
+    } catch (err: any) {
+      setError(err?.message || "Failed to delete rule.");
+    }
+  }
+
+  async function handleTestRule() {
+    setTestingRule(true);
+    setTestResult(null);
+    try {
+      const allMsgs = await fetchMessages(props.mailbox.id);
+      const sample = allMsgs.slice(0, 20);
+      if (sample.length === 0) {
+        setTestResult("No messages in mailbox to test against.");
+        return;
+      }
+
+      const senderFilter = matchSender().trim().toLowerCase();
+      const recipientFilter = matchRecipient().trim().toLowerCase();
+      const attachmentsChoice = matchAttachments();
+      const minKB = parseInt(matchMinSizeKB().trim(), 10);
+      const minBytes = !isNaN(minKB) && minKB > 0 ? minKB * 1024 : null;
+
+      let matchCount = 0;
+      for (const msg of sample) {
+        if (senderFilter && !msg.sender.toLowerCase().includes(senderFilter)) {
+          continue;
+        }
+        if (recipientFilter) {
+          const recMatches = (msg.recipients || []).some((r) =>
+            r.toLowerCase().includes(recipientFilter)
+          );
+          if (!recMatches) continue;
+        }
+        if (attachmentsChoice === "yes" && !msg.has_attachments) {
+          continue;
+        }
+        if (attachmentsChoice === "no" && msg.has_attachments) {
+          continue;
+        }
+        if (minBytes !== null && (msg.size_bytes || 0) < minBytes) {
+          continue;
+        }
+        matchCount++;
+      }
+
+      setTestResult(`Matched ${matchCount} of the last ${sample.length} message(s).`);
+    } catch (err: any) {
+      setTestResult("Could not test: " + (err?.message || "failed to fetch messages"));
+    } finally {
+      setTestingRule(false);
+    }
+  }
+
+  async function handleSaveRule(e: Event) {
     e.preventDefault();
-    if (!filterName().trim()) return;
-    setSavingFilter(true);
+    if (!ruleName().trim()) return;
+
+    if (actionType() === "move" && !actionFolder().trim()) {
+      setError("Please select a target folder.");
+      return;
+    }
+    if (actionType() === "label" && !actionLabelId()) {
+      setError("Please select a label to apply.");
+      return;
+    }
+
+    setSavingRule(true);
     setError(null);
 
-    const rulesJSON: FilterRulesJSON = {
-      match: filterMatch(),
-      conditions: filterConditions().filter((c) => c.value.trim() !== ""),
-      actions: {
-        folder: actionApplyMove() ? actionMoveFolder() : undefined,
-        mark_read: actionMarkRead() || undefined,
-        star: actionStar() || undefined,
-      },
+    const minKB = parseInt(matchMinSizeKB().trim(), 10);
+    const minBytes = !isNaN(minKB) && minKB > 0 ? minKB * 1024 : null;
+
+    let hasAtt: boolean | null = null;
+    if (matchAttachments() === "yes") hasAtt = true;
+    if (matchAttachments() === "no") hasAtt = false;
+
+    const payload: Partial<MailRule> = {
+      name: ruleName().trim(),
+      enabled: ruleEnabled(),
+      match_sender: matchSender().trim() || null,
+      match_recipient: matchRecipient().trim() || null,
+      match_has_attachments: hasAtt,
+      match_min_size_bytes: minBytes,
+      action_type: actionType(),
+      action_folder: actionType() === "move" ? actionFolder().trim() : (actionType() === "delete" ? "trash" : null),
+      action_label_id: actionType() === "label" ? actionLabelId() : null,
     };
 
     try {
-      if (editingFilterId()) {
-        const updated = await updateFilter(props.mailbox.id, editingFilterId()!, {
-          name: filterName().trim(),
-          filter_type: "custom",
-          rules_json: rulesJSON,
-        });
-        setFilters((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
-        showSuccess(`Filter "${updated.name}" updated.`);
+      if (editingRuleId()) {
+        const updated = await updateRule(props.mailbox.id, editingRuleId()!, payload);
+        setRules((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+        showSuccess(`Rule "${updated.name}" updated.`);
       } else {
-        const created = await createFilter(props.mailbox.id, {
-          name: filterName().trim(),
-          filter_type: "custom",
-          rules_json: rulesJSON,
-        });
-        setFilters((prev) => [...prev, created]);
-        showSuccess(`Filter "${created.name}" created.`);
+        const created = await createRule(props.mailbox.id, payload);
+        setRules((prev) => [...prev, created]);
+        showSuccess(`Rule "${created.name}" created.`);
       }
-      setCustomFilterModalOpen(false);
+      setRuleModalOpen(false);
     } catch (err: any) {
-      setError(err?.message || "Failed to save filter.");
+      setError(err?.message || "Failed to save rule.");
     } finally {
-      setSavingFilter(false);
-    }
-  }
-
-  // ── Sieve Filter Actions ──
-  function openCreateSieveFilter() {
-    setSieveFilterName("");
-    setSieveFilterModalOpen(true);
-  }
-
-  async function handleSaveSieveFilter(e: Event) {
-    e.preventDefault();
-    if (!sieveFilterName().trim() || !sieveScript().trim()) return;
-    setSavingFilter(true);
-    setError(null);
-    try {
-      const created = await createFilter(props.mailbox.id, {
-        name: sieveFilterName().trim(),
-        filter_type: "sieve",
-        sieve_script: sieveScript(),
-      });
-      setFilters((prev) => [...prev, created]);
-      setSieveFilterModalOpen(false);
-      showSuccess(`Sieve filter "${created.name}" saved.`);
-    } catch (err: any) {
-      setError(err?.message || "Failed to save Sieve filter.");
-    } finally {
-      setSavingFilter(false);
-    }
-  }
-
-  async function handleToggleFilterActive(filter: FilterItem) {
-    try {
-      const updated = await updateFilter(props.mailbox.id, filter.id, {
-        is_active: !filter.is_active,
-      });
-      setFilters((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
-    } catch (err: any) {
-      setError(err?.message || "Failed to toggle filter status.");
-    }
-  }
-
-  async function handleDeleteFilter(filter: FilterItem) {
-    if (!confirm(`Delete filter "${filter.name}"?`)) return;
-    try {
-      await deleteFilter(props.mailbox.id, filter.id);
-      setFilters((prev) => prev.filter((f) => f.id !== filter.id));
-      showSuccess(`Filter "${filter.name}" deleted.`);
-    } catch (err: any) {
-      setError(err?.message || "Failed to delete filter.");
+      setSavingRule(false);
     }
   }
 
@@ -227,7 +259,7 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
     e.preventDefault();
     const val = newRuleValue().trim();
     if (!val) return;
-    setSavingRule(true);
+    setSavingAddressRule(true);
     setError(null);
     try {
       const created = await createAddressRule(props.mailbox.id, {
@@ -235,13 +267,13 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
         value: val,
       });
       setAddressRules((prev) => [created, ...prev]);
-      setAddRuleModalOpen(false);
+      setAddAddressModalOpen(false);
       setNewRuleValue("");
       showSuccess(`Added "${val}" to ${newRuleListType()} list.`);
     } catch (err: any) {
       setError(err?.message || "Failed to add address rule.");
     } finally {
-      setSavingRule(false);
+      setSavingAddressRule(false);
     }
   }
 
@@ -255,12 +287,52 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
     }
   }
 
+  function getLabelName(labelId?: string | null): string {
+    if (!labelId) return "Label";
+    const found = labels().find((l) => l.id === labelId);
+    return found ? found.name : "Label";
+  }
+
+  function formatConditions(rule: MailRule): string {
+    const parts: string[] = [];
+    if (rule.match_sender) {
+      parts.push(`From contains "${rule.match_sender}"`);
+    }
+    if (rule.match_recipient) {
+      parts.push(`To/Cc contains "${rule.match_recipient}"`);
+    }
+    if (rule.match_has_attachments === true) {
+      parts.push("Has attachments");
+    } else if (rule.match_has_attachments === false) {
+      parts.push("No attachments");
+    }
+    if (rule.match_min_size_bytes) {
+      parts.push(`Size ≥ ${Math.round(rule.match_min_size_bytes / 1024)} KB`);
+    }
+    return parts.length > 0 ? parts.join(" • ") : "Matches all incoming messages";
+  }
+
+  function formatAction(rule: MailRule): string {
+    switch (rule.action_type) {
+      case "move":
+        return `Move to "${rule.action_folder || "folder"}"`;
+      case "label":
+        return `Apply label "${getLabelName(rule.action_label_id)}"`;
+      case "mark_read":
+        return "Mark as read";
+      case "delete":
+        return "Delete (move to Trash)";
+      default:
+        return rule.action_type;
+    }
+  }
+
   return (
     <div class="space-y-6 pb-12">
       <div>
         <h3 class="text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Filters & Rules</h3>
         <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA] mt-1">
-          Automate message sorting with visual custom rules, Sieve scripts, and inbound address lists.
+          Automate message sorting at ingest based on sender, recipient, attachments, and size.
         </p>
       </div>
 
@@ -283,121 +355,97 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
       <Show when={loading()}>
         <div class="bg-white dark:bg-[#1E2025] rounded-2xl p-8 border border-[#E2DFD8] dark:border-[#2E3138] text-center">
           <div class="inline-block animate-spin w-6 h-6 border-2 border-[#A27561] border-t-transparent rounded-full mb-2"></div>
-          <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA]">Loading filters and address rules…</p>
+          <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA]">Loading rules and filters…</p>
         </div>
       </Show>
 
       <Show when={!loading()}>
         <div class="space-y-6">
-          {/* 1. Custom & Sieve Filters Card */}
+          {/* 1. Mail Rules Card */}
           <div class="bg-white dark:bg-[#1E2025] rounded-2xl p-6 border border-[#E2DFD8] dark:border-[#2E3138] shadow-xs space-y-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h4 class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6] uppercase tracking-wider font-mono">
-                  Custom Filters
+                  Mail Rules
                 </h4>
                 <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA] mt-0.5">
-                  Add a custom filter to automatically perform certain actions, like labeling or archiving messages.
+                  Rules evaluate at ingest time. First matching rule takes effect. Subject and body remain end-to-end encrypted.
                 </p>
               </div>
 
-              <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={openCreateCustomFilter}
-                  class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer"
-                >
-                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
-                  <span>Add Filter</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={openCreateSieveFilter}
-                  class="px-4 py-2 border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561] text-[#1A1B1E] dark:text-[#F3F4F6] text-xs font-semibold rounded-xl transition hover:bg-[#F3ECE8] dark:hover:bg-[#252830] flex items-center gap-1.5 cursor-pointer"
-                >
-                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
-                    <polyline points="16 18 22 12 16 6" />
-                    <polyline points="8 6 2 12 8 18" />
-                  </svg>
-                  <span>Add Sieve Filter</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={openCreateRule}
+                class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
+              >
+                <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                <span>Add Rule</span>
+              </button>
             </div>
 
-            {/* Filter List */}
+            {/* Rules List */}
             <div class="border border-[#E2DFD8] dark:border-[#2E3138] rounded-xl overflow-hidden divide-y divide-[#E2DFD8] dark:divide-[#2E3138]">
               <Show
-                when={filters().length > 0}
+                when={rules().length > 0}
                 fallback={
                   <div class="p-8 text-center text-xs text-[#6E7075] dark:text-[#A1A1AA]">
-                    No custom filters configured. Click "Add Filter" to create your first inbox sorting rule.
+                    No mail rules configured. Click "Add Rule" to automatically sort your incoming mail.
                   </div>
                 }
               >
-                <For each={filters()}>
-                  {(item) => (
-                    <div class="p-4 flex items-center justify-between hover:bg-[#F8F7F4] dark:hover:bg-[#18191D] transition">
-                      <div class="space-y-1">
+                <For each={rules()}>
+                  {(rule) => (
+                    <div class="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#F8F7F4] dark:hover:bg-[#18191D] transition">
+                      <div class="space-y-1 min-w-0">
                         <div class="flex items-center gap-2">
-                          <span class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
-                            {item.name}
+                          <span class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6] truncate">
+                            {rule.name}
                           </span>
-                          <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-[#F0EEE9] dark:bg-[#252830] text-[#6E7075] dark:text-[#A1A1AA] border border-[#E2DFD8] dark:border-[#2E3138]">
-                            {item.filter_type}
+                          <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-[#F0EEE9] dark:bg-[#252830] text-[#6E7075] dark:text-[#A1A1AA] border border-[#E2DFD8] dark:border-[#2E3138]">
+                            {rule.action_type}
                           </span>
                         </div>
-                        <Show when={item.filter_type === "custom" && item.rules_json}>
-                          <div class="text-[11px] text-[#6E7075] dark:text-[#A1A1AA]">
-                            Matches {item.rules_json!.match === "all" ? "all" : "any"} of {item.rules_json!.conditions?.length || 0} condition(s)
-                            {item.rules_json!.actions?.folder && ` • Move to "${item.rules_json!.actions.folder}"`}
-                            {item.rules_json!.actions?.mark_read && " • Mark as read"}
-                            {item.rules_json!.actions?.star && " • Star"}
-                          </div>
-                        </Show>
-                        <Show when={item.filter_type === "sieve"}>
-                          <div class="text-[11px] text-[#6E7075] dark:text-[#A1A1AA] font-mono truncate max-w-md">
-                            RFC 5228 Sieve Script
-                          </div>
-                        </Show>
+                        <div class="text-[11px] text-[#6E7075] dark:text-[#A1A1AA] truncate">
+                          {formatConditions(rule)}
+                        </div>
+                        <div class="text-[11px] font-medium text-[#A27561] dark:text-[#C59B89]">
+                          → {formatAction(rule)}
+                        </div>
                       </div>
 
-                      <div class="flex items-center gap-3">
-                        {/* Toggle active */}
+                      <div class="flex items-center gap-2.5 self-end sm:self-auto shrink-0">
                         <button
                           type="button"
-                          onClick={() => handleToggleFilterActive(item)}
+                          onClick={() => handleToggleRuleEnabled(rule)}
                           class={`px-2.5 py-1 rounded-full text-[11px] font-mono font-medium border transition cursor-pointer ${
-                            item.is_active
+                            rule.enabled
                               ? "bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800"
                               : "bg-stone-100 text-stone-600 border-stone-200 dark:bg-stone-800 dark:text-stone-400 dark:border-stone-700"
                           }`}
                         >
-                          {item.is_active ? "Enabled" : "Disabled"}
+                          {rule.enabled ? "Enabled" : "Disabled"}
                         </button>
-
-                        <Show when={item.filter_type === "custom"}>
-                          <button
-                            type="button"
-                            onClick={() => openEditCustomFilter(item)}
-                            class="p-1.5 text-[#6E7075] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] rounded-lg transition cursor-pointer"
-                            title="Edit Filter"
-                          >
-                            <svg class="w-4 h-4 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
-                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                            </svg>
-                          </button>
-                        </Show>
 
                         <button
                           type="button"
-                          onClick={() => handleDeleteFilter(item)}
+                          onClick={() => openEditRule(rule)}
+                          class="p-1.5 text-[#6E7075] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] rounded-lg transition cursor-pointer"
+                          title="Edit Rule"
+                        >
+                          <svg class="w-4 h-4 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                          </svg>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteRule(rule)}
                           class="p-1.5 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg transition cursor-pointer"
-                          title="Delete Filter"
+                          title="Delete Rule"
                         >
                           <svg class="w-4 h-4 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
                             <polyline points="3 6 5 6 21 6" />
@@ -412,7 +460,7 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
             </div>
           </div>
 
-          {/* 2. Spam, Block, and Allow Lists Card */}
+          {/* 2. Spam, Block, and Allow Lists Card (preserved) */}
           <div class="bg-white dark:bg-[#1E2025] rounded-2xl p-6 border border-[#E2DFD8] dark:border-[#2E3138] shadow-xs space-y-5">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
@@ -420,7 +468,7 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
                   Spam, Block, and Allow Lists
                 </h4>
                 <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA] mt-0.5">
-                  Take control over what lands in your inbox by creating the following lists:
+                  Manage static sender and domain inbound policies:
                 </p>
               </div>
 
@@ -429,7 +477,7 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
                 onClick={() => {
                   setNewRuleListType(activeRuleTab());
                   setNewRuleValue("");
-                  setAddRuleModalOpen(true);
+                  setAddAddressModalOpen(true);
                 }}
                 class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
               >
@@ -480,22 +528,6 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
               </button>
             </div>
 
-            {/* Explainer for Active List */}
-            <div class="p-3 bg-[#F8F7F4] dark:bg-[#18191D] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs text-[#6E7075] dark:text-[#A1A1AA]">
-              <Show when={activeRuleTab() === "spam"}>
-                <span class="font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Spam list: </span>
-                To prevent junk mail from clogging up your inbox. Messages from these senders or domains are placed directly in Spam.
-              </Show>
-              <Show when={activeRuleTab() === "block"}>
-                <span class="font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Block list: </span>
-                To stop phishing or suspicious emails from entering your email system. Inbound messages will be blocked.
-              </Show>
-              <Show when={activeRuleTab() === "allow"}>
-                <span class="font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Allow list: </span>
-                To ensure critical messages don't end up in spam and getting missed. Bypasses spam filtering.
-              </Show>
-            </div>
-
             {/* Address Rule Items Table */}
             <div class="border border-[#E2DFD8] dark:border-[#2E3138] rounded-xl overflow-hidden divide-y divide-[#E2DFD8] dark:divide-[#2E3138]">
               <Show
@@ -543,172 +575,217 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
         </div>
       </Show>
 
-      {/* ── MODALS ── */}
-
-      {/* 1. Custom Filter Modal */}
-      <Show when={customFilterModalOpen()}>
+      {/* ── CREATE / EDIT RULE MODAL ── */}
+      <Show when={ruleModalOpen()}>
         <div class="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div class="bg-white dark:bg-[#1E2025] rounded-2xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-xl max-w-xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div class="flex items-center justify-between">
               <h3 class="text-sm font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
-                {editingFilterId() ? "Edit Custom Filter" : "Add Custom Filter"}
+                {editingRuleId() ? "Edit Mail Rule" : "Create Mail Rule"}
               </h3>
-              <button onClick={() => setCustomFilterModalOpen(false)} class="text-[#6E7075] p-1 cursor-pointer">✕</button>
+              <button onClick={() => setRuleModalOpen(false)} class="text-[#6E7075] p-1 cursor-pointer">✕</button>
             </div>
 
-            <form onSubmit={handleSaveCustomFilter} class="space-y-4">
+            <form onSubmit={handleSaveRule} class="space-y-4">
               <div>
                 <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
-                  Filter Name
+                  Rule Name
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Invoices & Billing"
-                  value={filterName()}
-                  onInput={(e) => setFilterName(e.currentTarget.value)}
+                  placeholder="e.g. Move newsletters to archive"
+                  value={ruleName()}
+                  onInput={(e) => setRuleName(e.currentTarget.value)}
                   class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
                 />
               </div>
 
-              {/* Conditions Block */}
-              <div class="space-y-2 pt-1">
+              <div class="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="rule-enabled-chk"
+                  checked={ruleEnabled()}
+                  onChange={(e) => setRuleEnabled(e.currentTarget.checked)}
+                  class="rounded border-[#E2DFD8] text-[#A27561] focus:ring-[#A27561]"
+                />
+                <label for="rule-enabled-chk" class="text-xs text-[#1A1B1E] dark:text-[#F3F4F6] cursor-pointer">
+                  Rule enabled
+                </label>
+              </div>
+
+              {/* Conditions Section */}
+              <div class="p-3 bg-[#F8F7F4] dark:bg-[#18191D] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] space-y-3">
                 <div class="flex items-center justify-between">
-                  <div class="flex items-center gap-2">
-                    <span class="text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">When a message matches</span>
-                    <select
-                      value={filterMatch()}
-                      onChange={(e) => setFilterMatch(e.currentTarget.value as "all" | "any")}
-                      class="px-2 py-1 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs font-bold text-[#A27561] cursor-pointer"
-                    >
-                      <option value="all">ALL conditions (AND)</option>
-                      <option value="any">ANY condition (OR)</option>
-                    </select>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleAddCondition}
-                    class="text-xs text-[#A27561] hover:underline font-semibold cursor-pointer"
-                  >
-                    + Add Condition
-                  </button>
+                  <span class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
+                    Conditions (All specified must match — AND)
+                  </span>
+                  <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">
+                    Leave blank to match any
+                  </span>
                 </div>
 
-                <div class="space-y-2">
-                  <For each={filterConditions()}>
-                    {(cond, idx) => (
-                      <div class="flex items-center gap-2 p-2 bg-[#F8F7F4] dark:bg-[#18191D] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138]">
-                        <select
-                          value={cond.field}
-                          onChange={(e) => handleUpdateCondition(idx(), "field", e.currentTarget.value)}
-                          class="px-2 py-1 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] cursor-pointer"
-                        >
-                          <option value="from">Sender (From)</option>
-                          <option value="to">Recipient (To)</option>
-                          <option value="subject">Subject</option>
-                        </select>
+                <div>
+                  <label class="block text-[11px] font-medium text-[#6E7075] dark:text-[#A1A1AA] mb-0.5">
+                    Sender contains:
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. @notifications.github.com or newsletter"
+                    value={matchSender()}
+                    onInput={(e) => setMatchSender(e.currentTarget.value)}
+                    class="w-full px-3 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6]"
+                  />
+                </div>
 
-                        <select
-                          value={cond.comparator}
-                          onChange={(e) => handleUpdateCondition(idx(), "comparator", e.currentTarget.value)}
-                          class="px-2 py-1 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] cursor-pointer"
-                        >
-                          <option value="contains">contains</option>
-                          <option value="is">is exactly</option>
-                          <option value="starts_with">starts with</option>
-                          <option value="ends_with">ends with</option>
-                          <option value="not_contains">does not contain</option>
-                        </select>
+                <div>
+                  <label class="block text-[11px] font-medium text-[#6E7075] dark:text-[#A1A1AA] mb-0.5">
+                    Recipient contains:
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. dev+alerts@domain.com"
+                    value={matchRecipient()}
+                    onInput={(e) => setMatchRecipient(e.currentTarget.value)}
+                    class="w-full px-3 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6]"
+                  />
+                </div>
 
-                        <input
-                          type="text"
-                          required
-                          placeholder="Search text"
-                          value={cond.value}
-                          onInput={(e) => handleUpdateCondition(idx(), "value", e.currentTarget.value)}
-                          class="flex-1 px-3 py-1 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6]"
-                        />
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-[11px] font-medium text-[#6E7075] dark:text-[#A1A1AA] mb-0.5">
+                      Has Attachments:
+                    </label>
+                    <select
+                      value={matchAttachments()}
+                      onChange={(e) => setMatchAttachments(e.currentTarget.value as any)}
+                      class="w-full px-2.5 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] cursor-pointer"
+                    >
+                      <option value="any">Any</option>
+                      <option value="yes">Yes (Must have attachments)</option>
+                      <option value="no">No (Must have no attachments)</option>
+                    </select>
+                  </div>
 
-                        <Show when={filterConditions().length > 1}>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveCondition(idx())}
-                            class="p-1 text-rose-500 hover:text-rose-700 cursor-pointer"
-                            title="Remove Condition"
-                          >
-                            ✕
-                          </button>
-                        </Show>
-                      </div>
-                    )}
-                  </For>
+                  <div>
+                    <label class="block text-[11px] font-medium text-[#6E7075] dark:text-[#A1A1AA] mb-0.5">
+                      Min Size (KB):
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="e.g. 50"
+                      value={matchMinSizeKB()}
+                      onInput={(e) => setMatchMinSizeKB(e.currentTarget.value)}
+                      class="w-full px-3 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6]"
+                    />
+                  </div>
                 </div>
               </div>
 
-              {/* Actions Block */}
-              <div class="space-y-2 pt-2 border-t border-[#E2DFD8] dark:border-[#2E3138]">
+              {/* Action Section */}
+              <div class="space-y-3 pt-2">
                 <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">
-                  Perform these actions:
+                  Action
                 </label>
 
-                <div class="space-y-2 text-xs text-[#1A1B1E] dark:text-[#F3F4F6]">
-                  <label class="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={actionApplyMove()}
-                      onChange={(e) => setActionApplyMove(e.currentTarget.checked)}
-                      class="rounded border-[#E2DFD8] text-[#A27561] focus:ring-[#A27561]"
-                    />
-                    <span>Move to folder:</span>
+                <select
+                  value={actionType()}
+                  onChange={(e) => setActionType(e.currentTarget.value as any)}
+                  class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] cursor-pointer font-medium"
+                >
+                  <option value="move">Move to folder</option>
+                  <option value="label">Apply label</option>
+                  <option value="mark_read">Mark as read</option>
+                  <option value="delete">Delete (move to Trash)</option>
+                </select>
+
+                <Show when={actionType() === "move"}>
+                  <div class="space-y-1">
+                    <label class="block text-[11px] font-medium text-[#6E7075] dark:text-[#A1A1AA]">
+                      Target Folder:
+                    </label>
                     <select
-                      disabled={!actionApplyMove()}
-                      value={actionMoveFolder()}
-                      onChange={(e) => setActionMoveFolder(e.currentTarget.value)}
-                      class="px-2 py-1 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs disabled:opacity-50 cursor-pointer"
+                      value={actionFolder()}
+                      onChange={(e) => setActionFolder(e.currentTarget.value)}
+                      class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] cursor-pointer"
                     >
                       <option value="inbox">Inbox</option>
                       <option value="archive">Archive</option>
                       <option value="spam">Spam</option>
                       <option value="trash">Trash</option>
                     </select>
-                  </label>
+                  </div>
+                </Show>
 
-                  <label class="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={actionMarkRead()}
-                      onChange={(e) => setActionMarkRead(e.currentTarget.checked)}
-                      class="rounded border-[#E2DFD8] text-[#A27561] focus:ring-[#A27561]"
-                    />
-                    <span>Mark as read</span>
-                  </label>
-
-                  <label class="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={actionStar()}
-                      onChange={(e) => setActionStar(e.currentTarget.checked)}
-                      class="rounded border-[#E2DFD8] text-[#A27561] focus:ring-[#A27561]"
-                    />
-                    <span>Star message</span>
-                  </label>
-                </div>
+                <Show when={actionType() === "label"}>
+                  <div class="space-y-1">
+                    <label class="block text-[11px] font-medium text-[#6E7075] dark:text-[#A1A1AA]">
+                      Select Label:
+                    </label>
+                    <Show
+                      when={labels().length > 0}
+                      fallback={
+                        <p class="text-xs text-rose-500">
+                          No labels found. Create a label in Settings → Labels first.
+                        </p>
+                      }
+                    >
+                      <select
+                        value={actionLabelId()}
+                        onChange={(e) => setActionLabelId(e.currentTarget.value)}
+                        class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] cursor-pointer"
+                      >
+                        <For each={labels()}>
+                          {(lbl) => (
+                            <option value={lbl.id}>
+                              {lbl.name} ({lbl.color_name})
+                            </option>
+                          )}
+                        </For>
+                      </select>
+                    </Show>
+                  </div>
+                </Show>
               </div>
 
+              {/* Test Rule Section */}
+              <div class="p-3 bg-[#F0EEE9] dark:bg-[#252830] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div class="text-[11px] text-[#6E7075] dark:text-[#A1A1AA]">
+                  <span class="font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Verification: </span>
+                  Test conditions against recent messages.
+                </div>
+                <button
+                  type="button"
+                  onClick={handleTestRule}
+                  disabled={testingRule()}
+                  class="px-3 py-1.5 bg-white dark:bg-[#1E2025] hover:border-[#A27561] border border-[#E2DFD8] dark:border-[#2E3138] text-[#1A1B1E] dark:text-[#F3F4F6] text-xs font-semibold rounded-lg transition cursor-pointer self-start sm:self-auto disabled:opacity-50"
+                >
+                  {testingRule() ? "Testing…" : "Test against last 20 messages"}
+                </button>
+              </div>
+
+              <Show when={testResult()}>
+                <div class="p-2.5 rounded-lg bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-900/50 text-sky-800 dark:text-sky-300 text-xs font-mono">
+                  {testResult()}
+                </div>
+              </Show>
+
+              {/* Footer Buttons */}
               <div class="flex justify-end gap-2 pt-3 border-t border-[#E2DFD8] dark:border-[#2E3138]">
                 <button
                   type="button"
-                  onClick={() => setCustomFilterModalOpen(false)}
-                  class="px-4 py-2 rounded-xl border border-[#E2DFD8] text-xs cursor-pointer"
+                  onClick={() => setRuleModalOpen(false)}
+                  class="px-4 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={savingFilter()}
+                  disabled={savingRule()}
                   class="px-5 py-2 rounded-xl bg-[#A27561] text-white text-xs font-semibold hover:bg-[#8F6452] cursor-pointer disabled:opacity-50"
                 >
-                  {savingFilter() ? "Saving Filter…" : "Save Filter"}
+                  {savingRule() ? "Saving Rule…" : "Save Rule"}
                 </button>
               </div>
             </form>
@@ -716,75 +793,15 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
         </div>
       </Show>
 
-      {/* 2. Sieve Filter Modal */}
-      <Show when={sieveFilterModalOpen()}>
-        <div class="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div class="bg-white dark:bg-[#1E2025] rounded-2xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-xl max-w-xl w-full p-6 space-y-4">
-            <div class="flex items-center justify-between">
-              <h3 class="text-sm font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
-                Add Sieve Filter
-              </h3>
-              <button onClick={() => setSieveFilterModalOpen(false)} class="text-[#6E7075] p-1 cursor-pointer">✕</button>
-            </div>
-
-            <form onSubmit={handleSaveSieveFilter} class="space-y-4">
-              <div>
-                <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
-                  Sieve Filter Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Advanced Sieve Router"
-                  value={sieveFilterName()}
-                  onInput={(e) => setSieveFilterName(e.currentTarget.value)}
-                  class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6]"
-                />
-              </div>
-
-              <div>
-                <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
-                  Sieve Script (RFC 5228)
-                </label>
-                <textarea
-                  rows={8}
-                  required
-                  value={sieveScript()}
-                  onInput={(e) => setSieveScript(e.currentTarget.value)}
-                  class="w-full p-3 font-mono text-xs rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-[#1A1B1E] dark:text-[#F3F4F6]"
-                />
-              </div>
-
-              <div class="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setSieveFilterModalOpen(false)}
-                  class="px-4 py-2 rounded-xl border border-[#E2DFD8] text-xs cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={savingFilter()}
-                  class="px-5 py-2 rounded-xl bg-[#A27561] text-white text-xs font-semibold hover:bg-[#8F6452] cursor-pointer"
-                >
-                  {savingFilter() ? "Saving Sieve…" : "Save Sieve Filter"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      </Show>
-
-      {/* 3. Add Address or Domain Modal */}
-      <Show when={addRuleModalOpen()}>
+      {/* ── ADD ADDRESS RULE MODAL (Spam, Block, Allow) ── */}
+      <Show when={addAddressModalOpen()}>
         <div class="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div class="bg-white dark:bg-[#1E2025] rounded-2xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-xl max-w-md w-full p-6 space-y-4">
             <div class="flex items-center justify-between">
               <h3 class="text-sm font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
                 Add Address or Domain
               </h3>
-              <button onClick={() => setAddRuleModalOpen(false)} class="text-[#6E7075] p-1 cursor-pointer">✕</button>
+              <button onClick={() => setAddAddressModalOpen(false)} class="text-[#6E7075] p-1 cursor-pointer">✕</button>
             </div>
 
             <form onSubmit={handleAddAddressRule} class="space-y-4">
@@ -823,17 +840,17 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
               <div class="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setAddRuleModalOpen(false)}
-                  class="px-4 py-2 rounded-xl border border-[#E2DFD8] text-xs cursor-pointer"
+                  onClick={() => setAddAddressModalOpen(false)}
+                  class="px-4 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={savingRule()}
+                  disabled={savingAddressRule()}
                   class="px-5 py-2 rounded-xl bg-[#A27561] text-white text-xs font-semibold hover:bg-[#8F6452] cursor-pointer"
                 >
-                  {savingRule() ? "Adding…" : "Add to List"}
+                  {savingAddressRule() ? "Adding…" : "Add to List"}
                 </button>
               </div>
             </form>

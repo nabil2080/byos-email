@@ -362,6 +362,7 @@ func main() {
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/labels/{label_id}", withSecurityHeaders(withCORS(messageLabelsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/read", withSecurityHeaders(withCORS(messageReadHandler)))
 	http.HandleFunc("PATCH /v1/mailboxes/{mailbox_id}/messages/{message_id}/star", withSecurityHeaders(withCORS(messageStarHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/snooze", withSecurityHeaders(withCORS(messageSnoozeHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/import", withSecurityHeaders(withCORS(messageImportHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/threads", withSecurityHeaders(withCORS(threadsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/threads/{thread_id}", withSecurityHeaders(withCORS(threadDetailHandler)))
@@ -403,6 +404,10 @@ func main() {
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/filters/{filter_id}", withSecurityHeaders(withCORS(mailboxFilterItemHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/address-rules", withSecurityHeaders(withCORS(mailboxAddressRulesHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/address-rules/{rule_id}", withSecurityHeaders(withCORS(mailboxAddressRuleItemHandler)))
+
+	// Mail Rules
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/rules", withSecurityHeaders(withCORS(mailboxRulesHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/rules/{rule_id}", withSecurityHeaders(withCORS(mailboxRuleItemHandler)))
 
 	// Email Open Tracking
 	http.HandleFunc("/v1/track/{token}", withSecurityHeaders(withCORS(trackPixelHandler)))

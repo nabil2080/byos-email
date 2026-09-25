@@ -4,6 +4,7 @@ import { DisplayMessage } from "./MessageList";
 import { AttachmentItem, MailboxFolder, MailboxLabel } from "../api";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { AttachmentBadge } from "./AttachmentBadge";
+import { SnoozeMenu } from "./SnoozeMenu";
 
 export interface ReadingPaneProps {
   message: DisplayMessage;
@@ -19,6 +20,7 @@ export interface ReadingPaneProps {
   onPrev: () => void;
   onNext: () => void;
   onArchive: (msg: DisplayMessage) => void;
+  onSnooze?: (msg: DisplayMessage, until: Date) => void;
   onSpam: (msg: DisplayMessage) => void;
   onTrash: (msg: DisplayMessage) => void;
   onDeleteForever?: (msg: DisplayMessage) => void;
@@ -154,6 +156,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
   const [moveMenuOpen, setMoveMenuOpen] = createSignal(false);
   const [labelMenuOpen, setLabelMenuOpen] = createSignal(false);
   const [moreMenuOpen, setMoreMenuOpen] = createSignal(false);
+  const [snoozeMenuOpen, setSnoozeMenuOpen] = createSignal(false);
   const [allowRemoteImages, setAllowRemoteImages] = createSignal(false);
   const [showTrackerDetails, setShowTrackerDetails] = createSignal(false);
 
@@ -295,6 +298,28 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               <line x1="10" y1="12" x2="14" y2="12" />
             </svg>
           </button>
+
+          {/* Snooze */}
+          <button
+            type="button"
+            onClick={() => setSnoozeMenuOpen(true)}
+            class="p-1.5 text-[#464748] dark:text-[#A3A3A3] hover:text-[#A27561] dark:hover:text-[#A27561] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+            title="Snooze"
+          >
+            <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          </button>
+
+          <SnoozeMenu
+            open={snoozeMenuOpen()}
+            onClose={() => setSnoozeMenuOpen(false)}
+            onSelect={(until) => {
+              setSnoozeMenuOpen(false);
+              props.onSnooze?.(props.message, until);
+            }}
+          />
 
           {/* Spam */}
           <button

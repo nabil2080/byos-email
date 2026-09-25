@@ -412,10 +412,17 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 	}
 
 	var msgID, inReplyTo, references string
+	var hasAttachments bool
+	var attachmentCount int
 	if parsedMsg, parseErr := mail.ReadMessage(bytes.NewReader(rawMessage)); parseErr == nil && parsedMsg != nil {
 		msgID = normalizeMsgID(parsedMsg.Header.Get("Message-ID"))
 		inReplyTo = normalizeMsgID(parsedMsg.Header.Get("In-Reply-To"))
 		references = parsedMsg.Header.Get("References")
+		ct := strings.ToLower(parsedMsg.Header.Get("Content-Type"))
+		if strings.Contains(ct, "multipart/mixed") || strings.Contains(ct, "multipart/related") {
+			hasAttachments = true
+			attachmentCount = 1
+		}
 	}
 
 	threadID, err := ComputeThreadID(ctx, tx, route.MailboxID, inReplyTo, references)
@@ -424,21 +431,56 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 		threadID = ""
 	}
 
+	sizeBytes := int64(len(rawMessage))
+	folder := "inbox"
+	isRead := false
+
+	folderOverride, labelIDs, markRead, deleteMessage, ruleErr := EvaluateRules(
+		ctx, tx, route.MailboxID, normalizeAddress(envelopeFrom), []string{recipient}, sizeBytes, hasAttachments,
+	)
+	if ruleErr != nil {
+		log.Printf("[WARN] evaluate rules failed for mailbox=%s: %v", route.MailboxID, ruleErr)
+	} else {
+		if deleteMessage {
+			folder = "trash"
+		} else if folderOverride != "" {
+			folder = folderOverride
+		}
+		if markRead {
+			isRead = true
+		}
+	}
+
 	// No duplicate - insert new message
 	err = tx.QueryRow(ctx, `
 		INSERT INTO message_metadata (
 			mailbox_id, domain_id, message_seq, direction, delivery_identity, sender, recipients,
 			storage_object_id, content_key_hpke_wrapped, wrapped_key_algorithm, mailbox_sk_version, encryption_version,
 			encryption_iv, aad_version, bundle_hash, status,
-			message_id, in_reply_to, thread_id
-		) VALUES ($1, $2, $3, 'received', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'received', NULLIF($15, ''), NULLIF($16, ''), COALESCE(NULLIF($17, '')::uuid, gen_random_uuid()))
+			message_id, in_reply_to, thread_id,
+			folder, is_read, size_bytes, has_attachments, attachment_count
+		) VALUES (
+			$1, $2, $3, 'received', $4, $5, $6,
+			$7, $8, $9, $10, $11,
+			$12, $13, $14, 'received',
+			NULLIF($15, ''), NULLIF($16, ''), COALESCE(NULLIF($17, '')::uuid, gen_random_uuid()),
+			$18, $19, $20, $21, $22
+		)
 		RETURNING id`,
 		route.MailboxID, route.DomainID, messageSeq, deliveryIdentity[:], normalizeAddress(envelopeFrom), normalizedRecipients,
 		storageObjectID, wrappedKey, wrappedKeyAlg, route.MailboxSKVersion, cryptoResp.EncryptionVersion, iv, cryptoResp.AADVersion, bundleHash,
 		msgID, inReplyTo, threadID,
+		folder, isRead, sizeBytes, hasAttachments, attachmentCount,
 	).Scan(&messageID)
 	if err != nil {
 		return StoredMessage{}, fmt.Errorf("insert message metadata: %w", err)
+	}
+
+	for _, labelID := range labelIDs {
+		_, lErr := tx.Exec(ctx, `INSERT INTO message_labels (message_id, label_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, messageID, labelID)
+		if lErr != nil {
+			log.Printf("[WARN] failed to apply rule label %s to message %s: %v", labelID, messageID, lErr)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
