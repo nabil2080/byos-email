@@ -69,6 +69,9 @@ import {
   KeyDirectoryRecord,
   InternalSendRequest,
   InternalSendResponse,
+  fetchThreads,
+  fetchThreadMessages,
+  ThreadSummary,
 } from "./api";
 import {
   unlockMailboxKey,
@@ -349,6 +352,9 @@ const App: Component = () => {
   const [currentFolder, setCurrentFolder] = createSignal<Folder>("inbox");
   const [messages, setMessages] = createSignal<DisplayMessage[]>([]);
   const [selectedMsg, setSelectedMsg] = createSignal<DisplayMessage | null>(null);
+  const [threads, setThreads] = createSignal<ThreadSummary[]>([]);
+  const [expandedThreadId, setExpandedThreadId] = createSignal<string | null>(null);
+  const [viewMode, setViewMode] = createSignal<"threads" | "flat">("threads");
   const [searchQuery, setSearchQuery] = createSignal("");
   const [composeOpen, setComposeOpen] = createSignal(false);
   const [isDecrypting, setIsDecrypting] = createSignal(false);
@@ -2158,12 +2164,13 @@ const App: Component = () => {
   async function loadMailboxData(mailboxId: string) {
     try {
       setStorageErrorBanner(null);
-      const [draftsList, messageList, folderList, labelList, attachmentList] = await Promise.all([
+      const [draftsList, messageList, folderList, labelList, attachmentList, threadList] = await Promise.all([
         fetchDrafts(mailboxId),
         fetchMessages(mailboxId),
         fetchFolders(mailboxId),
         fetchLabels(mailboxId),
         fetchAttachments(mailboxId).catch(() => []),
+        fetchThreads(mailboxId).catch(() => []),
       ]);
 
       function deduplicateByName<T extends { id: string; name: string }>(items: T[]): T[] {
@@ -2269,6 +2276,7 @@ const App: Component = () => {
       });
 
       setMessages([...realMessages, ...draftMessages]);
+      setThreads(threadList);
 
       // Background preview decryptor for visible real messages
       if (key && wasm && keyBoxId === mailboxId) {
@@ -2465,6 +2473,25 @@ const App: Component = () => {
     const start = (currentPage() - 1) * pageSize;
     return list.slice(start, start + pageSize);
   };
+
+  const filteredThreads = () => {
+    const cur = currentFolder();
+    const q = searchQuery().toLowerCase().trim();
+    return threads().filter((t) => {
+      const matchFolder = (t.folder || "inbox") === cur;
+      if (!matchFolder) return false;
+      if (!q) return true;
+      const matchParticipant = (t.participants || []).some((p) => p.toLowerCase().includes(q));
+      const matchMsg = messages().some(
+        (m) =>
+          t.message_ids?.includes(m.id) &&
+          (m.subject.toLowerCase().includes(q) || m.snippet.toLowerCase().includes(q))
+      );
+      return matchParticipant || matchMsg;
+    });
+  };
+
+  const effectiveViewMode = () => (filteredThreads().length > 0 ? viewMode() : "flat");
 
   const currentMsgIndex = () => {
     const sel = selectedMsg();
@@ -2750,6 +2777,40 @@ const App: Component = () => {
         `Failed to open message: ${err instanceof Error ? err.message : "unknown error"}`
       );
       setIsDecrypting(false);
+    }
+  }
+
+  async function handleSelectThread(threadId: string) {
+    setExpandedThreadId((prev) => (prev === threadId ? null : threadId));
+    const box = selectedMailbox();
+    if (!box) return;
+
+    // V1 Simplification: open the latest message in the thread directly in the reading pane.
+    // Full multi-message accordion view in the reading pane is deferred to V1.1.
+    const thread = threads().find((t) => t.thread_id === threadId);
+    let targetMsg: DisplayMessage | undefined;
+
+    if (thread && thread.message_ids && thread.message_ids.length > 0) {
+      const threadMsgs = messages().filter((m) => thread.message_ids.includes(m.id));
+      if (threadMsgs.length > 0) {
+        targetMsg = threadMsgs[threadMsgs.length - 1];
+      }
+    }
+
+    if (!targetMsg) {
+      try {
+        const metas = await fetchThreadMessages(box.id, threadId);
+        if (metas.length > 0) {
+          const latestMeta = metas[metas.length - 1];
+          targetMsg = messages().find((m) => m.id === latestMeta.id);
+        }
+      } catch (err) {
+        console.warn("Failed to fetch thread messages:", err);
+      }
+    }
+
+    if (targetMsg) {
+      await openMessage(targetMsg);
     }
   }
 
@@ -4180,6 +4241,10 @@ const App: Component = () => {
               theme={theme()}
               onSetTheme={handleSetTheme}
               onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark")}
+              threads={filteredThreads()}
+              viewMode={effectiveViewMode()}
+              expandedThreadId={expandedThreadId()}
+              onSelectThread={handleSelectThread}
             />
           </div>
 

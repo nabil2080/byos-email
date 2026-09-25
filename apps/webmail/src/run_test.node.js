@@ -12,6 +12,7 @@ import { runReplySignatureTests } from "./reply_signature.test.js";
 import { runMboxStreamTests } from "./mbox_stream.test.js";
 import { runMboxLabelsTests } from "./mbox_labels.test.js";
 import { runImportQueueTests } from "./import_queue.test.js";
+import { runThreadingTests } from "./threading.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -99,6 +100,12 @@ async function main() {
   console.log(`IMPORT QUEUE TESTS: ${importQueueRes.passed} passed, ${importQueueRes.failed} failed\n`);
   totalPassed += importQueueRes.passed;
   totalFailed += importQueueRes.failed;
+
+  console.log("Running Conversation Threading Tests...");
+  const threadingRes = await runThreadingTests();
+  console.log(`CONVERSATION THREADING TESTS: ${threadingRes.passed} passed, ${threadingRes.failed} failed\n`);
+  totalPassed += threadingRes.passed;
+  totalFailed += threadingRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

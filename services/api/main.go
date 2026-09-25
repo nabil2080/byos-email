@@ -362,6 +362,8 @@ func main() {
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/labels/{label_id}", withSecurityHeaders(withCORS(messageLabelsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/read", withSecurityHeaders(withCORS(messageReadHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/import", withSecurityHeaders(withCORS(messageImportHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/threads", withSecurityHeaders(withCORS(threadsHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/threads/{thread_id}", withSecurityHeaders(withCORS(threadDetailHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/aliases", withSecurityHeaders(withCORS(organizationAliasesHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/aliases", withSecurityHeaders(withCORS(mailboxAliasesHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/aliases/{alias_id}", withSecurityHeaders(withCORS(mailboxAliasItemHandler)))

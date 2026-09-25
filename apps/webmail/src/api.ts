@@ -72,6 +72,18 @@ export interface MessageMetadata {
   is_read?: boolean;
 }
 
+export interface ThreadSummary {
+  thread_id: string;
+  message_count: number;
+  unread_count: number;
+  latest_at: string;
+  participants: string[];
+  message_ids: string[];
+  is_starred: boolean;
+  folder: string;
+  has_attachments: boolean;
+}
+
 export interface MessageBodyResponse {
   encrypted_body: string;
   content_key_hpke_wrapped: string;
@@ -488,6 +500,27 @@ export async function fetchMailboxDetail(mailboxId: string): Promise<MailboxDeta
 export async function fetchMessages(mailboxId: string): Promise<MessageMetadata[]> {
   const res = await apiRequest<{ messages: MessageMetadata[] }>(`/v1/mailboxes/${mailboxId}/messages`);
   return res.messages || [];
+}
+
+export async function fetchThreads(
+  mailboxId: string,
+  folder?: string,
+): Promise<ThreadSummary[]> {
+  const url = folder
+    ? `/v1/mailboxes/${mailboxId}/threads?folder=${encodeURIComponent(folder)}`
+    : `/v1/mailboxes/${mailboxId}/threads`;
+  const resp = await apiRequest<{ threads: ThreadSummary[] }>(url);
+  return resp.threads || [];
+}
+
+export async function fetchThreadMessages(
+  mailboxId: string,
+  threadId: string,
+): Promise<MessageMetadata[]> {
+  const resp = await apiRequest<{ messages: MessageMetadata[] }>(
+    `/v1/mailboxes/${mailboxId}/threads/${threadId}`,
+  );
+  return resp.messages || [];
 }
 
 export async function fetchMessageBody(mailboxId: string, messageId: string): Promise<MessageBodyResponse> {

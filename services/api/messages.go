@@ -45,6 +45,18 @@ type MessageMetadataResponse struct {
 	IsRead                bool     `json:"is_read"`
 }
 
+type ThreadSummary struct {
+	ThreadID       string   `json:"thread_id"`
+	MessageCount   int      `json:"message_count"`
+	UnreadCount    int      `json:"unread_count"`
+	LatestAt       string   `json:"latest_at"`       // RFC3339
+	Participants   []string `json:"participants"`     // distinct senders, ordered by first appearance
+	MessageIDs     []string `json:"message_ids"`      // chronological (oldest first)
+	IsStarred      bool     `json:"is_starred"`       // any message starred
+	Folder         string   `json:"folder"`           // folder of the latest message
+	HasAttachments bool     `json:"has_attachments"`  // any message in thread has attachments
+}
+
 func messagesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -94,6 +106,215 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 		LIMIT 100`, mailboxID)
 	if err != nil {
 		http.Error(w, "failed to query messages", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	messages := make([]MessageMetadataResponse, 0)
+	for rows.Next() {
+		var m MessageMetadataResponse
+		var wrapped, iv, hash []byte
+		var receivedAt time.Time
+		var sentAt *time.Time
+		var folder, folderIDStr string
+		var labelIDs []string
+		if err := rows.Scan(&m.ID, &m.MessageSeq, &m.Direction, &m.Sender, &m.Recipients, &m.StorageObjectID,
+			&wrapped, &m.EncryptionVersion, &iv, &m.AADVersion, &hash,
+			&receivedAt, &sentAt, &m.Status, &m.HasAttachments, &m.AttachmentCount,
+			&folder, &folderIDStr, &labelIDs, &m.IsRead); err != nil {
+			http.Error(w, "failed to read message metadata", http.StatusInternalServerError)
+			return
+		}
+		m.MailboxID = mailboxID
+		m.ReceivedAt = receivedAt.Format(time.RFC3339)
+		m.ContentKeyHPKEWrapped = base64.StdEncoding.EncodeToString(wrapped)
+		m.EncryptionIV = base64.StdEncoding.EncodeToString(iv)
+		m.BundleHash = base64.StdEncoding.EncodeToString(hash)
+		if sentAt != nil {
+			formatted := sentAt.Format(time.RFC3339)
+			m.SentAt = &formatted
+		}
+		m.Sender = strings.TrimSpace(m.Sender)
+		m.Folder = folder
+		if folderIDStr != "" {
+			m.FolderID = &folderIDStr
+		}
+		if labelIDs == nil {
+			labelIDs = []string{}
+		}
+		m.LabelIDs = labelIDs
+		messages = append(messages, m)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "failed to read messages", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"messages": messages})
+}
+
+// GET /v1/mailboxes/{mailbox_id}/threads
+// Returns one row per thread, ordered by latest activity.
+func threadsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mailboxID := r.PathValue("mailbox_id")
+	if _, err := uuid.Parse(mailboxID); err != nil {
+		http.Error(w, "invalid mailbox_id UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !allowPerUser(userID) {
+		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+	folderFilter := strings.TrimSpace(r.URL.Query().Get("folder"))
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	var authorized string
+	if err := conn.QueryRow(ctx, `SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true`, mailboxID, userID).Scan(&authorized); err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	rows, err := conn.Query(ctx, `
+		SELECT
+		    m.thread_id::text,
+		    COUNT(m.id)::int AS message_count,
+		    COUNT(m.id) FILTER (WHERE NOT COALESCE(m.is_read, false))::int AS unread_count,
+		    MAX(COALESCE(m.sent_at, m.received_at)) AS latest_at,
+		    COALESCE(ARRAY_AGG(m.sender ORDER BY COALESCE(m.sent_at, m.received_at) ASC), ARRAY[]::text[]) AS senders,
+		    COALESCE(ARRAY_AGG(m.id::text ORDER BY COALESCE(m.sent_at, m.received_at) ASC), ARRAY[]::text[]) AS message_ids,
+		    false AS is_starred,
+		    (ARRAY_AGG(COALESCE(m.folder, 'inbox') ORDER BY COALESCE(m.sent_at, m.received_at) DESC))[1] AS folder,
+		    COALESCE(BOOL_OR(m.has_attachments), false) AS has_attachments
+		FROM message_metadata m
+		WHERE m.mailbox_id = $1
+		  AND ($2 = '' OR m.folder = $2)
+		GROUP BY m.thread_id
+		ORDER BY latest_at DESC
+		LIMIT 200`, mailboxID, folderFilter)
+	if err != nil {
+		http.Error(w, "failed to query threads", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	threads := make([]ThreadSummary, 0)
+	for rows.Next() {
+		var t ThreadSummary
+		var latestAt time.Time
+		var allSenders []string
+		var messageIDs []string
+		if err := rows.Scan(&t.ThreadID, &t.MessageCount, &t.UnreadCount, &latestAt,
+			&allSenders, &messageIDs, &t.IsStarred, &t.Folder, &t.HasAttachments); err != nil {
+			http.Error(w, "failed to read thread summary", http.StatusInternalServerError)
+			return
+		}
+		t.LatestAt = latestAt.Format(time.RFC3339)
+		if messageIDs == nil {
+			messageIDs = []string{}
+		}
+		t.MessageIDs = messageIDs
+
+		seen := make(map[string]bool)
+		participants := make([]string, 0)
+		for _, s := range allSenders {
+			s = strings.TrimSpace(s)
+			if s != "" && !seen[s] {
+				seen[s] = true
+				participants = append(participants, s)
+			}
+		}
+		t.Participants = participants
+
+		threads = append(threads, t)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "failed to read threads", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"threads": threads})
+}
+
+// GET /v1/mailboxes/{mailbox_id}/threads/{thread_id}
+// Returns all messages in the thread, chronologically ordered.
+func threadDetailHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mailboxID := r.PathValue("mailbox_id")
+	if _, err := uuid.Parse(mailboxID); err != nil {
+		http.Error(w, "invalid mailbox_id UUID", http.StatusBadRequest)
+		return
+	}
+	threadID := r.PathValue("thread_id")
+	if _, err := uuid.Parse(threadID); err != nil {
+		http.Error(w, "invalid thread_id UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !allowPerUser(userID) {
+		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	var authorized string
+	if err := conn.QueryRow(ctx, `SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true`, mailboxID, userID).Scan(&authorized); err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	rows, err := conn.Query(ctx, `
+		SELECT m.id::text, m.message_seq, m.direction, m.sender, m.recipients, m.storage_object_id,
+		       m.content_key_hpke_wrapped, m.encryption_version, m.encryption_iv,
+		       m.aad_version, m.bundle_hash, m.received_at, m.sent_at, m.status,
+		       m.has_attachments, m.attachment_count,
+		       COALESCE(m.folder, 'inbox'), COALESCE(m.folder_id::text, ''),
+		       COALESCE(ARRAY_AGG(ml.label_id::text) FILTER (WHERE ml.label_id IS NOT NULL), ARRAY[]::text[]) as label_ids,
+		       COALESCE(m.is_read, false)
+		FROM message_metadata m
+		LEFT JOIN message_labels ml ON ml.message_id = m.id
+		WHERE m.mailbox_id=$1 AND m.thread_id=$2
+		GROUP BY m.id
+		ORDER BY COALESCE(m.sent_at, m.received_at) ASC`, mailboxID, threadID)
+	if err != nil {
+		http.Error(w, "failed to query thread messages", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()

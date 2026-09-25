@@ -2,7 +2,8 @@ import { Component, For, Show } from "solid-js";
 import { Folder } from "./Sidebar";
 import { InboxToolbar, SelectionFilter, SortOrder } from "./InboxToolbar";
 import { MessageRow } from "./MessageRow";
-import { MailboxFolder, MailboxLabel } from "../api";
+import { ThreadRow } from "./ThreadRow";
+import { MailboxFolder, MailboxLabel, ThreadSummary } from "../api";
 
 export interface DisplayMessage {
   id: string;
@@ -75,6 +76,10 @@ interface MessageListProps {
   theme?: string;
   onSetTheme?: (t: "cloud_dancer" | "dark") => void;
   onToggleTheme?: () => void;
+  threads?: ThreadSummary[];
+  viewMode?: "threads" | "flat";
+  onSelectThread?: (threadId: string) => void;
+  expandedThreadId?: string | null;
 }
 
 export const MessageList: Component<MessageListProps> = (props) => {
@@ -184,28 +189,57 @@ export const MessageList: Component<MessageListProps> = (props) => {
           </div>
         </Show>
 
-        <For each={props.messages}>
-          {(msg) => (
-            <MessageRow
-              message={msg}
-              isSelected={props.selectedMessage?.id === msg.id}
-              isChecked={props.selectedIds.has(msg.id)}
-              isSplit={props.isSplit}
-              density={props.density}
-              selectedIds={props.selectedIds}
-              onSelect={props.onSelectMessage}
-              onToggleCheck={props.onToggleCheck}
-              onToggleStarred={props.onToggleStarred}
-              onToggleRead={props.onToggleRead}
-              onArchive={props.onArchive}
-              onTrash={props.onTrash}
-              onDeleteForever={props.onDeleteForever}
-              labels={props.labels}
-            />
-          )}
-        </For>
+        <Show
+          when={props.viewMode === "threads" && (props.threads || []).length > 0}
+          fallback={
+            <For each={props.messages}>
+              {(msg) => (
+                <MessageRow
+                  message={msg}
+                  isSelected={props.selectedMessage?.id === msg.id}
+                  isChecked={props.selectedIds.has(msg.id)}
+                  isSplit={props.isSplit}
+                  density={props.density}
+                  selectedIds={props.selectedIds}
+                  onSelect={props.onSelectMessage}
+                  onToggleCheck={props.onToggleCheck}
+                  onToggleStarred={props.onToggleStarred}
+                  onToggleRead={props.onToggleRead}
+                  onArchive={props.onArchive}
+                  onTrash={props.onTrash}
+                  onDeleteForever={props.onDeleteForever}
+                  labels={props.labels}
+                />
+              )}
+            </For>
+          }
+        >
+          <For each={props.threads}>
+            {(thread) => {
+              const matchingMsg = () => props.messages.find((m) => thread.message_ids?.includes(m.id));
+              return (
+                <ThreadRow
+                  thread={thread}
+                  expanded={props.expandedThreadId === thread.thread_id}
+                  onClick={() => props.onSelectThread?.(thread.thread_id)}
+                  subject={matchingMsg()?.subject}
+                  snippet={matchingMsg()?.snippet}
+                  density={props.density}
+                  isSplit={props.isSplit}
+                />
+              );
+            }}
+          </For>
+        </Show>
 
-        <Show when={!props.isLoading && props.messages.length === 0}>
+        <Show
+          when={
+            !props.isLoading &&
+            (props.viewMode === "threads"
+              ? (props.threads || []).length === 0 && props.messages.length === 0
+              : props.messages.length === 0)
+          }
+        >
           <div class="p-12 text-center text-xs text-[#878A8E] flex flex-col items-center justify-center gap-2 select-none">
             <svg class="w-8 h-8 stroke-current fill-none stroke-[1.2] text-[#878A8E]/50" viewBox="0 0 24 24">
               <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />

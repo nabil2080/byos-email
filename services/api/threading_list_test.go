@@ -1,0 +1,272 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+func insertThreadListTestMessage(t *testing.T, conn *pgx.Conn, mailboxID, domainID, threadID, sender, folder string, isRead bool, receivedAt time.Time) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	deliveryID := uuid.New().String()
+	err := conn.QueryRow(ctx, `
+		INSERT INTO message_metadata (
+			mailbox_id, domain_id, direction, delivery_identity, sender, recipients,
+			storage_object_id, content_key_hpke_wrapped, mailbox_sk_version,
+			encryption_version, encryption_iv, aad_version, bundle_hash,
+			status, folder, is_read, thread_id, received_at
+		) VALUES (
+			$1, $2, 'received', $3, $4, ARRAY['rcpt@test.local'],
+			'storage/obj', decode('AA==', 'base64'), 1,
+			1, decode('AA==', 'base64'), 1, decode('AA==', 'base64'),
+			'received', $5, $6, $7::uuid, $8
+		) RETURNING id::text
+	`, mailboxID, domainID, []byte(deliveryID), sender, folder, isRead, threadID, receivedAt).Scan(&id)
+	if err != nil {
+		t.Fatalf("insertThreadListTestMessage failed: %v", err)
+	}
+	return id
+}
+
+// 1. TestThreadsEndpointGroupsReplies
+func TestThreadsEndpointGroupsReplies(t *testing.T) {
+	conn := getTestDB(t)
+	defer conn.Close(context.Background())
+	ctx := context.Background()
+
+	_, userID, domainID, mailboxID := createThreadingTestMailbox(t, conn)
+
+	token, tokenHash := generateSessionToken()
+	_, err := conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		userID, tokenHash, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	threadID := uuid.New().String()
+	t0 := time.Now().Add(-10 * time.Minute)
+	t1 := time.Now().Add(-5 * time.Minute)
+
+	id1 := insertThreadListTestMessage(t, conn, mailboxID, domainID, threadID, "alice@test.local", "inbox", false, t0)
+	id2 := insertThreadListTestMessage(t, conn, mailboxID, domainID, threadID, "bob@test.local", "inbox", true, t1)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailboxID+"/threads", nil)
+	req.SetPathValue("mailbox_id", mailboxID)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	w := httptest.NewRecorder()
+	threadsHandler(w, req)
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, w.Body.String())
+	}
+
+	var body struct {
+		Threads []ThreadSummary `json:"threads"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if len(body.Threads) != 1 {
+		t.Fatalf("expected exactly 1 thread, got %d", len(body.Threads))
+	}
+
+	th := body.Threads[0]
+	if th.ThreadID != threadID {
+		t.Errorf("expected thread_id %q, got %q", threadID, th.ThreadID)
+	}
+	if th.MessageCount != 2 {
+		t.Errorf("expected message_count 2, got %d", th.MessageCount)
+	}
+	if th.UnreadCount != 1 {
+		t.Errorf("expected unread_count 1, got %d", th.UnreadCount)
+	}
+	if len(th.MessageIDs) != 2 {
+		t.Fatalf("expected 2 message_ids, got %d", len(th.MessageIDs))
+	}
+	if th.MessageIDs[0] != id1 || th.MessageIDs[1] != id2 {
+		t.Errorf("expected message_ids [%s, %s], got [%s, %s]", id1, id2, th.MessageIDs[0], th.MessageIDs[1])
+	}
+	if len(th.Participants) != 2 {
+		t.Errorf("expected 2 participants, got %d (%v)", len(th.Participants), th.Participants)
+	}
+}
+
+// 2. TestThreadsEndpointSeparatesUnrelated
+func TestThreadsEndpointSeparatesUnrelated(t *testing.T) {
+	conn := getTestDB(t)
+	defer conn.Close(context.Background())
+	ctx := context.Background()
+
+	_, userID, domainID, mailboxID := createThreadingTestMailbox(t, conn)
+
+	token, tokenHash := generateSessionToken()
+	_, err := conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		userID, tokenHash, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	threadID1 := uuid.New().String()
+	threadID2 := uuid.New().String()
+
+	insertThreadListTestMessage(t, conn, mailboxID, domainID, threadID1, "user1@test.local", "inbox", false, time.Now().Add(-5*time.Minute))
+	insertThreadListTestMessage(t, conn, mailboxID, domainID, threadID2, "user2@test.local", "inbox", false, time.Now())
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailboxID+"/threads", nil)
+	req.SetPathValue("mailbox_id", mailboxID)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	w := httptest.NewRecorder()
+	threadsHandler(w, req)
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, w.Body.String())
+	}
+
+	var body struct {
+		Threads []ThreadSummary `json:"threads"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if len(body.Threads) != 2 {
+		t.Fatalf("expected 2 separate threads, got %d", len(body.Threads))
+	}
+}
+
+// 3. TestThreadsEndpointFolderFilter
+func TestThreadsEndpointFolderFilter(t *testing.T) {
+	conn := getTestDB(t)
+	defer conn.Close(context.Background())
+	ctx := context.Background()
+
+	_, userID, domainID, mailboxID := createThreadingTestMailbox(t, conn)
+
+	token, tokenHash := generateSessionToken()
+	_, err := conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		userID, tokenHash, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	threadInbox := uuid.New().String()
+	threadSent := uuid.New().String()
+
+	insertThreadListTestMessage(t, conn, mailboxID, domainID, threadInbox, "inbox@test.local", "inbox", false, time.Now().Add(-5*time.Minute))
+	insertThreadListTestMessage(t, conn, mailboxID, domainID, threadSent, "sent@test.local", "sent", true, time.Now())
+
+	// Query ?folder=inbox
+	reqInbox := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailboxID+"/threads?folder=inbox", nil)
+	reqInbox.SetPathValue("mailbox_id", mailboxID)
+	reqInbox.Header.Set("Authorization", "Bearer "+token)
+
+	wInbox := httptest.NewRecorder()
+	threadsHandler(wInbox, reqInbox)
+	respInbox := wInbox.Result()
+	defer respInbox.Body.Close()
+
+	var bodyInbox struct {
+		Threads []ThreadSummary `json:"threads"`
+	}
+	if err := json.NewDecoder(respInbox.Body).Decode(&bodyInbox); err != nil {
+		t.Fatalf("decode inbox response: %v", err)
+	}
+	if len(bodyInbox.Threads) != 1 {
+		t.Fatalf("expected 1 inbox thread, got %d", len(bodyInbox.Threads))
+	}
+	if bodyInbox.Threads[0].ThreadID != threadInbox {
+		t.Errorf("expected inbox thread %q, got %q", threadInbox, bodyInbox.Threads[0].ThreadID)
+	}
+
+	// Query ?folder=sent
+	reqSent := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailboxID+"/threads?folder=sent", nil)
+	reqSent.SetPathValue("mailbox_id", mailboxID)
+	reqSent.Header.Set("Authorization", "Bearer "+token)
+
+	wSent := httptest.NewRecorder()
+	threadsHandler(wSent, reqSent)
+	respSent := wSent.Result()
+	defer respSent.Body.Close()
+
+	var bodySent struct {
+		Threads []ThreadSummary `json:"threads"`
+	}
+	if err := json.NewDecoder(respSent.Body).Decode(&bodySent); err != nil {
+		t.Fatalf("decode sent response: %v", err)
+	}
+	if len(bodySent.Threads) != 1 {
+		t.Fatalf("expected 1 sent thread, got %d", len(bodySent.Threads))
+	}
+	if bodySent.Threads[0].ThreadID != threadSent {
+		t.Errorf("expected sent thread %q, got %q", threadSent, bodySent.Threads[0].ThreadID)
+	}
+}
+
+// 4. TestThreadDetailReturnsChronologicalOrder
+func TestThreadDetailReturnsChronologicalOrder(t *testing.T) {
+	conn := getTestDB(t)
+	defer conn.Close(context.Background())
+	ctx := context.Background()
+
+	_, userID, domainID, mailboxID := createThreadingTestMailbox(t, conn)
+
+	token, tokenHash := generateSessionToken()
+	_, err := conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		userID, tokenHash, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	threadID := uuid.New().String()
+	parentTime := time.Now().Add(-10 * time.Minute)
+	replyTime := time.Now().Add(-2 * time.Minute)
+
+	parentID := insertThreadListTestMessage(t, conn, mailboxID, domainID, threadID, "alice@test.local", "inbox", false, parentTime)
+	replyID := insertThreadListTestMessage(t, conn, mailboxID, domainID, threadID, "bob@test.local", "inbox", true, replyTime)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailboxID+"/threads/"+threadID, nil)
+	req.SetPathValue("mailbox_id", mailboxID)
+	req.SetPathValue("thread_id", threadID)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	w := httptest.NewRecorder()
+	threadDetailHandler(w, req)
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, w.Body.String())
+	}
+
+	var body struct {
+		Messages []MessageMetadataResponse `json:"messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode detail response: %v", err)
+	}
+
+	if len(body.Messages) != 2 {
+		t.Fatalf("expected 2 messages in detail, got %d", len(body.Messages))
+	}
+	if body.Messages[0].ID != parentID {
+		t.Errorf("expected first message to be parent %q, got %q", parentID, body.Messages[0].ID)
+	}
+	if body.Messages[1].ID != replyID {
+		t.Errorf("expected second message to be reply %q, got %q", replyID, body.Messages[1].ID)
+	}
+}
