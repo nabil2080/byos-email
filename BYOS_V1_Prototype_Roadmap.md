@@ -930,6 +930,7 @@ For privacy-sensitive fields such as subject terms, the client can compute keyed
 |Outbound plaintext (external mail only)|Accepted. The outbound worker decrypts external mail for DKIM signing and SES delivery. Internal BYOS-to-BYOS mail is end-to-end encrypted and never decrypted by BYOS infrastructure. External mail cannot be E2E due to SMTP limitations.|
 |Key substitution attack|Accepted in V1. The server hosts the public key directory. A compromised or coerced server could substitute a different public key for a recipient, causing the sender to encrypt to the server instead. V1.5 mitigation: append-only key transparency log.|
 |Storage encryption algorithm|Now X-Wing hybrid for new mail (X25519 + ML-KEM-768); X25519-only for pre-migration rows. Migration 035 adds `wrapped_key_algorithm` to track which algorithm each row uses.|
+|Reply graph|Accepted for V1. The server stores raw `message_id`, `in_reply_to`, and a computed `thread_id` to enable conversation threading. This reveals that message B is a reply to message A. Subject lines, bodies, and attachments remain end-to-end encrypted. V2 plan: client-side IndexedDB header cache to eliminate this leak.|
 
 **WORDING:** Do not claim that the server cannot tell two searches use the same word/token. The correct statement is that the server does not receive the plaintext search term. 
 
@@ -1611,6 +1612,7 @@ BYOS BUSINESS EMAIL  |  V1 PROTOTYPE ROADMAP
 
 ### **Appendix D - Post-V1 Future Backlog** 
 
+- Client-side IndexedDB header cache to eliminate the reply-graph disclosure by moving threading entirely to the client (V2)
 - Key transparency log for the public key directory (V1.5)
 - External mail E2E via S/MIME or PGP (V2, if demand)
 - Browser-extension crypto boundary for stronger protection against compromised web origins. 
