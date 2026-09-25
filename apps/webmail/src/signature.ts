@@ -65,3 +65,23 @@ export function applySignatureHtml(html: string, signatureHtml: string): string 
   if (!sig) return html;
   return `${html}<div class="byos-signature"><br>-- <br>${sig}</div>`;
 }
+
+export function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export function formatQuotedHtml(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "<p><br></p>";
+  const lines = trimmed.split("\n");
+  const htmlLines = lines
+    .map((line) => `<p>${escapeHtml(line) || "<br>"}</p>`)
+    .join("");
+  return `<p><br></p><div style="color: #6F7173; border-left: 2px solid #ccc; padding-left: 8px; margin: 8px 0;">${htmlLines}</div>`;
+}
+

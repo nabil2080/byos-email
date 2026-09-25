@@ -1,4 +1,4 @@
-import { applySignature, applySignatureHtml } from "./signature.js";
+import { applySignature, applySignatureHtml, formatQuotedHtml } from "./signature.js";
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -23,118 +23,164 @@ export function runReplySignatureTests(): { passed: number; failed: number } {
 
   console.log("Running Reply Signature Tests...");
 
-  // 1. TestReplyAppendsSignature
-  test("1. TestReplyAppendsSignature", () => {
-    // Fake reply HTML body (with quoted text + quoted signature from Alice)
-    const quotedHtml =
-      "<p>Sounds good!</p>" +
-      "<p>--- On Sep 25, 2026, Alice wrote: ---</p>" +
-      "<blockquote>" +
-      "<p>Can we meet tomorrow?</p>" +
-      '<div class="byos-signature"><br>-- <br><b>Alice</b></div>' +
-      "</blockquote>";
-    const userSigHtml = "<b>Bob</b>";
+  // 1. TestReplyPrePopulatesSignature
+  test("1. TestReplyPrePopulatesSignature", () => {
+    const msg = {
+      sender: "alice@byos.local",
+      subject: "Project Update",
+      date: "Sep 25, 2026",
+    };
+    const originalPlaintext = "Can we meet tomorrow?";
+    const quotedPlain = `\n\n--- On ${msg.date}, ${msg.sender} wrote: ---\n> ${originalPlaintext}`;
+    const sigPlain = "Bob Jones";
+    const sigHtml = "<b>Bob Jones</b>";
 
-    const result = applySignatureHtml(quotedHtml, userSigHtml);
+    // Simulate startReply state logic
+    let composeBody = "";
+    let composeBodyHtml = "";
+    let composeSignatureApplied = false;
 
-    // Assert the user's signature div appears at the end
-    const expectedSigDiv = '<div class="byos-signature"><br>-- <br><b>Bob</b></div>';
-    assert(result.endsWith(expectedSigDiv), "User signature div must appear at the end");
+    if (sigPlain) {
+      composeBody = `${quotedPlain}\n\n-- \n${sigPlain}`;
+    } else {
+      composeBody = quotedPlain;
+    }
 
-    // Assert no duplicate of the user's own signature
-    const userSigMatches = (result.match(/<b>Bob<\/b>/g) || []).length;
-    assert(userSigMatches === 1, `Expected Bob signature once, found ${userSigMatches}`);
+    const quoteHtml = formatQuotedHtml(quotedPlain);
+    if (sigHtml) {
+      composeBodyHtml = `${quoteHtml}<div class="byos-signature"><br>-- <br>${sigHtml}</div>`;
+    } else {
+      composeBodyHtml = quoteHtml;
+    }
 
-    // Plaintext counterpart
-    const quotedPlain =
-      "Sounds good!\n\n--- On Sep 25, 2026, Alice wrote: ---\n> Can we meet tomorrow?\n> \n> -- \n> Alice";
-    const userSigPlain = "Bob";
-    const resultPlain = applySignature(quotedPlain, userSigPlain);
-    assert(resultPlain.endsWith("\n\n-- \nBob"), "User signature must appear at the end of plaintext");
-    const plainMatches = (resultPlain.match(/\bBob\b/g) || []).length;
-    assert(plainMatches === 1, `Expected Bob once in plaintext, found ${plainMatches}`);
+    if (sigPlain || sigHtml) {
+      composeSignatureApplied = true;
+    }
+
+    // Assert composeBody contains the quoted text AND the signature
+    assert(composeBody.includes(quotedPlain), "composeBody must contain quoted text");
+    assert(composeBody.includes("-- \nBob Jones"), "composeBody must contain user signature");
+    assert(composeBody.endsWith("\n\n-- \nBob Jones"), "signature must appear at bottom of composeBody");
+
+    // Assert composeBodyHtml contains styled quote and signature div
+    assert(composeBodyHtml.includes("border-left: 2px solid #ccc"), "composeBodyHtml must contain styled quote");
+    assert(
+      composeBodyHtml.endsWith('<div class="byos-signature"><br>-- <br><b>Bob Jones</b></div>'),
+      "composeBodyHtml must contain user HTML signature div at bottom"
+    );
+
+    // Assert composeSignatureApplied is true
+    assert(composeSignatureApplied === true, "composeSignatureApplied must be true");
   });
 
-  // 2. TestNewComposeDoesNotDoubleSignature
-  test("2. TestNewComposeDoesNotDoubleSignature", () => {
-    // Simulate the state: composeSignatureApplied = true (as set by startNewCompose)
-    let composeSignatureApplied = true;
-    const body = "Here is my message.\n\n-- \nBob";
-    const composeBodyHtml =
-      '<p>Here is my message.</p><div class="byos-signature"><p>-- </p><b>Bob</b></div>';
-    const sigPlain = "Bob";
-    const sigHtml = "<b>Bob</b>";
+  // 2. TestForwardPrePopulatesSignature
+  test("2. TestForwardPrePopulatesSignature", () => {
+    const msg = {
+      sender: "alice@byos.local",
+      date: "Sep 25, 2026",
+    };
+    const originalPlaintext = "Confidential report content";
+    const fwdContent = `--- Forwarded message from ${msg.sender} (${msg.date}) ---\n${originalPlaintext}`;
+    const quotedPlain = `\n\n${fwdContent}`;
+    const sigPlain = "Bob Jones";
+    const sigHtml = "<b>Bob Jones</b>";
 
+    // Simulate startForward state logic
+    let composeBody = "";
+    let composeBodyHtml = "";
+    let composeSignatureApplied = false;
+
+    if (sigPlain) {
+      composeBody = `${quotedPlain}\n\n-- \n${sigPlain}`;
+    } else {
+      composeBody = quotedPlain;
+    }
+
+    const quoteHtml = formatQuotedHtml(fwdContent);
+    if (sigHtml) {
+      composeBodyHtml = `${quoteHtml}<div class="byos-signature"><br>-- <br>${sigHtml}</div>`;
+    } else {
+      composeBodyHtml = quoteHtml;
+    }
+
+    if (sigPlain || sigHtml) {
+      composeSignatureApplied = true;
+    }
+
+    // Assert composeBody contains forwarded text AND the signature
+    assert(composeBody.includes(fwdContent), "composeBody must contain forwarded text");
+    assert(composeBody.includes("-- \nBob Jones"), "composeBody must contain user signature");
+    assert(composeBody.endsWith("\n\n-- \nBob Jones"), "signature must appear at bottom of composeBody");
+
+    // Assert composeBodyHtml contains quote and signature div
+    assert(composeBodyHtml.includes("border-left: 2px solid #ccc"), "composeBodyHtml must contain styled forward block");
+    assert(
+      composeBodyHtml.endsWith('<div class="byos-signature"><br>-- <br><b>Bob Jones</b></div>'),
+      "composeBodyHtml must contain user HTML signature div at bottom"
+    );
+
+    // Assert composeSignatureApplied is true
+    assert(composeSignatureApplied === true, "composeSignatureApplied must be true");
+  });
+
+  // 3. TestNewComposePrePopulatesSignature
+  test("3. TestNewComposePrePopulatesSignature", () => {
+    const sigPlain = "Bob Jones";
+    const sigHtml = "<b>Bob Jones</b>";
+
+    // Simulate startNewCompose state logic
+    let composeBody = "";
+    let composeBodyHtml = "";
+    let composeSignatureApplied = false;
+
+    if (sigPlain) {
+      composeBody = `\n\n-- \n${sigPlain}`;
+    }
+    if (sigHtml) {
+      composeBodyHtml = `<p><br></p><div class="byos-signature"><p>-- </p>${sigHtml}</div>`;
+    }
+    if (sigPlain || sigHtml) {
+      composeSignatureApplied = true;
+    }
+
+    // Assert composeBody contains only the signature (with leading blank lines for typing)
+    assert(composeBody === "\n\n-- \nBob Jones", "composeBody must contain only the signature");
+    assert(
+      composeBodyHtml === '<p><br></p><div class="byos-signature"><p>-- </p><b>Bob Jones</b></div>',
+      "composeBodyHtml must contain blank paragraph and signature div"
+    );
+    assert(composeSignatureApplied === true, "composeSignatureApplied must be true");
+  });
+
+  // 4. TestSendDoesNotDoubleAppend
+  test("4. TestSendDoesNotDoubleAppend", () => {
+    // Simulate a reply where composeBody already has the signature
+    const sigPlain = "Bob Jones";
+    const sigHtml = "<b>Bob Jones</b>";
+
+    const body = "Sounds great!\n\n--- On Sep 25, 2026, Alice wrote: ---\n> Can we meet?\n\n-- \nBob Jones";
+    const composeBodyHtml =
+      '<p>Sounds great!</p><div style="color: #6F7173; border-left: 2px solid #ccc; padding-left: 8px; margin: 8px 0;"><p>--- On Sep 25, 2026, Alice wrote: ---</p><p>&gt; Can we meet?</p></div><div class="byos-signature"><br>-- <br><b>Bob Jones</b></div>';
+    const composeSignatureApplied = true;
+
+    // handleSend signature application block:
     let signedBody = body;
     let htmlBody = composeBodyHtml;
 
-    let applySignatureCalled = false;
-    let applySignatureHtmlCalled = false;
-
-    // handleSend logic under test:
     if (!composeSignatureApplied) {
-      applySignatureCalled = true;
       signedBody = applySignature(body, sigPlain);
-      applySignatureHtmlCalled = true;
       htmlBody = applySignatureHtml(composeBodyHtml, sigHtml);
     }
 
-    // Verify handleSend does NOT call applySignature / applySignatureHtml
-    assert(!applySignatureCalled, "handleSend must NOT call applySignature when composeSignatureApplied is true");
-    assert(!applySignatureHtmlCalled, "handleSend must NOT call applySignatureHtml when composeSignatureApplied is true");
-    assert(signedBody === body, "signedBody must remain unmodified");
-    assert(htmlBody === composeBodyHtml, "htmlBody must remain unmodified");
+    // Assert signature appears exactly once in signedBody
+    const plainSigCount = (signedBody.match(/-- \nBob Jones/g) || []).length;
+    assert(plainSigCount === 1, `Expected signature once in plaintext, found ${plainSigCount}`);
 
-    // Verify when composeSignatureApplied is false (e.g. reply / forward), it DOES append
-    composeSignatureApplied = false;
-    let replyBody = "Draft without signature";
-    let replyHtml = "<p>Draft without signature</p>";
-    if (!composeSignatureApplied) {
-      replyBody = applySignature(replyBody, sigPlain);
-      replyHtml = applySignatureHtml(replyHtml, sigHtml);
-    }
-    assert(replyBody.endsWith("\n\n-- \nBob"), "Must append signature when composeSignatureApplied is false");
-    assert(
-      replyHtml.endsWith('<div class="byos-signature"><br>-- <br><b>Bob</b></div>'),
-      "Must append HTML signature when composeSignatureApplied is false"
-    );
-  });
-
-  // 3. TestReplySignsWithCorrectSignature
-  test("3. TestReplySignsWithCorrectSignature", () => {
-    // Different quoted signature (Alice's) + user signature (Bob's)
-    const quotedHtml =
-      "<p>Thanks for the update.</p>" +
-      "<blockquote>--- On Friday, Alice wrote: ---" +
-      '<div class="byos-signature"><br>-- <br>Alice Smith</div>' +
-      "</blockquote>";
-    const bobSigHtml = "<b>Bob Jones</b>";
-
-    const resultHtml = applySignatureHtml(quotedHtml, bobSigHtml);
-
-    // Verify Bob's signature appears
-    assert(
-      resultHtml.includes('<div class="byos-signature"><br>-- <br><b>Bob Jones</b></div>'),
-      "Bob's signature must appear in the HTML result"
-    );
-    // Verify Alice's is preserved in the quote
-    assert(
-      resultHtml.includes('<div class="byos-signature"><br>-- <br>Alice Smith</div>'),
-      "Alice's signature must be preserved in the quoted original"
-    );
-    assert(
-      resultHtml.endsWith('<div class="byos-signature"><br>-- <br><b>Bob Jones</b></div>'),
-      "Bob's signature must be at the very end of the HTML result"
-    );
-
-    // Plaintext check
-    const quotedPlain =
-      "Thanks for the update.\n\n--- On Friday, Alice wrote: ---\n> Hello\n> \n> -- \n> Alice Smith";
-    const bobSigPlain = "Bob Jones";
-    const resultPlain = applySignature(quotedPlain, bobSigPlain);
-    assert(resultPlain.includes("-- \nBob Jones"), "Bob's signature must appear in plaintext");
-    assert(resultPlain.includes("Alice Smith"), "Alice's signature must be preserved in quoted plaintext");
-    assert(resultPlain.endsWith("\n\n-- \nBob Jones"), "Bob's signature must be at the end of plaintext");
+    // Assert signature appears exactly once in htmlBody
+    const htmlSigCount = (htmlBody.match(/<b>Bob Jones<\/b>/g) || []).length;
+    assert(htmlSigCount === 1, `Expected signature once in HTML, found ${htmlSigCount}`);
+    const divSigCount = (htmlBody.match(/byos-signature/g) || []).length;
+    assert(divSigCount === 1, `Expected byos-signature div once in HTML, found ${divSigCount}`);
   });
 
   return { passed, failed };

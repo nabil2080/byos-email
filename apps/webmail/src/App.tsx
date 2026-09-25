@@ -90,7 +90,7 @@ import {
   base64ToBytes,
   decryptPathAEnvelope,
 } from "./message_crypto";
-import { loadSignature, loadSignatureHtml, saveSignature, saveSignatureHtml, applySignature, applySignatureHtml } from "./signature";
+import { loadSignature, loadSignatureHtml, saveSignature, saveSignatureHtml, applySignature, applySignatureHtml, formatQuotedHtml } from "./signature";
 import { parseMime, getHeader } from "./mime";
 import { SetupAccount } from "./routes/setup-account";
 import { SettingsLayout, SettingsTabId } from "./routes/settings/SettingsLayout";
@@ -2949,6 +2949,7 @@ const App: Component = () => {
   }
 
   function startEditDraft(msg: DisplayMessage, plaintext: string) {
+    clearComposeForm();
     setComposeTo(msg.recipient === "(no recipient)" ? "" : msg.recipient);
     setComposeSubject(msg.subject === "(no subject)" ? "" : msg.subject);
     setComposeBody(plaintext);
@@ -2982,13 +2983,33 @@ const App: Component = () => {
   function startReply(msg: DisplayMessage) {
     const plaintext = messagePlaintext();
     if (plaintext === null) return;
+    clearComposeForm();
+    const box = selectedMailbox();
+    const sigPlain = box ? loadSignature(box.id) : "";
+    const sigHtml = box ? loadSignatureHtml(box.id) : "";
+    const quotedPlain = quoteOriginal(msg, plaintext);
+
     setComposeTo(msg.sender);
     setComposeSubject(withSubjectPrefix(msg.subject, "Re:"));
-    setComposeBody(quoteOriginal(msg, plaintext));
+    if (sigPlain) {
+      setComposeBody(`${quotedPlain}\n\n-- \n${sigPlain}`);
+    } else {
+      setComposeBody(quotedPlain);
+    }
+
+    const quoteHtml = formatQuotedHtml(quotedPlain);
+    if (sigHtml) {
+      setComposeBodyHtml(`${quoteHtml}<div class="byos-signature"><br>-- <br>${sigHtml}</div>`);
+    } else {
+      setComposeBodyHtml(quoteHtml);
+    }
+
     setScheduledTime("");
     setComposeAttachments([]);
     setEditingDraft(null);
-    setComposeSignatureApplied(false);
+    if (sigPlain || sigHtml) {
+      setComposeSignatureApplied(true);
+    }
     setComposeOpen(true);
   }
 
@@ -3000,17 +3021,36 @@ const App: Component = () => {
     // instead of dropping them silently.
     const attachNote =
       messageAttachments().length > 0
-        ? `\n[Note: ${messageAttachments().length} original attachment(s) not carried by forwarding in V1.]\n`
+        ? `[Note: ${messageAttachments().length} original attachment(s) not carried by forwarding in V1.]\n\n`
         : "";
+    clearComposeForm();
+    const box = selectedMailbox();
+    const sigPlain = box ? loadSignature(box.id) : "";
+    const sigHtml = box ? loadSignatureHtml(box.id) : "";
+    const fwdContent = `${attachNote}--- Forwarded message from ${msg.sender} (${msg.date}) ---\n${plaintext}`;
+    const quotedPlain = `\n\n${fwdContent}`;
+
     setComposeTo("");
     setComposeSubject(withSubjectPrefix(msg.subject, "Fwd:"));
-    setComposeBody(
-      `${attachNote}\n--- Forwarded message from ${msg.sender} (${msg.date}) ---\n${plaintext}`
-    );
+    if (sigPlain) {
+      setComposeBody(`${quotedPlain}\n\n-- \n${sigPlain}`);
+    } else {
+      setComposeBody(quotedPlain);
+    }
+
+    const quoteHtml = formatQuotedHtml(fwdContent);
+    if (sigHtml) {
+      setComposeBodyHtml(`${quoteHtml}<div class="byos-signature"><br>-- <br>${sigHtml}</div>`);
+    } else {
+      setComposeBodyHtml(quoteHtml);
+    }
+
     setScheduledTime("");
     setComposeAttachments([]);
     setEditingDraft(null);
-    setComposeSignatureApplied(false);
+    if (sigPlain || sigHtml) {
+      setComposeSignatureApplied(true);
+    }
     setComposeOpen(true);
   }
 
