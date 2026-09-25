@@ -72,6 +72,7 @@ import {
   fetchThreads,
   fetchThreadMessages,
   ThreadSummary,
+  toggleMessageStar,
 } from "./api";
 import {
   unlockMailboxKey,
@@ -535,11 +536,36 @@ const App: Component = () => {
 
   function toggleMessageStarred(msg: DisplayMessage) {
     const origStarred = msg.starred;
+    const newStarred = !origStarred;
     setMessages((prev) =>
-      prev.map((m) => (m.id === msg.id ? { ...m, starred: !origStarred } : m))
+      prev.map((m) => (m.id === msg.id ? { ...m, starred: newStarred } : m))
     );
     if (selectedMsg()?.id === msg.id) {
-      setSelectedMsg({ ...selectedMsg()!, starred: !origStarred });
+      setSelectedMsg({ ...selectedMsg()!, starred: newStarred });
+    }
+
+    const box = selectedMailbox();
+    if (box && msg.isRealApi) {
+      toggleMessageStar(box.id, msg.id, newStarred)
+        .then((res) => {
+          if (res.is_starred !== newStarred) {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === msg.id ? { ...m, starred: res.is_starred } : m))
+            );
+            if (selectedMsg()?.id === msg.id) {
+              setSelectedMsg({ ...selectedMsg()!, starred: res.is_starred });
+            }
+          }
+        })
+        .catch((err) => {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === msg.id ? { ...m, starred: origStarred } : m))
+          );
+          if (selectedMsg()?.id === msg.id) {
+            setSelectedMsg({ ...selectedMsg()!, starred: origStarred });
+          }
+          showToast(`Failed to update star: ${err instanceof Error ? err.message : "unknown error"}`);
+        });
     }
   }
 
@@ -2230,7 +2256,7 @@ const App: Component = () => {
           encryptedBody: m.storage_object_id,
           date: formatMessageDate(m.sent_at || m.received_at, timeFormat(), language()),
           read: m.is_read ?? false,
-          starred: false,
+          starred: m.is_starred ?? false,
           isRealApi: true,
           hasAttachments: m.has_attachments || msgAtts.length > 0,
           attachmentCount: attCount,

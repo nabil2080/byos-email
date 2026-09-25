@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -270,3 +271,166 @@ func TestThreadDetailReturnsChronologicalOrder(t *testing.T) {
 		t.Errorf("expected second message to be reply %q, got %q", replyID, body.Messages[1].ID)
 	}
 }
+
+// 5. TestToggleStarPersists
+func TestToggleStarPersists(t *testing.T) {
+	conn := getTestDB(t)
+	defer conn.Close(context.Background())
+	ctx := context.Background()
+
+	_, userID, domainID, mailboxID := createThreadingTestMailbox(t, conn)
+
+	token, tokenHash := generateSessionToken()
+	_, err := conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		userID, tokenHash, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	threadID := uuid.New().String()
+	msgID := insertThreadListTestMessage(t, conn, mailboxID, domainID, threadID, "alice@test.local", "inbox", false, time.Now())
+
+	// Call toggle star endpoint with PATCH
+	req := httptest.NewRequest(http.MethodPatch, "/v1/mailboxes/"+mailboxID+"/messages/"+msgID+"/star", strings.NewReader(`{"starred":true}`))
+	req.SetPathValue("mailbox_id", mailboxID)
+	req.SetPathValue("message_id", msgID)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	messageStarHandler(w, req)
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, w.Body.String())
+	}
+
+	var res struct {
+		IsStarred bool `json:"is_starred"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !res.IsStarred {
+		t.Fatalf("expected is_starred=true in response, got false")
+	}
+
+	// Query DB to verify persistence
+	var dbStarred bool
+	err = conn.QueryRow(ctx, `SELECT is_starred FROM message_metadata WHERE id = $1`, msgID).Scan(&dbStarred)
+	if err != nil {
+		t.Fatalf("query message_metadata: %v", err)
+	}
+	if !dbStarred {
+		t.Fatalf("expected is_starred=true in database, got false")
+	}
+}
+
+// 6. TestToggleStarRejectsNonOwner
+func TestToggleStarRejectsNonOwner(t *testing.T) {
+	conn := getTestDB(t)
+	defer conn.Close(context.Background())
+	ctx := context.Background()
+
+	_, _, domainIDA, mailboxIDA := createThreadingTestMailbox(t, conn)
+	_, userIDB, _, _ := createThreadingTestMailbox(t, conn)
+
+	tokenB, tokenHashB := generateSessionToken()
+	_, err := conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		userIDB, tokenHashB, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("create session for user B: %v", err)
+	}
+
+	threadID := uuid.New().String()
+	msgIDA := insertThreadListTestMessage(t, conn, mailboxIDA, domainIDA, threadID, "alice@test.local", "inbox", false, time.Now())
+
+	// User B tries to star message in mailbox A
+	req := httptest.NewRequest(http.MethodPatch, "/v1/mailboxes/"+mailboxIDA+"/messages/"+msgIDA+"/star", strings.NewReader(`{"starred":true}`))
+	req.SetPathValue("mailbox_id", mailboxIDA)
+	req.SetPathValue("message_id", msgIDA)
+	req.Header.Set("Authorization", "Bearer "+tokenB)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	messageStarHandler(w, req)
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for non-owner, got %d: %s", resp.StatusCode, w.Body.String())
+	}
+}
+
+// 7. TestThreadSummaryIncludesStarred
+func TestThreadSummaryIncludesStarred(t *testing.T) {
+	conn := getTestDB(t)
+	defer conn.Close(context.Background())
+	ctx := context.Background()
+
+	_, userID, domainID, mailboxID := createThreadingTestMailbox(t, conn)
+
+	token, tokenHash := generateSessionToken()
+	_, err := conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		userID, tokenHash, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	threadID := uuid.New().String()
+	t0 := time.Now().Add(-10 * time.Minute)
+	t1 := time.Now().Add(-5 * time.Minute)
+
+	id1 := insertThreadListTestMessage(t, conn, mailboxID, domainID, threadID, "alice@test.local", "inbox", false, t0)
+	_ = insertThreadListTestMessage(t, conn, mailboxID, domainID, threadID, "bob@test.local", "inbox", true, t1)
+
+	// Star id1 via PATCH endpoint
+	starReq := httptest.NewRequest(http.MethodPatch, "/v1/mailboxes/"+mailboxID+"/messages/"+id1+"/star", strings.NewReader(`{"starred":true}`))
+	starReq.SetPathValue("mailbox_id", mailboxID)
+	starReq.SetPathValue("message_id", id1)
+	starReq.Header.Set("Authorization", "Bearer "+token)
+	starReq.Header.Set("Content-Type", "application/json")
+
+	wStar := httptest.NewRecorder()
+	messageStarHandler(wStar, starReq)
+	if wStar.Result().StatusCode != http.StatusOK {
+		t.Fatalf("star request failed: %s", wStar.Body.String())
+	}
+
+	// Fetch threads summary
+	req := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailboxID+"/threads", nil)
+	req.SetPathValue("mailbox_id", mailboxID)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	w := httptest.NewRecorder()
+	threadsHandler(w, req)
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, w.Body.String())
+	}
+
+	var body struct {
+		Threads []ThreadSummary `json:"threads"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode threads response: %v", err)
+	}
+
+	var found *ThreadSummary
+	for i := range body.Threads {
+		if body.Threads[i].ThreadID == threadID {
+			found = &body.Threads[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("thread %q not found in summary", threadID)
+	}
+	if !found.IsStarred {
+		t.Fatalf("expected thread IsStarred=true when message is starred, got false")
+	}
+}
+

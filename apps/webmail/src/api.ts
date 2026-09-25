@@ -70,6 +70,7 @@ export interface MessageMetadata {
   folder_id?: string | null;
   label_ids?: string[];
   is_read?: boolean;
+  is_starred?: boolean;
 }
 
 export interface ThreadSummary {
@@ -480,6 +481,20 @@ export async function setMessageRead(
       method: "PUT",
       body: JSON.stringify({ read }),
     }
+  );
+}
+
+export async function toggleMessageStar(
+  mailboxId: string,
+  messageId: string,
+  starred: boolean,
+): Promise<{ is_starred: boolean }> {
+  return apiRequest<{ is_starred: boolean }>(
+    `/v1/mailboxes/${mailboxId}/messages/${messageId}/star`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ starred }),
+    },
   );
 }
 

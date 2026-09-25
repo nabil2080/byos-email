@@ -1,5 +1,5 @@
 import { formatParticipants, getUnreadClass } from "./components/ThreadRow.js";
-import { fetchThreads, fetchThreadMessages } from "./api.js";
+import { fetchThreads, fetchThreadMessages, toggleMessageStar } from "./api.js";
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -97,6 +97,47 @@ export async function runThreadingTests(): Promise<{ passed: number; failed: num
         requestedUrls.some((u) => u.endsWith("/v1/mailboxes/mailbox-123/threads/thread-456")),
         `fetchThreadMessages should request /v1/mailboxes/mailbox-123/threads/thread-456, got: ${requestedUrls.join(", ")}`
       );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // 4. TestToggleMessageStarCallsCorrectURL
+  await test("4. TestToggleMessageStarCallsCorrectURL", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: { url: string; method?: string; body?: any }[] = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      let bodyJson = null;
+      if (init?.body && typeof init.body === "string") {
+        try {
+          bodyJson = JSON.parse(init.body);
+        } catch {}
+      }
+      requests.push({ url, method: init?.method, body: bodyJson });
+      return new Response(JSON.stringify({ is_starred: bodyJson?.starred ?? false }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const resTrue = await toggleMessageStar("box-1", "msg-1", true);
+      assert(resTrue.is_starred === true, "returns is_starred true");
+      assert(requests.length === 1, "made 1 request");
+      assert(requests[0].method === "PATCH", "method is PATCH");
+      assert(
+        requests[0].url.endsWith("/v1/mailboxes/box-1/messages/msg-1/star"),
+        `url matches star endpoint: ${requests[0].url}`
+      );
+      assert(requests[0].body?.starred === true, "body has starred: true");
+
+      const resFalse = await toggleMessageStar("box-1", "msg-1", false);
+      assert(resFalse.is_starred === false, "returns is_starred false");
+      assert(requests.length === 2, "made 2 requests");
+      assert(requests[1].method === "PATCH", "method is PATCH");
+      assert(requests[1].body?.starred === false, "body has starred: false");
     } finally {
       globalThis.fetch = originalFetch;
     }

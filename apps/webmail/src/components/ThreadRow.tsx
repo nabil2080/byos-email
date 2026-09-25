@@ -105,6 +105,15 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
           </Show>
         </div>
 
+        {/* Star indicator */}
+        <Show when={props.thread.is_starred}>
+          <span class="text-amber-500 flex-shrink-0" title="Starred">
+            <svg class="w-3.5 h-3.5 fill-amber-400 stroke-amber-500 stroke-[1.4]" viewBox="0 0 24 24">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+            </svg>
+          </span>
+        </Show>
+
         {/* Attachment indicator */}
         <Show when={props.thread.has_attachments}>
           <span class="text-[#878A8E] flex-shrink-0" title="Has attachments">

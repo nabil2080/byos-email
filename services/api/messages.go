@@ -43,6 +43,7 @@ type MessageMetadataResponse struct {
 	FolderID              *string  `json:"folder_id,omitempty"`
 	LabelIDs              []string `json:"label_ids"`
 	IsRead                bool     `json:"is_read"`
+	IsStarred             bool     `json:"is_starred"`
 }
 
 type ThreadSummary struct {
@@ -97,7 +98,8 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 		       m.has_attachments, m.attachment_count,
 		       COALESCE(m.folder, 'inbox'), COALESCE(m.folder_id::text, ''),
 		       COALESCE(ARRAY_AGG(ml.label_id::text) FILTER (WHERE ml.label_id IS NOT NULL), ARRAY[]::text[]) as label_ids,
-		       COALESCE(m.is_read, false)
+		       COALESCE(m.is_read, false),
+		       COALESCE(m.is_starred, false)
 		FROM message_metadata m
 		LEFT JOIN message_labels ml ON ml.message_id = m.id
 		WHERE m.mailbox_id=$1
@@ -121,7 +123,7 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&m.ID, &m.MessageSeq, &m.Direction, &m.Sender, &m.Recipients, &m.StorageObjectID,
 			&wrapped, &m.EncryptionVersion, &iv, &m.AADVersion, &hash,
 			&receivedAt, &sentAt, &m.Status, &m.HasAttachments, &m.AttachmentCount,
-			&folder, &folderIDStr, &labelIDs, &m.IsRead); err != nil {
+			&folder, &folderIDStr, &labelIDs, &m.IsRead, &m.IsStarred); err != nil {
 			http.Error(w, "failed to read message metadata", http.StatusInternalServerError)
 			return
 		}
@@ -202,7 +204,7 @@ func threadsHandler(w http.ResponseWriter, r *http.Request) {
 		    MAX(COALESCE(m.sent_at, m.received_at)) AS latest_at,
 		    COALESCE(ARRAY_AGG(m.sender ORDER BY COALESCE(m.sent_at, m.received_at) ASC), ARRAY[]::text[]) AS senders,
 		    COALESCE(ARRAY_AGG(m.id::text ORDER BY COALESCE(m.sent_at, m.received_at) ASC), ARRAY[]::text[]) AS message_ids,
-		    false AS is_starred,
+		    COALESCE(BOOL_OR(m.is_starred), false) AS is_starred,
 		    (ARRAY_AGG(COALESCE(m.folder, 'inbox') ORDER BY COALESCE(m.sent_at, m.received_at) DESC))[1] AS folder,
 		    COALESCE(BOOL_OR(m.has_attachments), false) AS has_attachments
 		FROM message_metadata m
@@ -307,7 +309,8 @@ func threadDetailHandler(w http.ResponseWriter, r *http.Request) {
 		       m.has_attachments, m.attachment_count,
 		       COALESCE(m.folder, 'inbox'), COALESCE(m.folder_id::text, ''),
 		       COALESCE(ARRAY_AGG(ml.label_id::text) FILTER (WHERE ml.label_id IS NOT NULL), ARRAY[]::text[]) as label_ids,
-		       COALESCE(m.is_read, false)
+		       COALESCE(m.is_read, false),
+		       COALESCE(m.is_starred, false)
 		FROM message_metadata m
 		LEFT JOIN message_labels ml ON ml.message_id = m.id
 		WHERE m.mailbox_id=$1 AND m.thread_id=$2
@@ -330,7 +333,7 @@ func threadDetailHandler(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&m.ID, &m.MessageSeq, &m.Direction, &m.Sender, &m.Recipients, &m.StorageObjectID,
 			&wrapped, &m.EncryptionVersion, &iv, &m.AADVersion, &hash,
 			&receivedAt, &sentAt, &m.Status, &m.HasAttachments, &m.AttachmentCount,
-			&folder, &folderIDStr, &labelIDs, &m.IsRead); err != nil {
+			&folder, &folderIDStr, &labelIDs, &m.IsRead, &m.IsStarred); err != nil {
 			http.Error(w, "failed to read message metadata", http.StatusInternalServerError)
 			return
 		}
@@ -754,6 +757,76 @@ func messageReadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// PATCH /v1/mailboxes/{mailbox_id}/messages/{message_id}/star
+// Body: { "starred": true | false }
+// Returns: { "is_starred": bool }
+func messageStarHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		writeInternalSendError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !allowPerUser(userID) {
+		writeInternalSendError(w, http.StatusTooManyRequests, "rate_limited")
+		return
+	}
+
+	mailboxID := r.PathValue("mailbox_id")
+	messageID := r.PathValue("message_id")
+
+	var req struct {
+		Starred bool `json:"starred"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeInternalSendError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		writeInternalSendError(w, http.StatusInternalServerError, "database_connection_failed")
+		return
+	}
+	defer conn.Close(ctx)
+
+	// Verify ownership
+	var owns bool
+	err = conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM mailboxes m
+			JOIN users u ON u.id = m.user_id
+			WHERE m.id = $1 AND u.id = $2 AND m.is_active = true
+		)
+	`, mailboxID, userID).Scan(&owns)
+	if err != nil || !owns {
+		writeInternalSendError(w, http.StatusForbidden, "not_mailbox_owner")
+		return
+	}
+
+	// Update star
+	cmdTag, err := conn.Exec(ctx, `
+		UPDATE message_metadata
+		SET is_starred = $1
+		WHERE id = $2 AND mailbox_id = $3
+	`, req.Starred, messageID, mailboxID)
+	if err != nil {
+		writeInternalSendError(w, http.StatusInternalServerError, "update_failed")
+		return
+	}
+	if cmdTag.RowsAffected() == 0 {
+		writeInternalSendError(w, http.StatusNotFound, "message_not_found")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"is_starred": req.Starred})
 }
 
 func computeDeliveryIdentity(envelopeFrom string, recipients []string, rawMessage []byte) [32]byte {
