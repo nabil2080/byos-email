@@ -264,8 +264,8 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
 
   return (
     <Show when={props.isOpen}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-        <div class="bg-white dark:bg-[#1E2025] rounded-2xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-2xl max-w-md w-full p-6 space-y-4 font-sans">
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-3 sm:p-4">
+        <div class="bg-white dark:bg-[#1E2025] rounded-2xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-2xl max-w-md w-full p-4 sm:p-6 space-y-4 font-sans max-h-[95vh] overflow-y-auto">
           <div class="flex items-center justify-between pb-3 border-b border-[#E2DFD8] dark:border-[#2E3138]">
             <div>
               <h3 class="text-sm font-bold text-[#2B2C2D] dark:text-[#F3F4F6]">

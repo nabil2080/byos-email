@@ -350,6 +350,32 @@ export async function tryPathASend(
 }
 
 const App: Component = () => {
+  const [isMobile, setIsMobile] = createSignal(typeof window !== "undefined" ? window.innerWidth < 768 : false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = createSignal(false);
+
+  onMount(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    onCleanup(() => {
+      window.removeEventListener("resize", handleResize);
+    });
+  });
+
+  createEffect(() => {
+    if (mobileSidebarOpen()) {
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === "Escape") {
+          setMobileSidebarOpen(false);
+        }
+      };
+      window.addEventListener("keydown", handleKeyDown);
+      onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
+    }
+  });
+
   const [currentUser, setCurrentUser] = createSignal<UserMe | null>(null);
   const [mailboxes, setMailboxes] = createSignal<Mailbox[]>([]);
   const [selectedMailbox, setSelectedMailbox] = createSignal<Mailbox | null>(null);
@@ -4359,10 +4385,10 @@ const App: Component = () => {
           </SettingsLayout>
         }
       >
-      <div class="flex flex-col h-screen w-screen overflow-hidden bg-[#F0EEE9] dark:bg-[#121316] text-[#1A1B1E] dark:text-[#F3F4F6] font-sans p-2.5 sm:p-3 gap-2.5 sm:gap-3">
+      <div class="flex flex-col h-screen w-screen overflow-hidden bg-[#F0EEE9] dark:bg-[#121316] text-[#1A1B1E] dark:text-[#F3F4F6] font-sans p-1.5 sm:p-3 gap-1.5 sm:gap-3">
         {/* Audited Impersonation Banner */}
         <Show when={isImpersonating()}>
-          <div class="bg-amber-600 text-white px-4 py-2 flex items-center justify-between text-xs sm:text-sm font-medium shadow-sm z-50 rounded-xl">
+          <div class="bg-amber-600 text-white px-3 sm:px-4 py-2 flex items-center justify-between text-xs sm:text-sm font-medium shadow-sm z-50 rounded-xl">
             <div class="flex items-center gap-2">
               <svg class="w-4 h-4 stroke-current fill-none stroke-2 flex-shrink-0" viewBox="0 0 24 24">
                 <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
@@ -4385,7 +4411,7 @@ const App: Component = () => {
 
         {/* Historical Messages Locked Warning Banner (Tier 2 Recovery) */}
         <Show when={selectedMailbox()?.previous_wrapped_sk_user || currentUser()?.previous_wrapped_sk_user}>
-          <div class="bg-amber-500/15 border border-amber-500/30 text-amber-900 dark:text-amber-200 px-4 py-2.5 flex items-center justify-between text-xs font-medium rounded-xl shadow-xs">
+          <div class="bg-amber-500/15 border border-amber-500/30 text-amber-900 dark:text-amber-200 px-3 sm:px-4 py-2 sm:py-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between text-xs font-medium rounded-xl shadow-xs gap-2">
             <div class="flex items-center gap-2.5">
               <svg class="w-4 h-4 stroke-amber-600 dark:stroke-amber-400 fill-none stroke-2 shrink-0" viewBox="0 0 24 24">
                 <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
@@ -4407,9 +4433,99 @@ const App: Component = () => {
           </div>
         </Show>
 
+        {/* Mobile Navigation Drawer with Backdrop */}
+        <Show when={mobileSidebarOpen()}>
+          <div
+            class="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 md:hidden transition-opacity"
+            onClick={() => setMobileSidebarOpen(false)}
+            aria-hidden="true"
+          />
+          <div class="fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-[#F0EEE9] dark:bg-[#18191D] z-50 md:hidden shadow-2xl flex flex-col transition-transform duration-200">
+            <Sidebar
+              currentUser={currentUser()}
+              selectedMailbox={selectedMailbox()}
+              currentFolder={currentFolder()}
+              onSelectFolder={(f) => {
+                setCurrentFolder(f);
+                setActiveCustomFolder(null);
+                setActiveLabel(null);
+                setSelectedMsg(null);
+                setSelectedIds(new Set<string>());
+                setCurrentPage(1);
+                setMobileSidebarOpen(false);
+              }}
+              folderCounts={folderCounts()}
+              customFolderCounts={customFolderCounts()}
+              labelCounts={labelCounts()}
+              onCompose={() => {
+                startNewCompose();
+                setMobileSidebarOpen(false);
+              }}
+              onOpenContacts={() => {
+                openContacts();
+                setMobileSidebarOpen(false);
+              }}
+              onOpenImport={() => {
+                setImportEmailsModalOpen(true);
+                setMobileSidebarOpen(false);
+              }}
+              onOpenSettings={() => {
+                setActiveSettingsTab("signatures");
+                setSettingsOpen(true);
+                setMobileSidebarOpen(false);
+              }}
+              onLogout={handleLogout}
+              isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
+              storageError={storageErrorBanner()}
+              connectedAccounts={connectedAccounts()}
+              onSelectAccount={(acc) => {
+                handleSwitchAccount(acc);
+                setMobileSidebarOpen(false);
+              }}
+              onOpenAddMailbox={() => {
+                setAddMailboxModalOpen(true);
+                setMobileSidebarOpen(false);
+              }}
+              customFolders={customFolders()}
+              activeFolderId={activeCustomFolder()?.id}
+              onSelectCustomFolder={(f) => {
+                handleSelectCustomFolder(f);
+                setMobileSidebarOpen(false);
+              }}
+              onOpenCreateFolder={() => {
+                setFolderToEdit(null);
+                setCreateFolderModalOpen(true);
+                setMobileSidebarOpen(false);
+              }}
+              onEditFolder={handleOpenEditFolder}
+              onDeleteFolder={handleDeleteFolder}
+              labels={labels()}
+              activeLabelId={activeLabel()?.id}
+              onSelectLabel={(l) => {
+                handleSelectLabel(l);
+                setMobileSidebarOpen(false);
+              }}
+              onOpenCreateLabel={() => {
+                setLabelToEdit(null);
+                setCreateLabelModalOpen(true);
+                setMobileSidebarOpen(false);
+              }}
+              onEditLabel={handleOpenEditLabel}
+              onDeleteLabel={handleDeleteLabel}
+              onMoveMessages={handleMoveMessages}
+              onAttachLabel={handleAttachLabel}
+              theme={theme()}
+              onSetTheme={handleSetTheme}
+              onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark")}
+              onCloseMobile={() => setMobileSidebarOpen(false)}
+            />
+          </div>
+        </Show>
+
         <div class="flex flex-1 overflow-hidden gap-3">
           {/* ── Left Navigation Sidebar (Unified with Canvas #F0EEE9) ── */}
           <Sidebar
+            class="hidden md:flex"
             currentUser={currentUser()}
             selectedMailbox={selectedMailbox()}
             currentFolder={currentFolder()}
@@ -4465,10 +4581,10 @@ const App: Component = () => {
           {/* ── Message List Column (Dynamic Full-Width, 380px Split, or Hidden in Full Mode) ── */}
           <div
             class={`${
-              layoutMode() === "full" && selectedMsg()
+              (layoutMode() === "full" && selectedMsg()) || (isMobile() && selectedMsg())
                 ? "hidden"
                 : selectedMsg()
-                ? "w-[380px] min-w-[340px] max-w-[420px] flex-shrink-0"
+                ? "w-full md:w-[380px] md:min-w-[340px] md:max-w-[420px] md:flex-shrink-0"
                 : "w-full flex-1"
             } transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] h-full overflow-hidden`}
           >
@@ -4477,7 +4593,7 @@ const App: Component = () => {
               messages={paginatedMessages()}
               selectedMessage={selectedMsg()}
               selectedIds={selectedIds()}
-              isSplit={Boolean(selectedMsg())}
+              isSplit={isMobile() || Boolean(selectedMsg())}
               onSelectMessage={openMessage}
               onToggleCheck={handleToggleCheck}
               onSelectFilter={handleSelectFilter}
@@ -4525,12 +4641,13 @@ const App: Component = () => {
               viewMode={effectiveViewMode()}
               expandedThreadId={expandedThreadId()}
               onSelectThread={handleSelectThread}
+              onOpenMobileMenu={() => setMobileSidebarOpen(true)}
             />
           </div>
 
           {/* ── Reading Pane (Only mounted when selectedMsg()) ── */}
           <Show when={selectedMsg()}>
-            <div class="flex-1 min-w-0 h-full overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]">
+            <div class="flex-1 min-w-0 w-full h-full overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]">
               <ReadingPane
                 message={selectedMsg()!}
                 isDecrypting={isDecrypting()}

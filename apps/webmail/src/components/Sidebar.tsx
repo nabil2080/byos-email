@@ -40,6 +40,8 @@ interface SidebarProps {
   theme?: string;
   onToggleTheme?: () => void;
   onSetTheme?: (theme: "cloud_dancer" | "dark") => void;
+  class?: string;
+  onCloseMobile?: () => void;
 }
 
 export const Sidebar: Component<SidebarProps> = (props) => {
@@ -149,15 +151,31 @@ export const Sidebar: Component<SidebarProps> = (props) => {
   const isPrivate = () => props.selectedMailbox?.mode === "private";
 
   return (
-    <aside class="w-64 flex-shrink-0 bg-[#F0EEE9] dark:bg-[#18191D] border-r border-[#E2DFD8]/80 dark:border-[#2E3138] flex flex-col justify-between select-none h-full relative">
+    <aside class={`w-full md:w-64 flex-shrink-0 bg-[#F0EEE9] dark:bg-[#18191D] border-r border-[#E2DFD8]/80 dark:border-[#2E3138] flex flex-col justify-between select-none h-full relative ${props.class || ""}`}>
       {/* FIXED TOP: Brand Header & Mode Toggle, Account Switcher, Compose, Quick Actions */}
       <div class="p-2 pb-2 relative z-50 overflow-visible space-y-2 flex-shrink-0">
         {/* Top-Left App Brand Header */}
-        <div class="flex items-center gap-2 px-1.5 pt-0.5 pb-0.5">
-          <div class="w-6 h-6 rounded-lg bg-[#A27561] flex items-center justify-center text-white font-bold text-xs shadow-2xs tracking-wider">
-            B
+        <div class="flex items-center justify-between px-1.5 pt-0.5 pb-0.5">
+          <div class="flex items-center gap-2">
+            <div class="w-6 h-6 rounded-lg bg-[#A27561] flex items-center justify-center text-white font-bold text-xs shadow-2xs tracking-wider">
+              B
+            </div>
+            <span class="text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight">BYOS Mail</span>
           </div>
-          <span class="text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight">BYOS Mail</span>
+          <Show when={props.onCloseMobile}>
+            <button
+              type="button"
+              onClick={props.onCloseMobile}
+              class="md:hidden flex items-center justify-center w-8 h-8 rounded-lg text-[#6F7173] dark:text-[#878A8E] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF] dark:hover:bg-[#26282E] transition cursor-pointer"
+              title="Close navigation menu"
+              aria-label="Close navigation menu"
+            >
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </Show>
         </div>
 
         {/* User Identity & Account Switcher (Top-Left) */}
@@ -166,16 +184,25 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           isPrivate={isPrivate()}
           connectedAccounts={props.connectedAccounts || []}
           activeAccountId={props.selectedMailbox?.id || ""}
-          onSelectAccount={(acc) => props.onSelectAccount?.(acc)}
-          onOpenAddMailbox={() => props.onOpenAddMailbox?.()}
+          onSelectAccount={(acc) => {
+            props.onSelectAccount?.(acc);
+            props.onCloseMobile?.();
+          }}
+          onOpenAddMailbox={() => {
+            props.onOpenAddMailbox?.();
+            props.onCloseMobile?.();
+          }}
           onSignOut={props.onLogout}
         />
 
         {/* Compose Pill & Quick Actions */}
         <div class="space-y-1.5">
           <button
-            onClick={props.onCompose}
-            class="w-full bg-[#A27561] hover:bg-[#8F6452] dark:bg-[#A27561] dark:hover:bg-[#B2826F] text-white text-xs font-medium py-2 px-3.5 rounded-xl shadow-none transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-[0.99]"
+            onClick={() => {
+              props.onCompose();
+              props.onCloseMobile?.();
+            }}
+            class="w-full bg-[#A27561] hover:bg-[#8F6452] dark:bg-[#A27561] dark:hover:bg-[#B2826F] text-white text-xs font-medium py-2.5 px-3.5 min-h-[40px] rounded-xl shadow-none transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-[0.99]"
           >
             <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
               <line x1="12" y1="5" x2="12" y2="19" />
@@ -187,8 +214,11 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           {/* Sub-actions: Contacts, Import & Settings */}
           <div class="grid grid-cols-3 gap-1 pt-0.5">
             <button
-              onClick={props.onOpenContacts}
-              class="flex items-center justify-center gap-1 py-1.5 px-1.5 rounded-lg text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] transition-colors cursor-pointer"
+              onClick={() => {
+                props.onOpenContacts();
+                props.onCloseMobile?.();
+              }}
+              class="flex items-center justify-center gap-1 py-2 px-1.5 min-h-[36px] rounded-lg text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] transition-colors cursor-pointer"
               title="Contacts"
             >
               <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -201,8 +231,11 @@ export const Sidebar: Component<SidebarProps> = (props) => {
             </button>
 
             <button
-              onClick={props.onOpenImport}
-              class="flex items-center justify-center gap-1 py-1.5 px-1.5 rounded-lg text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] transition-colors cursor-pointer"
+              onClick={() => {
+                props.onOpenImport?.();
+                props.onCloseMobile?.();
+              }}
+              class="flex items-center justify-center gap-1 py-2 px-1.5 min-h-[36px] rounded-lg text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] transition-colors cursor-pointer"
               title="Import Emails (.eml / .mbox)"
             >
               <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -212,8 +245,11 @@ export const Sidebar: Component<SidebarProps> = (props) => {
             </button>
 
             <button
-              onClick={props.onOpenSettings}
-              class="flex items-center justify-center gap-1 py-1.5 px-1.5 rounded-lg text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] transition-colors cursor-pointer"
+              onClick={() => {
+                props.onOpenSettings();
+                props.onCloseMobile?.();
+              }}
+              class="flex items-center justify-center gap-1 py-2 px-1.5 min-h-[36px] rounded-lg text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] transition-colors cursor-pointer"
               title="Settings"
             >
               <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -237,7 +273,10 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
             return (
               <button
-                onClick={() => props.onSelectFolder(f)}
+                onClick={() => {
+                  props.onSelectFolder(f);
+                  props.onCloseMobile?.();
+                }}
                 onDragOver={(e) => {
                   e.preventDefault();
                   if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
@@ -247,7 +286,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                   if (dragOverTarget() === f) setDragOverTarget(null);
                 }}
                 onDrop={(e) => handleDrop(e, f, false)}
-                class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer ${
+                class={`w-full flex items-center justify-between px-3 py-2.5 md:py-2 min-h-[40px] text-sm rounded-xl transition-all cursor-pointer ${
                   isDropTarget()
                     ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
                     : isActive()
@@ -291,7 +330,10 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 const isDropTarget = () => dragOverTarget() === f.id;
                 return (
                   <div
-                    onClick={() => props.onSelectCustomFolder?.(f)}
+                    onClick={() => {
+                      props.onSelectCustomFolder?.(f);
+                      props.onCloseMobile?.();
+                    }}
                     onDragOver={(e) => {
                       e.preventDefault();
                       if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
@@ -301,7 +343,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                       if (dragOverTarget() === f.id) setDragOverTarget(null);
                     }}
                     onDrop={(e) => handleDrop(e, f.id, false)}
-                    class={`group relative w-full flex items-center justify-between px-2.5 py-1.5 text-xs rounded-xl transition-all cursor-pointer ${
+                    class={`group relative w-full flex items-center justify-between px-2.5 py-2 md:py-1.5 min-h-[38px] text-xs rounded-xl transition-all cursor-pointer ${
                       f.parent_id ? "pl-5" : ""
                     } ${
                       isDropTarget()
@@ -336,8 +378,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                             setOpenFolderMenuId(openFolderMenuId() === f.id ? null : f.id);
                             setOpenLabelMenuId(null);
                           }}
-                          class={`p-0.5 rounded text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer ${
-                            openFolderMenuId() === f.id ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                          class={`p-1 rounded text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer ${
+                            openFolderMenuId() === f.id ? "opacity-100" : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                           }`}
                           title="Folder options"
                         >
@@ -409,7 +451,10 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 const isDropTarget = () => dragOverTarget() === l.id;
                 return (
                   <div
-                    onClick={() => props.onSelectLabel?.(l)}
+                    onClick={() => {
+                      props.onSelectLabel?.(l);
+                      props.onCloseMobile?.();
+                    }}
                     onDragOver={(e) => {
                       e.preventDefault();
                       if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
@@ -419,7 +464,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                       if (dragOverTarget() === l.id) setDragOverTarget(null);
                     }}
                     onDrop={(e) => handleDrop(e, l.id, true)}
-                    class={`group relative w-full flex items-center justify-between px-2.5 py-1.5 text-xs rounded-xl transition-all cursor-pointer ${
+                    class={`group relative w-full flex items-center justify-between px-2.5 py-2 md:py-1.5 min-h-[38px] text-xs rounded-xl transition-all cursor-pointer ${
                       isDropTarget()
                         ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
                         : isActive()
@@ -453,8 +498,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                             setOpenLabelMenuId(openLabelMenuId() === l.id ? null : l.id);
                             setOpenFolderMenuId(null);
                           }}
-                          class={`p-0.5 rounded text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer ${
-                            openLabelMenuId() === l.id ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                          class={`p-1 rounded text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer ${
+                            openLabelMenuId() === l.id ? "opacity-100" : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                           }`}
                           title="Label options"
                         >

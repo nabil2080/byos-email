@@ -234,7 +234,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
       {/* ── Top Reading Pane Action Toolbar ── */}
       <div
         ref={paneToolbarRef}
-        class="px-4 py-2.5 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#18191D] flex items-center justify-between gap-2 flex-shrink-0 select-none relative z-20"
+        class="px-2.5 sm:px-4 py-2 sm:py-2.5 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#18191D] flex items-center justify-between gap-1.5 sm:gap-2 flex-shrink-0 select-none relative z-20 overflow-x-auto no-scrollbar"
       >
         {/* Left Side: Back button & Sequential Switchers */}
         <div class="flex items-center gap-1.5 sm:gap-2">
@@ -242,7 +242,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
           <button
             type="button"
             onClick={props.onBack}
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] hover:text-[#A27561] dark:hover:text-[#A27561] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] transition cursor-pointer border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] shadow-2xs"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] hover:text-[#A27561] dark:hover:text-[#A27561] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] transition cursor-pointer border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] shadow-2xs min-h-[36px]"
             title="Back to messages (Esc)"
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">

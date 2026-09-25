@@ -169,7 +169,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
             </Show>
 
             {/* Sender Column with ProfileAvatar */}
-            <div class="w-48 sm:w-56 min-w-0 flex-shrink-0 flex items-center gap-2 truncate">
+            <div class="w-28 sm:w-48 md:w-56 min-w-0 flex-shrink-0 flex items-center gap-2 truncate">
               <ProfileAvatar email={props.message.sender} size="xs" />
               <span
                 class={`truncate font-sans text-sm ${
@@ -227,7 +227,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
             </Show>
 
             {/* Right Date & Floating Hover Action Pill (Fixed Width Slot) */}
-            <div class="w-28 flex-shrink-0 relative flex items-center justify-end">
+            <div class="w-20 sm:w-28 flex-shrink-0 relative flex items-center justify-end">
               {/* Monospace Short Date */}
               <span class="font-mono text-xs text-[#55575B] dark:text-[#9CA3AF] group-hover:invisible transition">
                 {formattedDate()}
@@ -333,7 +333,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                   e.stopPropagation();
                   props.onToggleCheck(props.message, !props.isChecked);
                 }}
-                class="flex items-center justify-center p-0.5 cursor-pointer flex-shrink-0"
+                class="flex items-center justify-center p-1 cursor-pointer flex-shrink-0"
                 title={props.isChecked ? "Deselect" : "Select"}
               >
                 <input
@@ -351,7 +351,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                   e.stopPropagation();
                   props.onToggleStarred(props.message);
                 }}
-                class="transition flex-shrink-0 cursor-pointer p-0.5 text-[#878A8E] hover:text-amber-500 flex items-center justify-center"
+                class="transition flex-shrink-0 cursor-pointer p-1 text-[#878A8E] hover:text-amber-500 flex items-center justify-center"
                 title={props.message.starred ? "Unstar" : "Star"}
               >
                 <Show

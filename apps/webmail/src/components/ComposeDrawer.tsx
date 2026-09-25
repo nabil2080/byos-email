@@ -69,8 +69,8 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
           drawerMode() === "minimized"
             ? "bottom-0 right-6 sm:right-10 w-80 h-12 rounded-t-xl cursor-pointer"
             : drawerMode() === "docked"
-            ? "bottom-0 right-6 sm:right-10 w-[580px] h-[560px] max-w-[calc(100vw-24px)] max-h-[calc(100vh-64px)] rounded-t-2xl"
-            : "top-8 bottom-6 inset-x-0 mx-auto w-[860px] max-w-[95vw] h-[calc(100vh-56px)] rounded-2xl"
+            ? "inset-0 w-full h-full rounded-none md:inset-auto md:bottom-0 md:right-10 md:w-[580px] md:h-[560px] md:max-w-[calc(100vw-24px)] md:max-h-[calc(100vh-64px)] md:rounded-t-2xl"
+            : "inset-0 w-full h-full rounded-none md:inset-x-0 md:top-8 md:bottom-6 md:mx-auto md:w-[860px] md:max-w-[95vw] md:h-[calc(100vh-56px)] md:rounded-2xl"
         }`}
         onClick={() => {
           if (drawerMode() === "minimized") setDrawerMode("docked");
@@ -93,7 +93,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
               type="button"
               onClick={toggleMinimize}
               title={drawerMode() === "minimized" ? "Expand" : "Minimize"}
-              class="w-7 h-7 rounded-lg hover:bg-stone-700/70 dark:hover:bg-[#26282E] flex items-center justify-center text-xs transition cursor-pointer text-stone-300 hover:text-white"
+              class="hidden md:flex w-7 h-7 rounded-lg hover:bg-stone-700/70 dark:hover:bg-[#26282E] items-center justify-center text-xs transition cursor-pointer text-stone-300 hover:text-white"
             >
               <Show
                 when={drawerMode() === "minimized"}
@@ -114,7 +114,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
               type="button"
               onClick={toggleMaximize}
               title={drawerMode() === "maximized" ? "Restore to Dock" : "Maximize"}
-              class="w-7 h-7 rounded-lg hover:bg-stone-700/70 dark:hover:bg-[#26282E] flex items-center justify-center text-xs transition cursor-pointer text-stone-300 hover:text-white"
+              class="hidden md:flex w-7 h-7 rounded-lg hover:bg-stone-700/70 dark:hover:bg-[#26282E] items-center justify-center text-xs transition cursor-pointer text-stone-300 hover:text-white"
             >
               <Show
                 when={drawerMode() === "maximized"}
@@ -138,8 +138,8 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
             <button
               type="button"
               onClick={handleClose}
-              title="Save draft & Close"
-              class="w-7 h-7 rounded-lg hover:bg-rose-600 hover:text-white flex items-center justify-center text-xs transition cursor-pointer text-stone-300"
+              title="Save draft & Close (Esc)"
+              class="w-8 h-8 rounded-lg hover:bg-stone-700/70 dark:hover:bg-[#26282E] flex items-center justify-center text-xs transition cursor-pointer text-stone-300 hover:text-white"
             >
               <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
                 <line x1="18" y1="6" x2="6" y2="18" />

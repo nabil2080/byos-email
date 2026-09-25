@@ -80,6 +80,7 @@ interface MessageListProps {
   viewMode?: "threads" | "flat";
   onSelectThread?: (threadId: string) => void;
   expandedThreadId?: string | null;
+  onOpenMobileMenu?: () => void;
 }
 
 export const MessageList: Component<MessageListProps> = (props) => {
@@ -156,6 +157,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
         theme={props.theme}
         onSetTheme={props.onSetTheme}
         onToggleTheme={props.onToggleTheme}
+        onOpenMobileMenu={props.onOpenMobileMenu}
       />
 
       {/* 30-Day Auto-Delete Bin Notice Banner */}

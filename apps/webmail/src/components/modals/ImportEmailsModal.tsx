@@ -281,15 +281,15 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
 
   return (
     <Show when={props.isOpen}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-2 sm:p-4">
         <div
-          class="w-full max-w-2xl rounded-2xl bg-white dark:bg-[#1E2025] shadow-2xl border border-[#E2DFD8] dark:border-[#2E3138] overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150 font-sans max-h-[90vh]"
+          class="w-full max-w-2xl rounded-xl sm:rounded-2xl bg-white dark:bg-[#1E2025] shadow-2xl border border-[#E2DFD8] dark:border-[#2E3138] overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150 font-sans max-h-[92vh]"
           role="dialog"
           aria-modal="true"
           aria-labelledby="import-emails-title"
         >
           {/* Header */}
-          <div class="px-6 py-4 border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between shrink-0">
+          <div class="px-4 sm:px-6 py-3 sm:py-4 border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between shrink-0">
             <div class="flex items-center gap-2.5">
               <div class="p-2 rounded-xl bg-[#F0EEE9] dark:bg-[#26282E] text-[#9E725F]">
                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

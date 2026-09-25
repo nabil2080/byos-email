@@ -120,22 +120,22 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
       </header>
 
       {/* Main Settings Body with Secondary Sidebar */}
-      <div class="flex flex-1 overflow-hidden">
+      <div class="flex flex-col md:flex-row flex-1 overflow-hidden">
         {/* Navigation Tabs Sidebar */}
-        <aside class="w-72 bg-white dark:bg-[#18191D] border-r border-[#E2DFD8] dark:border-[#2E3138] flex flex-col p-4 flex-shrink-0">
-          <div class="px-2 py-1 mb-2">
+        <aside class="w-full md:w-72 bg-white dark:bg-[#18191D] border-b md:border-b-0 md:border-r border-[#E2DFD8] dark:border-[#2E3138] flex flex-col p-2.5 sm:p-4 flex-shrink-0">
+          <div class="px-2 py-1 mb-1 hidden md:block">
             <h2 class="text-xs font-bold text-[#6E7075] dark:text-[#A1A1AA] uppercase tracking-wider font-mono">
               Mailbox Settings
             </h2>
           </div>
-          <nav class="space-y-1.5 flex-1">
+          <nav class="flex flex-row md:flex-col gap-1.5 md:space-y-1.5 overflow-x-auto no-scrollbar flex-1 pb-1 md:pb-0">
             <For each={tabs}>
               {(tab) => {
                 const isActive = () => props.activeTab === tab.id;
                 return (
                   <button
                     onClick={() => props.onTabChange(tab.id)}
-                    class={`w-full text-left p-3 rounded-xl transition flex items-start gap-3 border cursor-pointer ${
+                    class={`flex-shrink-0 md:w-full text-left px-3 py-2 md:p-3 rounded-xl transition flex items-center md:items-start gap-2 md:gap-3 border cursor-pointer min-h-[38px] ${
                       isActive()
                         ? "bg-[#F3ECE8] dark:bg-[#2D2522] border-[#A27561] text-[#A27561] dark:text-[#D4A38F] shadow-xs"
                         : "bg-transparent border-transparent text-[#464748] dark:text-[#E2DFD8] hover:bg-[#F0EEE9] dark:hover:bg-[#252830]"
@@ -145,8 +145,8 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
                       {tab.icon}
                     </span>
                     <div class="min-w-0">
-                      <div class="text-xs font-semibold truncate leading-snug">{tab.label}</div>
-                      <div class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA] truncate leading-tight mt-0.5">
+                      <div class="text-xs font-semibold truncate leading-snug whitespace-nowrap md:whitespace-normal">{tab.label}</div>
+                      <div class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA] truncate leading-tight mt-0.5 hidden md:block">
                         {tab.description}
                       </div>
                     </div>
@@ -156,14 +156,14 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
             </For>
           </nav>
 
-          <div class="p-3 bg-[#F8F7F4] dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-[11px] text-[#6E7075] dark:text-[#A1A1AA]">
+          <div class="hidden md:block p-3 bg-[#F8F7F4] dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-[11px] text-[#6E7075] dark:text-[#A1A1AA]">
             <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] block mb-0.5">Security & Encryption</span>
             Client-side keys protect your privacy. Settings are encrypted and isolated per mailbox.
           </div>
         </aside>
 
         {/* Tab Content Panel */}
-        <main class="flex-1 bg-[#F0EEE9] dark:bg-[#121316] overflow-y-auto p-6 sm:p-8">
+        <main class="flex-1 bg-[#F0EEE9] dark:bg-[#121316] overflow-y-auto p-3 sm:p-6 md:p-8">
           <div class="max-w-3xl mx-auto">{props.children}</div>
         </main>
       </div>

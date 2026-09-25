@@ -37,6 +37,7 @@ interface InboxToolbarProps {
   theme?: string;
   onSetTheme?: (t: "cloud_dancer" | "dark") => void;
   onToggleTheme?: () => void;
+  onOpenMobileMenu?: () => void;
 }
 
 export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
@@ -373,9 +374,26 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
       class="px-3.5 pt-2.5 pb-2 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#18191D] flex flex-col gap-2 select-none relative z-20"
     >
       {/* Top Header Row: Search Input + Light/Dark Mode Switch all the way to the right */}
-      <div class="flex items-center justify-between gap-2.5 w-full">
+      <div class="flex items-center justify-between gap-2 sm:gap-2.5 w-full">
+        {/* Mobile Hamburger Navigation Button */}
+        <Show when={props.onOpenMobileMenu}>
+          <button
+            type="button"
+            onClick={props.onOpenMobileMenu}
+            class="md:hidden flex items-center justify-center w-8.5 h-8.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-[#55575B] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] transition cursor-pointer flex-shrink-0 shadow-2xs"
+            title="Open navigation menu"
+            aria-label="Open navigation menu"
+          >
+            <svg class="w-4 h-4 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </button>
+        </Show>
+
         {/* Search Bar with mathematically centered icon */}
-        <div class="relative flex-1 max-w-[540px]">
+        <div class="relative flex-1 min-w-0 max-w-[540px]">
           <input
             id="webmail-search-input"
             type="text"

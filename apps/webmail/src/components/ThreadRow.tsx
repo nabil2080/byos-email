@@ -58,76 +58,146 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
           : "bg-[#FAF9F6]/50 dark:bg-[#1A1B1E]/40 hover:bg-[#FAF9F6] dark:hover:bg-[#252830]"
       }`}
     >
-      <div class="flex items-center gap-3 min-w-0 overflow-hidden">
-        {/* Unread indicator dot */}
-        <Show
-          when={isUnread()}
-          fallback={<span class="w-1.5 h-1.5 flex-shrink-0"></span>}
-        >
-          <span
-            class="w-1.5 h-1.5 rounded-full bg-[#A27561] flex-shrink-0"
-            title="Unread"
-          ></span>
-        </Show>
+      <Show
+        when={props.isSplit}
+        fallback={
+          <div class="flex items-center gap-3 min-w-0 overflow-hidden">
+            {/* Unread indicator dot */}
+            <Show
+              when={isUnread()}
+              fallback={<span class="w-1.5 h-1.5 flex-shrink-0"></span>}
+            >
+              <span
+                class="w-1.5 h-1.5 rounded-full bg-[#A27561] flex-shrink-0"
+                title="Unread"
+              ></span>
+            </Show>
 
-        {/* Sender / Participants cluster */}
-        <div class="w-48 sm:w-56 min-w-0 flex-shrink-0 flex items-center gap-2 truncate">
-          <Show when={props.thread.participants && props.thread.participants.length > 0}>
-            <ProfileAvatar email={props.thread.participants[0]} size="xs" />
-          </Show>
-          <span
-            class={`truncate font-sans text-sm ${getUnreadClass(props.thread.unread_count)}`}
-          >
-            {participantLabel()}
-          </span>
-          <Show when={props.thread.message_count > 1}>
-            <span class="text-[11px] font-mono font-medium px-1.5 py-0.2 rounded-full bg-[#F0EEE9] dark:bg-[#2E3138] text-[#6F7173] dark:text-[#A1A1AA] flex-shrink-0">
-              {props.thread.message_count}
+            {/* Sender / Participants cluster */}
+            <div class="w-28 sm:w-48 md:w-56 min-w-0 flex-shrink-0 flex items-center gap-2 truncate">
+              <Show when={props.thread.participants && props.thread.participants.length > 0}>
+                <ProfileAvatar email={props.thread.participants[0]} size="xs" />
+              </Show>
+              <span
+                class={`truncate font-sans text-sm ${getUnreadClass(props.thread.unread_count)}`}
+              >
+                {participantLabel()}
+              </span>
+              <Show when={props.thread.message_count > 1}>
+                <span class="text-[11px] font-mono font-medium px-1.5 py-0.2 rounded-full bg-[#F0EEE9] dark:bg-[#2E3138] text-[#6F7173] dark:text-[#A1A1AA] flex-shrink-0">
+                  {props.thread.message_count}
+                </span>
+              </Show>
+            </div>
+
+            {/* Subject + Snippet */}
+            <div class="flex-1 min-w-0 overflow-hidden text-sm flex items-center gap-2">
+              <span
+                class={`truncate ${
+                  isUnread()
+                    ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                    : "font-normal text-[#2B2C2D] dark:text-[#E2DFD8]"
+                }`}
+              >
+                {props.subject || "(Thread conversation)"}
+              </span>
+              <Show when={props.snippet}>
+                <span class="truncate text-xs text-[#878A8E] hidden sm:inline">
+                  — {props.snippet}
+                </span>
+              </Show>
+            </div>
+
+            {/* Star indicator */}
+            <Show when={props.thread.is_starred}>
+              <span class="text-amber-500 flex-shrink-0" title="Starred">
+                <svg class="w-3.5 h-3.5 fill-amber-400 stroke-amber-500 stroke-[1.4]" viewBox="0 0 24 24">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg>
+              </span>
+            </Show>
+
+            {/* Attachment indicator */}
+            <Show when={props.thread.has_attachments}>
+              <span class="text-[#878A8E] flex-shrink-0" title="Has attachments">
+                <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              </span>
+            </Show>
+
+            {/* Timestamp */}
+            <span class="text-xs text-[#878A8E] flex-shrink-0 font-sans">
+              {formatSmartDate(props.thread.latest_at)}
             </span>
-          </Show>
-        </div>
-
-        {/* Subject + Snippet */}
-        <div class="flex-1 min-w-0 overflow-hidden text-sm flex items-center gap-2">
-          <span
-            class={`truncate ${
-              isUnread()
-                ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
-                : "font-normal text-[#2B2C2D] dark:text-[#E2DFD8]"
-            }`}
-          >
-            {props.subject || "(Thread conversation)"}
-          </span>
-          <Show when={props.snippet}>
-            <span class="truncate text-xs text-[#878A8E] hidden sm:inline">
-              — {props.snippet}
+          </div>
+        }
+      >
+        {/* Split / Mobile Stacked Card Layout */}
+        <div class="flex flex-col gap-1 min-w-0 overflow-hidden text-xs">
+          <div class="flex items-center justify-between min-w-0 gap-2">
+            <div class="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
+              <Show
+                when={isUnread()}
+                fallback={<span class="w-1.5 h-1.5 flex-shrink-0"></span>}
+              >
+                <span
+                  class="w-1.5 h-1.5 rounded-full bg-[#A27561] flex-shrink-0"
+                  title="Unread"
+                ></span>
+              </Show>
+              <Show when={props.thread.participants && props.thread.participants.length > 0}>
+                <ProfileAvatar email={props.thread.participants[0]} size="xs" />
+              </Show>
+              <span
+                class={`truncate font-sans text-sm ${getUnreadClass(props.thread.unread_count)}`}
+              >
+                {participantLabel()}
+              </span>
+              <Show when={props.thread.message_count > 1}>
+                <span class="text-[11px] font-mono font-medium px-1.5 py-0.2 rounded-full bg-[#F0EEE9] dark:bg-[#2E3138] text-[#6F7173] dark:text-[#A1A1AA] flex-shrink-0">
+                  {props.thread.message_count}
+                </span>
+              </Show>
+            </div>
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+              <Show when={props.thread.is_starred}>
+                <span class="text-amber-500 flex-shrink-0" title="Starred">
+                  <svg class="w-3.5 h-3.5 fill-amber-400 stroke-amber-500 stroke-[1.4]" viewBox="0 0 24 24">
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                  </svg>
+                </span>
+              </Show>
+              <Show when={props.thread.has_attachments}>
+                <span class="text-[#878A8E] flex-shrink-0" title="Has attachments">
+                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                </span>
+              </Show>
+              <span class="font-mono text-[11px] text-[#55575B] dark:text-[#9CA3AF] flex-shrink-0">
+                {formatSmartDate(props.thread.latest_at)}
+              </span>
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5 min-w-0 text-xs">
+            <span
+              class={`truncate ${
+                isUnread()
+                  ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                  : "font-normal text-[#2B2C2D] dark:text-[#E2DFD8]"
+              }`}
+            >
+              {props.subject || "(Thread conversation)"}
             </span>
-          </Show>
+            <Show when={props.snippet}>
+              <span class="truncate text-xs text-[#878A8E] min-w-0">
+                — {props.snippet}
+              </span>
+            </Show>
+          </div>
         </div>
-
-        {/* Star indicator */}
-        <Show when={props.thread.is_starred}>
-          <span class="text-amber-500 flex-shrink-0" title="Starred">
-            <svg class="w-3.5 h-3.5 fill-amber-400 stroke-amber-500 stroke-[1.4]" viewBox="0 0 24 24">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-            </svg>
-          </span>
-        </Show>
-
-        {/* Attachment indicator */}
-        <Show when={props.thread.has_attachments}>
-          <span class="text-[#878A8E] flex-shrink-0" title="Has attachments">
-            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
-              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-            </svg>
-          </span>
-        </Show>
-
-        {/* Timestamp */}
-        <span class="text-xs text-[#878A8E] flex-shrink-0 font-sans">
-          {formatSmartDate(props.thread.latest_at)}
-        </span>
-      </div>
+      </Show>
     </div>
   );
 };
