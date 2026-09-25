@@ -4356,6 +4356,12 @@ const App: Component = () => {
         onClose={() => setImportEmailsModalOpen(false)}
         mailboxId={selectedMailbox()?.id || ""}
         folders={customFolders()}
+        userEmail={
+          currentUser()?.email ||
+          (selectedMailbox()
+            ? `${selectedMailbox()!.local_part}@${currentUser()?.email?.split("@")[1] || "byos.local"}`
+            : "")
+        }
         onSuccess={() => {
           const box = selectedMailbox();
           if (box) {

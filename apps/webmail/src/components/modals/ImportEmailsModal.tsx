@@ -1,11 +1,17 @@
-import { Component, createSignal, createEffect, For, Show } from "solid-js";
+import { Component, createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { importEmail, MailboxFolder } from "../../api";
+import { streamMbox } from "../../mbox_stream";
+import { runWithConcurrency } from "../../import_queue";
+import { resolveTargetFolder, ByosFolder } from "../../mbox_labels";
+
+export const UPLOAD_CONCURRENCY = 4;
 
 export interface ImportEmailsModalProps {
   isOpen: boolean;
   onClose: () => void;
   mailboxId: string;
   folders: MailboxFolder[];
+  userEmail?: string;
   onSuccess: () => void;
 }
 
@@ -17,6 +23,7 @@ interface ParsedEmailItem {
   date: string;
   sizeBytes: number;
   rawB64: string;
+  targetFolder?: ByosFolder | null;
   status: "pending" | "importing" | "imported" | "duplicate" | "error";
   errorMsg?: string;
 }
@@ -28,9 +35,23 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
   const [isProcessingFiles, setIsProcessingFiles] = createSignal<boolean>(false);
   const [isImporting, setIsImporting] = createSignal<boolean>(false);
   const [importProgress, setImportProgress] = createSignal<{ current: number; total: number }>({ current: 0, total: 0 });
+  const [importStats, setImportStats] = createSignal<{ rate: number; etaSeconds: number | null }>({ rate: 0, etaSeconds: null });
   const [importSummary, setImportSummary] = createSignal<{ imported: number; duplicates: number; failed: number } | null>(null);
   const [isDragging, setIsDragging] = createSignal<boolean>(false);
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
+  const [accordionOpen, setAccordionOpen] = createSignal<boolean>(false);
+
+  // Tab unload protection while import is active
+  createEffect(() => {
+    if (isImporting()) {
+      const handler = (e: BeforeUnloadEvent) => {
+        e.preventDefault();
+        e.returnValue = "Import is in progress. Are you sure you want to leave?";
+      };
+      window.addEventListener("beforeunload", handler);
+      onCleanup(() => window.removeEventListener("beforeunload", handler));
+    }
+  });
 
   createEffect(() => {
     if (props.isOpen) {
@@ -40,8 +61,10 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
       setIsProcessingFiles(false);
       setIsImporting(false);
       setImportProgress({ current: 0, total: 0 });
+      setImportStats({ rate: 0, etaSeconds: null });
       setImportSummary(null);
       setErrorMessage(null);
+      setAccordionOpen(false);
     }
   });
 
@@ -79,25 +102,6 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
     };
   }
 
-  function splitMbox(mboxText: string): string[] {
-    const lines = mboxText.split(/\r?\n/);
-    const messages: string[] = [];
-    let currentMsg: string[] = [];
-    for (const line of lines) {
-      if (line.startsWith("From ") && currentMsg.length > 0) {
-        messages.push(currentMsg.join("\r\n"));
-        currentMsg = [];
-      } else {
-        const unescaped = line.startsWith(">From ") ? line.slice(1) : line;
-        currentMsg.push(unescaped);
-      }
-    }
-    if (currentMsg.length > 0 && currentMsg.some((l) => l.trim().length > 0)) {
-      messages.push(currentMsg.join("\r\n"));
-    }
-    return messages;
-  }
-
   async function handleFiles(files: FileList | File[]) {
     if (!files || files.length === 0) return;
     setIsProcessingFiles(true);
@@ -113,14 +117,12 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
         const lowerName = file.name.toLowerCase();
 
         if (lowerName.endsWith(".mbox")) {
-          const buffer = await file.arrayBuffer();
-          const text = decoder.decode(buffer);
-          const rawMsgs = splitMbox(text);
-          for (let m = 0; m < rawMsgs.length; m++) {
-            const msgText = rawMsgs[m];
-            if (!msgText.trim()) continue;
-            const bytes = encoder.encode(msgText);
-            const item = parseRFC822(msgText, bytes, `${file.name} #${m + 1}`);
+          let count = 0;
+          for await (const parsedMsg of streamMbox(file)) {
+            count++;
+            const msgBytes = encoder.encode(parsedMsg.raw);
+            const item = parseRFC822(parsedMsg.raw, msgBytes, `${file.name} #${count}`);
+            item.targetFolder = resolveTargetFolder(parsedMsg.raw, props.userEmail || "");
             newItems.push(item);
           }
         } else {
@@ -128,6 +130,7 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
           const bytes = new Uint8Array(buffer);
           const text = decoder.decode(bytes);
           const item = parseRFC822(text, bytes, file.name);
+          item.targetFolder = resolveTargetFolder(text, props.userEmail || "");
           newItems.push(item);
         }
       }
@@ -168,64 +171,96 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
     setErrorMessage(null);
   }
 
-  async function startImport() {
-    const list = items();
-    if (list.length === 0 || isImporting()) return;
+  async function runImportBatch(itemsToImport: ParsedEmailItem[]) {
+    if (itemsToImport.length === 0 || isImporting()) return;
 
     setIsImporting(true);
     setErrorMessage(null);
-    setImportSummary(null);
-    setImportProgress({ current: 0, total: list.length });
+    setImportProgress({ current: 0, total: itemsToImport.length });
+    setImportStats({ rate: 0, etaSeconds: null });
 
-    let importedCount = 0;
-    let duplicateCount = 0;
-    let failedCount = 0;
+    const startTime = Date.now();
+    let completedCount = 0;
+
+    const statsTimer = setInterval(() => {
+      const elapsedSec = (Date.now() - startTime) / 1000;
+      if (elapsedSec > 0 && completedCount > 0) {
+        const rate = completedCount / elapsedSec;
+        const remaining = itemsToImport.length - completedCount;
+        const etaSeconds = rate > 0 ? Math.ceil(remaining / rate) : null;
+        setImportStats({ rate: Number(rate.toFixed(1)), etaSeconds });
+      }
+    }, 1000);
 
     const folder = targetFolder();
     const read = markAsRead();
 
-    for (let i = 0; i < list.length; i++) {
-      const item = list[i];
-      setImportProgress({ current: i + 1, total: list.length });
+    try {
+      await runWithConcurrency(
+        itemsToImport,
+        UPLOAD_CONCURRENCY,
+        async (item) => {
+          setItems((prev) =>
+            prev.map((it) => (it.id === item.id ? { ...it, status: "importing" } : it))
+          );
 
-      setItems((prev) =>
-        prev.map((it) => (it.id === item.id ? { ...it, status: "importing" } : it))
+          const effectiveFolder = item.targetFolder || folder;
+
+          try {
+            const res = await importEmail(props.mailboxId, item.rawB64, effectiveFolder, read);
+            if (res.status === "already_imported") {
+              setItems((prev) =>
+                prev.map((it) =>
+                  it.id === item.id ? { ...it, status: "duplicate", errorMsg: undefined } : it
+                )
+              );
+            } else {
+              setItems((prev) =>
+                prev.map((it) =>
+                  it.id === item.id ? { ...it, status: "imported", errorMsg: undefined } : it
+                )
+              );
+            }
+          } catch (err: any) {
+            setItems((prev) =>
+              prev.map((it) =>
+                it.id === item.id
+                  ? { ...it, status: "error", errorMsg: err?.message || "Import failed" }
+                  : it
+              )
+            );
+          }
+        },
+        (completed, total) => {
+          completedCount = completed;
+          setImportProgress({ current: completed, total });
+        },
       );
-
-      try {
-        const res = await importEmail(props.mailboxId, item.rawB64, folder, read);
-        if (res.status === "already_imported") {
-          duplicateCount++;
-          setItems((prev) =>
-            prev.map((it) => (it.id === item.id ? { ...it, status: "duplicate" } : it))
-          );
-        } else {
-          importedCount++;
-          setItems((prev) =>
-            prev.map((it) => (it.id === item.id ? { ...it, status: "imported" } : it))
-          );
-        }
-      } catch (err: any) {
-        failedCount++;
-        setItems((prev) =>
-          prev.map((it) =>
-            it.id === item.id
-              ? { ...it, status: "error", errorMsg: err?.message || "Import failed" }
-              : it
-          )
-        );
-      }
+    } finally {
+      clearInterval(statsTimer);
+      setIsImporting(false);
     }
 
-    setIsImporting(false);
-    setImportSummary({
-      imported: importedCount,
-      duplicates: duplicateCount,
-      failed: failedCount,
-    });
+    const currentItems = items();
+    const imported = currentItems.filter((i) => i.status === "imported").length;
+    const duplicates = currentItems.filter((i) => i.status === "duplicate").length;
+    const failed = currentItems.filter((i) => i.status === "error").length;
 
-    if (importedCount > 0) {
+    setImportSummary({ imported, duplicates, failed });
+
+    if (imported > 0) {
       props.onSuccess();
+    }
+  }
+
+  function startImport() {
+    runImportBatch(items());
+  }
+
+  function retryFailed() {
+    const failedItems = items().filter((i) => i.status === "error");
+    if (failedItems.length > 0) {
+      runImportBatch(failedItems);
     }
   }
 
@@ -233,6 +268,15 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
     if (bytes < 1024) return bytes + " B";
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
     return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+  }
+
+  function formatEta(seconds: number): string {
+    if (seconds < 60) {
+      return `${seconds}s remaining`;
+    }
+    const mins = Math.floor(seconds / 60);
+    const remainingSecs = seconds % 60;
+    return `${mins}m ${remainingSecs}s remaining`;
   }
 
   return (
@@ -286,26 +330,35 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
 
             <Show when={importSummary()}>
               {(summary) => (
-                <div class="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[#2B2C2D] dark:text-[#F3F4F6] text-sm space-y-1">
+                <div class="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[#2B2C2D] dark:text-[#F3F4F6] text-sm space-y-1.5">
                   <div class="flex items-center gap-2 font-medium text-emerald-700 dark:text-emerald-400">
                     <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                     </svg>
                     Import process complete
                   </div>
-                  <div class="text-xs text-[#6F7173] dark:text-[#878A8E] flex gap-4 mt-1">
+                  <div class="text-xs text-[#6F7173] dark:text-[#878A8E] flex flex-wrap items-center gap-4 mt-1">
                     <span><strong>{summary().imported}</strong> imported</span>
                     <Show when={summary().duplicates > 0}>
                       <span><strong>{summary().duplicates}</strong> already existed</span>
                     </Show>
                     <Show when={summary().failed > 0}>
                       <span class="text-red-600 dark:text-red-400"><strong>{summary().failed}</strong> failed</span>
+                      <button
+                        type="button"
+                        onClick={retryFailed}
+                        disabled={isImporting()}
+                        class="px-2.5 py-0.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-md transition cursor-pointer disabled:opacity-50"
+                      >
+                        Retry failed ({summary().failed})
+                      </button>
                     </Show>
                   </div>
                 </div>
               )}
             </Show>
 
+            {/* Drop Zone */}
             <div
               onDragOver={(e) => {
                 e.preventDefault();
@@ -352,16 +405,74 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
                     <span class="text-[#9E725F] hover:underline font-semibold">Click to browse</span> or drag and drop
                   </p>
                   <p class="text-xs text-[#6F7173] dark:text-[#878A8E]">
-                    Supports individual <strong>.eml</strong> files or <strong>.mbox</strong> mail archives
+                    Supports individual <strong>.eml</strong> files or <strong>.mbox</strong> mail archives (streamed up to multi-GB)
                   </p>
                 </div>
               </label>
             </div>
 
+            {/* Migration Quick Guide Accordion */}
+            <div class="rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] overflow-hidden bg-[#F0EEE9]/30 dark:bg-[#26282E]/30">
+              <button
+                type="button"
+                onClick={() => setAccordionOpen(!accordionOpen())}
+                class="w-full px-4 py-2.5 flex items-center justify-between text-left text-xs font-medium text-[#2B2C2D] dark:text-[#F3F4F6] hover:bg-[#F0EEE9]/60 dark:hover:bg-[#26282E] transition cursor-pointer"
+                aria-expanded={accordionOpen()}
+              >
+                <div class="flex items-center gap-2">
+                  <svg class="w-4 h-4 text-[#9E725F]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>Migration Instructions (Gmail, Outlook, Apple Mail)</span>
+                </div>
+                <svg
+                  class={`w-4 h-4 text-[#6F7173] dark:text-[#878A8E] transition-transform duration-150 ${
+                    accordionOpen() ? "rotate-180" : ""
+                  }`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              <Show when={accordionOpen()}>
+                <div class="px-4 py-3 border-t border-[#E2DFD8] dark:border-[#2E3138] text-xs text-[#6F7173] dark:text-[#878A8E] space-y-3 bg-white dark:bg-[#1E2025]">
+                  <div>
+                    <p class="font-semibold text-[#2B2C2D] dark:text-[#F3F4F6] mb-1">
+                      Gmail (Google Takeout)
+                    </p>
+                    <ol class="list-decimal list-inside space-y-0.5 text-[11px] leading-relaxed">
+                      <li>Go to <a href="https://takeout.google.com" target="_blank" rel="noreferrer" class="text-[#9E725F] hover:underline">takeout.google.com</a> &rarr; click <strong>Deselect all</strong>.</li>
+                      <li>Check <strong>Mail</strong>, choose .zip format, and click <strong>Create export</strong>.</li>
+                      <li>Download and extract the zip archive; drop the <code class="px-1 py-0.5 rounded bg-[#F0EEE9] dark:bg-[#26282E]">.mbox</code> file here.</li>
+                      <li>Gmail labels (Sent, Archive, Spam, Trash) are automatically routed to their BYOS folders.</li>
+                    </ol>
+                  </div>
+                  <div>
+                    <p class="font-semibold text-[#2B2C2D] dark:text-[#F3F4F6] mb-1">
+                      Microsoft Outlook
+                    </p>
+                    <p class="text-[11px] leading-relaxed">
+                      Drag messages directly out of Outlook into this window as <code class="px-1 py-0.5 rounded bg-[#F0EEE9] dark:bg-[#26282E]">.eml</code> files, or sync your account in Mozilla Thunderbird to export an entire mailbox to <code class="px-1 py-0.5 rounded bg-[#F0EEE9] dark:bg-[#26282E]">.mbox</code>.
+                    </p>
+                  </div>
+                  <div>
+                    <p class="font-semibold text-[#2B2C2D] dark:text-[#F3F4F6] mb-1">
+                      Apple Mail (macOS)
+                    </p>
+                    <p class="text-[11px] leading-relaxed">
+                      In Apple Mail, right-click any mailbox &rarr; select <strong>Export Mailbox...</strong> &rarr; drop the resulting <code class="px-1 py-0.5 rounded bg-[#F0EEE9] dark:bg-[#26282E]">.mbox</code> file here.
+                    </p>
+                  </div>
+                </div>
+              </Show>
+            </div>
+
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-[#F0EEE9]/40 dark:bg-[#26282E]/40 p-4 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138]">
               <div>
                 <label class="block text-xs font-semibold text-[#6F7173] dark:text-[#878A8E] mb-1.5 uppercase tracking-wider">
-                  Target Folder
+                  Default Target Folder
                 </label>
                 <select
                   value={targetFolder()}
@@ -379,9 +490,12 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
                     )}
                   </For>
                 </select>
+                <p class="text-[10px] text-[#6F7173] dark:text-[#878A8E] mt-1">
+                  Used when Gmail labels or sender heuristics do not specify a folder.
+                </p>
               </div>
 
-              <div class="flex items-end pb-1.5">
+              <div class="flex items-start sm:items-center pt-2 sm:pt-4">
                 <label class="flex items-center gap-2.5 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -423,6 +537,11 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
                             <span class="font-medium text-[#2B2C2D] dark:text-[#F3F4F6] truncate max-w-xs">
                               {item.subject}
                             </span>
+                            <Show when={item.targetFolder && item.targetFolder !== targetFolder()}>
+                              <span class="px-1.5 py-0.5 text-[10px] rounded bg-[#9E725F]/15 text-[#9E725F] dark:text-[#D1AFA0] font-medium capitalize shrink-0">
+                                &rarr; {item.targetFolder}
+                              </span>
+                            </Show>
                             <span class="text-[10px] text-[#6F7173] dark:text-[#878A8E] shrink-0">
                               ({formatSize(item.sizeBytes)})
                             </span>
@@ -482,20 +601,35 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
               </div>
             </Show>
 
+            {/* Progress & Speed / ETA Area */}
             <Show when={isImporting()}>
               <div class="space-y-1.5">
-                <div class="flex justify-between text-xs text-[#6F7173] dark:text-[#878A8E]">
-                  <span>Encrypting & importing emails...</span>
-                  <span>
-                    {importProgress().current} of {importProgress().total} (
-                    {Math.round((importProgress().current / importProgress().total) * 100)}%)
+                <div class="flex justify-between items-center text-xs text-[#6F7173] dark:text-[#878A8E]">
+                  <span class="flex items-center gap-2">
+                    <span>Encrypting & importing emails...</span>
+                    <Show when={importStats().rate > 0}>
+                      <span class="text-[11px] px-1.5 py-0.5 rounded bg-[#F0EEE9] dark:bg-[#26282E] text-[#9E725F] font-mono">
+                        {importStats().rate} msg/s
+                      </span>
+                    </Show>
+                  </span>
+                  <span class="flex items-center gap-2">
+                    <Show when={importStats().etaSeconds !== null && importStats().etaSeconds! > 0}>
+                      <span class="text-[11px]">
+                        {formatEta(importStats().etaSeconds!)} &bull;
+                      </span>
+                    </Show>
+                    <span>
+                      {importProgress().current} of {importProgress().total} (
+                      {Math.round((importProgress().current / Math.max(1, importProgress().total)) * 100)}%)
+                    </span>
                   </span>
                 </div>
                 <div class="w-full bg-[#E2DFD8] dark:bg-[#2E3138] h-2 rounded-full overflow-hidden">
                   <div
                     class="bg-[#9E725F] h-2 transition-all duration-200"
                     style={{
-                      width: `${(importProgress().current / importProgress().total) * 100}%`,
+                      width: `${(importProgress().current / Math.max(1, importProgress().total)) * 100}%`,
                     }}
                   />
                 </div>
@@ -511,6 +645,15 @@ export const ImportEmailsModal: Component<ImportEmailsModalProps> = (props) => {
               </Show>
             </div>
             <div class="flex items-center gap-3">
+              <Show when={!isImporting() && items().some((i) => i.status === "error")}>
+                <button
+                  type="button"
+                  onClick={retryFailed}
+                  class="px-3.5 py-2 text-sm font-medium text-red-600 dark:text-red-400 border border-red-500/30 hover:bg-red-500/10 rounded-xl cursor-pointer transition"
+                >
+                  Retry failed ({items().filter((i) => i.status === "error").length})
+                </button>
+              </Show>
               <button
                 type="button"
                 onClick={props.onClose}

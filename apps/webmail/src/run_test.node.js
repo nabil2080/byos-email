@@ -8,6 +8,9 @@ import { runPathAComposeTests } from "./path_a_compose.test.js";
 import { runPathAReadTests } from "./path_a_read.test.js";
 import { runMimeTests } from "./mime.test.js";
 import { runSignatureTests } from "./signature.test.js";
+import { runMboxStreamTests } from "./mbox_stream.test.js";
+import { runMboxLabelsTests } from "./mbox_labels.test.js";
+import { runImportQueueTests } from "./import_queue.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -71,6 +74,24 @@ async function main() {
   console.log(`SIGNATURE TESTS: ${sigRes.passed} passed, ${sigRes.failed} failed\n`);
   totalPassed += sigRes.passed;
   totalFailed += sigRes.failed;
+
+  console.log("Running Mbox Stream Tests...");
+  const mboxStreamRes = await runMboxStreamTests();
+  console.log(`MBOX STREAM TESTS: ${mboxStreamRes.passed} passed, ${mboxStreamRes.failed} failed\n`);
+  totalPassed += mboxStreamRes.passed;
+  totalFailed += mboxStreamRes.failed;
+
+  console.log("Running Mbox Labels Tests...");
+  const mboxLabelsRes = runMboxLabelsTests();
+  console.log(`MBOX LABELS TESTS: ${mboxLabelsRes.passed} passed, ${mboxLabelsRes.failed} failed\n`);
+  totalPassed += mboxLabelsRes.passed;
+  totalFailed += mboxLabelsRes.failed;
+
+  console.log("Running Import Queue Tests...");
+  const importQueueRes = await runImportQueueTests();
+  console.log(`IMPORT QUEUE TESTS: ${importQueueRes.passed} passed, ${importQueueRes.failed} failed\n`);
+  totalPassed += importQueueRes.passed;
+  totalFailed += importQueueRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {
