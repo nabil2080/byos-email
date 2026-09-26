@@ -389,8 +389,8 @@ const App: Component = () => {
   const [expandedThreadId, setExpandedThreadId] = createSignal<string | null>(null);
   const [viewMode, setViewMode] = createSignal<"threads" | "flat">(
     typeof window !== "undefined"
-      ? ((sessionStorage.getItem("byos_view_mode") as "threads" | "flat") || "threads")
-      : "threads"
+      ? ((sessionStorage.getItem("byos_view_mode") as "threads" | "flat") || "flat")
+      : "flat"
   );
   createEffect(() => {
     if (typeof window !== "undefined") {
