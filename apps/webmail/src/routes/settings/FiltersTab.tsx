@@ -69,7 +69,8 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
         setActionLabelId(labelsList[0].id);
       }
     } catch (err: any) {
-      setError(err?.message || "Failed to load filters and rules.");
+      console.error("Failed to load filters and rules:", err);
+      setError("Failed to load rules");
     } finally {
       setLoading(false);
     }
@@ -337,8 +338,11 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
       </div>
 
       <Show when={error()}>
-        <div class="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 text-rose-700 dark:text-rose-300 text-xs flex items-center justify-between">
-          <span>{error()}</span>
+        <div class="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 text-rose-700 dark:text-rose-300 text-xs flex items-center justify-between gap-2">
+          <div class="flex items-center gap-1.5">
+            <span>⚠</span>
+            <span>{error()}</span>
+          </div>
           <button onClick={() => setError(null)} class="text-rose-500 hover:text-rose-800 p-1 cursor-pointer">✕</button>
         </div>
       </Show>
