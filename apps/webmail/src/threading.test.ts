@@ -143,5 +143,124 @@ export async function runThreadingTests(): Promise<{ passed: number; failed: num
     }
   });
 
+  // 5. TestThreadSnoozeFiltering
+  await test("5. TestThreadSnoozeFiltering", () => {
+    const now = 1700000000000;
+    const futureIso = new Date(now + 3600000).toISOString();
+    const pastIso = new Date(now - 3600000).toISOString();
+
+    const isThreadSnoozed = (
+      thread: { snoozed_until?: string | null; message_ids?: string[] },
+      msgs: { id: string; snoozedUntil?: string | null }[]
+    ): boolean => {
+      return Boolean(
+        (thread.snoozed_until && new Date(thread.snoozed_until).getTime() > now) ||
+        msgs.some((m) => thread.message_ids?.includes(m.id) && m.snoozedUntil && new Date(m.snoozedUntil).getTime() > now)
+      );
+    };
+
+    const filterThreads = (
+      threadsList: { id: string; folder: string; snoozed_until?: string | null; message_ids?: string[] }[],
+      msgs: { id: string; snoozedUntil?: string | null }[],
+      curFolder: string
+    ) => {
+      return threadsList.filter((t) => {
+        const snoozed = isThreadSnoozed(t, msgs);
+        if (curFolder === "snoozed") {
+          return snoozed;
+        } else if (snoozed && t.folder !== "sent" && t.folder !== "trash") {
+          return false;
+        }
+        return true;
+      });
+    };
+
+    const threadActive = { id: "t1", folder: "inbox", snoozed_until: null, message_ids: ["m1"] };
+    const threadSnoozedDirect = { id: "t2", folder: "inbox", snoozed_until: futureIso, message_ids: ["m2"] };
+    const threadSnoozedViaMessage = { id: "t3", folder: "inbox", snoozed_until: null, message_ids: ["m3"] };
+    const threadExpiredSnooze = { id: "t4", folder: "inbox", snoozed_until: pastIso, message_ids: ["m4"] };
+
+    const mockMessages = [
+      { id: "m1", snoozedUntil: null },
+      { id: "m2", snoozedUntil: futureIso },
+      { id: "m3", snoozedUntil: futureIso },
+      { id: "m4", snoozedUntil: pastIso },
+    ];
+
+    const testThreads = [threadActive, threadSnoozedDirect, threadSnoozedViaMessage, threadExpiredSnooze];
+
+    // In inbox: snoozed direct and snoozed via message must be excluded. Expired snooze must remain.
+    const inboxVisible = filterThreads(testThreads, mockMessages, "inbox");
+    assert(inboxVisible.some((t) => t.id === "t1"), "inbox should show active non-snoozed thread");
+    assert(inboxVisible.some((t) => t.id === "t4"), "inbox should show expired snoozed thread");
+    assert(!inboxVisible.some((t) => t.id === "t2"), "inbox must exclude directly snoozed thread");
+    assert(!inboxVisible.some((t) => t.id === "t3"), "inbox must exclude thread snoozed via constituent message");
+    assert(inboxVisible.length === 2, "inbox should have exactly 2 visible threads");
+
+    // In snoozed folder: only snoozed threads must appear
+    const snoozedVisible = filterThreads(testThreads, mockMessages, "snoozed");
+    assert(snoozedVisible.some((t) => t.id === "t2"), "snoozed folder must include directly snoozed thread");
+    assert(snoozedVisible.some((t) => t.id === "t3"), "snoozed folder must include message-snoozed thread");
+    assert(!snoozedVisible.some((t) => t.id === "t1"), "snoozed folder must exclude active thread");
+    assert(!snoozedVisible.some((t) => t.id === "t4"), "snoozed folder must exclude expired thread");
+    assert(snoozedVisible.length === 2, "snoozed folder should have exactly 2 visible threads");
+  });
+
+  // 6. TestThreadMultiSelectHelpers
+  await test("6. TestThreadMultiSelectHelpers", () => {
+    const threadMessageIds = ["msg-1", "msg-2", "msg-3"];
+
+    const computeSelectionState = (ids: string[], selected: Set<string>) => {
+      const matchCount = ids.filter((id) => selected.has(id)).length;
+      const allChecked = ids.length > 0 && matchCount === ids.length;
+      const isIndeterminate = matchCount > 0 && matchCount < ids.length;
+      return { allChecked, isIndeterminate, matchCount };
+    };
+
+    const toggleThreadIds = (ids: string[], selected: Set<string>) => {
+      const next = new Set(selected);
+      const { allChecked } = computeSelectionState(ids, selected);
+      if (allChecked) {
+        for (const id of ids) next.delete(id);
+      } else {
+        for (const id of ids) next.add(id);
+      }
+      return next;
+    };
+
+    // Case A: None selected
+    let selected = new Set<string>();
+    let state = computeSelectionState(threadMessageIds, selected);
+    assert(!state.allChecked, "none selected -> allChecked false");
+    assert(!state.isIndeterminate, "none selected -> indeterminate false");
+
+    // Toggle: should select all
+    selected = toggleThreadIds(threadMessageIds, selected);
+    state = computeSelectionState(threadMessageIds, selected);
+    assert(state.allChecked, "toggled from none -> allChecked true");
+    assert(!state.isIndeterminate, "toggled from none -> indeterminate false");
+    assert(selected.size === 3, "selected has 3 messages");
+
+    // Case B: Partial selection
+    selected = new Set(["msg-1"]);
+    state = computeSelectionState(threadMessageIds, selected);
+    assert(!state.allChecked, "partial selected -> allChecked false");
+    assert(state.isIndeterminate, "partial selected -> indeterminate true");
+
+    // Toggle partial: should select all
+    selected = toggleThreadIds(threadMessageIds, selected);
+    state = computeSelectionState(threadMessageIds, selected);
+    assert(state.allChecked, "toggled from partial -> allChecked true");
+    assert(!state.isIndeterminate, "toggled from partial -> indeterminate false");
+
+    // Toggle all: should clear all
+    selected = toggleThreadIds(threadMessageIds, selected);
+    state = computeSelectionState(threadMessageIds, selected);
+    assert(!state.allChecked, "toggled from all -> allChecked false");
+    assert(!state.isIndeterminate, "toggled from all -> indeterminate false");
+    assert(selected.size === 0, "selected set is now empty");
+  });
+
   return { passed, failed };
 }
+

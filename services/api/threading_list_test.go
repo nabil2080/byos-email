@@ -434,3 +434,112 @@ func TestThreadSummaryIncludesStarred(t *testing.T) {
 	}
 }
 
+// 5. TestThreadsEndpointExcludesSnoozed
+func TestThreadsEndpointExcludesSnoozed(t *testing.T) {
+	conn := getTestDB(t)
+	defer conn.Close(context.Background())
+	ctx := context.Background()
+
+	_, userID, domainID, mailboxID := createThreadingTestMailbox(t, conn)
+
+	token, tokenHash := generateSessionToken()
+	_, err := conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		userID, tokenHash, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	threadID1 := uuid.New().String()
+	threadID2 := uuid.New().String()
+	t0 := time.Now().Add(-10 * time.Minute)
+
+	// Thread 1: normal inbox message
+	insertThreadListTestMessage(t, conn, mailboxID, domainID, threadID1, "normal@test.local", "inbox", false, t0)
+
+	// Thread 2: snoozed message (+2 hours)
+	deliveryID := uuid.New().String()
+	futureSnooze := time.Now().Add(2 * time.Hour).UTC()
+	_, err = conn.Exec(ctx, `
+		INSERT INTO message_metadata (
+			mailbox_id, domain_id, direction, delivery_identity, sender, recipients,
+			storage_object_id, content_key_hpke_wrapped, mailbox_sk_version,
+			encryption_version, encryption_iv, aad_version, bundle_hash,
+			status, folder, is_read, thread_id, received_at, snoozed_until
+		) VALUES (
+			$1, $2, 'received', $3, 'snoozed@test.local', ARRAY['rcpt@test.local'],
+			'storage/obj', decode('AA==', 'base64'), 1,
+			1, decode('AA==', 'base64'), 1, decode('AA==', 'base64'),
+			'received', 'inbox', false, $4::uuid, $5, $6
+		)
+	`, mailboxID, domainID, []byte(deliveryID), threadID2, t0, futureSnooze)
+	if err != nil {
+		t.Fatalf("insert snoozed message: %v", err)
+	}
+
+	// 1. GET /v1/mailboxes/{mailbox_id}/threads?folder=inbox -> should include threadID1, exclude threadID2
+	reqInbox := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailboxID+"/threads?folder=inbox", nil)
+	reqInbox.SetPathValue("mailbox_id", mailboxID)
+	reqInbox.Header.Set("Authorization", "Bearer "+token)
+
+	wInbox := httptest.NewRecorder()
+	threadsHandler(wInbox, reqInbox)
+	if wInbox.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", wInbox.Result().StatusCode)
+	}
+
+	var bodyInbox struct {
+		Threads []ThreadSummary `json:"threads"`
+	}
+	if err := json.NewDecoder(wInbox.Body).Decode(&bodyInbox); err != nil {
+		t.Fatalf("decode inbox response: %v", err)
+	}
+
+	var foundThread1, foundThread2 bool
+	for _, th := range bodyInbox.Threads {
+		if th.ThreadID == threadID1 {
+			foundThread1 = true
+		}
+		if th.ThreadID == threadID2 {
+			foundThread2 = true
+		}
+	}
+	if !foundThread1 {
+		t.Errorf("expected normal thread %s in inbox threads", threadID1)
+	}
+	if foundThread2 {
+		t.Errorf("expected snoozed thread %s to be excluded from inbox threads", threadID2)
+	}
+
+	// 2. GET /v1/mailboxes/{mailbox_id}/threads?folder=snoozed -> should include threadID2
+	reqSnoozed := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailboxID+"/threads?folder=snoozed", nil)
+	reqSnoozed.SetPathValue("mailbox_id", mailboxID)
+	reqSnoozed.Header.Set("Authorization", "Bearer "+token)
+
+	wSnoozed := httptest.NewRecorder()
+	threadsHandler(wSnoozed, reqSnoozed)
+	if wSnoozed.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for snoozed folder, got %d", wSnoozed.Result().StatusCode)
+	}
+
+	var bodySnoozed struct {
+		Threads []ThreadSummary `json:"threads"`
+	}
+	if err := json.NewDecoder(wSnoozed.Body).Decode(&bodySnoozed); err != nil {
+		t.Fatalf("decode snoozed response: %v", err)
+	}
+
+	var foundInSnoozed bool
+	for _, th := range bodySnoozed.Threads {
+		if th.ThreadID == threadID2 {
+			foundInSnoozed = true
+			if th.SnoozedUntil == nil {
+				t.Errorf("expected SnoozedUntil to be populated on snoozed thread")
+			}
+		}
+	}
+	if !foundInSnoozed {
+		t.Errorf("expected snoozed thread %s in snoozed folder threads", threadID2)
+	}
+}
+
+

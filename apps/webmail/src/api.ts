@@ -85,6 +85,7 @@ export interface ThreadSummary {
   is_starred: boolean;
   folder: string;
   has_attachments: boolean;
+  snoozed_until?: string | null;
 }
 
 export interface MessageBodyResponse {

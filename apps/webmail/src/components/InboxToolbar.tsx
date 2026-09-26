@@ -38,6 +38,8 @@ interface InboxToolbarProps {
   onSetTheme?: (t: "cloud_dancer" | "dark") => void;
   onToggleTheme?: () => void;
   onOpenMobileMenu?: () => void;
+  viewMode?: "threads" | "flat";
+  onToggleViewMode?: () => void;
 }
 
 export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
@@ -588,6 +590,34 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                         </div>
                       </Show>
                     </div>
+
+                    {/* View Mode Toggle (Threads / Flat) */}
+                    <Show when={props.onToggleViewMode}>
+                      <button
+                        type="button"
+                        onClick={props.onToggleViewMode}
+                        class="px-2 py-1 text-xs text-[#55575B] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] flex items-center gap-1 font-medium"
+                        title={props.viewMode === "threads" ? "Switch to flat view" : "Switch to thread view"}
+                      >
+                        <svg class="w-3.5 h-3.5 text-[#878A8E] dark:text-[#71717A] stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                          <Show
+                            when={props.viewMode === "threads"}
+                            fallback={
+                              <>
+                                <line x1="4" y1="6" x2="20" y2="6" />
+                                <line x1="4" y1="12" x2="20" y2="12" />
+                                <line x1="4" y1="18" x2="20" y2="18" />
+                              </>
+                            }
+                          >
+                            <rect x="3" y="4" width="18" height="4" rx="1" />
+                            <rect x="5" y="10" width="16" height="4" rx="1" />
+                            <rect x="7" y="16" width="14" height="4" rx="1" />
+                          </Show>
+                        </svg>
+                        <span>{props.viewMode === "threads" ? "Threads" : "Flat"}</span>
+                      </button>
+                    </Show>
                   </div>
                 }
               >

@@ -58,6 +58,7 @@ type ThreadSummary struct {
 	IsStarred      bool     `json:"is_starred"`       // any message starred
 	Folder         string   `json:"folder"`           // folder of the latest message
 	HasAttachments bool     `json:"has_attachments"`  // any message in thread has attachments
+	SnoozedUntil   *string  `json:"snoozed_until,omitempty"`
 }
 
 func messagesHandler(w http.ResponseWriter, r *http.Request) {
@@ -258,23 +259,52 @@ func threadsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := conn.Query(ctx, `
-		SELECT
-		    m.thread_id::text,
-		    COUNT(m.id)::int AS message_count,
-		    COUNT(m.id) FILTER (WHERE NOT COALESCE(m.is_read, false))::int AS unread_count,
-		    MAX(COALESCE(m.sent_at, m.received_at)) AS latest_at,
-		    COALESCE(ARRAY_AGG(m.sender ORDER BY COALESCE(m.sent_at, m.received_at) ASC), ARRAY[]::text[]) AS senders,
-		    COALESCE(ARRAY_AGG(m.id::text ORDER BY COALESCE(m.sent_at, m.received_at) ASC), ARRAY[]::text[]) AS message_ids,
-		    COALESCE(BOOL_OR(m.is_starred), false) AS is_starred,
-		    (ARRAY_AGG(COALESCE(m.folder, 'inbox') ORDER BY COALESCE(m.sent_at, m.received_at) DESC))[1] AS folder,
-		    COALESCE(BOOL_OR(m.has_attachments), false) AS has_attachments
-		FROM message_metadata m
-		WHERE m.mailbox_id = $1
-		  AND ($2 = '' OR m.folder = $2)
-		GROUP BY m.thread_id
-		ORDER BY latest_at DESC
-		LIMIT 200`, mailboxID, folderFilter)
+	var rows pgx.Rows
+	if folderFilter == "snoozed" {
+		rows, err = conn.Query(ctx, `
+			SELECT
+			    m.thread_id::text,
+			    COUNT(m.id)::int AS message_count,
+			    COUNT(m.id) FILTER (WHERE NOT COALESCE(m.is_read, false))::int AS unread_count,
+			    MAX(COALESCE(m.sent_at, m.received_at)) AS latest_at,
+			    COALESCE(ARRAY_AGG(m.sender ORDER BY COALESCE(m.sent_at, m.received_at) ASC), ARRAY[]::text[]) AS senders,
+			    COALESCE(ARRAY_AGG(m.id::text ORDER BY COALESCE(m.sent_at, m.received_at) ASC), ARRAY[]::text[]) AS message_ids,
+			    COALESCE(BOOL_OR(m.is_starred), false) AS is_starred,
+			    (ARRAY_AGG(COALESCE(m.folder, 'inbox') ORDER BY COALESCE(m.sent_at, m.received_at) DESC))[1] AS folder,
+			    COALESCE(BOOL_OR(m.has_attachments), false) AS has_attachments,
+			    MAX(m.snoozed_until) AS snoozed_until
+			FROM message_metadata m
+			WHERE m.mailbox_id = $1
+			  AND m.snoozed_until IS NOT NULL
+			  AND m.snoozed_until > now()
+			GROUP BY m.thread_id
+			ORDER BY MAX(m.snoozed_until) ASC, latest_at DESC
+			LIMIT 200`, mailboxID)
+	} else {
+		rows, err = conn.Query(ctx, `
+			SELECT
+			    m.thread_id::text,
+			    COUNT(m.id)::int AS message_count,
+			    COUNT(m.id) FILTER (WHERE NOT COALESCE(m.is_read, false))::int AS unread_count,
+			    MAX(COALESCE(m.sent_at, m.received_at)) AS latest_at,
+			    COALESCE(ARRAY_AGG(m.sender ORDER BY COALESCE(m.sent_at, m.received_at) ASC), ARRAY[]::text[]) AS senders,
+			    COALESCE(ARRAY_AGG(m.id::text ORDER BY COALESCE(m.sent_at, m.received_at) ASC), ARRAY[]::text[]) AS message_ids,
+			    COALESCE(BOOL_OR(m.is_starred), false) AS is_starred,
+			    (ARRAY_AGG(COALESCE(m.folder, 'inbox') ORDER BY COALESCE(m.sent_at, m.received_at) DESC))[1] AS folder,
+			    COALESCE(BOOL_OR(m.has_attachments), false) AS has_attachments,
+			    MAX(m.snoozed_until) AS snoozed_until
+			FROM message_metadata m
+			WHERE m.mailbox_id = $1
+			  AND ($2 = '' OR m.folder = $2)
+			  AND (
+			    m.folder IN ('sent', 'trash')
+			    OR m.snoozed_until IS NULL
+			    OR m.snoozed_until <= now()
+			  )
+			GROUP BY m.thread_id
+			ORDER BY latest_at DESC
+			LIMIT 200`, mailboxID, folderFilter)
+	}
 	if err != nil {
 		http.Error(w, "failed to query threads", http.StatusInternalServerError)
 		return
@@ -287,12 +317,17 @@ func threadsHandler(w http.ResponseWriter, r *http.Request) {
 		var latestAt time.Time
 		var allSenders []string
 		var messageIDs []string
+		var snoozedUntil *time.Time
 		if err := rows.Scan(&t.ThreadID, &t.MessageCount, &t.UnreadCount, &latestAt,
-			&allSenders, &messageIDs, &t.IsStarred, &t.Folder, &t.HasAttachments); err != nil {
+			&allSenders, &messageIDs, &t.IsStarred, &t.Folder, &t.HasAttachments, &snoozedUntil); err != nil {
 			http.Error(w, "failed to read thread summary", http.StatusInternalServerError)
 			return
 		}
 		t.LatestAt = latestAt.Format(time.RFC3339)
+		if snoozedUntil != nil {
+			formatted := snoozedUntil.Format(time.RFC3339)
+			t.SnoozedUntil = &formatted
+		}
 		if messageIDs == nil {
 			messageIDs = []string{}
 		}

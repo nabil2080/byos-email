@@ -81,6 +81,8 @@ interface MessageListProps {
   onSelectThread?: (threadId: string) => void;
   expandedThreadId?: string | null;
   onOpenMobileMenu?: () => void;
+  onToggleViewMode?: () => void;
+  onToggleThreadCheck?: (threadId: string, checked: boolean) => void;
 }
 
 export const MessageList: Component<MessageListProps> = (props) => {
@@ -159,6 +161,8 @@ export const MessageList: Component<MessageListProps> = (props) => {
         onSetTheme={props.onSetTheme}
         onToggleTheme={props.onToggleTheme}
         onOpenMobileMenu={props.onOpenMobileMenu}
+        viewMode={props.viewMode}
+        onToggleViewMode={props.onToggleViewMode}
       />
 
       {/* 30-Day Auto-Delete Bin Notice Banner */}
@@ -220,6 +224,10 @@ export const MessageList: Component<MessageListProps> = (props) => {
           <For each={props.threads}>
             {(thread) => {
               const matchingMsg = () => props.messages.find((m) => thread.message_ids?.includes(m.id));
+              const isThreadSelected = () =>
+                props.expandedThreadId === thread.thread_id ||
+                (props.selectedMessage ? (thread.message_ids?.includes(props.selectedMessage.id) ?? false) : false);
+
               return (
                 <ThreadRow
                   thread={thread}
@@ -229,6 +237,16 @@ export const MessageList: Component<MessageListProps> = (props) => {
                   snippet={matchingMsg()?.snippet}
                   density={props.density}
                   isSplit={props.isSplit}
+                  isSelected={isThreadSelected()}
+                  selectedIds={props.selectedIds}
+                  onToggleThreadCheck={props.onToggleThreadCheck}
+                  targetMessage={matchingMsg()}
+                  labels={props.labels}
+                  onToggleStarred={props.onToggleStarred}
+                  onToggleRead={props.onToggleRead}
+                  onArchive={props.onArchive}
+                  onTrash={props.onTrash}
+                  onDeleteForever={props.onDeleteForever}
                 />
               );
             }}

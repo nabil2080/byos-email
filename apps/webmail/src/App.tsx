@@ -387,7 +387,16 @@ const App: Component = () => {
   const [selectedMsg, setSelectedMsg] = createSignal<DisplayMessage | null>(null);
   const [threads, setThreads] = createSignal<ThreadSummary[]>([]);
   const [expandedThreadId, setExpandedThreadId] = createSignal<string | null>(null);
-  const [viewMode, setViewMode] = createSignal<"threads" | "flat">("threads");
+  const [viewMode, setViewMode] = createSignal<"threads" | "flat">(
+    typeof window !== "undefined"
+      ? ((sessionStorage.getItem("byos_view_mode") as "threads" | "flat") || "threads")
+      : "threads"
+  );
+  createEffect(() => {
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("byos_view_mode", viewMode());
+    }
+  });
   const [searchQuery, setSearchQuery] = createSignal("");
   const [composeOpen, setComposeOpen] = createSignal(false);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = createSignal(false);
@@ -568,11 +577,34 @@ const App: Component = () => {
     timer: any;
   } | null>(null);
 
+  function handleToggleThreadCheck(threadId: string, checked: boolean) {
+    const thread = threads().find((t) => t.thread_id === threadId);
+    if (!thread || !thread.message_ids) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of thread.message_ids) {
+        if (checked) {
+          next.add(id);
+        } else {
+          next.delete(id);
+        }
+      }
+      return next;
+    });
+  }
+
   function toggleMessageStarred(msg: DisplayMessage) {
     const origStarred = msg.starred;
     const newStarred = !origStarred;
     setMessages((prev) =>
       prev.map((m) => (m.id === msg.id ? { ...m, starred: newStarred } : m))
+    );
+    setThreads((prev) =>
+      prev.map((t) =>
+        t.message_ids?.includes(msg.id)
+          ? { ...t, is_starred: newStarred }
+          : t
+      )
     );
     if (selectedMsg()?.id === msg.id) {
       setSelectedMsg({ ...selectedMsg()!, starred: newStarred });
@@ -586,6 +618,13 @@ const App: Component = () => {
             setMessages((prev) =>
               prev.map((m) => (m.id === msg.id ? { ...m, starred: res.is_starred } : m))
             );
+            setThreads((prev) =>
+              prev.map((t) =>
+                t.message_ids?.includes(msg.id)
+                  ? { ...t, is_starred: res.is_starred }
+                  : t
+              )
+            );
             if (selectedMsg()?.id === msg.id) {
               setSelectedMsg({ ...selectedMsg()!, starred: res.is_starred });
             }
@@ -594,6 +633,13 @@ const App: Component = () => {
         .catch((err) => {
           setMessages((prev) =>
             prev.map((m) => (m.id === msg.id ? { ...m, starred: origStarred } : m))
+          );
+          setThreads((prev) =>
+            prev.map((t) =>
+              t.message_ids?.includes(msg.id)
+                ? { ...t, is_starred: origStarred }
+                : t
+            )
           );
           if (selectedMsg()?.id === msg.id) {
             setSelectedMsg({ ...selectedMsg()!, starred: origStarred });
@@ -608,6 +654,15 @@ const App: Component = () => {
     const newRead = !origRead;
     setMessages((prev) =>
       prev.map((m) => (m.id === msg.id ? { ...m, read: newRead } : m))
+    );
+    setThreads((prev) =>
+      prev.map((t) => {
+        if (t.message_ids?.includes(msg.id)) {
+          const delta = newRead ? -1 : 1;
+          return { ...t, unread_count: Math.max(0, t.unread_count + delta) };
+        }
+        return t;
+      })
     );
     if (selectedMsg()?.id === msg.id) {
       setSelectedMsg({ ...selectedMsg()!, read: newRead });
@@ -640,10 +695,17 @@ const App: Component = () => {
     const untilISO = until.toISOString();
     const prevSnooze = msg.snoozedUntil;
 
-    // Optimistically update message
+    // Optimistically update message and thread
     setMessages((prev) =>
       prev.map((m) =>
         m.id === msg.id ? { ...m, snoozedUntil: untilISO, read: false } : m
+      )
+    );
+    setThreads((prev) =>
+      prev.map((t) =>
+        t.message_ids?.includes(msg.id)
+          ? { ...t, snoozed_until: untilISO }
+          : t
       )
     );
 
@@ -652,7 +714,11 @@ const App: Component = () => {
     }
 
     snoozeMessage(box.id, msg.id, untilISO)
-      .then(() => {
+      .then(async () => {
+        try {
+          const updated = await fetchThreads(box.id);
+          setThreads(updated);
+        } catch {}
         const timeLabel = formatSnoozeTime(until);
         const toastId = (typeof crypto !== "undefined" && crypto.randomUUID)
           ? crypto.randomUUID()
@@ -666,12 +732,16 @@ const App: Component = () => {
             onClick: () => {
               removeToast(toastId);
               snoozeMessage(box.id, msg.id, null)
-                .then(() => {
+                .then(async () => {
                   setMessages((prev) =>
                     prev.map((m) =>
                       m.id === msg.id ? { ...m, snoozedUntil: prevSnooze, read: false } : m
                     )
                   );
+                  try {
+                    const updated = await fetchThreads(box.id);
+                    setThreads(updated);
+                  } catch {}
                   showToast("Snooze cancelled.");
                 })
                 .catch((err) => {
@@ -686,6 +756,13 @@ const App: Component = () => {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === msg.id ? { ...m, snoozedUntil: prevSnooze } : m
+          )
+        );
+        setThreads((prev) =>
+          prev.map((t) =>
+            t.message_ids?.includes(msg.id)
+              ? { ...t, snoozed_until: prevSnooze }
+              : t
           )
         );
         showToast(`Failed to snooze: ${err instanceof Error ? err.message : "unknown error"}`);
@@ -2778,9 +2855,24 @@ const App: Component = () => {
   const filteredThreads = () => {
     const cur = currentFolder();
     const q = searchQuery().toLowerCase().trim();
+    const now = Date.now();
     return threads().filter((t) => {
-      const matchFolder = (t.folder || "inbox") === cur;
-      if (!matchFolder) return false;
+      const isSnoozed = Boolean(
+        (t.snoozed_until && new Date(t.snoozed_until).getTime() > now) ||
+        messages().some((m) => t.message_ids?.includes(m.id) && m.snoozedUntil && new Date(m.snoozedUntil).getTime() > now)
+      );
+
+      if (cur === "snoozed") {
+        if (!isSnoozed) return false;
+      } else if (isSnoozed && t.folder !== "sent" && t.folder !== "trash") {
+        return false;
+      }
+
+      if (cur !== "snoozed") {
+        const matchFolder = (t.folder || "inbox") === cur;
+        if (!matchFolder) return false;
+      }
+
       if (!q) return true;
       const matchParticipant = (t.participants || []).some((p) => p.toLowerCase().includes(q));
       const matchMsg = messages().some(
@@ -2792,7 +2884,7 @@ const App: Component = () => {
     });
   };
 
-  const effectiveViewMode = () => (filteredThreads().length > 0 ? viewMode() : "flat");
+  const effectiveViewMode = () => (viewMode() === "threads" && filteredThreads().length > 0 ? "threads" : "flat");
 
   const currentMsgIndex = () => {
     const sel = selectedMsg();
@@ -2917,6 +3009,14 @@ const App: Component = () => {
     if (!msg.read) {
       setMessages((prev) =>
         prev.map((m) => (m.id === msg.id ? { ...m, read: true } : m))
+      );
+      setThreads((prev) =>
+        prev.map((t) => {
+          if (t.message_ids?.includes(msg.id)) {
+            return { ...t, unread_count: Math.max(0, t.unread_count - 1) };
+          }
+          return t;
+        })
       );
       const box = selectedMailbox();
       if (box) {
@@ -4724,6 +4824,8 @@ const App: Component = () => {
               expandedThreadId={expandedThreadId()}
               onSelectThread={handleSelectThread}
               onOpenMobileMenu={() => setMobileSidebarOpen(true)}
+              onToggleViewMode={() => setViewMode((prev) => (prev === "threads" ? "flat" : "threads"))}
+              onToggleThreadCheck={handleToggleThreadCheck}
             />
           </div>
 
