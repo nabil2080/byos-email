@@ -387,20 +387,21 @@ async fn verify_least_privilege(client: &Client) {
 async fn poll_scheduled(client: &Client, redis_client: Option<&redis::Client>) -> Result<()> {
     // Select pending scheduled messages ready for delivery. Use transaction with SKIP LOCKED.
     // No decryption — copy encrypted payload verbatim to outbound_queue.
-    // Exclude those deferred via retry_after
+    // Exclude those deferred via retry_after.
+    // Path A rows (is_path_a = true) are delivered by the Go API goroutine — skip them here.
     let trans = client
         .query(
-            "SELECT id::text, delivery_id::text, mailbox_id::text, domain_id::text, recipient, encrypted_message, send_token_hpke_wrapped, outbox_seq, encryption_version, aad_version, encryption_iv, reservation_id::text, expires_at FROM scheduled_messages WHERE status='pending' AND scheduled_at <= now() AND expires_at > now() AND (retry_after IS NULL OR retry_after <= now()) ORDER BY scheduled_at ASC LIMIT 10 FOR UPDATE SKIP LOCKED",
+            "SELECT id::text, delivery_id::text, mailbox_id::text, domain_id::text, recipient, encrypted_message, send_token_hpke_wrapped, outbox_seq, encryption_version, aad_version, encryption_iv, reservation_id::text, expires_at, is_path_a FROM scheduled_messages WHERE status='pending' AND is_path_a = false AND scheduled_at <= now() AND expires_at > now() AND (retry_after IS NULL OR retry_after <= now()) ORDER BY scheduled_at ASC LIMIT 10 FOR UPDATE SKIP LOCKED",
             &[],
         )
         .await
         .context("select scheduled pending")?;
 
     if trans.is_empty() {
-        // Also opportunistically mark expired scheduled messages
+        // Also opportunistically mark expired scheduled messages (Path B only)
         let _ = client
             .execute(
-                "UPDATE scheduled_messages SET status='expired' WHERE status='pending' AND expires_at <= now()",
+                "UPDATE scheduled_messages SET status='expired' WHERE status='pending' AND is_path_a = false AND expires_at <= now()",
                 &[],
             )
             .await;
@@ -422,6 +423,14 @@ async fn poll_scheduled(client: &Client, redis_client: Option<&redis::Client>) -
         let aad_ver: Option<i16> = row.get(9);
         let enc_iv: Option<Vec<u8>> = row.get(10);
         let reservation_id: Option<String> = row.get(11);
+        // column 12: expires_at (not used directly below)
+        let is_path_a: bool = row.get(13);
+
+        // Defensive guard: should not happen due to WHERE is_path_a = false above
+        if is_path_a {
+            warn!("scheduled row {} has is_path_a=true but was fetched by Path B worker — skipping", delivery_id);
+            continue;
+        }
 
         if outbox_seq.is_none() || enc_ver.is_none() || aad_ver.is_none() || enc_iv.is_none() || reservation_id.is_none() {
             warn!("scheduled row {} missing V5.3 AAD/reservation, marking failed", delivery_id);
@@ -433,6 +442,7 @@ async fn poll_scheduled(client: &Client, redis_client: Option<&redis::Client>) -
                 .await;
             continue;
         }
+
         let outbox_seq = outbox_seq.unwrap();
         let enc_ver = enc_ver.unwrap();
         let aad_ver = aad_ver.unwrap();

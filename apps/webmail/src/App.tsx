@@ -37,6 +37,7 @@ import {
   prepareOutbound,
   sendOutbound,
   scheduleOutbound,
+  schedulePathA,
   searchMailboxTokens,
   indexSearchToken,
   fetchMailboxSettings,
@@ -3668,6 +3669,49 @@ const App: Component = () => {
 
         // kind === "fallback" → fall through to Path B
         setComposeStatus("Preparing encrypted message…");
+      }
+
+      // Path A scheduling: if the send is scheduled, has no attachments, and
+      // the recipient is a BYOS X-Wing user, pre-seal the envelope now.
+      // This preserves E2E encryption for scheduled messages.
+      if (isScheduled && !hasAttachments && singleRecipient && senderSeed && senderXwing) {
+        try {
+          const record = await lookupMailboxKeys(to);
+          if (
+            record?.status === "active" &&
+            record.xwing_public_key &&
+            record.key_id &&
+            record.key_epoch
+          ) {
+            const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+            const xwingPkBytes = base64ToBytes(record.xwing_public_key);
+            if (xwingPkBytes.length === 1216) {
+              const envelopeJson = wasm.wasm_seal_xwing_envelope_signed(
+                bytesToHex(xwingPkBytes),
+                record.key_id,
+                record.key_epoch,
+                bytesToHex(new TextEncoder().encode(mimeMessage)),
+                bytesToHex(senderXwing),
+              );
+              await schedulePathA({
+                mailbox_id: box.id,
+                recipient: to,
+                envelope_json: envelopeJson,
+                deliver_at: new Date(payload.scheduledTime!).toISOString(),
+              });
+              setComposeStatus("Encrypted message scheduled (end-to-end).");
+              showToast("Message scheduled for E2E delivery.");
+              loadMailboxData(box.id).catch((err) => {
+                console.warn("Failed to refresh mailbox after schedule:", err);
+              });
+              return;
+            }
+          }
+        } catch (err) {
+          // Fall through to Path B on any failure (recipient not BYOS, key missing, etc.)
+          console.warn("[Path A schedule] failed, falling back to Path B:", err);
+          setComposeStatus("Preparing encrypted message…");
+        }
       }
 
       const [pubkey, reservation] = await Promise.all([

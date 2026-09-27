@@ -81,6 +81,106 @@ func storeInternalEnvelope(ctx context.Context, mailboxID, objectKey string, mes
 	return nil
 }
 
+// deliverEnvelopeToMailbox stores a Path A envelope into the recipient's mailbox.
+// It is used by both internalSendHandler (HTTP) and the scheduled Path A delivery goroutine.
+//
+// Parameters:
+//   - ctx: request context
+//   - conn: pgx connection (used for idempotency check and duplicate read-back)
+//   - tx: open transaction to write into
+//   - recipientMailboxID: recipient's mailbox UUID string
+//   - recipientDomainID: recipient's domain UUID string
+//   - senderEmail: full sender address (e.g. "alice@example.com")
+//   - cleanRecipient: normalised recipient address
+//   - envelopeJSON: the raw JSON XWing envelope string
+//   - env: the already-parsed and signature-verified CryptoEnvelope
+//
+// Returns (messageID, messageSeq, error).
+// On "already delivered" the function returns ("", 0, nil) — caller should treat
+// this as idempotent success. Callers must check messageID == "" for that case.
+func deliverEnvelopeToMailbox(
+	ctx context.Context,
+	conn *pgx.Conn,
+	tx pgx.Tx,
+	recipientMailboxID, recipientDomainID string,
+	senderEmail, cleanRecipient string,
+	envelopeJSON string,
+	env *envelope.CryptoEnvelope,
+) (messageID string, messageSeq int64, err error) {
+	// 1. Compute delivery_identity = SHA256(envelope_json)
+	deliveryIdentity := sha256.Sum256([]byte(envelopeJSON))
+
+	// 2. Idempotency check
+	var existingMessageID string
+	var existingMessageSeq int64
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, message_seq
+		FROM message_metadata
+		WHERE mailbox_id = $1 AND delivery_identity = $2
+	`, recipientMailboxID, deliveryIdentity[:]).Scan(&existingMessageID, &existingMessageSeq)
+	if err == nil {
+		// Already delivered — idempotent success
+		return "", 0, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return "", 0, fmt.Errorf("idempotency check: %w", err)
+	}
+
+	// 3. Allocate sequence
+	if err := tx.QueryRow(ctx, "SELECT nextval('mailbox_message_seq')").Scan(&messageSeq); err != nil {
+		return "", 0, fmt.Errorf("allocate sequence: %w", err)
+	}
+
+	// 4. Build storage_object_id
+	storageObjectID := fmt.Sprintf("mailboxes/%s/%020d.eml.enc", recipientMailboxID, messageSeq)
+
+	// 5. POST to storage-worker
+	if err := storeInternalEnvelope(ctx, recipientMailboxID, storageObjectID, messageSeq, []byte(envelopeJSON)); err != nil {
+		return "", 0, fmt.Errorf("store envelope: %w", err)
+	}
+
+	// NOTE: Path A mail does not populate message_id, in_reply_to, or
+	// thread_id because those headers live inside the encrypted envelope
+	// and are inaccessible to the server. Replies to Path A mail therefore
+	// start new threads. Cross-message threading for Path A is deferred
+	// to V2 (see Appendix D).
+
+	// 6. INSERT message_metadata
+	err = tx.QueryRow(ctx, `
+		INSERT INTO message_metadata (
+			mailbox_id, domain_id, message_seq, direction, delivery_identity, sender, recipients,
+			has_attachments, attachment_count, storage_object_id, content_key_hpke_wrapped,
+			mailbox_sk_version, encryption_version, encryption_iv, aad_version, bundle_hash,
+			status, wrapped_key_algorithm
+		) VALUES (
+			$1, $2, $3, 'received', $4, $5, $6,
+			false, 0, $7, $8,
+			$9, $10, $11, $12, $13,
+			'received', $14
+		) RETURNING id::text
+	`,
+		recipientMailboxID, recipientDomainID, messageSeq, deliveryIdentity[:], senderEmail, []string{cleanRecipient},
+		storageObjectID, []byte{},
+		int(env.KeyEpoch), int(env.V), []byte{}, 1, deliveryIdentity[:],
+		"HPKE-XWing-AES256GCM-v1",
+	).Scan(&messageID)
+	if err != nil {
+		// Check for unique violation (concurrent insert of same delivery_identity)
+		var dupID string
+		var dupSeq int64
+		if reErr := conn.QueryRow(ctx, `
+			SELECT id::text, message_seq
+			FROM message_metadata
+			WHERE mailbox_id = $1 AND delivery_identity = $2
+		`, recipientMailboxID, deliveryIdentity[:]).Scan(&dupID, &dupSeq); reErr == nil {
+			// Concurrent duplicate — treat as idempotent
+			return "", 0, nil
+		}
+		return "", 0, fmt.Errorf("insert message_metadata: %w", err)
+	}
+
+	return messageID, messageSeq, nil
+}
+
 func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -257,19 +357,30 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	// 12. Compute delivery_identity = SHA256(envelope_json)
+	// 11–15. Deliver to recipient mailbox
+	messageID, messageSeq, err := deliverEnvelopeToMailbox(
+		ctx, conn, tx,
+		recipientMailboxID, recipientDomainID,
+		senderEmail, cleanRecipient,
+		req.EnvelopeJSON, env,
+	)
+	if err != nil {
+		writeInternalSendError(w, http.StatusInternalServerError, "database_insert_failed")
+		return
+	}
+
 	deliveryIdentity := sha256.Sum256([]byte(req.EnvelopeJSON))
 
-	// Check for existing row (idempotency check)
-	var existingMessageID string
-	var existingMessageSeq int64
-	err = tx.QueryRow(ctx, `
-		SELECT id::text, message_seq
-		FROM message_metadata
-		WHERE mailbox_id = $1 AND delivery_identity = $2
-	`, recipientMailboxID, deliveryIdentity[:]).Scan(&existingMessageID, &existingMessageSeq)
-	if err == nil {
+	// Already delivered (idempotent) — look up the original IDs and return them
+	if messageID == "" {
 		_ = tx.Rollback(ctx)
+		// Read back the existing row so we can return matching message_id + message_seq.
+		var existingMessageID string
+		var existingMessageSeq int64
+		_ = conn.QueryRow(ctx, `
+			SELECT id::text, message_seq FROM message_metadata
+			WHERE mailbox_id = $1 AND delivery_identity = $2
+		`, recipientMailboxID, deliveryIdentity[:]).Scan(&existingMessageID, &existingMessageSeq)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(InternalSendResponse{
@@ -278,74 +389,6 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 			Status:     "already_delivered",
 			MessageSeq: existingMessageSeq,
 		})
-		return
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		writeInternalSendError(w, http.StatusInternalServerError, "database_error")
-		return
-	}
-
-	// 11. Allocate sequence
-	var messageSeq int64
-	if err := tx.QueryRow(ctx, "SELECT nextval('mailbox_message_seq')").Scan(&messageSeq); err != nil {
-		writeInternalSendError(w, http.StatusInternalServerError, "sequence_allocation_failed")
-		return
-	}
-
-	// 13. Build storage_object_id
-	storageObjectID := fmt.Sprintf("mailboxes/%s/%020d.eml.enc", recipientMailboxID, messageSeq)
-
-	// 14. POST to storage-worker /api/store
-	if err := storeInternalEnvelope(ctx, recipientMailboxID, storageObjectID, messageSeq, []byte(req.EnvelopeJSON)); err != nil {
-		writeInternalSendError(w, http.StatusBadGateway, "storage_failed")
-		return
-	}
-
-	// NOTE: Path A mail does not populate message_id, in_reply_to, or 
-	// thread_id because those headers live inside the encrypted envelope 
-	// and are inaccessible to the server. Replies to Path A mail therefore 
-	// start new threads. Cross-message threading for Path A is deferred 
-	// to V2 (see Appendix D).
-	// 15. INSERT INTO message_metadata
-	var messageID string
-	err = tx.QueryRow(ctx, `
-		INSERT INTO message_metadata (
-			mailbox_id, domain_id, message_seq, direction, delivery_identity, sender, recipients,
-			has_attachments, attachment_count, storage_object_id, content_key_hpke_wrapped,
-			mailbox_sk_version, encryption_version, encryption_iv, aad_version, bundle_hash,
-			status, wrapped_key_algorithm
-		) VALUES (
-			$1, $2, $3, 'received', $4, $5, $6,
-			false, 0, $7, $8,
-			$9, $10, $11, $12, $13,
-			'received', $14
-		) RETURNING id::text
-	`,
-		recipientMailboxID, recipientDomainID, messageSeq, deliveryIdentity[:], senderEmail, []string{cleanRecipient},
-		storageObjectID, []byte{},
-		int(env.KeyEpoch), int(env.V), []byte{}, 1, deliveryIdentity[:],
-		"HPKE-XWing-AES256GCM-v1",
-	).Scan(&messageID)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		// Check for unique violation (concurrent insert of same delivery_identity)
-		var dupID string
-		var dupSeq int64
-		if reErr := conn.QueryRow(ctx, `
-			SELECT id::text, message_seq
-			FROM message_metadata
-			WHERE mailbox_id = $1 AND delivery_identity = $2
-		`, recipientMailboxID, deliveryIdentity[:]).Scan(&dupID, &dupSeq); reErr == nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(InternalSendResponse{
-				DeliveryID: hex.EncodeToString(deliveryIdentity[:]),
-				MessageID:  dupID,
-				Status:     "already_delivered",
-				MessageSeq: dupSeq,
-			})
-			return
-		}
-		writeInternalSendError(w, http.StatusInternalServerError, "database_insert_failed")
 		return
 	}
 
@@ -410,7 +453,7 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 		"sender_mailbox_id":    req.SenderMailboxID,
 		"recipient_mailbox_id": recipientMailboxID,
 		"message_seq":          messageSeq,
-		"storage_object_id":    storageObjectID,
+		"storage_object_id":    fmt.Sprintf("mailboxes/%s/%020d.eml.enc", recipientMailboxID, messageSeq),
 	})
 
 	// 18. Return 201

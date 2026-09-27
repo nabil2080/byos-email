@@ -296,6 +296,16 @@ func main() {
 	startStorageHealthMonitor()
 	startJanitor()
 
+	// Start the Path A scheduled delivery goroutine.
+	// Uses a background context tied to the process lifetime.
+	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
+	_ = schedulerCancel // cancelled when process exits; not explicitly called here
+	schedulerDSN := os.Getenv("DATABASE_URL")
+	if schedulerDSN == "" {
+		schedulerDSN = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	go startScheduledPathADelivery(schedulerCtx, schedulerDSN)
+
 	http.HandleFunc("/health", withSecurityHeaders(withCORS(healthHandler)))
 	http.HandleFunc("/metrics", withSecurityHeaders(metricsHandler))
 	http.HandleFunc("/", withSecurityHeaders(rootHandler))
@@ -319,7 +329,9 @@ func main() {
 	http.HandleFunc("/v1/outbound/send", withSecurityHeaders(withCORS(outboundSendHandler)))
 	http.HandleFunc("/v1/outbound/schedule", withSecurityHeaders(withCORS(outboundScheduleHandler)))
 	http.HandleFunc("/v1/outbound/scheduled/cancel", withSecurityHeaders(withCORS(outboundScheduledCancelHandler)))
+	http.HandleFunc("/v1/outbound/schedule-path-a", withSecurityHeaders(withCORS(outboundSchedulePathAHandler)))
 	http.HandleFunc("/v1/outbound/send-internal", withSecurityHeaders(withCORS(internalSendHandler)))
+
 	http.HandleFunc("/v1/bridge/authenticate", withSecurityHeaders(withCORS(bridgeAuthenticateHandler)))
 	http.HandleFunc("/v1/bridge/messages", withSecurityHeaders(withCORS(bridgeMessagesHandler)))
 	http.HandleFunc("/v1/bridge/message-body", withSecurityHeaders(withCORS(bridgeMessageBodyHandler)))

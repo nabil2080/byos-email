@@ -30,6 +30,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/mail"
@@ -38,9 +39,11 @@ import (
 	"strings"
 	"time"
 
+	"byos.email/crypto/envelope"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
+
 
 type OutboundPrepareRequest struct {
 	MailboxID string `json:"mailbox_id"`
@@ -729,3 +732,212 @@ func outboundScheduledCancelHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(OutboundScheduledCancelResponse{DeliveryID: req.DeliveryID, Status: "cancelled"})
 }
+
+// OutboundSchedulePathARequest is the request body for POST /v1/outbound/schedule-path-a.
+// The client pre-seals the XWing envelope at compose time; the server stores it opaquely.
+type OutboundSchedulePathARequest struct {
+	MailboxID    string `json:"mailbox_id"`
+	Recipient    string `json:"recipient"`
+	EnvelopeJSON string `json:"envelope_json"`
+	DeliverAt    string `json:"deliver_at"` // RFC3339
+}
+
+type OutboundSchedulePathAResponse struct {
+	ID          string `json:"id"`
+	ScheduledAt string `json:"scheduled_at"`
+	Status      string `json:"status"`
+}
+
+// outboundSchedulePathAHandler stores a pre-sealed Path A envelope for future delivery.
+// POST /v1/outbound/schedule-path-a
+func outboundSchedulePathAHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 1. Auth
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// 2. Rate limit (shared per-user limit)
+	if !allowPerUser(userID) {
+		w.Header().Set("Retry-After", "60")
+		http.Error(w, "rate_limited", http.StatusTooManyRequests)
+		return
+	}
+
+	// 3. Body cap (4 MB)
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
+
+	// 4. Parse body
+	var req OutboundSchedulePathARequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err.Error() == "http: request body too large" {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+		}
+		return
+	}
+	if strings.TrimSpace(req.MailboxID) == "" || strings.TrimSpace(req.Recipient) == "" ||
+		strings.TrimSpace(req.EnvelopeJSON) == "" || strings.TrimSpace(req.DeliverAt) == "" {
+		http.Error(w, "mailbox_id, recipient, envelope_json, deliver_at required", http.StatusBadRequest)
+		return
+	}
+	if _, err := uuid.Parse(req.MailboxID); err != nil {
+		http.Error(w, "invalid mailbox_id", http.StatusBadRequest)
+		return
+	}
+
+	// 5. Validate deliver_at is 5s–30d in the future
+	deliverAt, err := time.Parse(time.RFC3339, req.DeliverAt)
+	if err != nil {
+		if deliverAt, err = time.Parse(time.RFC3339Nano, req.DeliverAt); err != nil {
+			http.Error(w, "deliver_at must be RFC3339", http.StatusBadRequest)
+			return
+		}
+	}
+	now := time.Now()
+	if deliverAt.Before(now.Add(5*time.Second)) || deliverAt.After(now.Add(30*24*time.Hour)) {
+		http.Error(w, "deliver_at must be between 5 seconds and 30 days in the future", http.StatusBadRequest)
+		return
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	// 6. Verify sender owns mailbox_id
+	var senderOrgID, senderLocalPart, senderDomainName, senderDomainID string
+	var senderEd25519PK []byte
+	err = conn.QueryRow(ctx, `
+		SELECT m.org_id::text, m.local_part, d.name, m.mailbox_ed25519_pk, d.id::text
+		FROM mailboxes m
+		JOIN domains d ON d.id = m.domain_id
+		WHERE m.id = $1 AND m.user_id = $2 AND m.is_active = true
+	`, req.MailboxID, userID).Scan(&senderOrgID, &senderLocalPart, &senderDomainName, &senderEd25519PK, &senderDomainID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not_sender_mailbox", http.StatusForbidden)
+			return
+		}
+		http.Error(w, "database_error", http.StatusInternalServerError)
+		return
+	}
+
+	// 7. Look up recipient mailbox (validates recipient is a BYOS user)
+	cleanRecipient := strings.TrimSpace(strings.ToLower(req.Recipient))
+	parts := strings.Split(cleanRecipient, "@")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		http.Error(w, "invalid_recipient", http.StatusBadRequest)
+		return
+	}
+	var recipientMailboxID, recipientDomainID string
+	var recipientXWingPK []byte
+	err = conn.QueryRow(ctx, `
+		SELECT m.id::text, m.mailbox_xwing_pk, d.id::text
+		FROM mailboxes m
+		JOIN domains d ON d.id = m.domain_id
+		WHERE lower(m.local_part) = $1 AND lower(d.name) = $2
+		  AND m.is_active = true AND m.key_status = 'active'
+	`, parts[0], parts[1]).Scan(&recipientMailboxID, &recipientXWingPK, &recipientDomainID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "recipient_not_found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "database_error", http.StatusInternalServerError)
+		return
+	}
+	if len(recipientXWingPK) == 0 {
+		http.Error(w, "recipient_not_xwing", http.StatusBadRequest)
+		return
+	}
+
+	// 8. Parse and validate the envelope (v=1, correct alg, key_id matches)
+	env, err := envelope.UnmarshalCanonical([]byte(req.EnvelopeJSON))
+	if err != nil {
+		http.Error(w, "invalid_envelope", http.StatusBadRequest)
+		return
+	}
+	if env.V != 1 {
+		http.Error(w, "unsupported_version", http.StatusBadRequest)
+		return
+	}
+	if env.Alg != "HPKE-XWing-AES256GCM-v1" {
+		http.Error(w, "unsupported_algorithm", http.StatusBadRequest)
+		return
+	}
+	if env.KeyID != recipientMailboxID {
+		http.Error(w, "key_id_mismatch", http.StatusBadRequest)
+		return
+	}
+	if env.KeyEpoch == 0 {
+		http.Error(w, "invalid_key_epoch", http.StatusBadRequest)
+		return
+	}
+
+	// 9. Verify sender signature
+	if len(senderEd25519PK) == 0 {
+		http.Error(w, "sender_has_no_signing_key", http.StatusBadRequest)
+		return
+	}
+	if err := envelope.VerifyEnvelopeSignature(senderEd25519PK, env); err != nil {
+		http.Error(w, "invalid_signature", http.StatusBadRequest)
+		return
+	}
+
+	// 10. INSERT into scheduled_messages with is_path_a=true
+	// send_token_hash must be NOT NULL per schema — use empty bytes as placeholder (no semantic use for Path A)
+	expiresAt := deliverAt.Add(7 * 24 * time.Hour)
+	var rowID string
+	err = conn.QueryRow(ctx, `
+		INSERT INTO scheduled_messages (
+			mailbox_id, domain_id, recipient,
+			send_token_hash,
+			scheduled_at, status,
+			expires_at,
+			is_path_a, envelope_json
+		) VALUES (
+			$1, $2, $3,
+			$4,
+			$5, 'pending',
+			$6,
+			true, $7
+		) RETURNING id::text
+	`, req.MailboxID, senderDomainID, cleanRecipient,
+		[]byte{}, // send_token_hash placeholder
+		deliverAt, expiresAt,
+		req.EnvelopeJSON,
+	).Scan(&rowID)
+	if err != nil {
+		http.Error(w, "failed to schedule message", http.StatusInternalServerError)
+		return
+	}
+
+	auditLog(ctx, conn, senderOrgID, userID, "schedule_path_a", "scheduled_messages", rowID, map[string]interface{}{
+		"recipient":  cleanRecipient,
+		"deliver_at": deliverAt.Format(time.RFC3339),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(OutboundSchedulePathAResponse{
+		ID:          rowID,
+		ScheduledAt: deliverAt.Format(time.RFC3339),
+		Status:      "scheduled",
+	})
+}
+

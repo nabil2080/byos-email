@@ -679,6 +679,25 @@ export async function scheduleOutbound(payload: SchedulePayload): Promise<{ deli
   });
 }
 
+export interface SchedulePathARequest {
+  mailbox_id: string;
+  recipient: string;
+  envelope_json: string;
+  deliver_at: string; // RFC3339
+}
+
+export async function schedulePathA(
+  req: SchedulePathARequest,
+): Promise<{ id: string; scheduled_at: string; status: string }> {
+  return apiRequest<{ id: string; scheduled_at: string; status: string }>(
+    "/v1/outbound/schedule-path-a",
+    {
+      method: "POST",
+      body: JSON.stringify(req),
+    },
+  );
+}
+
 export interface SearchTokensResponse {
   message_ids: string[];
 }
