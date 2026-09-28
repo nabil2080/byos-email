@@ -266,6 +266,7 @@ async fn main() -> Result<()> {
     verify_least_privilege(&client).await;
 
     info!("outbound-worker polling every {}ms, postfix={}, redis={}", poll_ms, postfix_addr, redis_url);
+    info!("scheduled poller: filtering WHERE is_path_a = false");
 
     loop {
         if let Err(e) = poll_scheduled(&client, redis_client.as_ref()).await {

@@ -93,9 +93,10 @@ func processPathAScheduled(ctx context.Context, dsn string) error {
 
 	if len(batch) == 0 {
 		// Opportunistically expire Path A rows past their window
-		_, _ = tx.Exec(ctx,
-			"UPDATE scheduled_messages SET status='expired' WHERE status='pending' AND is_path_a = true AND expires_at <= now()",
-		)
+		if _, err := tx.Exec(ctx, "UPDATE scheduled_messages SET status='expired' WHERE status='pending' AND is_path_a = true AND expires_at <= now()"); err != nil {
+			log.Printf("[scheduled-path-a] failed to expire rows: %v", err)
+			return err
+		}
 		return tx.Commit(ctx)
 	}
 
@@ -104,13 +105,15 @@ func processPathAScheduled(ctx context.Context, dsn string) error {
 	for _, r := range batch {
 		if err := deliverPathARow(ctx, conn, tx, r); err != nil {
 			log.Printf("[scheduled-path-a] delivery failed id=%s: %v", r.id, err)
-			_, _ = tx.Exec(ctx,
-				"UPDATE scheduled_messages SET status='failed' WHERE id=$1",
-				r.id)
+			if _, err := tx.Exec(ctx, "UPDATE scheduled_messages SET status='failed' WHERE id=$1", r.id); err != nil {
+				log.Printf("[scheduled-path-a] failed to mark %s as failed: %v", r.id, err)
+				return err
+			}
 		} else {
-			_, _ = tx.Exec(ctx,
-				"UPDATE scheduled_messages SET status='executed', sent_at=now() WHERE id=$1",
-				r.id)
+			if _, err := tx.Exec(ctx, "UPDATE scheduled_messages SET status='executed', sent_at=now() WHERE id=$1", r.id); err != nil {
+				log.Printf("[scheduled-path-a] failed to mark %s as executed: %v", r.id, err)
+				return err
+			}
 			log.Printf("[scheduled-path-a] delivered id=%s recipient=%s", r.id, r.recipient)
 		}
 	}
