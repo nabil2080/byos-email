@@ -161,19 +161,41 @@ fn print_sql(
         user_id_list, user_email_list
     );
 
+    println!("DELETE FROM scheduled_messages WHERE mailbox_id IN ({});", target_mb);
     println!("DELETE FROM delivery_log WHERE mailbox_id IN ({});", target_mb);
     println!("DELETE FROM outbound_queue WHERE mailbox_id IN ({});", target_mb);
     println!("DELETE FROM outbound_reservations WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM message_labels WHERE message_id IN (SELECT id FROM message_metadata WHERE mailbox_id IN ({}));", target_mb);
+    println!("DELETE FROM attachments WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM message_tracking WHERE mailbox_id IN ({});", target_mb);
     println!("DELETE FROM message_metadata WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM drafts WHERE mailbox_id IN ({});", target_mb);
     println!("DELETE FROM mailbox_storage WHERE mailbox_id IN ({});", target_mb);
     println!("DELETE FROM search_index WHERE mailbox_id IN ({});", target_mb);
-    println!("DELETE FROM scheduled_messages WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM search_tokens WHERE mailbox_id IN ({});", target_mb);
     println!("DELETE FROM auto_reply_rules WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM mailbox_address_rules WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM mail_rules WHERE mailbox_id IN ({});", target_mb);
     println!("DELETE FROM device_mailbox_access WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM storage_connections WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM bridge_credentials WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM account_invitations WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM mailbox_folders WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM mailbox_labels WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM aliases WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM contacts WHERE mailbox_id IN ({});", target_mb);
+    println!("DELETE FROM mailbox_settings WHERE mailbox_id IN ({});", target_mb);
     println!(
         "DELETE FROM mailboxes\nWHERE id IN ({})\n   OR (domain_id = (SELECT id FROM domains WHERE name = '{}') AND local_part IN ({}));",
         id_list, domain, local_list
     );
+    println!("DELETE FROM sessions WHERE user_id IN ({});", target_users);
+    println!("DELETE FROM user_passkeys WHERE user_id IN ({});", target_users);
+    println!("DELETE FROM auth_challenges WHERE user_id IN ({});", target_users);
+    println!("DELETE FROM recovery_challenges WHERE user_id IN ({});", target_users);
+    println!("DELETE FROM devices WHERE user_id IN ({});", target_users);
+    println!("DELETE FROM org_recovery_principals WHERE user_id IN ({});", target_users);
+    println!("DELETE FROM google_drive_oauth_states WHERE user_id IN ({});", target_users);
     println!("DELETE FROM audit_log WHERE user_id IN ({});", target_users);
     println!("DELETE FROM users WHERE id IN ({}) OR email IN ({});", user_id_list, user_email_list);
     println!();
