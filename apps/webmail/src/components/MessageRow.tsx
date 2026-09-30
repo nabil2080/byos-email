@@ -59,7 +59,10 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
     return props.isSplit ? "py-2.5 px-3.5" : "py-2 px-3.5";
   };
 
-  const formattedDate = () => formatSmartDate(props.message.date);
+  const formattedDate = () => {
+    const d = formatSmartDate(props.message.date);
+    return props.message.folder === "scheduled" ? `Sends ${d}` : d;
+  };
 
   const handleDragStart = (e: DragEvent) => {
     if (!e.dataTransfer) return;
@@ -168,9 +171,9 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
               ></span>
             </Show>
 
-            {/* Sender Column with ProfileAvatar */}
+            {/* Sender (or To: for scheduled) Column with ProfileAvatar */}
             <div class="w-28 sm:w-48 md:w-56 min-w-0 flex-shrink-0 flex items-center gap-2 truncate">
-              <ProfileAvatar email={props.message.sender} size="xs" />
+              <ProfileAvatar email={props.message.folder === "scheduled" ? props.message.recipient : props.message.sender} size="xs" />
               <span
                 class={`truncate font-sans text-sm ${
                   props.message.read
@@ -178,7 +181,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
                 }`}
               >
-                {props.message.sender}
+                {props.message.folder === "scheduled" ? props.message.recipient : props.message.sender}
               </span>
             </div>
 
@@ -213,7 +216,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
                 }`}
               >
-                {props.message.subject || "(No subject)"}
+                {props.message.subject || (props.message.folder === "scheduled" ? "(scheduled)" : "(No subject)")}
               </span>
             </div>
 
@@ -381,7 +384,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
 
               {/* Sender with ProfileAvatar */}
               <div class="flex items-center gap-1.5 min-w-0 flex-1 truncate">
-                <ProfileAvatar email={props.message.sender} size="xs" />
+                <ProfileAvatar email={props.message.folder === "scheduled" ? props.message.recipient : props.message.sender} size="xs" />
                 <span
                   class={`truncate min-w-0 font-sans text-sm ${
                     props.message.read
@@ -389,7 +392,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                       : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
                   }`}
                 >
-                  {props.message.sender}
+                  {props.message.folder === "scheduled" ? props.message.recipient : props.message.sender}
                 </span>
               </div>
             </div>
@@ -512,7 +515,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
                 }`}
               >
-                {props.message.subject || "(No subject)"}
+                {props.message.subject || (props.message.folder === "scheduled" ? "(scheduled)" : "(No subject)")}
               </span>
             </div>
             <Show when={props.message.hasAttachments || (props.message.attachmentCount && props.message.attachmentCount > 0)}>

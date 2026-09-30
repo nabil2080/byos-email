@@ -122,7 +122,7 @@ import { ShortcutHandler, isTextInputElement, matchShortcut } from "./keyboard_s
 import { formatMessageDate } from "./utils/dateTime";
 import { formatSnoozeTime } from "./snooze";
 
-type Folder = "inbox" | "sent" | "drafts" | "archive" | "spam" | "trash" | "snoozed";
+type Folder = "inbox" | "sent" | "scheduled" | "drafts" | "snoozed" | "archive" | "spam" | "trash";
 
 interface DisplayMessage {
   id: string;
@@ -2531,9 +2531,10 @@ const App: Component = () => {
   async function loadMailboxData(mailboxId: string) {
     try {
       setStorageErrorBanner(null);
-      const [draftsList, messageList, folderList, labelList, attachmentList, threadList] = await Promise.all([
+      const [draftsList, messageList, scheduledList, folderList, labelList, attachmentList, threadList] = await Promise.all([
         fetchDrafts(mailboxId),
         fetchMessages(mailboxId),
+        fetchMessages(mailboxId, "scheduled").catch(() => []),
         fetchFolders(mailboxId),
         fetchLabels(mailboxId),
         fetchAttachments(mailboxId).catch(() => []),
@@ -2570,7 +2571,9 @@ const App: Component = () => {
         return ext.length > 4 ? ext.slice(0, 4) : ext;
       }
 
-      const realMessages: DisplayMessage[] = messageList.map((m: MessageMetadata) => {
+      const allApiMessages = [...messageList, ...(scheduledList || [])];
+      const realMessages: DisplayMessage[] = allApiMessages.map((m: MessageMetadata) => {
+        const isScheduled = m.folder === "scheduled";
         const cachedSubject = sessionStorage.getItem("byos_msg_subject_" + m.id);
         const cachedSnippet = sessionStorage.getItem("byos_msg_snippet_" + m.id);
         const msgAtts = attachmentsByMsgId.get(m.id) || [];
@@ -2592,11 +2595,11 @@ const App: Component = () => {
           labelIds: m.label_ids || [],
           sender: m.sender,
           recipient: m.recipients.join(", "),
-          subject: cachedSubject || "(Encrypted message)",
-          snippet: cachedSnippet || `Encrypted payload • ${m.storage_object_id}`,
+          subject: isScheduled ? "(scheduled)" : (cachedSubject || "(Encrypted message)"),
+          snippet: isScheduled ? `Scheduled send to ${m.recipients.join(", ")}` : (cachedSnippet || `Encrypted payload • ${m.storage_object_id}`),
           encryptedBody: m.storage_object_id,
           date: formatMessageDate(m.sent_at || m.received_at, timeFormat(), language()),
-          read: m.is_read ?? false,
+          read: isScheduled ? true : (m.is_read ?? false),
           starred: m.is_starred ?? false,
           snoozedUntil: m.snoozed_until,
           isRealApi: true,
@@ -2650,6 +2653,7 @@ const App: Component = () => {
       if (key && wasm && keyBoxId === mailboxId) {
         (async () => {
           for (const m of realMessages) {
+            if (m.folder === "scheduled") continue;
             if (sessionStorage.getItem("byos_msg_subject_" + m.id)) continue;
             try {
               const body = await fetchMessageBody(mailboxId, m.id);
@@ -3007,7 +3011,7 @@ const App: Component = () => {
     setSenderVerification(null);
 
     // Mark as read (optimistic + persist)
-    if (!msg.read) {
+    if (!msg.read && msg.folder !== "scheduled") {
       setMessages((prev) =>
         prev.map((m) => (m.id === msg.id ? { ...m, read: true } : m))
       );
@@ -3035,6 +3039,14 @@ const App: Component = () => {
     }
 
     try {
+      if (msg.folder === "scheduled") {
+        if (seq === currentDecryptSeq) {
+          setDecryptedContent(`This message is scheduled for delivery to ${msg.recipient} on ${msg.date}.\n\n(Scheduled send)`);
+          setIsDecrypting(false);
+        }
+        return;
+      }
+
       // Drafts live outside message_metadata: decrypt the stored envelope
       // directly instead of fetching a message body (which would 404).
       if (msg.folder === "drafts") {
@@ -3912,6 +3924,7 @@ const App: Component = () => {
   const folderNames: Record<Folder, string> = {
     inbox: "Inbox",
     sent: "Sent",
+    scheduled: "Scheduled",
     drafts: "Drafts",
     archive: "Archive",
     spam: "Spam",
@@ -3923,6 +3936,7 @@ const App: Component = () => {
     const counts: Record<Folder, number> = {
       inbox: 0,
       sent: 0,
+      scheduled: 0,
       drafts: 0,
       archive: 0,
       spam: 0,
@@ -3931,6 +3945,10 @@ const App: Component = () => {
     };
     const now = Date.now();
     for (const m of messages()) {
+      if (m.folder === "scheduled") {
+        counts.scheduled++;
+        continue;
+      }
       const isSnoozed = Boolean(m.snoozedUntil && new Date(m.snoozedUntil).getTime() > now);
       if (isSnoozed) {
         counts.snoozed++;

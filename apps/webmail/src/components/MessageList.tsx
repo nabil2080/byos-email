@@ -89,6 +89,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
   const folderNames: Record<Folder, string> = {
     inbox: "Inbox",
     sent: "Sent",
+    scheduled: "Scheduled",
     drafts: "Drafts",
     archive: "Archive",
     spam: "Spam",

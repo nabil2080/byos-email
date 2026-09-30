@@ -16,6 +16,7 @@ import { runThreadingTests } from "./threading.test.js";
 import { runUndoSendTests } from "./undo_send.test.js";
 import { runKeyboardShortcutsTests } from "./keyboard_shortcuts.test.js";
 import { runSnoozeTests } from "./snooze.test.js";
+import { runScheduledFolderTests } from "./scheduled_folder.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -127,6 +128,12 @@ async function main() {
   console.log(`SNOOZE TESTS: ${snoozeRes.passed} passed, ${snoozeRes.failed} failed\n`);
   totalPassed += snoozeRes.passed;
   totalFailed += snoozeRes.failed;
+
+  console.log("Running Scheduled Folder Tests...");
+  const scheduledRes = runScheduledFolderTests();
+  console.log(`SCHEDULED FOLDER TESTS: ${scheduledRes.passed} passed, ${scheduledRes.failed} failed\n`);
+  totalPassed += scheduledRes.passed;
+  totalFailed += scheduledRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

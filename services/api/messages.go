@@ -96,7 +96,42 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	folderFilter := strings.TrimSpace(r.URL.Query().Get("folder"))
 	var rows pgx.Rows
-	if folderFilter == "snoozed" {
+	if folderFilter == "scheduled" {
+		// Scheduled folder: query scheduled_messages for pending future sends.
+		// Returns a synthetic MessageMetadataResponse slice: no storage objects,
+		// no decryption keys — just enough for the list view (recipient, time).
+		rows, err = conn.Query(ctx, `
+			SELECT
+			  sm.id::text,
+			  0::bigint,
+			  'sent'::text,
+			  sm.recipient,
+			  ARRAY[sm.recipient],
+			  ''::text,
+			  ''::bytea,
+			  1::int,
+			  ''::bytea,
+			  1::smallint,
+			  ''::bytea,
+			  sm.scheduled_at,
+			  sm.scheduled_at,
+			  'scheduled'::text,
+			  false::bool,
+			  0::int,
+			  'scheduled'::text,
+			  ''::text,
+			  ARRAY[]::text[],
+			  true::bool,
+			  false::bool,
+			  NULL::timestamptz,
+			  0::bigint
+			FROM scheduled_messages sm
+			WHERE sm.mailbox_id = $1
+			  AND sm.status = 'pending'
+			  AND sm.scheduled_at > now()
+			ORDER BY sm.scheduled_at ASC
+			LIMIT 100`, mailboxID)
+	} else if folderFilter == "snoozed" {
 		rows, err = conn.Query(ctx, `
 			SELECT m.id::text, m.message_seq, m.direction, m.sender, m.recipients, m.storage_object_id,
 			       m.content_key_hpke_wrapped, m.encryption_version, m.encryption_iv,

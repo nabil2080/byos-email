@@ -63,7 +63,7 @@ func processPathAScheduled(ctx context.Context, dsn string) error {
 	defer tx.Rollback(ctx)
 
 	rows, err := tx.Query(ctx, `
-		SELECT id::text, mailbox_id::text, recipient, envelope_json
+		SELECT id::text, mailbox_id::text, recipient, COALESCE(envelope_json, '')
 		FROM scheduled_messages
 		WHERE status = 'pending'
 		  AND is_path_a = true

@@ -3,7 +3,7 @@ import { StorageStatusPill } from "./StorageStatusPill";
 import { UserMe, Mailbox, ConnectedAccount, MailboxFolder, MailboxLabel } from "../api";
 import { AccountSwitcher } from "./AccountSwitcher";
 
-export type Folder = "inbox" | "sent" | "drafts" | "archive" | "spam" | "trash" | "snoozed";
+export type Folder = "inbox" | "sent" | "scheduled" | "drafts" | "snoozed" | "archive" | "spam" | "trash";
 
 interface SidebarProps {
   currentUser: UserMe | null;
@@ -79,6 +79,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
   const folderLabels: Record<Folder, string> = {
     inbox: "Inbox",
     sent: "Sent",
+    scheduled: "Scheduled",
     drafts: "Drafts",
     archive: "Archive",
     spam: "Spam",
@@ -100,6 +101,15 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5] flex-shrink-0" viewBox="0 0 24 24">
             <line x1="22" y1="2" x2="11" y2="13" />
             <polygon points="22 2 15 22 11 13 2 9 22 2" />
+          </svg>
+        );
+      case "scheduled":
+        return (
+          <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5] flex-shrink-0" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+            <line x1="18.5" y1="5.5" x2="20.5" y2="3.5" />
+            <polyline points="19 3 21 3 21 5" />
           </svg>
         );
       case "drafts":
@@ -274,7 +284,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       <div class="flex-1 min-h-0 overflow-y-auto px-2 py-1 space-y-3 custom-scrollbar relative z-10">
         {/* Navigation Folders List */}
         <nav class="space-y-0.5">
-          {(["inbox", "sent", "drafts", "archive", "spam", "snoozed", "trash"] as Folder[]).map((f) => {
+          {(["inbox", "sent", "scheduled", "drafts", "snoozed", "archive", "spam", "trash"] as Folder[]).map((f) => {
             const isActive = () => props.currentFolder === f;
             const isDropTarget = () => dragOverTarget() === f;
             const count = () => (props.folderCounts ? props.folderCounts[f] || 0 : 0);
