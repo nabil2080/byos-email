@@ -46,6 +46,9 @@ type MessageMetadataResponse struct {
 	IsStarred             bool     `json:"is_starred"`
 	SnoozedUntil          *string  `json:"snoozed_until,omitempty"`
 	SizeBytes             int64    `json:"size_bytes"`
+	Subject               string   `json:"subject,omitempty"`
+	DraftStorageRef       string   `json:"draft_storage_ref,omitempty"`
+	SendAt                *string  `json:"send_at,omitempty"`
 }
 
 type ThreadSummary struct {
@@ -54,6 +57,7 @@ type ThreadSummary struct {
 	UnreadCount    int      `json:"unread_count"`
 	LatestAt       string   `json:"latest_at"`       // RFC3339
 	Participants   []string `json:"participants"`     // distinct senders, ordered by first appearance
+	Recipients     []string `json:"recipients"`       // recipients of the latest message in thread
 	MessageIDs     []string `json:"message_ids"`      // chronological (oldest first)
 	IsStarred      bool     `json:"is_starred"`       // any message starred
 	Folder         string   `json:"folder"`           // folder of the latest message
@@ -94,6 +98,15 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Query().Has("search") {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "use /v1/mailboxes/{id}/search for search",
+		})
+		return
+	}
+
 	folderFilter := strings.TrimSpace(r.URL.Query().Get("folder"))
 	var rows pgx.Rows
 	if folderFilter == "scheduled" {
@@ -107,14 +120,14 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 			  'sent'::text,
 			  sm.recipient,
 			  ARRAY[sm.recipient],
-			  ''::text,
+			  COALESCE(sm.draft_storage_ref, '')::text,
 			  ''::bytea,
 			  1::int,
 			  ''::bytea,
 			  1::smallint,
 			  ''::bytea,
-			  sm.scheduled_at,
-			  sm.scheduled_at,
+			  COALESCE(sm.send_at, sm.scheduled_at),
+			  COALESCE(sm.send_at, sm.scheduled_at),
 			  'scheduled'::text,
 			  false::bool,
 			  0::int,
@@ -128,8 +141,7 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 			FROM scheduled_messages sm
 			WHERE sm.mailbox_id = $1
 			  AND sm.status = 'pending'
-			  AND sm.scheduled_at > now()
-			ORDER BY sm.scheduled_at ASC
+			ORDER BY COALESCE(sm.send_at, sm.scheduled_at) ASC
 			LIMIT 100`, mailboxID)
 	} else if folderFilter == "snoozed" {
 		rows, err = conn.Query(ctx, `
@@ -236,7 +248,12 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		m.Sender = strings.TrimSpace(m.Sender)
 		m.Folder = folder
-		if folderIDStr != "" {
+		if folder == "scheduled" {
+			m.Subject = ""
+			m.DraftStorageRef = m.StorageObjectID
+			m.SendAt = m.SentAt
+			m.FolderID = nil
+		} else if folderIDStr != "" {
 			m.FolderID = &folderIDStr
 		}
 		if labelIDs == nil {
@@ -307,7 +324,8 @@ func threadsHandler(w http.ResponseWriter, r *http.Request) {
 			    COALESCE(BOOL_OR(m.is_starred), false) AS is_starred,
 			    (ARRAY_AGG(COALESCE(m.folder, 'inbox') ORDER BY COALESCE(m.sent_at, m.received_at) DESC))[1] AS folder,
 			    COALESCE(BOOL_OR(m.has_attachments), false) AS has_attachments,
-			    MAX(m.snoozed_until) AS snoozed_until
+			    MAX(m.snoozed_until) AS snoozed_until,
+			    COALESCE((ARRAY_AGG(to_jsonb(m.recipients) ORDER BY COALESCE(m.sent_at, m.received_at) DESC))[1]::text, '[]') AS latest_recipients
 			FROM message_metadata m
 			WHERE m.mailbox_id = $1
 			  AND m.snoozed_until IS NOT NULL
@@ -327,7 +345,8 @@ func threadsHandler(w http.ResponseWriter, r *http.Request) {
 			    COALESCE(BOOL_OR(m.is_starred), false) AS is_starred,
 			    (ARRAY_AGG(COALESCE(m.folder, 'inbox') ORDER BY COALESCE(m.sent_at, m.received_at) DESC))[1] AS folder,
 			    COALESCE(BOOL_OR(m.has_attachments), false) AS has_attachments,
-			    MAX(m.snoozed_until) AS snoozed_until
+			    MAX(m.snoozed_until) AS snoozed_until,
+			    COALESCE((ARRAY_AGG(to_jsonb(m.recipients) ORDER BY COALESCE(m.sent_at, m.received_at) DESC))[1]::text, '[]') AS latest_recipients
 			FROM message_metadata m
 			WHERE m.mailbox_id = $1
 			  AND ($2 = '' OR m.folder = $2)
@@ -353,10 +372,17 @@ func threadsHandler(w http.ResponseWriter, r *http.Request) {
 		var allSenders []string
 		var messageIDs []string
 		var snoozedUntil *time.Time
+		var rcptJSON string
 		if err := rows.Scan(&t.ThreadID, &t.MessageCount, &t.UnreadCount, &latestAt,
-			&allSenders, &messageIDs, &t.IsStarred, &t.Folder, &t.HasAttachments, &snoozedUntil); err != nil {
+			&allSenders, &messageIDs, &t.IsStarred, &t.Folder, &t.HasAttachments, &snoozedUntil, &rcptJSON); err != nil {
 			http.Error(w, "failed to read thread summary", http.StatusInternalServerError)
 			return
+		}
+		if err := json.Unmarshal([]byte(rcptJSON), &t.Recipients); err != nil {
+			log.Printf("[THREADS] recipients unmarshal failed thread_id=%s err=%v raw_prefix=%.40s", t.ThreadID, err, rcptJSON)
+			t.Recipients = []string{}
+		} else if t.Recipients == nil {
+			t.Recipients = []string{}
 		}
 		t.LatestAt = latestAt.Format(time.RFC3339)
 		if snoozedUntil != nil {
@@ -552,7 +578,7 @@ func loadEncryptedMessageBody(ctx context.Context, conn *pgx.Conn, mailboxID, me
 		return nil, &messageBodyLoadError{status: http.StatusNotFound, msg: "message not found", err: err}
 	}
 
-	if wrappedKeyAlg != "HPKE-XWing-AES256GCM-v1" && wrappedKeyAlg != "HPKE-X25519-AES256GCM-v1" {
+	if wrappedKeyAlg != "HPKE-XWing-AES256GCM-v1" && wrappedKeyAlg != "HPKE-X25519-AES256GCM-v1" && wrappedKeyAlg != "byos-draft-v1" {
 		return nil, &messageBodyLoadError{status: http.StatusInternalServerError, msg: `{"error":"unknown_wrapped_key_algorithm"}`, err: fmt.Errorf("unknown wrapped_key_algorithm: %s", wrappedKeyAlg)}
 	}
 
@@ -727,6 +753,10 @@ func messageFolderHandler(w http.ResponseWriter, r *http.Request) {
 		folder = "custom"
 	}
 
+	var oldFolder string
+	var isRead bool
+	_ = conn.QueryRow(ctx, `SELECT COALESCE(folder, 'inbox'), COALESCE(is_read, false) FROM message_metadata WHERE id=$1 AND mailbox_id=$2`, messageID, mailboxID).Scan(&oldFolder, &isRead)
+
 	tag, err := conn.Exec(ctx, `
 		UPDATE message_metadata
 		SET folder = $1, folder_id = $2
@@ -740,6 +770,31 @@ func messageFolderHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "message not found", http.StatusNotFound)
 		return
 	}
+
+	if oldFolder != "" && oldFolder != folder {
+		oldDelta := 0
+		if !isRead {
+			oldDelta = -1
+		}
+		publishMailboxEvent(ctx, MailboxEvent{
+			Type:        "message.moved",
+			MailboxID:   mailboxID,
+			Folder:      oldFolder,
+			MessageID:   messageID,
+			UnreadDelta: oldDelta,
+		})
+	}
+	newDelta := 0
+	if !isRead {
+		newDelta = 1
+	}
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.moved",
+		MailboxID:   mailboxID,
+		Folder:      folder,
+		MessageID:   messageID,
+		UnreadDelta: newDelta,
+	})
 
 	resp := map[string]interface{}{
 		"status":     "ok",
@@ -888,6 +943,10 @@ func messageReadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var oldRead bool
+	var folder string
+	_ = conn.QueryRow(ctx, `SELECT COALESCE(is_read, false), COALESCE(folder, 'inbox') FROM message_metadata WHERE id=$1 AND mailbox_id=$2`, messageID, mailboxID).Scan(&oldRead, &folder)
+
 	_, err = conn.Exec(ctx,
 		`UPDATE message_metadata SET is_read=$1 WHERE id=$2 AND mailbox_id=$3`,
 		body.Read, messageID, mailboxID)
@@ -895,6 +954,21 @@ func messageReadHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to update read state", http.StatusInternalServerError)
 		return
 	}
+	unreadDelta := 0
+	if oldRead != body.Read {
+		if body.Read {
+			unreadDelta = -1
+		} else {
+			unreadDelta = 1
+		}
+	}
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.updated",
+		MailboxID:   mailboxID,
+		Folder:      folder,
+		MessageID:   messageID,
+		UnreadDelta: unreadDelta,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 

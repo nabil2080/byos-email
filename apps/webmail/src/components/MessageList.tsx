@@ -14,6 +14,7 @@ export interface DisplayMessage {
   labelIds?: string[];
   sender: string;
   recipient: string;
+  recipients?: string[];
   subject: string;
   snippet: string;
   encryptedBody: string;
@@ -31,6 +32,11 @@ export interface DisplayMessage {
     firstOpenedAt?: string;
     lastOpenedAt?: string;
   };
+  draftStorageRef?: string;
+  scheduledAt?: string;
+  status?: string;
+  decryptedContent?: string;
+  sendFailed?: boolean;
 }
 
 interface MessageListProps {
@@ -204,6 +210,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
               {(msg) => (
                 <MessageRow
                   message={msg}
+                  currentFolder={props.currentFolder}
                   isSelected={props.selectedMessage?.id === msg.id}
                   isChecked={props.selectedIds.has(msg.id)}
                   isSplit={props.isSplit}
@@ -225,6 +232,13 @@ export const MessageList: Component<MessageListProps> = (props) => {
           <For each={props.threads}>
             {(thread) => {
               const matchingMsg = () => props.messages.find((m) => thread.message_ids?.includes(m.id));
+              const latestMsg = () => {
+                if (thread.message_ids && thread.message_ids.length > 0) {
+                  const latestId = thread.message_ids[thread.message_ids.length - 1];
+                  return props.messages.find((m) => m.id === latestId) || matchingMsg();
+                }
+                return matchingMsg();
+              };
               const isThreadSelected = () =>
                 props.expandedThreadId === thread.thread_id ||
                 (props.selectedMessage ? (thread.message_ids?.includes(props.selectedMessage.id) ?? false) : false);
@@ -232,16 +246,18 @@ export const MessageList: Component<MessageListProps> = (props) => {
               return (
                 <ThreadRow
                   thread={thread}
+                  currentFolder={props.currentFolder}
                   expanded={props.expandedThreadId === thread.thread_id}
                   onClick={() => props.onSelectThread?.(thread.thread_id)}
-                  subject={matchingMsg()?.subject}
-                  snippet={matchingMsg()?.snippet}
+                  subject={latestMsg()?.subject || matchingMsg()?.subject}
+                  snippet={latestMsg()?.snippet || matchingMsg()?.snippet}
                   density={props.density}
                   isSplit={props.isSplit}
                   isSelected={isThreadSelected()}
                   selectedIds={props.selectedIds}
                   onToggleThreadCheck={props.onToggleThreadCheck}
                   targetMessage={matchingMsg()}
+                  latestMessage={latestMsg()}
                   labels={props.labels}
                   onToggleStarred={props.onToggleStarred}
                   onToggleRead={props.onToggleRead}

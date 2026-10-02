@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -41,14 +42,19 @@ func startScheduledPathADelivery(ctx context.Context, dsn string) {
 }
 
 type pathAScheduledRow struct {
-	id           string
-	mailboxID    string
-	recipient    string
-	envelopeJSON string
+	id                        string
+	deliveryID                string
+	mailboxID                 string
+	recipient                 string
+	envelopeJSON              string
+	draftStorageRef           string
+	subject                   string
+	attachmentEnvelopes       []AttachmentEnvelope
+	senderAttachmentEnvelopes []AttachmentEnvelope
 }
 
 // processPathAScheduled fetches up to 10 due Path A rows, delivers each one,
-// and marks status='executed' on success or status='failed' on error.
+// and marks status='sent' on success (writing a copy to Sent folder) or status='failed' on error (moving to Drafts).
 func processPathAScheduled(ctx context.Context, dsn string) error {
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -63,7 +69,10 @@ func processPathAScheduled(ctx context.Context, dsn string) error {
 	defer tx.Rollback(ctx)
 
 	rows, err := tx.Query(ctx, `
-		SELECT id::text, mailbox_id::text, recipient, COALESCE(envelope_json, '')
+		SELECT id::text, delivery_id::text, mailbox_id::text, recipient, COALESCE(envelope_json, ''),
+		       COALESCE(draft_storage_ref, ''), COALESCE(subject, ''),
+		       COALESCE(attachment_envelopes, '[]'::jsonb),
+		       COALESCE(sender_attachment_envelopes, '[]'::jsonb)
 		FROM scheduled_messages
 		WHERE status = 'pending'
 		  AND is_path_a = true
@@ -80,9 +89,16 @@ func processPathAScheduled(ctx context.Context, dsn string) error {
 	var batch []pathAScheduledRow
 	for rows.Next() {
 		var r pathAScheduledRow
-		if err := rows.Scan(&r.id, &r.mailboxID, &r.recipient, &r.envelopeJSON); err != nil {
+		var attRaw, senderAttRaw []byte
+		if err := rows.Scan(&r.id, &r.deliveryID, &r.mailboxID, &r.recipient, &r.envelopeJSON, &r.draftStorageRef, &r.subject, &attRaw, &senderAttRaw); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan row: %w", err)
+		}
+		if len(attRaw) > 0 {
+			_ = json.Unmarshal(attRaw, &r.attachmentEnvelopes)
+		}
+		if len(senderAttRaw) > 0 {
+			_ = json.Unmarshal(senderAttRaw, &r.senderAttachmentEnvelopes)
 		}
 		batch = append(batch, r)
 	}
@@ -93,7 +109,7 @@ func processPathAScheduled(ctx context.Context, dsn string) error {
 
 	if len(batch) == 0 {
 		// Opportunistically expire Path A rows past their window
-		if _, err := tx.Exec(ctx, "UPDATE scheduled_messages SET status='expired' WHERE status='pending' AND is_path_a = true AND expires_at <= now()"); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE scheduled_messages SET status='expired', updated_at=now() WHERE status='pending' AND is_path_a = true AND expires_at <= now()"); err != nil {
 			log.Printf("[scheduled-path-a] failed to expire rows: %v", err)
 			return err
 		}
@@ -103,18 +119,22 @@ func processPathAScheduled(ctx context.Context, dsn string) error {
 	log.Printf("[scheduled-path-a] processing %d rows", len(batch))
 
 	for _, r := range batch {
-		if err := deliverPathARow(ctx, conn, tx, r); err != nil {
+		err := deliverPathARow(ctx, conn, tx, r)
+		targetID := r.deliveryID
+		if targetID == "" {
+			targetID = r.id
+		}
+		if err != nil {
 			log.Printf("[scheduled-path-a] delivery failed id=%s: %v", r.id, err)
-			if _, err := tx.Exec(ctx, "UPDATE scheduled_messages SET status='failed' WHERE id=$1", r.id); err != nil {
-				log.Printf("[scheduled-path-a] failed to mark %s as failed: %v", r.id, err)
-				return err
+			if compErr := completeScheduledDeliveryTx(ctx, tx, targetID, "failed", err.Error()); compErr != nil {
+				log.Printf("[scheduled-path-a] failed to mark failure for %s: %v", r.id, compErr)
+				return compErr
 			}
 		} else {
-			if _, err := tx.Exec(ctx, "UPDATE scheduled_messages SET status='executed', sent_at=now() WHERE id=$1", r.id); err != nil {
-				log.Printf("[scheduled-path-a] failed to mark %s as executed: %v", r.id, err)
-				return err
+			if compErr := completeScheduledDeliveryTx(ctx, tx, targetID, "delivered", ""); compErr != nil {
+				log.Printf("[scheduled-path-a] failed to mark delivery for %s: %v", r.id, compErr)
+				return compErr
 			}
-			log.Printf("[scheduled-path-a] delivered id=%s recipient=%s", r.id, r.recipient)
 		}
 	}
 
@@ -141,13 +161,13 @@ func deliverPathARow(ctx context.Context, conn *pgx.Conn, tx pgx.Tx, r pathASche
 	}
 
 	// 2. Look up sender mailbox (from scheduled_messages.mailbox_id)
-	var senderLocalPart, senderDomainName, senderEd25519PKHex string
+	var senderLocalPart, senderDomainName, senderEd25519PKHex, senderDomainID string
 	err = conn.QueryRow(ctx, `
-		SELECT m.local_part, d.name, encode(m.mailbox_ed25519_pk, 'hex')
+		SELECT m.local_part, d.name, encode(m.mailbox_ed25519_pk, 'hex'), d.id::text
 		FROM mailboxes m
 		JOIN domains d ON d.id = m.domain_id
 		WHERE m.id = $1 AND m.is_active = true
-	`, r.mailboxID).Scan(&senderLocalPart, &senderDomainName, &senderEd25519PKHex)
+	`, r.mailboxID).Scan(&senderLocalPart, &senderDomainName, &senderEd25519PKHex, &senderDomainID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("sender mailbox not found")
@@ -194,16 +214,53 @@ func deliverPathARow(ctx context.Context, conn *pgx.Conn, tx pgx.Tx, r pathASche
 		recipientMailboxID, recipientDomainID,
 		senderEmail, recipientEmail,
 		r.envelopeJSON, env,
+		r.attachmentEnvelopes,
 	)
 	if err != nil {
 		return fmt.Errorf("deliver to mailbox: %w", err)
 	}
 	if messageID == "" {
-		// Already delivered (idempotent) — still mark executed
+		// Already delivered (idempotent)
 		log.Printf("[scheduled-path-a] id=%s already delivered (idempotent)", r.id)
+		return nil
+	}
+
+	// 6. Evaluate rules on scheduled delivery
+	sizeBytes := int64(len(r.envelopeJSON))
+	hasAttachments := len(r.attachmentEnvelopes) > 0
+	folderOverride, labelIDs, markRead, deleteMessage, ruleErr := EvaluateRules(
+		ctx, tx, recipientMailboxID, senderEmail, []string{recipientEmail}, sizeBytes, hasAttachments,
+	)
+	if ruleErr != nil {
+		return fmt.Errorf("evaluate rules: %w", ruleErr)
+	}
+	finalFolder := "inbox"
+	if deleteMessage {
+		finalFolder = "trash"
+	} else if folderOverride != "" {
+		finalFolder = folderOverride
+	}
+	if finalFolder != "inbox" || markRead {
+		if _, updateErr := tx.Exec(ctx, `
+			UPDATE message_metadata
+			SET folder = $1, is_read = $2
+			WHERE id = $3
+		`, finalFolder, markRead, messageID); updateErr != nil {
+			return fmt.Errorf("rule update: %w", updateErr)
+		}
+	}
+	for _, labelID := range labelIDs {
+		if _, lErr := tx.Exec(ctx, `
+			INSERT INTO message_labels (message_id, label_id)
+			VALUES ($1, $2)
+			ON CONFLICT DO NOTHING
+		`, messageID, labelID); lErr != nil {
+			return fmt.Errorf("rule label: %w", lErr)
+		}
 	}
 	return nil
 }
+
 
 // hexToBytes converts a hex-encoded string (from PostgreSQL encode(col,'hex'))
 // to a byte slice.

@@ -137,15 +137,15 @@ func TestSnoozeExpiryRestores(t *testing.T) {
 
 	msgID := insertSnoozeTestMessage(t, conn, mailboxID, domainID, "bob@test.local", "inbox", nil)
 
-	// Snooze for +250ms
-	snoozeTime := time.Now().Add(250 * time.Millisecond).UTC().Format(time.RFC3339Nano)
+	// Snooze for +600ms
+	snoozeTime := time.Now().Add(600 * time.Millisecond).UTC().Format(time.RFC3339Nano)
 	resp := postSnooze(t, mailboxID, msgID, token, &snoozeTime)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("postSnooze failed: status %d", resp.StatusCode)
 	}
 
-	// Wait 350ms for snooze to expire
-	time.Sleep(350 * time.Millisecond)
+	// Wait 750ms for snooze to expire
+	time.Sleep(750 * time.Millisecond)
 
 	// GET inbox -> message IS in list
 	inboxMsgs := getMessagesForFolder(t, mailboxID, token, "inbox")

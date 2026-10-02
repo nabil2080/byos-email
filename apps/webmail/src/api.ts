@@ -1,4 +1,13 @@
-import { encryptAttachmentBytes, decryptAttachmentBytes } from "./attachment_crypto";
+import {
+  encryptAttachmentBytes,
+  decryptAttachmentBytes,
+  AttachmentEnvelope,
+  AttachmentWrappedKey,
+  AttachmentChunk,
+  bytesToBase64,
+} from "./attachment_crypto";
+
+export type { AttachmentEnvelope, AttachmentWrappedKey, AttachmentChunk };
 
 export interface UserMe {
   id?: string;
@@ -32,6 +41,7 @@ export interface DraftMessage {
   recipient: string;
   encrypted_envelope: string;
   version: number;
+  send_failed?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -46,6 +56,9 @@ export interface AttachmentItem {
   byte_size?: number;
   encrypted: boolean;
   created_at: string;
+  rawFile?: File;
+  isPathA?: boolean;
+  envelope?: AttachmentEnvelope;
 }
 
 export interface MessageMetadata {
@@ -73,6 +86,10 @@ export interface MessageMetadata {
   is_starred?: boolean;
   snoozed_until?: string;
   size_bytes?: number;
+  subject?: string;
+  draft_storage_ref?: string;
+  send_at?: string;
+  scheduled_at?: string;
 }
 
 export interface ThreadSummary {
@@ -81,6 +98,7 @@ export interface ThreadSummary {
   unread_count: number;
   latest_at: string;
   participants: string[];
+  recipients?: string[];
   message_ids: string[];
   is_starred: boolean;
   folder: string;
@@ -136,6 +154,84 @@ export interface SendPayload {
 
 export interface SchedulePayload extends SendPayload {
   scheduled_at: string;
+  draft_envelope?: string;
+  draft_storage_ref?: string;
+  subject?: string;
+}
+
+export interface SchedulePathARequest {
+  mailbox_id: string;
+  recipient: string;
+  envelope_json: string;
+  deliver_at: string; // RFC3339
+  draft_envelope?: string;
+  draft_storage_ref?: string;
+  subject?: string;
+  attachment_envelopes?: AttachmentEnvelope[];
+  sender_attachment_envelopes?: AttachmentEnvelope[];
+}
+
+export async function schedulePathA(
+  req: SchedulePathARequest,
+): Promise<{ id: string; scheduled_at: string; status: string }> {
+  return apiRequest<{ id: string; scheduled_at: string; status: string }>(
+    "/v1/outbound/schedule-path-a",
+    {
+      method: "POST",
+      body: JSON.stringify(req),
+    },
+  );
+}
+
+export async function cancelScheduledMessage(
+  mailboxId: string,
+  id: string,
+): Promise<{ status: string; draft_id?: string }> {
+  return apiRequest<{ status: string; draft_id?: string }>(
+    `/v1/mailboxes/${mailboxId}/scheduled/${id}/cancel`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export interface UpdateScheduledPayload {
+  scheduled_at?: string;
+  draft_envelope?: string;
+  draft_storage_ref?: string;
+  subject?: string;
+}
+
+export async function updateScheduledMessage(
+  mailboxId: string,
+  id: string,
+  payload: UpdateScheduledPayload,
+): Promise<{ id: string; status: string }> {
+  return apiRequest<{ id: string; status: string }>(
+    `/v1/mailboxes/${mailboxId}/scheduled/${id}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export interface ScheduledDraftResponse {
+  id: string;
+  mailbox_id: string;
+  draft_storage_ref: string;
+  encrypted_envelope: string;
+  send_at: string;
+  status: string;
+}
+
+export async function fetchScheduledDraft(
+  mailboxId: string,
+  id: string,
+): Promise<ScheduledDraftResponse> {
+  return apiRequest<ScheduledDraftResponse>(
+    `/v1/mailboxes/${mailboxId}/scheduled/${id}`,
+  );
 }
 
 export function apiBase(): string {
@@ -203,9 +299,12 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
 export async function fetchCurrentUser(): Promise<UserMe | null> {
   try {
     return await apiRequest<UserMe>("/v1/auth/me");
-  } catch (err) {
-    console.warn("fetchCurrentUser error, proceeding with session fallback:", err);
-    return null;
+  } catch (err: any) {
+    if (err?.status === 401 || err?.status === 403) {
+      return null;
+    }
+    console.warn("fetchCurrentUser server/network error:", err);
+    throw err;
   }
 }
 
@@ -246,23 +345,13 @@ export async function logout(): Promise<void> {
 }
 
 export async function fetchMailboxes(orgId: string): Promise<Mailbox[]> {
-  try {
-    const res = await apiRequest<{ mailboxes: Mailbox[] }>(`/v1/organizations/${orgId}/mailboxes`);
-    return res.mailboxes || [];
-  } catch (err) {
-    console.warn("fetchMailboxes error:", err);
-    return [];
-  }
+  const res = await apiRequest<{ mailboxes: Mailbox[] }>(`/v1/organizations/${orgId}/mailboxes`);
+  return res.mailboxes || [];
 }
 
 export async function fetchDrafts(mailboxId: string): Promise<DraftMessage[]> {
-  try {
-    const res = await apiRequest<{ drafts: DraftMessage[] }>(`/v1/mailboxes/${mailboxId}/drafts`);
-    return res.drafts || [];
-  } catch (err) {
-    console.warn("fetchDrafts error:", err);
-    return [];
-  }
+  const res = await apiRequest<{ drafts: DraftMessage[] }>(`/v1/mailboxes/${mailboxId}/drafts`);
+  return res.drafts || [];
 }
 
 export async function createDraft(
@@ -302,13 +391,8 @@ export interface ContactItem {
 }
 
 export async function fetchContacts(mailboxId: string): Promise<ContactItem[]> {
-  try {
-    const res = await apiRequest<{ contacts: ContactItem[] }>(`/v1/mailboxes/${mailboxId}/contacts`);
-    return res.contacts || [];
-  } catch (err) {
-    console.warn("fetchContacts error:", err);
-    return [];
-  }
+  const res = await apiRequest<{ contacts: ContactItem[] }>(`/v1/mailboxes/${mailboxId}/contacts`);
+  return res.contacts || [];
 }
 
 export async function createContact(
@@ -355,16 +439,15 @@ export interface MailboxLabel {
   color: string;
   color_name: string;
   created_at: string;
+  parent_label_id?: string | null;
+  sort_order?: number;
+  path?: string;
+  unread_count?: number;
 }
 
 export async function fetchFolders(mailboxId: string): Promise<MailboxFolder[]> {
-  try {
-    const res = await apiRequest<{ folders: MailboxFolder[] }>(`/v1/mailboxes/${mailboxId}/folders`);
-    return res.folders || [];
-  } catch (err) {
-    console.warn("fetchFolders error:", err);
-    return [];
-  }
+  const res = await apiRequest<{ folders: MailboxFolder[] }>(`/v1/mailboxes/${mailboxId}/folders`);
+  return res.folders || [];
 }
 
 export async function createFolder(
@@ -395,18 +478,19 @@ export async function deleteFolder(mailboxId: string, folderId: string): Promise
 }
 
 export async function fetchLabels(mailboxId: string): Promise<MailboxLabel[]> {
-  try {
-    const res = await apiRequest<{ labels: MailboxLabel[] }>(`/v1/mailboxes/${mailboxId}/labels`);
-    return res.labels || [];
-  } catch (err) {
-    console.warn("fetchLabels error:", err);
-    return [];
-  }
+  const res = await apiRequest<{ labels: MailboxLabel[] }>(`/v1/mailboxes/${mailboxId}/labels`);
+  return res.labels || [];
 }
 
 export async function createLabel(
   mailboxId: string,
-  payload: { name: string; color?: string; color_name?: string }
+  payload: {
+    name: string;
+    color?: string;
+    color_name?: string;
+    parent_label_id?: string | null;
+    sort_order?: number;
+  }
 ): Promise<MailboxLabel> {
   return apiRequest<MailboxLabel>(`/v1/mailboxes/${mailboxId}/labels`, {
     method: "POST",
@@ -417,13 +501,21 @@ export async function createLabel(
 export async function updateLabel(
   mailboxId: string,
   labelId: string,
-  payload: { name: string; color?: string; color_name?: string }
+  payload: {
+    name?: string;
+    color?: string;
+    color_name?: string;
+    parent_label_id?: string | null;
+    sort_order?: number;
+  }
 ): Promise<MailboxLabel> {
   return apiRequest<MailboxLabel>(`/v1/mailboxes/${mailboxId}/labels/${labelId}`, {
-    method: "PUT",
+    method: "PATCH",
     body: JSON.stringify(payload),
   });
 }
+
+export const patchLabel = updateLabel;
 
 export async function deleteLabel(mailboxId: string, labelId: string): Promise<void> {
   return apiRequest<void>(`/v1/mailboxes/${mailboxId}/labels/${labelId}`, {
@@ -502,13 +594,8 @@ export async function toggleMessageStar(
 }
 
 export async function fetchAttachments(mailboxId: string): Promise<AttachmentItem[]> {
-  try {
-    const res = await apiRequest<{ attachments: AttachmentItem[] }>(`/v1/mailboxes/${mailboxId}/attachments`);
-    return res.attachments || [];
-  } catch (err) {
-    console.warn("fetchAttachments error:", err);
-    return [];
-  }
+  const res = await apiRequest<{ attachments: AttachmentItem[] }>(`/v1/mailboxes/${mailboxId}/attachments`);
+  return res.attachments || [];
 }
 
 export async function fetchMailboxDetail(mailboxId: string): Promise<MailboxDetail> {
@@ -677,25 +764,6 @@ export async function scheduleOutbound(payload: SchedulePayload): Promise<{ deli
     method: "POST",
     body: JSON.stringify(payload),
   });
-}
-
-export interface SchedulePathARequest {
-  mailbox_id: string;
-  recipient: string;
-  envelope_json: string;
-  deliver_at: string; // RFC3339
-}
-
-export async function schedulePathA(
-  req: SchedulePathARequest,
-): Promise<{ id: string; scheduled_at: string; status: string }> {
-  return apiRequest<{ id: string; scheduled_at: string; status: string }>(
-    "/v1/outbound/schedule-path-a",
-    {
-      method: "POST",
-      body: JSON.stringify(req),
-    },
-  );
 }
 
 export interface SearchTokensResponse {
@@ -1356,6 +1424,8 @@ export interface InternalSendRequest {
   sender_envelope_json?: string;
   recipient: string;
   sender_mailbox_id: string;
+  attachment_envelopes?: AttachmentEnvelope[];
+  sender_attachment_envelopes?: AttachmentEnvelope[];
 }
 
 export interface InternalSendResponse {
@@ -1373,3 +1443,70 @@ export async function sendInternal(
     body: JSON.stringify(req),
   });
 }
+
+export async function uploadAttachmentChunk(
+  mailboxId: string,
+  storageRef: string,
+  chunkBytes: Uint8Array,
+): Promise<void> {
+  await apiRequest(`/v1/mailboxes/${mailboxId}/attachment-chunks`, {
+    method: "POST",
+    body: JSON.stringify({
+      object_key: storageRef,
+      data: bytesToBase64(chunkBytes),
+    }),
+  });
+}
+
+export async function fetchMessageAttachmentEnvelopes(
+  mailboxId: string,
+  messageId: string,
+): Promise<AttachmentEnvelope[]> {
+  try {
+    const res = await apiRequest<{ attachments: AttachmentEnvelope[] }>(
+      `/v1/mailboxes/${mailboxId}/messages/${messageId}/attachments`,
+    );
+    return res.attachments || [];
+  } catch (err) {
+    console.warn("fetchMessageAttachmentEnvelopes error:", err);
+    return [];
+  }
+}
+
+export async function fetchMessageAttachmentChunk(
+  mailboxId: string,
+  messageId: string,
+  attachmentId: string,
+  chunkIndex: number,
+): Promise<Uint8Array> {
+  const impersonationToken =
+    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
+  const activeToken =
+    typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null;
+  const authHeaders: Record<string, string> = {};
+  if (activeToken) {
+    authHeaders["Authorization"] = `Bearer ${activeToken}`;
+  } else if (impersonationToken) {
+    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  }
+
+  const response = await fetch(
+    `${apiBase()}/v1/mailboxes/${mailboxId}/messages/${messageId}/attachments/${attachmentId}/chunks/${chunkIndex}`,
+    {
+      credentials: "include",
+      headers: {
+        "X-BYOS-Client": "webmail",
+        ...authHeaders,
+      },
+    },
+  );
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "");
+    throw new Error(`Failed to fetch chunk ${chunkIndex}: ${response.status} ${errText}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  return new Uint8Array(arrayBuffer);
+}
+

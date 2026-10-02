@@ -5,6 +5,7 @@ import { AttachmentItem, MailboxFolder, MailboxLabel } from "../api";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { SnoozeMenu } from "./SnoozeMenu";
+import { formatScheduledBanner } from "../utils/dateTime";
 
 export interface ReadingPaneProps {
   message: DisplayMessage;
@@ -31,6 +32,8 @@ export interface ReadingPaneProps {
   onForward: (msg: DisplayMessage) => void;
   onEditDraft?: (msg: DisplayMessage) => void;
   onDeleteDraft?: (msg: DisplayMessage) => void;
+  onCancelScheduled?: (msg: DisplayMessage) => void;
+  onEditScheduled?: (msg: DisplayMessage) => void;
   customFolders?: MailboxFolder[];
   labels?: MailboxLabel[];
   onToggleLabel?: (msg: DisplayMessage, labelId: string) => void;
@@ -227,6 +230,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
 
   const canReply = () =>
     props.message.folder !== "drafts" &&
+    props.message.folder !== "scheduled" &&
     !props.isDecrypting &&
     props.decryptedContent !== null &&
     !props.decryptedContent.startsWith("Failed to open") &&
@@ -681,6 +685,34 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
 
       {/* ── Message Content Area ── */}
       <div class="flex-1 flex flex-col overflow-y-auto min-h-0 bg-white dark:bg-[#1E2025]">
+        <Show when={props.message.folder === "scheduled"}>
+          <div class="px-6 py-3 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-900/60 flex items-center justify-between gap-4 text-xs flex-shrink-0">
+            <div class="flex items-center gap-2 text-amber-900 dark:text-amber-200 font-medium">
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              <span>{formatScheduledBanner(props.message.scheduledAt || props.message.date, props.message.status)}</span>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => (props.onEditScheduled ? props.onEditScheduled(props.message) : props.onEditDraft?.(props.message))}
+                class="px-3 py-1 bg-white dark:bg-[#1E2025] hover:bg-amber-100 dark:hover:bg-amber-900/60 text-amber-900 dark:text-amber-200 font-medium rounded-md border border-amber-300 dark:border-amber-800 transition cursor-pointer"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={() => props.onCancelScheduled?.(props.message)}
+                class="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-medium rounded-md transition cursor-pointer shadow-2xs"
+              >
+                Cancel send
+              </button>
+            </div>
+          </div>
+        </Show>
+
         {/* Header & Sender Metadata */}
         <div class="p-6 border-b border-[#E2DFD8]/70 dark:border-[#2E3138] bg-white dark:bg-[#1E2025]">
           <div class="flex items-start justify-between gap-4">

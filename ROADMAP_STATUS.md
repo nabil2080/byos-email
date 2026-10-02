@@ -165,6 +165,16 @@ Current roadmap stage:
 
 **Regression strategy:** `defaultStorage` MinIO `byos-mailbox` fallback keeps `inbound E2E/outbound/scheduled/rate` via MinIO; `cargo test 29 PASS` untouched (no crypto changes); file‑based checks `grep BYOS_STORAGE_ENCRYPTION_ENABLED` → 0, `grep storage_dek` → only `storage-worker`+`docker-compose:storage-worker`+`bootstrap`, `git ls-files infra/secrets/` → clean (gitignored), `docker inspect` hardening unchanged.
 
+## Design Note — Path A End-to-End Encrypted Attachment Storage Architecture (Section 9) 2026-10-01
+
+**Context & Options:** Path A attachments are encrypted client-side using per-attachment AES-256-GCM content keys wrapped via X-Wing hybrid post-quantum KEM. For internal recipient delivery, the client generates two distinct sets of encrypted chunks under independent content keys: $K_{recipient}$ and $K_{sender}$ (Sent copy).
+
+**Architectural Decision: Option (a) Proton-Equivalent Single Tenant-Origin Model:**
+- **Recipient storage reference:** Recipient chunk references point directly to the sender mailbox storage prefix: `mailboxes/{sender_mailbox_id}/path-a-attachments/{attachment_id}/chunk_{paddedIndex}.enc`.
+- **Sent copy storage reference:** Sender Sent-copy chunk references point to `mailboxes/{sender_mailbox_id}/sent-attachments/{attachment_id}/chunk_{paddedIndex}.enc`.
+- **Rationale:** Prevents unnecessary server-side duplication of large ciphertext across tenants during internal message exchange while preserving zero-knowledge properties (each party holds distinct wrapped content keys and non-reused ciphertexts). The storage-worker and API boundary verifies tenant identity and authorization via storage object references.
+- **Data Hygiene Guarantee:** Recipient inbox rows strictly record `attachment_envelopes` and keep `sender_attachment_envelopes = '[]'::jsonb`, ensuring zero leakage of sender wrapped keys to recipients. Sender Sent rows store both recipient envelopes and sender envelopes, enabling download and decryption of sent attachments via $K_{sender}$.
+
 ## Design Note — Trust Engine (Section 8) Pre-inspection 2026-08-30
 
 **Findings:** `services/api/main.go:291` `outboundSendHandler` validates `X-User-Id`+60/min+4MB, canonical envelope/HPKE, then `BEGIN; SELECT reservation FOR UPDATE` → ownership/seq/ver checks; `services/outbound-worker/src/main.rs:157` `poll_scheduled` selects `pending WHERE scheduled_at<=now() AND expires_at>now() FOR UPDATE SKIP LOCKED` → verbatim copy to `outbound_queue`; `poll_once:273` selects `outbound_queue pending` → `decrypt_outbound:319` → plaintext available for DKIM; Redis already in `api` via `go-redis` `REDIS_ADDR=redis:6379`, `outbound-worker` had no Redis.

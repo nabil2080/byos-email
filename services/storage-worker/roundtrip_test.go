@@ -11,6 +11,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -148,5 +151,69 @@ func TestStoreOctetStreamVariants(t *testing.T) {
 	}
 	if !bytes.Equal(rr.Data, original) {
 		t.Fatalf("round-trip mismatch: got %v want %v", rr.Data, original)
+	}
+}
+
+func TestUnreachableMinIOFailsWithoutTmpFallback(t *testing.T) {
+	t.Setenv("STORAGE_WORKER_INTERNAL_KEY", "test-internal-key")
+
+	// 1. Storage worker with S3 storage pointing to unreachable MinIO port
+	unreachableS3, err := NewS3Storage("127.0.0.1:54321", "baduser", "badpass", "byos-mailbox", "", true)
+	if err != nil {
+		t.Fatalf("unexpected error creating S3Storage struct: %v", err)
+	}
+
+	w := &StorageWorker{
+		defaultStorage: unreachableS3,
+		defaultBucket:  "byos-mailbox",
+		dbURL:          "",
+	}
+
+	const objectKey = "mailboxes/test-mailbox/unreachable-test.enc"
+	payload := []byte("confidential-email-bytes-do-not-leak")
+
+	rec := doStoreOctetStream(t, w, objectKey, payload, "test-internal-key", "test-mailbox", "application/octet-stream")
+
+	// Must fail loudly with HTTP 500
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected storage call to fail when MinIO is unreachable, but got 200 OK")
+	}
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500 InternalServerError, got %d", rec.Code)
+	}
+
+	// Must contain failure error message
+	body := rec.Body.String()
+	if !strings.Contains(body, "Failed to store object") {
+		t.Fatalf("expected 'Failed to store object' in error body, got: %s", body)
+	}
+
+	// Assert that no fallback file was created in /tmp/byos-drive-mock or temp directory
+	mockPath := filepath.Join("/tmp", "byos-drive-mock", objectKey)
+	if _, err := os.Stat(mockPath); err == nil {
+		t.Fatalf("CRITICAL SECURITY FAILURE: object was written to mock fallback path %s instead of returning an error!", mockPath)
+	}
+}
+
+func TestNilStorageBackendFailsWithoutFallback(t *testing.T) {
+	t.Setenv("STORAGE_WORKER_INTERNAL_KEY", "test-internal-key")
+
+	// When default storage is nil (e.g., initial S3 connection failed)
+	w := &StorageWorker{
+		defaultStorage: nil,
+		defaultBucket:  "byos-mailbox",
+		dbURL:          "",
+	}
+
+	const objectKey = "mailboxes/test-mailbox/nil-backend-test.enc"
+	payload := []byte("some-data")
+
+	rec := doStoreOctetStream(t, w, objectKey, payload, "test-internal-key", "test-mailbox", "application/octet-stream")
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected store to fail with nil storage backend, got 200 OK")
+	}
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500 InternalServerError, got %d", rec.Code)
 	}
 }

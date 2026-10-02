@@ -38,6 +38,9 @@ import {
   sendOutbound,
   scheduleOutbound,
   schedulePathA,
+  cancelScheduledMessage,
+  updateScheduledMessage,
+  fetchScheduledDraft,
   searchMailboxTokens,
   indexSearchToken,
   fetchMailboxSettings,
@@ -46,6 +49,7 @@ import {
   fetchTrackingList,
   MessageTrackingItem,
   getTrackingPixelUrl,
+  apiBase,
   UserMe,
   Mailbox,
   DraftMessage,
@@ -54,6 +58,7 @@ import {
   MailboxFolder,
   MailboxLabel,
   MessageMetadata,
+  MessageBodyResponse,
   ConnectedAccount,
   fetchPasskeyLoginOptions,
   loginWithPasskey,
@@ -68,6 +73,10 @@ import {
   publishMailboxKeys,
   lookupMailboxKeys,
   sendInternal,
+  uploadAttachmentChunk,
+  fetchMessageAttachmentEnvelopes,
+  fetchMessageAttachmentChunk,
+  AttachmentEnvelope,
   KeyDirectoryRecord,
   InternalSendRequest,
   InternalSendResponse,
@@ -76,6 +85,11 @@ import {
   ThreadSummary,
   toggleMessageStar,
 } from "./api";
+import {
+  preparePathAAttachment,
+  decryptPathAAttachment,
+  MAX_ATTACHMENT_SIZE,
+} from "./attachment_crypto";
 import {
   unlockMailboxKey,
   autoUnwrapMailboxKey,
@@ -115,12 +129,16 @@ import { ReadingPane } from "./components/ReadingPane";
 import { SelectionFilter, SortOrder } from "./components/InboxToolbar";
 import { AddMailboxModal } from "./components/AddMailboxModal";
 import { CreateLabelModal } from "./components/modals/CreateLabelModal";
+import { ChangeParentModal } from "./components/modals/ChangeParentModal";
 import { CreateFolderModal } from "./components/modals/CreateFolderModal";
 import { ImportEmailsModal } from "./components/modals/ImportEmailsModal";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { ShortcutHandler, isTextInputElement, matchShortcut } from "./keyboard_shortcuts";
 import { formatMessageDate } from "./utils/dateTime";
 import { formatSnoozeTime } from "./snooze";
+import { getSubtreeLabelIds } from "./utils/nested_labels";
+import { GlobalErrorBanner } from "./components/GlobalErrorBanner";
+import { setGlobalError } from "./errors";
 
 type Folder = "inbox" | "sent" | "scheduled" | "drafts" | "snoozed" | "archive" | "spam" | "trash";
 
@@ -133,6 +151,7 @@ interface DisplayMessage {
   labelIds?: string[];
   sender: string;
   recipient: string;
+  recipients?: string[];
   subject: string;
   snippet: string;
   encryptedBody: string;
@@ -151,6 +170,11 @@ interface DisplayMessage {
     firstOpenedAt?: string;
     lastOpenedAt?: string;
   };
+  draftStorageRef?: string;
+  scheduledAt?: string;
+  status?: string;
+  decryptedContent?: string;
+  sendFailed?: boolean;
 }
 
 export function buildMimeString(params: {
@@ -241,10 +265,12 @@ export async function tryPathASend(
     mimeMessage: string;
     signingSeed: Uint8Array;
     senderXwingSeed?: Uint8Array;
+    attachmentEnvelopes?: AttachmentEnvelope[];
+    senderAttachmentEnvelopes?: AttachmentEnvelope[];
   },
   deps?: PathADeps,
 ): Promise<PathAResult> {
-  const { recipient, senderMailboxId, mimeMessage, signingSeed, senderXwingSeed } = params;
+  const { recipient, senderMailboxId, mimeMessage, signingSeed, senderXwingSeed, attachmentEnvelopes, senderAttachmentEnvelopes } = params;
   const lookupFn = deps?.lookupMailboxKeys ?? lookupMailboxKeys;
   const sendFn = deps?.sendInternal ?? sendInternal;
 
@@ -308,6 +334,7 @@ export async function tryPathASend(
       }
     } else {
       const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      // Canonical form is AAD || ciphertext (raw bytes). Attachment envelopes are excluded from message envelope signature.
       envelopeJson = wasm.wasm_seal_xwing_envelope_signed(
         xwingPkHex,
         record.key_id,
@@ -328,11 +355,12 @@ export async function tryPathASend(
         );
       }
     }
-  } catch (e) {
+  } catch (e: unknown) {
     // Local crypto failure — treat as a real failure, not a fallback.
+    const errMsg = e instanceof Error ? e.message : (typeof e === "string" ? e : JSON.stringify(e) || String(e));
     return {
       kind: "failed",
-      error: `Local encryption failed: ${e instanceof Error ? e.message : "unknown"}`,
+      error: `Local encryption failed: ${errMsg}`,
     };
   }
 
@@ -343,6 +371,8 @@ export async function tryPathASend(
       sender_envelope_json: senderEnvelopeJson,
       recipient,
       sender_mailbox_id: senderMailboxId,
+      attachment_envelopes: attachmentEnvelopes,
+      sender_attachment_envelopes: senderAttachmentEnvelopes,
     });
     return { kind: "sent", messageId: resp.message_id };
   } catch (e) {
@@ -390,11 +420,14 @@ const App: Component = () => {
   const [expandedThreadId, setExpandedThreadId] = createSignal<string | null>(null);
   const [viewMode, setViewMode] = createSignal<"threads" | "flat">(
     typeof window !== "undefined"
-      ? ((sessionStorage.getItem("byos_view_mode") as "threads" | "flat") || "flat")
+      ? ((localStorage.getItem("byos_view_mode") as "threads" | "flat") ||
+         (sessionStorage.getItem("byos_view_mode") as "threads" | "flat") ||
+         "flat")
       : "flat"
   );
   createEffect(() => {
     if (typeof window !== "undefined") {
+      localStorage.setItem("byos_view_mode", viewMode());
       sessionStorage.setItem("byos_view_mode", viewMode());
     }
   });
@@ -465,6 +498,8 @@ const App: Component = () => {
   const [composeAttachments, setComposeAttachments] = createSignal<AttachmentItem[]>([]);
   // When set, saving updates this draft (optimistic version) instead of creating.
   const [editingDraft, setEditingDraft] = createSignal<{ id: string; version: number } | null>(null);
+  // When set, user is editing a pending scheduled message non-destructively.
+  const [editingScheduledId, setEditingScheduledId] = createSignal<string | null>(null);
   const [pendingSend, setPendingSend] = createSignal<PendingSend | null>(null);
 
   // Settings suite & Layout preferences
@@ -1208,6 +1243,8 @@ const App: Component = () => {
   const [activeLabel, setActiveLabel] = createSignal<MailboxLabel | null>(null);
   const [createLabelModalOpen, setCreateLabelModalOpen] = createSignal(false);
   const [labelToEdit, setLabelToEdit] = createSignal<MailboxLabel | null>(null);
+  const [initialParentLabelId, setInitialParentLabelId] = createSignal<string | null>(null);
+  const [changeParentLabel, setChangeParentLabel] = createSignal<MailboxLabel | null>(null);
 
   async function handleSaveFolder(name: string, parentId?: string | null, notify?: boolean) {
     const box = selectedMailbox();
@@ -1276,40 +1313,53 @@ const App: Component = () => {
     }
   }
 
-  async function handleSaveLabel(name: string, color: string, colorName: string) {
+  async function handleSaveLabel(name: string, color: string, colorName: string, parentLabelId?: string | null) {
     const box = selectedMailbox();
     if (!box) return;
     const editing = labelToEdit();
     const cleanName = name.trim();
     if (!cleanName) return;
 
-    // Deduplication check (case-insensitive)
+    // Sibling deduplication check (case-insensitive) under the SAME parent
+    const targetParent = parentLabelId || null;
     const duplicate = labels().some(
-      (l) => l.name.trim().toLowerCase() === cleanName.toLowerCase() && (!editing || l.id !== editing.id)
+      (l) =>
+        (l.parent_label_id || null) === targetParent &&
+        l.name.trim().toLowerCase() === cleanName.toLowerCase() &&
+        (!editing || l.id !== editing.id)
     );
     if (duplicate) {
-      showToast(`Label "${cleanName}" already exists`);
+      showToast(`A label named "${cleanName}" already exists under this parent`);
       return;
     }
 
     try {
       if (editing) {
-        const updated = await updateLabel(box.id, editing.id, { name: cleanName, color, color_name: colorName });
-        setLabels((prev) =>
-          prev.map((l) => (l.id === editing.id ? updated : l)).sort((a, b) => a.name.localeCompare(b.name))
-        );
+        const updated = await updateLabel(box.id, editing.id, {
+          name: cleanName,
+          color,
+          color_name: colorName,
+          parent_label_id: parentLabelId,
+        });
+        const refreshed = await fetchLabels(box.id);
+        setLabels(refreshed);
         if (activeLabel()?.id === editing.id) {
-          setActiveLabel(updated);
+          const freshActive = refreshed.find((l) => l.id === editing.id) || updated;
+          setActiveLabel(freshActive);
         }
         setLabelToEdit(null);
+        setInitialParentLabelId(null);
         showToast(`Label "${cleanName}" updated`);
       } else {
-        const created = await createLabel(box.id, { name: cleanName, color, color_name: colorName });
-        setLabels((prev) => {
-          const exists = prev.some((l) => l.id === created.id || l.name.trim().toLowerCase() === cleanName.toLowerCase());
-          if (exists) return prev;
-          return [...prev, created].sort((a, b) => a.name.localeCompare(b.name));
+        await createLabel(box.id, {
+          name: cleanName,
+          color,
+          color_name: colorName,
+          parent_label_id: parentLabelId,
         });
+        const refreshed = await fetchLabels(box.id);
+        setLabels(refreshed);
+        setInitialParentLabelId(null);
         showToast(`Label "${cleanName}" created`);
       }
     } catch (err: any) {
@@ -1317,25 +1367,61 @@ const App: Component = () => {
     }
   }
 
+  async function handleChangeParent(labelId: string, newParentId: string | null) {
+    const box = selectedMailbox();
+    if (!box) return;
+    try {
+      await updateLabel(box.id, labelId, { parent_label_id: newParentId });
+      const refreshed = await fetchLabels(box.id);
+      setLabels(refreshed);
+      if (activeLabel()?.id === labelId) {
+        const fresh = refreshed.find((l) => l.id === labelId);
+        if (fresh) setActiveLabel(fresh);
+      }
+      setChangeParentLabel(null);
+      showToast("Label moved");
+    } catch (err: any) {
+      showToast(err?.message || "Failed to move label");
+    }
+  }
+
   function handleOpenEditLabel(label: MailboxLabel) {
     setLabelToEdit(label);
+    setInitialParentLabelId(label.parent_label_id || null);
+    setCreateLabelModalOpen(true);
+  }
+
+  function handleOpenNewSublabel(parentLabel: MailboxLabel) {
+    setLabelToEdit(null);
+    setInitialParentLabelId(parentLabel.id);
     setCreateLabelModalOpen(true);
   }
 
   async function handleDeleteLabel(label: MailboxLabel) {
     const box = selectedMailbox();
     if (!box) return;
-    if (!confirm(`Delete label "${label.name}"?`)) return;
+    const all = labels();
+    const subtreeIds = getSubtreeLabelIds(label.id, all);
+    const subCount = subtreeIds.length - 1;
+
+    let confirmMsg = `Delete label "${label.name}"? Messages with this label will not be deleted.`;
+    if (subCount > 0) {
+      confirmMsg = `This will also delete ${subCount} sublabel${subCount > 1 ? "s" : ""}. Messages with those labels will not be deleted.`;
+    }
+    if (!confirm(confirmMsg)) return;
+
     try {
       await deleteLabel(box.id, label.id);
-      setLabels((prev) => prev.filter((l) => l.id !== label.id));
-      if (activeLabel()?.id === label.id) {
+      const remaining = all.filter((l) => !subtreeIds.includes(l.id));
+      setLabels(remaining);
+      if (activeLabel() && subtreeIds.includes(activeLabel()!.id)) {
         setActiveLabel(null);
       }
-      // Detach label from all messages in memory
+      // Detach label and descendants from all messages in memory
+      const deletedSet = new Set(subtreeIds);
       setMessages((prev) =>
         prev.map((m) =>
-          m.labelIds ? { ...m, labelIds: m.labelIds.filter((lid) => lid !== label.id) } : m
+          m.labelIds ? { ...m, labelIds: m.labelIds.filter((lid) => !deletedSet.has(lid)) } : m
         )
       );
       showToast(`Label "${label.name}" deleted`);
@@ -1363,9 +1449,6 @@ const App: Component = () => {
     signingSeed: Uint8Array,
     xwingSeed: Uint8Array,
   ): Promise<void> {
-    const key = "byos_keys_published_" + boxId;
-    if (typeof window === "undefined" || sessionStorage.getItem(key)) return;
-
     try {
       const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
       const signingPubHex = wasm.wasm_signing_public_key_from_seed(
@@ -1374,6 +1457,9 @@ const App: Component = () => {
       const xwingPubHex = wasm.wasm_xwing_public_key_from_seed(
         bytesToHex(xwingSeed),
       );
+      const key = "byos_keys_published_" + boxId + "_" + signingPubHex + "_" + xwingPubHex;
+      if (typeof window === "undefined" || sessionStorage.getItem(key)) return;
+
       await publishMailboxKeys({
         ed25519_signing_public_key: hexToBase64(signingPubHex),
         xwing_public_key: hexToBase64(xwingPubHex),
@@ -1386,7 +1472,16 @@ const App: Component = () => {
 
   async function bootstrapSession(user: UserMe, password?: string, sessionToken?: string) {
     setCurrentUser(user);
-    const boxes = await fetchMailboxes(user.org_id);
+    let boxes: Mailbox[] = [];
+    try {
+      boxes = await fetchMailboxes(user.org_id);
+    } catch (err: any) {
+      console.error("fetchMailboxes failed:", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      const isAuth = msg.includes("401") || msg.includes("Unauthorized") || msg.includes("unauthorized");
+      setGlobalError(`Failed to load mailboxes: ${msg}`, isAuth);
+      return;
+    }
     let targetBox: Mailbox | undefined;
 
     // Strict user-mailbox binding per Section 12 & 14
@@ -1542,9 +1637,16 @@ const App: Component = () => {
         } catch {}
       }
       if (!Array.isArray(list)) list = [];
-      list = list.filter((a) => a.id !== activeAcc.id && a.email.toLowerCase() !== activeAcc.email.toLowerCase());
+      list = list.filter(
+        (a) =>
+          Boolean(a) &&
+          a.id !== activeAcc.id &&
+          (!a.email || a.email.toLowerCase() !== activeAcc.email.toLowerCase())
+      );
       list.unshift(activeAcc);
-      sessionStorage.setItem("byos_connected_accounts", JSON.stringify(list));
+      try {
+        sessionStorage.setItem("byos_connected_accounts", JSON.stringify(list));
+      } catch {}
       try {
         const durableList = list.map((a) => ({ ...a, mailboxSkHex: "", searchKeyHex: "" }));
         localStorage.setItem("byos_connected_accounts", JSON.stringify(durableList));
@@ -1633,9 +1735,16 @@ const App: Component = () => {
 
       // 4. Update connected accounts list to keep active account prominent
       setConnectedAccounts((prev) => {
-        const remaining = prev.filter((a) => a.id !== account.id && a.email.toLowerCase() !== account.email.toLowerCase());
+        const remaining = prev.filter(
+          (a) =>
+            Boolean(a) &&
+            a.id !== account.id &&
+            (!a.email || a.email.toLowerCase() !== account.email.toLowerCase())
+        );
         const updated = [account, ...remaining];
-        sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+        try {
+          sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+        } catch {}
         try {
           const durableList = updated.map((a) => ({ ...a, mailboxSkHex: "", searchKeyHex: "" }));
           localStorage.setItem("byos_connected_accounts", JSON.stringify(durableList));
@@ -1655,9 +1764,16 @@ const App: Component = () => {
 
   function handleAccountAdded(account: ConnectedAccount) {
     setConnectedAccounts((prev) => {
-      const filtered = prev.filter((a) => a.id !== account.id && a.email.toLowerCase() !== account.email.toLowerCase());
+      const filtered = prev.filter(
+        (a) =>
+          Boolean(a) &&
+          a.id !== account.id &&
+          (!a.email || a.email.toLowerCase() !== account.email.toLowerCase())
+      );
       const updated = [account, ...filtered];
-      sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+      try {
+        sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+      } catch {}
       try {
         const durableList = updated.map((a) => ({ ...a, mailboxSkHex: "", searchKeyHex: "" }));
         localStorage.setItem("byos_connected_accounts", JSON.stringify(durableList));
@@ -1865,6 +1981,9 @@ const App: Component = () => {
       }
     } catch (err) {
       console.warn("Failed loading user/mailbox data on mount:", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      const isAuth = msg.includes("401") || msg.includes("Unauthorized") || msg.includes("unauthorized");
+      setGlobalError(`Failed to load user session: ${msg}`, isAuth);
     } finally {
       setIsLoading(false);
     }
@@ -1896,7 +2015,7 @@ const App: Component = () => {
 
   async function handleLogin(e: Event) {
     e.preventDefault();
-    const email = loginEmail().trim();
+    const email = loginEmail().trim().toLowerCase();
     const password = loginPassword();
     if (!email || !password) {
       setLoginError("Enter your email and password.");
@@ -1925,16 +2044,41 @@ const App: Component = () => {
 
       setIsLoading(true);
       if (loginRes.token) {
-        sessionStorage.setItem("byos_active_session_token", loginRes.token);
+        try {
+          sessionStorage.setItem("byos_active_session_token", loginRes.token);
+        } catch {}
       }
-      const user = await fetchCurrentUser();
+      let user = await fetchCurrentUser();
+      if (!user && loginRes.id) {
+        user = {
+          id: loginRes.id,
+          user_id: loginRes.id,
+          email: loginRes.email || email,
+          org_id: loginRes.org_id || loginRes.organization_id || "",
+          role: loginRes.role || "member",
+          plan: loginRes.plan || "solo",
+          mailbox_id: loginRes.mailbox_id,
+          mailbox_local_part: loginRes.mailbox_local_part,
+          mailbox_mode: loginRes.mailbox_mode,
+          wrapped_sk_user: loginRes.wrapped_sk_user,
+          previous_wrapped_sk_user: loginRes.previous_wrapped_sk_user,
+        } as UserMe;
+      }
       if (!user) throw new Error("Session was not established.");
       if (loginRes.wrapped_sk_user && !user.wrapped_sk_user) {
         user.wrapped_sk_user = loginRes.wrapped_sk_user;
       }
       await bootstrapSession(user, password, loginRes.token);
-    } catch (err) {
-      setLoginError("Invalid email or password.");
+    } catch (err: any) {
+      console.error("[handleLogin error]", err);
+      const status = err?.status;
+      if (status === 429) {
+        setLoginError("Too many attempts. Please try again later.");
+      } else if (status === 401) {
+        setLoginError("Invalid email or password.");
+      } else {
+        setLoginError(err?.message || "Failed to log in.");
+      }
     } finally {
       setLoginPassword("");
       setLoginBusy(false);
@@ -2534,11 +2678,11 @@ const App: Component = () => {
       const [draftsList, messageList, scheduledList, folderList, labelList, attachmentList, threadList] = await Promise.all([
         fetchDrafts(mailboxId),
         fetchMessages(mailboxId),
-        fetchMessages(mailboxId, "scheduled").catch(() => []),
+        fetchMessages(mailboxId, "scheduled"),
         fetchFolders(mailboxId),
         fetchLabels(mailboxId),
-        fetchAttachments(mailboxId).catch(() => []),
-        fetchThreads(mailboxId).catch(() => []),
+        fetchAttachments(mailboxId),
+        fetchThreads(mailboxId),
       ]);
 
       function deduplicateByName<T extends { id: string; name: string }>(items: T[]): T[] {
@@ -2571,6 +2715,17 @@ const App: Component = () => {
         return ext.length > 4 ? ext.slice(0, 4) : ext;
       }
 
+      const key = mailboxKey();
+      const keyBoxId = unlockedBoxId();
+      let wasm: typeof import("./generated/crypto-core/byos_crypto_core.js") | null = null;
+      if (key && keyBoxId === mailboxId) {
+        try {
+          wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+        } catch {
+          wasm = null;
+        }
+      }
+
       const allApiMessages = [...messageList, ...(scheduledList || [])];
       const realMessages: DisplayMessage[] = allApiMessages.map((m: MessageMetadata) => {
         const isScheduled = m.folder === "scheduled";
@@ -2586,6 +2741,62 @@ const App: Component = () => {
         );
         const attCount = msgAtts.length > 0 ? msgAtts.length : (m.has_attachments ? 1 : 0);
 
+        const draftRef = m.draft_storage_ref || (isScheduled ? m.storage_object_id : "");
+        let subject = cachedSubject || "";
+        let snippet = cachedSnippet || "";
+
+        if (isScheduled) {
+          if (!draftRef || !draftRef.startsWith("mailboxes/")) {
+            subject = "[Scheduled message missing storage reference - this is a bug]";
+            snippet = "[Scheduled message missing storage reference - this is a bug]";
+            console.error("Scheduled message missing valid customer storage reference. Row ID:", m.id, "ref:", draftRef);
+          } else if (cachedSubject) {
+            subject = cachedSubject;
+            snippet = cachedSnippet || `Scheduled send to ${m.recipients.join(", ")}`;
+          } else if (key && wasm && keyBoxId === mailboxId) {
+            subject = "(Scheduled message)";
+            snippet = `Scheduled send to ${m.recipients.join(", ")}`;
+            // Asynchronously fetch from customer storage and decrypt preview
+            fetchScheduledDraft(mailboxId, m.id)
+              .then(async (resp) => {
+                try {
+                  const text = decryptDraftEnvelope(wasm, key, mailboxId, resp.encrypted_envelope);
+                  let parsedSubj = "";
+                  let parsedBody = text;
+                  try {
+                    const parsed = JSON.parse(text);
+                    if (parsed && typeof parsed === "object") {
+                      if (parsed.subject) parsedSubj = parsed.subject;
+                      if (parsed.body) parsedBody = parsed.body;
+                    }
+                  } catch {}
+                  const finalSubj = parsedSubj || "(no subject)";
+                  const finalSnippet = parsedBody.slice(0, 80) + (parsedBody.length > 80 ? "…" : "");
+                  sessionStorage.setItem("byos_msg_subject_" + m.id, finalSubj);
+                  sessionStorage.setItem("byos_msg_snippet_" + m.id, finalSnippet);
+                  setMessages((prev) =>
+                    prev.map((item) =>
+                      item.id === m.id
+                        ? { ...item, subject: finalSubj, snippet: finalSnippet }
+                        : item
+                    )
+                  );
+                } catch (decErr) {
+                  console.error("Scheduled message preview decryption failed. Row ID:", m.id, "Error:", decErr);
+                }
+              })
+              .catch((fetchErr) => {
+                console.error("Scheduled message storage retrieval failed. Row ID:", m.id, "Error:", fetchErr);
+              });
+          } else {
+            subject = "(Scheduled message)";
+            snippet = `Scheduled send to ${m.recipients.join(", ")}`;
+          }
+        } else {
+          if (!subject) subject = "(Encrypted message)";
+          if (!snippet) snippet = `Encrypted payload • ${m.storage_object_id}`;
+        }
+
         return {
           id: m.id,
           messageId: m.id, // For attachment filtering
@@ -2594,11 +2805,15 @@ const App: Component = () => {
           folderId: m.folder_id || null,
           labelIds: m.label_ids || [],
           sender: m.sender,
-          recipient: m.recipients.join(", "),
-          subject: isScheduled ? "(scheduled)" : (cachedSubject || "(Encrypted message)"),
-          snippet: isScheduled ? `Scheduled send to ${m.recipients.join(", ")}` : (cachedSnippet || `Encrypted payload • ${m.storage_object_id}`),
-          encryptedBody: m.storage_object_id,
-          date: formatMessageDate(m.sent_at || m.received_at, timeFormat(), language()),
+          recipient: (m.recipients || []).join(", "),
+          recipients: m.recipients || [],
+          subject,
+          snippet,
+          encryptedBody: isScheduled ? draftRef : m.storage_object_id,
+          draftStorageRef: draftRef,
+          scheduledAt: m.send_at || m.scheduled_at || m.sent_at || m.received_at,
+          status: m.status,
+          date: formatMessageDate(m.send_at || m.scheduled_at || m.sent_at || m.received_at, timeFormat(), language()),
           read: isScheduled ? true : (m.is_read ?? false),
           starred: m.is_starred ?? false,
           snoozedUntil: m.snoozed_until,
@@ -2608,16 +2823,6 @@ const App: Component = () => {
           attachmentTypes: uniqueTypes,
         };
       });
-      const key = mailboxKey();
-      const keyBoxId = unlockedBoxId();
-      let wasm: typeof import("./generated/crypto-core/byos_crypto_core.js") | null = null;
-      if (key && keyBoxId === mailboxId) {
-        try {
-          wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-        } catch {
-          wasm = null;
-        }
-      }
       const draftMessages: DisplayMessage[] = draftsList.map((d: DraftMessage) => {
         let snippet = "Encrypted draft — unlock mailbox to preview.";
         if (key && wasm && keyBoxId === mailboxId && d.encrypted_envelope) {
@@ -2636,6 +2841,7 @@ const App: Component = () => {
           folder: "drafts",
           sender: currentUser()?.email || "me@byos.local",
           recipient: d.recipient || "(no recipient)",
+          recipients: d.recipient ? d.recipient.split(",").map((s) => s.trim()).filter(Boolean) : [],
           subject: d.subject || "(no subject)",
           snippet,
           encryptedBody: d.encrypted_envelope || "Encrypted draft envelope",
@@ -2643,6 +2849,7 @@ const App: Component = () => {
           read: true,
           starred: false,
           isRealApi: true,
+          sendFailed: d.send_failed,
         };
       });
 
@@ -2657,27 +2864,50 @@ const App: Component = () => {
             if (sessionStorage.getItem("byos_msg_subject_" + m.id)) continue;
             try {
               const body = await fetchMessageBody(mailboxId, m.id);
-              const plaintext = decryptMessageEnvelope(wasm!, key!, mailboxId, {
-                message_seq: m.messageSeq!,
-                encryption_version: body.encryption_version,
-                encrypted_body: body.encrypted_body,
-                content_key_hpke_wrapped: body.content_key_hpke_wrapped,
-              });
-              let sub = m.subject;
-              const subMatch = plaintext.match(/^Subject:\s*(.*)$/im);
-              if (subMatch && subMatch[1]) sub = subMatch[1].trim();
-              const bodyParts = plaintext.split(/\r?\n\r?\n/);
-              const bodyText = bodyParts.length > 1 ? bodyParts.slice(1).join("\n\n") : plaintext;
-              const snip = bodyText.trim().slice(0, 100).replace(/\s+/g, " ");
+              let plaintext = "";
+              if (body.xwing_envelope_json && body.xwing_envelope_json.trim()) {
+                const seed = xwingSeed();
+                if (seed) {
+                  const res = await decryptPathAEnvelope(body.xwing_envelope_json, m.sender, seed);
+                  plaintext = res.plaintext;
+                }
+              } else if (body.encrypted_body && (!body.content_key_hpke_wrapped || body.content_key_hpke_wrapped === "")) {
+                const rawDraft = decryptDraftEnvelope(wasm!, key!, mailboxId, body.encrypted_body);
+                try {
+                  const parsed = JSON.parse(rawDraft);
+                  if (parsed && typeof parsed === "object") {
+                    plaintext = `Subject: ${parsed.subject || ""}\r\n\r\n${parsed.body || ""}`;
+                  } else {
+                    plaintext = rawDraft;
+                  }
+                } catch {
+                  plaintext = rawDraft;
+                }
+              } else if (m.messageSeq !== undefined && body.content_key_hpke_wrapped) {
+                plaintext = decryptMessageEnvelope(wasm!, key!, mailboxId, {
+                  message_seq: m.messageSeq!,
+                  encryption_version: body.encryption_version,
+                  encrypted_body: body.encrypted_body,
+                  content_key_hpke_wrapped: body.content_key_hpke_wrapped,
+                });
+              }
+              if (plaintext) {
+                let sub = m.subject;
+                const subMatch = plaintext.match(/^Subject:\s*(.*)$/im);
+                if (subMatch && subMatch[1]) sub = subMatch[1].trim();
+                const bodyParts = plaintext.split(/\r?\n\r?\n/);
+                const bodyText = bodyParts.length > 1 ? bodyParts.slice(1).join("\n\n") : plaintext;
+                const snip = bodyText.trim().slice(0, 100).replace(/\s+/g, " ");
 
-              sessionStorage.setItem("byos_msg_subject_" + m.id, sub);
-              sessionStorage.setItem("byos_msg_snippet_" + m.id, snip);
+                sessionStorage.setItem("byos_msg_subject_" + m.id, sub);
+                sessionStorage.setItem("byos_msg_snippet_" + m.id, snip);
 
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === m.id ? { ...msg, subject: sub, snippet: snip } : msg
-                )
-              );
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === m.id ? { ...msg, subject: sub, snippet: snip } : msg
+                  )
+                );
+              }
             } catch {}
           }
         })();
@@ -2759,6 +2989,8 @@ const App: Component = () => {
       if (msg.includes("503") || msg.includes("storage_disconnected") || msg.includes("storage disconnected")) {
         setStorageErrorBanner("Mailbox storage is currently disconnected or unreachable. Inbound emails are held safely at the mail transfer agent and will deliver automatically once storage is reconnected.");
       }
+      const isAuth = msg.includes("401") || msg.includes("403") || msg.includes("unauthorized") || msg.includes("Unauthorized");
+      setGlobalError(`Failed to load mailbox data: ${msg}`, isAuth);
     }
   }
 
@@ -2789,6 +3021,12 @@ const App: Component = () => {
     setActiveLabel(null);
   }
 
+  const activeLabelSubtreeIds = () => {
+    const lbl = activeLabel();
+    if (!lbl) return new Set<string>();
+    return new Set(getSubtreeLabelIds(lbl.id, labels()));
+  };
+
   const filteredMessages = () => {
     const q = searchQuery().toLowerCase().trim();
     const matchedIds = new Set(serverMatchedMsgIds());
@@ -2812,7 +3050,8 @@ const App: Component = () => {
       } else if (customFolder) {
         matchFolder = m.folderId === customFolder.id && m.folder !== "trash";
       } else if (label) {
-        matchFolder = Boolean(m.labelIds?.includes(label.id)) && m.folder !== "trash";
+        const subtreeIds = activeLabelSubtreeIds();
+        matchFolder = Boolean(m.labelIds?.some((lid) => subtreeIds.has(lid))) && m.folder !== "trash";
       } else {
         if (cur === "inbox") {
           matchFolder = (!m.folderId || m.folderId === "") && (!m.folder || m.folder === "inbox");
@@ -2857,14 +3096,25 @@ const App: Component = () => {
     return list.slice(start, start + pageSize);
   };
 
+  const supportsThreading = () => {
+    const cur = currentFolder();
+    return cur !== "drafts" && cur !== "scheduled";
+  };
+
   const filteredThreads = () => {
     const cur = currentFolder();
+    if (!supportsThreading()) return [];
+
+    const activeCust = activeCustomFolder();
+    const activeLbl = activeLabel();
     const q = searchQuery().toLowerCase().trim();
     const now = Date.now();
+    const allMsgs = messages();
+
     return threads().filter((t) => {
       const isSnoozed = Boolean(
         (t.snoozed_until && new Date(t.snoozed_until).getTime() > now) ||
-        messages().some((m) => t.message_ids?.includes(m.id) && m.snoozedUntil && new Date(m.snoozedUntil).getTime() > now)
+        allMsgs.some((m) => t.message_ids?.includes(m.id) && m.snoozedUntil && new Date(m.snoozedUntil).getTime() > now)
       );
 
       if (cur === "snoozed") {
@@ -2873,14 +3123,21 @@ const App: Component = () => {
         return false;
       }
 
-      if (cur !== "snoozed") {
-        const matchFolder = (t.folder || "inbox") === cur;
-        if (!matchFolder) return false;
+      if (activeCust) {
+        const hasCustomMsg = allMsgs.some((m) => t.message_ids?.includes(m.id) && m.folderId === activeCust.id);
+        if (!hasCustomMsg) return false;
+      } else if (activeLbl) {
+        const subtreeIds = activeLabelSubtreeIds();
+        const hasLabelMsg = allMsgs.some((m) => t.message_ids?.includes(m.id) && m.labelIds?.some((lid) => subtreeIds.has(lid)));
+        if (!hasLabelMsg) return false;
+      } else if (cur !== "snoozed") {
+        const hasFolderMsg = (t.folder || "inbox") === cur || allMsgs.some((m) => t.message_ids?.includes(m.id) && m.folder === cur);
+        if (!hasFolderMsg) return false;
       }
 
       if (!q) return true;
       const matchParticipant = (t.participants || []).some((p) => p.toLowerCase().includes(q));
-      const matchMsg = messages().some(
+      const matchMsg = allMsgs.some(
         (m) =>
           t.message_ids?.includes(m.id) &&
           (m.subject.toLowerCase().includes(q) || m.snippet.toLowerCase().includes(q))
@@ -2889,7 +3146,8 @@ const App: Component = () => {
     });
   };
 
-  const effectiveViewMode = () => (viewMode() === "threads" && filteredThreads().length > 0 ? "threads" : "flat");
+  const effectiveViewMode = () =>
+    supportsThreading() && viewMode() === "threads" && filteredThreads().length > 0 ? "threads" : "flat";
 
   const currentMsgIndex = () => {
     const sel = selectedMsg();
@@ -2962,6 +3220,53 @@ const App: Component = () => {
 
     setDownloadingAttachment(att.id);
     try {
+      if (att.isPathA && att.envelope) {
+        const seed = xwingSeed();
+        if (!seed) {
+          alert("Please log out and log back in to load your X-Wing key to decrypt this attachment.");
+          return;
+        }
+        const selected = selectedMsg();
+        if (!selected) return;
+
+        const chunkCount = att.envelope.chunk_count || att.envelope.chunks.length;
+        const chunks: Uint8Array[] = [];
+        for (let i = 0; i < chunkCount; i++) {
+          const chunkBytes = await fetchMessageAttachmentChunk(
+            box.id,
+            selected.id,
+            att.envelope.attachment_id,
+            i,
+          );
+          chunks.push(chunkBytes);
+        }
+
+        const result = await decryptPathAAttachment(
+          att.envelope,
+          chunks,
+          bytesToHex(seed),
+          box.id,
+        );
+
+        if (result.isCorrupted || !result.data) {
+          alert(`Attachment "${att.filename}" is corrupted or could not be decrypted.`);
+          return;
+        }
+
+        const blob = new Blob([result.data.buffer as ArrayBuffer], {
+          type: result.mimeType || att.content_type,
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = att.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return;
+      }
+
       const key = mailboxKey();
       if (key && unlockedBoxId() === box.id) {
         // Decrypt locally with the unlocked mailbox key.
@@ -3040,9 +3345,51 @@ const App: Component = () => {
 
     try {
       if (msg.folder === "scheduled") {
-        if (seq === currentDecryptSeq) {
-          setDecryptedContent(`This message is scheduled for delivery to ${msg.recipient} on ${msg.date}.\n\n(Scheduled send)`);
-          setIsDecrypting(false);
+        const key = mailboxKey();
+        if (!key || unlockedBoxId() !== box.id) {
+          if (seq === currentDecryptSeq) {
+            setDecryptedContent("Mailbox is locked. Please sign in with your password to view scheduled message.");
+            setIsDecrypting(false);
+          }
+          return;
+        }
+        const draftRef = msg.draftStorageRef || msg.encryptedBody;
+        if (!draftRef || !draftRef.startsWith("mailboxes/")) {
+          if (seq === currentDecryptSeq) {
+            setDecryptedContent("[Scheduled message missing storage reference - this is a bug]");
+            console.error("Scheduled message missing valid customer storage reference. Row ID:", msg.id, "ref:", draftRef);
+            setIsDecrypting(false);
+          }
+          return;
+        }
+        const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+        try {
+          const resp = await fetchScheduledDraft(box.id, msg.id);
+          const plaintext = decryptDraftEnvelope(wasm, key, box.id, resp.encrypted_envelope);
+          let bodyText = plaintext;
+          let parsedSubject = "";
+          try {
+            const parsed = JSON.parse(plaintext);
+            if (parsed && typeof parsed === "object") {
+              if (parsed.body) bodyText = parsed.body;
+              if (parsed.subject) parsedSubject = parsed.subject;
+            }
+          } catch {}
+          if (parsedSubject) {
+            sessionStorage.setItem("byos_msg_subject_" + msg.id, parsedSubject);
+          }
+          sessionStorage.setItem("byos_msg_snippet_" + msg.id, bodyText.slice(0, 80));
+          if (seq === currentDecryptSeq) {
+            setDecryptedContent(bodyText);
+            setEditablePlaintext(bodyText);
+            setIsDecrypting(false);
+          }
+        } catch (err: any) {
+          console.error("Scheduled message retrieval or decryption failed. Row ID:", msg.id, "Ref:", draftRef, "ErrorType:", err?.name || "DecryptError", err);
+          if (seq === currentDecryptSeq) {
+            setDecryptedContent("[Scheduled message could not be decrypted]");
+            setIsDecrypting(false);
+          }
         }
         return;
       }
@@ -3067,19 +3414,49 @@ const App: Component = () => {
         }
         return;
       }
-      const [body, allAttachments] = await Promise.all([
-        fetchMessageBody(box.id, msg.id),
-        fetchAttachments(box.id).catch(() => []),
-      ]);
+      let body: MessageBodyResponse;
+      let allAttachments: AttachmentItem[] = [];
+      let pathAEnvelopes: AttachmentEnvelope[] = [];
+      try {
+        const [b, atts, pAtts] = await Promise.all([
+          fetchMessageBody(box.id, msg.id),
+          fetchAttachments(box.id).catch(() => []),
+          fetchMessageAttachmentEnvelopes(box.id, msg.id).catch(() => []),
+        ]);
+        body = b;
+        allAttachments = atts;
+        pathAEnvelopes = pAtts;
+      } catch (fetchErr: unknown) {
+        const errText = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+        throw new Error(`Failed to decrypt end-to-end message: storage fetch: ${errText}`);
+      }
 
       if (seq !== currentDecryptSeq) return;
 
-      // Fetch attachments for this message - use stable msg.id with fallback for legacy messageId
-      const targetId = msg.messageId ?? msg.id;
-      const msgAttachments = allAttachments.filter((a) => {
-        const attMessageId = a.message_id ?? (a as unknown as { messageId?: string }).messageId;
-        return attMessageId != null && attMessageId !== "" && attMessageId === targetId;
-      });
+      let msgAttachments: AttachmentItem[] = [];
+      if (pathAEnvelopes && pathAEnvelopes.length > 0) {
+        msgAttachments = pathAEnvelopes.map((env) => ({
+          id: env.attachment_id,
+          mailbox_id: box.id,
+          message_id: msg.id,
+          filename: env.filename,
+          content_type: env.mime_type,
+          size_bytes: env.size_bytes,
+          byte_size: env.size_bytes,
+          encrypted: true,
+          created_at: new Date().toISOString(),
+          isPathA: true,
+          envelope: env,
+        }));
+      } else {
+        // Fetch attachments for this message - use stable msg.id with fallback for legacy messageId
+        const targetId = msg.messageId ?? msg.id;
+        msgAttachments = allAttachments.filter((a) => {
+          const attMessageId = a.message_id ?? (a as unknown as { messageId?: string }).messageId;
+          return attMessageId != null && attMessageId !== "" && attMessageId === targetId;
+        });
+      }
+
       if (seq === currentDecryptSeq) {
         setMessageAttachments(msgAttachments);
       }
@@ -3089,7 +3466,7 @@ const App: Component = () => {
         const seed = xwingSeed();
         if (!seed) {
           throw new Error(
-            "This message is end-to-end encrypted. Please log out and log back in to load your X-Wing key.",
+            "Failed to decrypt end-to-end message: key unwrap: mailbox X-Wing private key is locked. Please sign in with your password to load your X-Wing key.",
           );
         }
         const result = await decryptPathAEnvelope(
@@ -3116,12 +3493,30 @@ const App: Component = () => {
           return;
         }
         const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-        plaintext = decryptMessageEnvelope(wasm, key, box.id, {
-          message_seq: msg.messageSeq,
-          encryption_version: body.encryption_version,
-          encrypted_body: body.encrypted_body,
-          content_key_hpke_wrapped: body.content_key_hpke_wrapped,
-        });
+        if (body.encrypted_body && (!body.content_key_hpke_wrapped || body.content_key_hpke_wrapped === "")) {
+          const rawDraft = decryptDraftEnvelope(wasm, key, box.id, body.encrypted_body);
+          try {
+            const parsed = JSON.parse(rawDraft);
+            if (parsed && typeof parsed === "object") {
+              if (parsed.bodyHtml) {
+                plaintext = `Subject: ${parsed.subject || ""}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${parsed.bodyHtml}`;
+              } else {
+                plaintext = `Subject: ${parsed.subject || ""}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${parsed.body || ""}`;
+              }
+            } else {
+              plaintext = rawDraft;
+            }
+          } catch {
+            plaintext = rawDraft;
+          }
+        } else {
+          plaintext = decryptMessageEnvelope(wasm, key, box.id, {
+            message_seq: msg.messageSeq,
+            encryption_version: body.encryption_version,
+            encrypted_body: body.encrypted_body,
+            content_key_hpke_wrapped: body.content_key_hpke_wrapped,
+          });
+        }
       }
 
       let extractedSubject = msg.subject;
@@ -3253,6 +3648,7 @@ const App: Component = () => {
     setComposeStatus("Encrypting attachment…");
     try {
       const uploaded = await uploadEncryptedAttachment(box.id, file, key);
+      uploaded.rawFile = file;
       setComposeAttachments((prev) => [...prev, uploaded]);
       setComposeStatus(null);
     } catch (err) {
@@ -3309,7 +3705,9 @@ const App: Component = () => {
       }
       setContacts(shown);
     } catch (err) {
-      setContactsError(`Failed to load contacts: ${err instanceof Error ? err.message : "unknown error"}`);
+      const msg = err instanceof Error ? err.message : "unknown error";
+      setContactsError(`Failed to load contacts: ${msg}`);
+      setGlobalError(`Failed to load contacts: ${msg}`);
       setContacts([]);
     } finally {
       setContactsLoading(false);
@@ -3399,7 +3797,10 @@ const App: Component = () => {
     setComposeTrackOpens(false);
     setComposeAttachments([]);
     setEditingDraft(null);
+    setEditingScheduledId(null);
     setComposeSignatureApplied(false);
+    setErrorMessage(null);
+    setComposeStatus(null);
   }
 
   function startNewCompose() {
@@ -3650,8 +4051,78 @@ const App: Component = () => {
 
       const singleRecipient = !to.includes(",") && !to.includes(";");
 
-      if (!isScheduled && !hasAttachments && singleRecipient && senderSeed && senderXwing) {
+      if (!isScheduled && singleRecipient && senderSeed && senderXwing) {
         setComposeStatus("Delivering via end-to-end encrypted Path A…");
+
+        let recipientAttEnvelopes: AttachmentEnvelope[] | undefined;
+        let senderAttEnvelopes: AttachmentEnvelope[] | undefined;
+
+        if (hasAttachments) {
+          // Check recipient key directory first to ensure Path A is eligible before preparing/uploading chunks
+          let recRecord: KeyDirectoryRecord | null = null;
+          try {
+            recRecord = await lookupMailboxKeys(to);
+          } catch {
+            recRecord = null;
+          }
+
+          if (recRecord && recRecord.status === "active" && recRecord.xwing_public_key && recRecord.key_id) {
+            // Verify size budget
+            const totalAttBytes = (payload.attachments || []).reduce(
+              (sum, a) => sum + (a.size_bytes || a.byte_size || 0),
+              0,
+            );
+            if (totalAttBytes > MAX_ATTACHMENT_SIZE) {
+              setErrorMessage("Total attachments exceed 40 MB maximum size limit.");
+              setComposeStatus(null);
+              showToast("Attachments exceed 40 MB limit.");
+              return;
+            }
+
+            setComposeStatus("Encrypting attachments for recipient…");
+            const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+            const senderXwingPkHex = wasm.wasm_xwing_public_key_from_seed(bytesToHex(senderXwing));
+            const recXwingBytes = base64ToBytes(recRecord.xwing_public_key);
+            const recXwingPkHex = bytesToHex(recXwingBytes);
+
+            recipientAttEnvelopes = [];
+            senderAttEnvelopes = [];
+
+            const key = mailboxKey();
+
+            for (const att of payload.attachments || []) {
+              let fileData: Uint8Array;
+              if (att.rawFile) {
+                fileData = new Uint8Array(await att.rawFile.arrayBuffer());
+              } else if (key && unlockedBoxId() === box.id) {
+                const blob = await downloadAndDecryptAttachment(box.id, att.id, key);
+                fileData = new Uint8Array(await blob.arrayBuffer());
+              } else {
+                throw new Error("Cannot read attachment data for Path A encryption");
+              }
+
+              const prep = await preparePathAAttachment({
+                file: { name: att.filename, type: att.content_type, data: fileData },
+                senderMailboxId: box.id,
+                recipientMailboxId: recRecord.key_id,
+                recipientXWingPkHex: recXwingPkHex,
+                senderXWingPkHex: senderXwingPkHex,
+              });
+
+              // Upload recipient chunks to storage
+              for (const ch of prep.recipientChunks) {
+                await uploadAttachmentChunk(box.id, ch.storageRef, ch.data);
+              }
+              // Upload sender Sent chunks to storage
+              for (const ch of prep.senderChunks) {
+                await uploadAttachmentChunk(box.id, ch.storageRef, ch.data);
+              }
+
+              recipientAttEnvelopes.push(prep.recipientEnvelope);
+              senderAttEnvelopes.push(prep.senderEnvelope);
+            }
+          }
+        }
 
         const result = await tryPathASend({
           recipient: to,
@@ -3659,6 +4130,8 @@ const App: Component = () => {
           mimeMessage,
           signingSeed: senderSeed,
           senderXwingSeed: senderXwing,
+          attachmentEnvelopes: recipientAttEnvelopes,
+          senderAttachmentEnvelopes: senderAttEnvelopes,
         });
 
         if (result.kind === "sent") {
@@ -3672,7 +4145,7 @@ const App: Component = () => {
 
         if (result.kind === "failed") {
           setErrorMessage(
-            `Internal encrypted delivery failed: ${result.error}. Message was not sent.`
+            `Internal encrypted delivery failed: ${result.error}. Message was not sent.`,
           );
           setComposeStatus(null);
           showToast(`Send failed: ${result.error}`);
@@ -3686,7 +4159,66 @@ const App: Component = () => {
       // Path A scheduling: if the send is scheduled, has no attachments, and
       // the recipient is a BYOS X-Wing user, pre-seal the envelope now.
       // This preserves E2E encryption for scheduled messages.
-      if (isScheduled && !hasAttachments && singleRecipient && senderSeed && senderXwing) {
+      let schedDraftRef = "";
+      if (payload.scheduledTime) {
+        const key = mailboxKey();
+        if (!key || unlockedBoxId() !== box.id) {
+          setErrorMessage("Your mailbox key is locked. Unlock it to schedule this message.");
+          setComposeStatus(null);
+          showToast("Your mailbox key is locked. Unlock it to schedule this message.");
+          return;
+        }
+        try {
+          const wasmDraft = await import("./generated/crypto-core/byos_crypto_core.js");
+          const draftPayload = JSON.stringify({
+            to,
+            subject: subject || "(no subject)",
+            body: signedBody,
+            bodyHtml: htmlBody,
+            attachments: payload.attachments || [],
+          });
+          schedDraftRef = encryptDraftEnvelope(wasmDraft, key, box.id, draftPayload);
+        } catch (e) {
+          console.error("[SCHEDULE_ERROR] Failed to encrypt scheduled draft envelope:", e);
+        }
+      }
+
+      if (payload.scheduledTime && !schedDraftRef) {
+        setErrorMessage("Failed to encrypt scheduled message envelope. Message was not scheduled.");
+        setComposeStatus(null);
+        showToast("Scheduling failed: Could not encrypt draft payload");
+        return;
+      }
+
+      if (editingScheduledId() && payload.scheduledTime) {
+        setComposeStatus("Updating scheduled message…");
+        await updateScheduledMessage(box.id, editingScheduledId()!, {
+          scheduled_at: new Date(payload.scheduledTime).toISOString(),
+          draft_envelope: schedDraftRef,
+          draft_storage_ref: schedDraftRef,
+          subject: subject || "(no subject)",
+        });
+        setEditingScheduledId(null);
+        setComposeStatus("Scheduled send updated.");
+        setComposeOpen(false);
+        clearComposeForm();
+        showToast("Scheduled send updated.");
+        loadMailboxData(box.id).catch((err) => {
+          console.warn("Failed to refresh mailbox after update:", err);
+        });
+        return;
+      }
+
+      if (editingScheduledId() && !payload.scheduledTime) {
+        try {
+          await cancelScheduledMessage(box.id, editingScheduledId()!);
+        } catch (cancelErr) {
+          console.warn("Failed to cancel scheduled message during immediate send:", cancelErr);
+        }
+        setEditingScheduledId(null);
+      }
+
+      if (payload.scheduledTime && singleRecipient && senderSeed && senderXwing) {
         try {
           const record = await lookupMailboxKeys(to);
           if (
@@ -3703,26 +4235,87 @@ const App: Component = () => {
                 record.key_id,
                 record.key_epoch,
                 bytesToHex(new TextEncoder().encode(mimeMessage)),
-                bytesToHex(senderXwing),
+                bytesToHex(senderSeed),
               );
+
+              let recipientAttEnvelopes: AttachmentEnvelope[] | undefined;
+              let senderAttEnvelopes: AttachmentEnvelope[] | undefined;
+
+              if (hasAttachments) {
+                // Verify size budget
+                const totalAttBytes = (payload.attachments || []).reduce(
+                  (sum, a) => sum + (a.size_bytes || a.byte_size || 0),
+                  0,
+                );
+                if (totalAttBytes > MAX_ATTACHMENT_SIZE) {
+                  setErrorMessage("Total attachments exceed 40 MB maximum size limit.");
+                  setComposeStatus(null);
+                  showToast("Attachments exceed 40 MB limit.");
+                  return;
+                }
+
+                setComposeStatus("Encrypting attachments for recipient…");
+                const senderXwingPkHex = wasm.wasm_xwing_public_key_from_seed(bytesToHex(senderXwing));
+                const recXwingPkHex = bytesToHex(xwingPkBytes);
+
+                recipientAttEnvelopes = [];
+                senderAttEnvelopes = [];
+
+                const key = mailboxKey();
+
+                for (const att of payload.attachments || []) {
+                  let fileData: Uint8Array;
+                  if (att.rawFile) {
+                    fileData = new Uint8Array(await att.rawFile.arrayBuffer());
+                  } else if (key && unlockedBoxId() === box.id) {
+                    const blob = await downloadAndDecryptAttachment(box.id, att.id, key);
+                    fileData = new Uint8Array(await blob.arrayBuffer());
+                  } else {
+                    throw new Error("Cannot read attachment data for Path A encryption");
+                  }
+
+                  const prep = await preparePathAAttachment({
+                    file: { name: att.filename, type: att.content_type, data: fileData },
+                    senderMailboxId: box.id,
+                    recipientMailboxId: record.key_id,
+                    recipientXWingPkHex: recXwingPkHex,
+                    senderXWingPkHex: senderXwingPkHex,
+                  });
+
+                  // Upload recipient chunks to storage
+                  for (const ch of prep.recipientChunks) {
+                    await uploadAttachmentChunk(box.id, ch.storageRef, ch.data);
+                  }
+                  // Upload sender Sent chunks to storage
+                  for (const ch of prep.senderChunks) {
+                    await uploadAttachmentChunk(box.id, ch.storageRef, ch.data);
+                  }
+
+                  recipientAttEnvelopes.push(prep.recipientEnvelope);
+                  senderAttEnvelopes.push(prep.senderEnvelope);
+                }
+              }
+
               await schedulePathA({
                 mailbox_id: box.id,
                 recipient: to,
                 envelope_json: envelopeJson,
-                deliver_at: new Date(payload.scheduledTime!).toISOString(),
+                deliver_at: new Date(payload.scheduledTime).toISOString(),
+                draft_envelope: schedDraftRef || undefined,
+                draft_storage_ref: schedDraftRef || undefined,
+                subject: subject || "(no subject)",
+                attachment_envelopes: recipientAttEnvelopes,
+                sender_attachment_envelopes: senderAttEnvelopes,
               });
               setComposeStatus("Encrypted message scheduled (end-to-end).");
-              showToast("Message scheduled for E2E delivery.");
-              loadMailboxData(box.id).catch((err) => {
-                console.warn("Failed to refresh mailbox after schedule:", err);
-              });
+              setComposeOpen(false);
+              clearComposeForm();
+              showToast("Message scheduled for delivery.");
               return;
             }
           }
         } catch (err) {
-          // Fall through to Path B on any failure (recipient not BYOS, key missing, etc.)
-          console.warn("[Path A schedule] failed, falling back to Path B:", err);
-          setComposeStatus("Preparing encrypted message…");
+          console.warn("Path A scheduled send attempt failed, falling back to Path B:", err);
         }
       }
 
@@ -3761,6 +4354,9 @@ const App: Component = () => {
           encryption_iv: encrypted.iv,
           scheduled_at: new Date(payload.scheduledTime).toISOString(),
           attachment_ids: attIDs.length > 0 ? attIDs : undefined,
+          draft_envelope: schedDraftRef || undefined,
+          draft_storage_ref: schedDraftRef || undefined,
+          subject: subject || "(no subject)",
         });
       } else {
         await sendOutbound({
@@ -3782,10 +4378,17 @@ const App: Component = () => {
       loadMailboxData(box.id).catch((err) => {
         console.warn("Failed to refresh mailbox after send:", err);
       });
-    } catch (err) {
-      setErrorMessage(`Failed to send securely: ${err instanceof Error ? err.message : "unknown error"}`);
+    } catch (err: any) {
+      console.error("[SCHEDULE_ERROR] send or schedule failed:", {
+        message: err?.message || err,
+        status: err?.status,
+        scheduledTime: payload.scheduledTime,
+      });
+      const errMsg = err instanceof Error ? err.message : String(err || "unknown error");
+      const formattedErr = errMsg.startsWith("schedule: ") ? errMsg.slice(10) : errMsg;
+      setErrorMessage(`Failed to send securely: ${formattedErr}`);
       setComposeStatus(null);
-      showToast(`Send failed: ${err instanceof Error ? err.message : "unknown error"}`);
+      showToast(`Send failed: ${formattedErr}`);
     }
   }
 
@@ -3847,6 +4450,7 @@ const App: Component = () => {
                 ? {
                     ...m,
                     recipient: to || "(no recipient)",
+                    recipients: to ? to.split(",").map((s) => s.trim()).filter(Boolean) : [],
                     subject: subject || "(no subject)",
                     snippet: body.slice(0, 80) + (body.length > 80 ? "…" : ""),
                     encryptedBody: envelope,
@@ -3885,6 +4489,7 @@ const App: Component = () => {
         folder: "drafts",
         sender: currentUser()?.email || "me@byos.local",
         recipient: to || "(no recipient)",
+        recipients: to ? to.split(",").map((s) => s.trim()).filter(Boolean) : [],
         subject: subject || "Untitled Draft",
         snippet: body.slice(0, 80) + (body.length > 80 ? "…" : ""),
         encryptedBody: envelope,
@@ -3919,6 +4524,143 @@ const App: Component = () => {
       prev.map((m) => (m.id === msg.id ? { ...m, folder: "trash" } : m))
     );
     setSelectedMsg(null);
+  }
+
+  let sseEventSource: EventSource | null = null;
+  let sseReconnectTimer: number | null = null;
+  let sseDelay = 1000;
+
+  function disconnectSSE() {
+    if (sseReconnectTimer) {
+      window.clearTimeout(sseReconnectTimer);
+      sseReconnectTimer = null;
+    }
+    if (sseEventSource) {
+      sseEventSource.close();
+      sseEventSource = null;
+    }
+  }
+
+  function connectSSE(mailboxId: string) {
+    disconnectSSE();
+    if (!mailboxId) return;
+
+    const base = apiBase();
+    const url = `${base}/api/v1/mailboxes/${mailboxId}/events`;
+
+    try {
+      const es = new EventSource(url, { withCredentials: true });
+      sseEventSource = es;
+
+      es.onopen = () => {
+        sseDelay = 1000;
+      };
+
+      es.onmessage = (event) => {
+        if (!event.data) return;
+        try {
+          const data = JSON.parse(event.data);
+          if (!data || !data.mailboxId || data.mailboxId !== mailboxId) return;
+
+          loadMailboxData(mailboxId).catch(() => {});
+
+          if (data.type === "message.created" && data.folder === "inbox" && (data.unreadDelta || 0) > 0) {
+            showToast("New message received");
+          }
+        } catch {}
+      };
+
+      es.onerror = () => {
+        if (sseEventSource) {
+          sseEventSource.close();
+          sseEventSource = null;
+        }
+        sseReconnectTimer = window.setTimeout(() => {
+          sseDelay = Math.min(sseDelay * 2, 30000);
+          connectSSE(mailboxId);
+        }, sseDelay);
+      };
+    } catch (err) {
+      console.error("Failed to setup SSE connection:", err);
+    }
+  }
+
+  createEffect(() => {
+    const box = selectedMailbox();
+    if (box && box.id && Boolean(currentUser())) {
+      connectSSE(box.id);
+    } else {
+      disconnectSSE();
+    }
+  });
+
+  onCleanup(() => {
+    disconnectSSE();
+  });
+
+  function formatDatetimeLocal(dateInput?: string | Date | number): string {
+    if (!dateInput) return "";
+    const d = new Date(dateInput);
+    if (isNaN(d.getTime())) return "";
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    const year = d.getFullYear();
+    const month = pad(d.getMonth() + 1);
+    const day = pad(d.getDate());
+    const hours = pad(d.getHours());
+    const minutes = pad(d.getMinutes());
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  }
+
+  async function handleEditScheduled(msg: DisplayMessage) {
+    clearComposeForm();
+    const box = selectedMailbox();
+    const key = mailboxKey();
+    let bodyText = editablePlaintext() || decryptedContent() || (msg.snippet?.endsWith("…") ? "" : msg.snippet || "");
+    let cleanSub = msg.subject && !msg.subject.startsWith("(") && !msg.subject.startsWith("[") ? msg.subject : "";
+    let rcpt = msg.recipient === "(no recipient)" ? "" : msg.recipient || "";
+
+    if ((!bodyText || !cleanSub) && box && key && unlockedBoxId() === box.id && msg.draftStorageRef?.startsWith("mailboxes/")) {
+      try {
+        const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+        const resp = await fetchScheduledDraft(box.id, msg.id);
+        const plaintext = decryptDraftEnvelope(wasm, key, box.id, resp.encrypted_envelope);
+        bodyText = plaintext;
+        try {
+          const parsed = JSON.parse(plaintext);
+          if (parsed && typeof parsed === "object") {
+            if (parsed.body) bodyText = parsed.body;
+            if (parsed.subject) cleanSub = parsed.subject;
+            if (parsed.to) rcpt = Array.isArray(parsed.to) ? parsed.to.join(", ") : parsed.to;
+          }
+        } catch {}
+      } catch (err) {
+        console.error("Failed to load draft for editing:", err);
+      }
+    }
+
+    setComposeTo(rcpt);
+    setComposeSubject(cleanSub);
+    setComposeBody(bodyText);
+    setScheduledTime(formatDatetimeLocal(msg.scheduledAt || msg.date));
+    setEditingScheduledId(msg.id);
+    setComposeOpen(true);
+  }
+
+  async function handleCancelScheduled(msg: DisplayMessage) {
+    const box = selectedMailbox();
+    if (!box) return;
+    try {
+      setComposeStatus("Cancelling scheduled send…");
+      await cancelScheduledMessage(box.id, msg.id);
+      await loadMailboxData(box.id);
+      setSelectedMsg(null);
+      showToast("Scheduled send cancelled. Saved to Drafts.");
+    } catch (err: any) {
+      console.error("Failed to cancel scheduled send:", err);
+      showToast("Failed to cancel scheduled send: " + (err.message || "Unknown error"));
+    } finally {
+      setComposeStatus(null);
+    }
   }
 
   const folderNames: Record<Folder, string> = {
@@ -3981,26 +4723,57 @@ const App: Component = () => {
   };
 
   const labelCounts = () => {
+    const allLabels = labels();
     const counts: Record<string, number> = {};
-    for (const m of messages()) {
-      if (m.folder !== "trash" && m.labelIds) {
-        for (const lid of m.labelIds) {
-          counts[lid] = (counts[lid] || 0) + 1;
+    const msgs = messages();
+
+    if (msgs.length > 0) {
+      const directUnreadMsgIds = new Map<string, Set<string>>();
+      for (const m of msgs) {
+        if (!m.read && m.folder !== "trash" && m.labelIds) {
+          for (const lid of m.labelIds) {
+            let set = directUnreadMsgIds.get(lid);
+            if (!set) {
+              set = new Set();
+              directUnreadMsgIds.set(lid, set);
+            }
+            set.add(m.id);
+          }
         }
+      }
+
+      for (const l of allLabels) {
+        const subtreeIds = getSubtreeLabelIds(l.id, allLabels);
+        const uniqueMsgIds = new Set<string>();
+        for (const sid of subtreeIds) {
+          const directSet = directUnreadMsgIds.get(sid);
+          if (directSet) {
+            for (const mid of directSet) {
+              uniqueMsgIds.add(mid);
+            }
+          }
+        }
+        counts[l.id] = uniqueMsgIds.size;
+      }
+    } else {
+      for (const l of allLabels) {
+        counts[l.id] = l.unread_count || 0;
       }
     }
     return counts;
   };
 
   return (
-    <Show when={!isSetupAccount()} fallback={<SetupAccount />}>
+    <>
+      <GlobalErrorBanner />
+      <Show when={!isSetupAccount()} fallback={<SetupAccount />}>
       <Show
         when={(currentUser() !== null && mailboxKey() !== null) || isLoading()}
         fallback={
-          <div class="flex h-screen w-screen items-center justify-center bg-[#F0EEE9] p-4">
-            <div class="w-full max-w-sm rounded-2xl bg-white shadow-xl border border-[#E2DFD8] p-8">
+          <div class="flex h-screen w-screen items-center justify-center bg-[#F0EEE9] dark:bg-[#121316] p-4 text-[#2B2C2D] dark:text-[#F3F4F6]">
+            <div class="w-full max-w-sm rounded-2xl bg-white dark:bg-[#1E2025] shadow-xl border border-[#E2DFD8] dark:border-[#2E3138] p-8 text-[#2B2C2D] dark:text-[#F3F4F6]">
               <div class="flex items-center gap-2">
-                <span class="text-xl font-bold tracking-wider text-[#3C3D3E]">BYOS</span>
+                <span class="text-xl font-bold tracking-wider text-[#3C3D3E] dark:text-[#F3F4F6]">BYOS</span>
                 <span class="text-xs bg-[#A27561] text-white px-2 py-0.5 rounded-lg font-mono">Webmail</span>
               </div>
               <Show
@@ -4012,9 +4785,9 @@ const App: Component = () => {
                       when={twoFactorChallenge()}
                       fallback={
                         <div>
-                          <p class="mt-2 text-sm text-[#6F7173]">Sign in to access your encrypted mailbox.</p>
+                          <p class="mt-2 text-sm text-[#6F7173] dark:text-[#A1A1AA]">Sign in to access your encrypted mailbox.</p>
                           <Show when={loginError()}>
-                            <div role="alert" class="mt-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
+                            <div role="alert" class="mt-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 p-3 text-xs text-rose-700 dark:text-rose-300">
                               {loginError()}
                             </div>
                           </Show>
@@ -4026,7 +4799,7 @@ const App: Component = () => {
                               value={loginEmail()}
                               onInput={(e) => setLoginEmail(e.currentTarget.value)}
                               disabled={loginBusy()}
-                              class="w-full rounded-xl border border-[#E2DFD8] px-3 py-2 text-xs focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6]"
+                              class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3 py-2 text-xs text-[#2B2C2D] dark:text-[#F3F4F6] focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6] dark:bg-[#18191D] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50"
                             />
                             <div>
                               <input
@@ -4036,13 +4809,13 @@ const App: Component = () => {
                                 value={loginPassword()}
                                 onInput={(e) => setLoginPassword(e.currentTarget.value)}
                                 disabled={loginBusy()}
-                                class="w-full rounded-xl border border-[#E2DFD8] px-3 py-2 text-xs focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6]"
+                                class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3 py-2 text-xs text-[#2B2C2D] dark:text-[#F3F4F6] focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6] dark:bg-[#18191D] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50"
                               />
                               <div class="flex justify-end mt-1.5">
                                 <button
                                   type="button"
                                   onClick={handleOpenForgotPassword}
-                                  class="text-[11px] text-[#A27561] hover:underline cursor-pointer font-medium"
+                                  class="text-[11px] text-[#A27561] dark:text-[#C59380] hover:underline cursor-pointer font-medium"
                                 >
                                   Forgot password?
                                 </button>
@@ -4056,15 +4829,15 @@ const App: Component = () => {
                               {loginBusy() ? "Signing in…" : "Sign in"}
                             </button>
                             <div class="relative flex py-1 items-center">
-                              <div class="flex-grow border-t border-[#E2DFD8]"></div>
-                              <span class="flex-shrink mx-3 text-[10px] uppercase tracking-wider text-[#878A8E] font-medium">or</span>
-                              <div class="flex-grow border-t border-[#E2DFD8]"></div>
+                              <div class="flex-grow border-t border-[#E2DFD8] dark:border-[#2E3138]"></div>
+                              <span class="flex-shrink mx-3 text-[10px] uppercase tracking-wider text-[#878A8E] dark:text-[#6E7075] font-medium">or</span>
+                              <div class="flex-grow border-t border-[#E2DFD8] dark:border-[#2E3138]"></div>
                             </div>
                             <button
                               type="button"
                               onClick={handlePasskeyLogin}
                               disabled={loginBusy()}
-                              class="w-full rounded-xl border border-[#E2DFD8] hover:border-[#A27561] bg-white hover:bg-[#FAF9F6] px-4 py-2 text-xs font-medium text-[#2B2C2D] transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+                              class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561] dark:hover:border-[#A27561] bg-white dark:bg-[#18191D] hover:bg-[#FAF9F6] dark:hover:bg-[#23262D] px-4 py-2 text-xs font-medium text-[#2B2C2D] dark:text-[#F3F4F6] transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
                             >
                               <svg class="w-4 h-4 stroke-current fill-none stroke-2 text-[#A27561]" viewBox="0 0 24 24">
                                 <path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 001.99 5.334" />
@@ -4085,26 +4858,26 @@ const App: Component = () => {
                             </svg>
                           </div>
                           <div>
-                            <h2 class="text-sm font-semibold text-[#3C3D3E]">Two-Step Verification</h2>
-                            <p class="text-[11px] text-[#6F7173]">Security challenge required</p>
+                            <h2 class="text-sm font-semibold text-[#3C3D3E] dark:text-[#F3F4F6]">Two-Step Verification</h2>
+                            <p class="text-[11px] text-[#6F7173] dark:text-[#A1A1AA]">Security challenge required</p>
                           </div>
                         </div>
 
-                        <p class="mt-3 text-xs text-[#6F7173] leading-relaxed">
+                        <p class="mt-3 text-xs text-[#6F7173] dark:text-[#A1A1AA] leading-relaxed">
                           {twoFactorChallenge()?.preferred_method === "totp"
                             ? "Enter the 6-digit code from your authenticator app to complete sign in."
                             : `Enter the 6-digit security code sent to ${twoFactorChallenge()?.destination_masked}.`}
                         </p>
 
                         <Show when={twoFactorError()}>
-                          <div role="alert" class="mt-3 rounded-xl bg-rose-50 border border-rose-200 p-2.5 text-xs text-rose-700">
+                          <div role="alert" class="mt-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 p-2.5 text-xs text-rose-700 dark:text-rose-300">
                             {twoFactorError()}
                           </div>
                         </Show>
 
                         <form onSubmit={handleVerifyLogin2FA} class="mt-4 space-y-3">
                           <div>
-                            <label class="block text-[11px] font-medium text-[#6F7173] mb-1">
+                            <label class="block text-[11px] font-medium text-[#6F7173] dark:text-[#A1A1AA] mb-1">
                               Verification Code
                             </label>
                             <input
@@ -4117,12 +4890,12 @@ const App: Component = () => {
                               onInput={(e) => setTwoFactorCodeInput(e.currentTarget.value.replace(/[^0-9]/g, ""))}
                               disabled={twoFactorBusy()}
                               autofocus
-                              class="w-full tracking-widest text-center font-mono rounded-xl border border-[#E2DFD8] px-3 py-2 text-sm focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6]"
+                              class="w-full tracking-widest text-center font-mono rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3 py-2 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6] dark:bg-[#18191D] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50"
                             />
                           </div>
 
                           <Show when={(twoFactorChallenge()?.methods?.length || 0) > 1}>
-                            <div class="flex items-center justify-between text-[11px] text-[#6F7173] pt-1">
+                            <div class="flex items-center justify-between text-[11px] text-[#6F7173] dark:text-[#A1A1AA] pt-1">
                               <span>Try another method:</span>
                               <div class="flex items-center gap-1.5">
                                 <Show when={twoFactorChallenge()?.methods.includes("email") && twoFactorChallenge()?.preferred_method !== "email"}>
@@ -4161,7 +4934,7 @@ const App: Component = () => {
                             type="button"
                             onClick={handleCancelLogin2FA}
                             disabled={twoFactorBusy()}
-                            class="w-full rounded-xl border border-[#E2DFD8] bg-white hover:bg-[#FAF9F6] px-4 py-2 text-xs font-medium text-[#6F7173] hover:text-[#3C3D3E] transition cursor-pointer"
+                            class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#18191D] hover:bg-[#FAF9F6] dark:hover:bg-[#23262D] px-4 py-2 text-xs font-medium text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#3C3D3E] dark:hover:text-[#F3F4F6] transition cursor-pointer"
                           >
                             Back to Sign In
                           </button>
@@ -4172,12 +4945,12 @@ const App: Component = () => {
                 }
               >
                 <div class="mt-3">
-                  <h2 class="text-base font-semibold text-[#2B2C2D]">Unlock your mailbox</h2>
-                  <p class="mt-1 text-xs text-[#6F7173]">
-                    Signed in as <span class="font-medium text-[#2B2C2D]">{currentUser()?.email}</span>
+                  <h2 class="text-base font-semibold text-[#2B2C2D] dark:text-[#F3F4F6]">Unlock your mailbox</h2>
+                  <p class="mt-1 text-xs text-[#6F7173] dark:text-[#A1A1AA]">
+                    Signed in as <span class="font-medium text-[#2B2C2D] dark:text-[#F3F4F6]">{currentUser()?.email}</span>
                   </p>
                   <Show when={loginError()}>
-                    <div role="alert" class="mt-3 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
+                    <div role="alert" class="mt-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 p-3 text-xs text-rose-700 dark:text-rose-300">
                       {loginError()}
                     </div>
                   </Show>
@@ -4186,7 +4959,7 @@ const App: Component = () => {
                     fallback={
                       <form onSubmit={handleUnlockWithRecovery} class="mt-4 space-y-3">
                         <div>
-                          <label class="block text-[11px] font-medium text-[#6F7173] mb-1">
+                          <label class="block text-[11px] font-medium text-[#6F7173] dark:text-[#A1A1AA] mb-1">
                             24-Word Recovery Phrase
                           </label>
                           <textarea
@@ -4196,7 +4969,7 @@ const App: Component = () => {
                             onInput={(e) => setRecoveryPhraseInput(e.currentTarget.value)}
                             disabled={loginBusy()}
                             autofocus
-                            class="w-full rounded-xl border border-[#E2DFD8] px-3.5 py-2 text-xs focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6] resize-none font-mono"
+                            class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2 text-xs text-[#2B2C2D] dark:text-[#F3F4F6] focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6] dark:bg-[#18191D] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50 resize-none font-mono"
                           />
                         </div>
                         <button
@@ -4230,7 +5003,7 @@ const App: Component = () => {
                         onInput={(e) => setLoginPassword(e.currentTarget.value)}
                         disabled={loginBusy()}
                         autofocus
-                        class="w-full rounded-xl border border-[#E2DFD8] px-3.5 py-2.5 text-xs focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6]"
+                        class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2.5 text-xs text-[#2B2C2D] dark:text-[#F3F4F6] focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6] dark:bg-[#18191D] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50"
                       />
                       <button
                         type="submit"
@@ -4240,15 +5013,15 @@ const App: Component = () => {
                         {loginBusy() ? "Unlocking…" : "Unlock Mailbox"}
                       </button>
                       <div class="relative flex py-1 items-center">
-                        <div class="flex-grow border-t border-[#E2DFD8]"></div>
-                        <span class="flex-shrink mx-3 text-[10px] uppercase tracking-wider text-[#878A8E] font-medium">or</span>
-                        <div class="flex-grow border-t border-[#E2DFD8]"></div>
+                        <div class="flex-grow border-t border-[#E2DFD8] dark:border-[#2E3138]"></div>
+                        <span class="flex-shrink mx-3 text-[10px] uppercase tracking-wider text-[#878A8E] dark:text-[#6E7075] font-medium">or</span>
+                        <div class="flex-grow border-t border-[#E2DFD8] dark:border-[#2E3138]"></div>
                       </div>
                       <button
                         type="button"
                         onClick={handlePasskeyLogin}
                         disabled={loginBusy()}
-                        class="w-full rounded-xl border border-[#E2DFD8] hover:border-[#A27561] bg-white hover:bg-[#FAF9F6] px-4 py-2 text-xs font-medium text-[#2B2C2D] transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+                        class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561] dark:hover:border-[#A27561] bg-white dark:bg-[#18191D] hover:bg-[#FAF9F6] dark:hover:bg-[#23262D] px-4 py-2 text-xs font-medium text-[#2B2C2D] dark:text-[#F3F4F6] transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
                       >
                         <svg class="w-4 h-4 stroke-current fill-none stroke-2 text-[#A27561]" viewBox="0 0 24 24">
                           <path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 001.99 5.334" />
@@ -4262,18 +5035,18 @@ const App: Component = () => {
                             setUseRecoveryPhrase(true);
                             setLoginError(null);
                           }}
-                          class="text-xs text-[#6F7173] hover:text-[#2B2C2D] hover:underline cursor-pointer"
+                          class="text-xs text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:underline cursor-pointer"
                         >
                           Unlock with 24-word recovery phrase instead
                         </button>
                       </div>
                     </form>
                   </Show>
-                  <div class="mt-4 pt-3 border-t border-[#E2DFD8] flex justify-between items-center text-[11px]">
+                  <div class="mt-4 pt-3 border-t border-[#E2DFD8] dark:border-[#2E3138] flex justify-between items-center text-[11px]">
                     <button
                       type="button"
                       onClick={() => handleLogout()}
-                      class="text-[#878A8E] hover:text-[#2B2C2D] hover:underline cursor-pointer"
+                      class="text-[#878A8E] dark:text-[#6E7075] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:underline cursor-pointer"
                     >
                       Sign in with a different account
                     </button>
@@ -4284,10 +5057,10 @@ const App: Component = () => {
 
             {/* ── Forgot Password / Account Recovery Modal ── */}
             <Show when={forgotPasswordModalOpen()}>
-              <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-fade-in font-sans">
-                <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-[#E2DFD8] overflow-hidden">
+              <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-fade-in font-sans">
+                <div class="w-full max-w-md bg-white dark:bg-[#1E2025] rounded-2xl shadow-2xl border border-[#E2DFD8] dark:border-[#2E3138] overflow-hidden">
                   {/* Modal Header */}
-                  <div class="px-6 py-4 border-b border-[#E2DFD8] flex items-center justify-between bg-[#FAF9F6]">
+                  <div class="px-6 py-4 border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between bg-[#FAF9F6] dark:bg-[#18191D]">
                     <div class="flex items-center gap-2">
                       <div class="w-7 h-7 rounded-lg bg-[#A27561]/10 text-[#A27561] flex items-center justify-center">
                         <svg class="w-4 h-4 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
@@ -4295,12 +5068,12 @@ const App: Component = () => {
                           <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                         </svg>
                       </div>
-                      <h3 class="text-sm font-semibold text-[#3C3D3E]">Account Password Recovery</h3>
+                      <h3 class="text-sm font-semibold text-[#3C3D3E] dark:text-[#F3F4F6]">Account Password Recovery</h3>
                     </div>
                     <button
                       type="button"
                       onClick={() => setForgotPasswordModalOpen(false)}
-                      class="text-[#878A8E] hover:text-[#2B2C2D] p-1 rounded-lg hover:bg-[#E2DFD8]/40 transition cursor-pointer"
+                      class="text-[#878A8E] dark:text-[#6E7075] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] p-1 rounded-lg hover:bg-[#E2DFD8]/40 dark:hover:bg-[#2E3138]/40 transition cursor-pointer"
                     >
                       <svg class="w-4 h-4 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
                         <line x1="18" y1="6" x2="6" y2="18" />
@@ -4312,7 +5085,7 @@ const App: Component = () => {
                   <div class="p-6">
                     {/* Error Notice */}
                     <Show when={forgotError()}>
-                      <div class="mb-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
+                      <div class="mb-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 p-3 text-xs text-rose-700 dark:text-rose-300">
                         {forgotError()}
                       </div>
                     </Show>
@@ -4323,11 +5096,11 @@ const App: Component = () => {
                         when={forgotMethods().length > 0}
                         fallback={
                           <form onSubmit={handleFindRecoveryMethods} class="space-y-4">
-                            <p class="text-xs text-[#6F7173] leading-relaxed">
+                            <p class="text-xs text-[#6F7173] dark:text-[#A1A1AA] leading-relaxed">
                               Enter your BYOS email address. We will look up the verified 2-step verification and recovery options configured on your account.
                             </p>
                             <div>
-                              <label class="block text-xs font-medium text-[#3C3D3E] mb-1.5">
+                              <label class="block text-xs font-medium text-[#3C3D3E] dark:text-[#D1D5DB] mb-1.5">
                                 Account Email
                               </label>
                               <input
@@ -4336,14 +5109,14 @@ const App: Component = () => {
                                 onInput={(e) => setForgotEmail(e.currentTarget.value)}
                                 placeholder="you@example.com"
                                 required
-                                class="w-full bg-[#FAF9F6] border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] outline-none"
+                                class="w-full bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] dark:text-[#F3F4F6] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50 outline-none"
                               />
                             </div>
                             <div class="flex items-center justify-end gap-2 pt-2">
                               <button
                                 type="button"
                                 onClick={() => setForgotPasswordModalOpen(false)}
-                                class="px-4 py-2 border border-[#E2DFD8] text-[#6F7173] hover:text-[#3C3D3E] text-xs font-medium rounded-xl transition cursor-pointer"
+                                class="px-4 py-2 border border-[#E2DFD8] dark:border-[#2E3138] text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#3C3D3E] dark:hover:text-[#F3F4F6] text-xs font-medium rounded-xl transition cursor-pointer bg-white dark:bg-[#18191D]"
                               >
                                 Cancel
                               </button>
@@ -4359,7 +5132,7 @@ const App: Component = () => {
                         }
                       >
                         <form onSubmit={handleRequestRecoveryCode} class="space-y-4">
-                          <p class="text-xs text-[#6F7173] leading-relaxed">
+                          <p class="text-xs text-[#6F7173] dark:text-[#A1A1AA] leading-relaxed">
                             Select how you would like to receive or verify your security recovery code:
                           </p>
                           <div class="space-y-2">
@@ -4369,7 +5142,7 @@ const App: Component = () => {
                                   class={`flex items-center justify-between p-3 rounded-xl border cursor-pointer transition ${
                                     forgotSelectedMethod() === method.type
                                       ? "border-[#A27561] bg-[#A27561]/5 ring-1 ring-[#A27561]"
-                                      : "border-[#E2DFD8] bg-[#FAF9F6] hover:bg-stone-50"
+                                      : "border-[#E2DFD8] dark:border-[#2E3138] bg-[#FAF9F6] dark:bg-[#18191D] hover:bg-stone-50 dark:hover:bg-[#23262D]"
                                   }`}
                                 >
                                   <div class="flex items-center gap-3">
@@ -4382,10 +5155,10 @@ const App: Component = () => {
                                       class="text-[#A27561] focus:ring-[#A27561]"
                                     />
                                     <div>
-                                      <span class="text-xs font-medium text-[#3C3D3E] capitalize block">
+                                      <span class="text-xs font-medium text-[#3C3D3E] dark:text-[#F3F4F6] capitalize block">
                                         {method.type === "totp" ? "Authenticator App" : method.type + " Verification"}
                                       </span>
-                                      <span class="text-[11px] text-[#6F7173] font-mono">
+                                      <span class="text-[11px] text-[#6F7173] dark:text-[#A1A1AA] font-mono">
                                         {method.destination_masked}
                                       </span>
                                     </div>
@@ -4402,7 +5175,7 @@ const App: Component = () => {
                             <button
                               type="button"
                               onClick={() => setForgotMethods([])}
-                              class="text-xs text-[#6F7173] hover:text-[#3C3D3E] cursor-pointer"
+                              class="text-xs text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#3C3D3E] dark:hover:text-[#F3F4F6] cursor-pointer"
                             >
                               Change email
                             </button>
@@ -4421,15 +5194,15 @@ const App: Component = () => {
                     {/* Step 2: Code Entry & New Password */}
                     <Show when={forgotStep() === 2}>
                       <form onSubmit={handleResetPasswordWithRecovery} class="space-y-4">
-                        <div class="p-3 bg-[#FAF9F6] rounded-xl border border-[#E2DFD8] text-xs text-[#6F7173]">
-                          <span class="font-medium text-[#3C3D3E] block mb-0.5">Verification required</span>
+                        <div class="p-3 bg-[#FAF9F6] dark:bg-[#18191D] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs text-[#6F7173] dark:text-[#A1A1AA]">
+                          <span class="font-medium text-[#3C3D3E] dark:text-[#F3F4F6] block mb-0.5">Verification required</span>
                           {forgotSelectedMethod() === "totp"
                             ? "Enter the 6-digit code from your authenticator app."
                             : `Enter the 6-digit code sent to ${forgotDestinationMasked()}.`}
                         </div>
 
                         <div>
-                          <label class="block text-xs font-medium text-[#3C3D3E] mb-1">
+                          <label class="block text-xs font-medium text-[#3C3D3E] dark:text-[#D1D5DB] mb-1">
                             6-Digit Security Code
                           </label>
                           <input
@@ -4441,12 +5214,12 @@ const App: Component = () => {
                             onInput={(e) => setForgotCode(e.currentTarget.value.replace(/[^0-9]/g, ""))}
                             placeholder="123456"
                             required
-                            class="w-full tracking-widest text-center font-mono bg-[#FAF9F6] border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-sm text-[#3C3D3E] outline-none"
+                            class="w-full tracking-widest text-center font-mono bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-sm text-[#3C3D3E] dark:text-[#F3F4F6] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50 outline-none"
                           />
                         </div>
 
                         <div>
-                          <label class="block text-xs font-medium text-[#3C3D3E] mb-1">
+                          <label class="block text-xs font-medium text-[#3C3D3E] dark:text-[#D1D5DB] mb-1">
                             New Password (min 12 chars)
                           </label>
                           <input
@@ -4456,12 +5229,12 @@ const App: Component = () => {
                             placeholder="At least 12 characters"
                             required
                             minlength="12"
-                            class="w-full bg-[#FAF9F6] border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] outline-none"
+                            class="w-full bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] dark:text-[#F3F4F6] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50 outline-none"
                           />
                         </div>
 
                         <div>
-                          <label class="block text-xs font-medium text-[#3C3D3E] mb-1">
+                          <label class="block text-xs font-medium text-[#3C3D3E] dark:text-[#D1D5DB] mb-1">
                             Confirm New Password
                           </label>
                           <input
@@ -4471,7 +5244,7 @@ const App: Component = () => {
                             placeholder="Re-enter new password"
                             required
                             minlength="12"
-                            class="w-full bg-[#FAF9F6] border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] outline-none"
+                            class="w-full bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] dark:text-[#F3F4F6] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50 outline-none"
                           />
                         </div>
 
@@ -4485,8 +5258,8 @@ const App: Component = () => {
                             <span>{showPhraseInput() ? "− Hide recovery phrase (optional)" : "+ Have your 24-word recovery phrase? (Optional)"}</span>
                           </button>
                           <Show when={showPhraseInput()}>
-                            <div class="mt-2 space-y-1.5 p-3 rounded-xl bg-[#F4F1EA] border border-[#E2DFD8]">
-                              <p class="text-[11px] text-[#6F7173] leading-relaxed">
+                            <div class="mt-2 space-y-1.5 p-3 rounded-xl bg-[#F4F1EA] dark:bg-[#141518] border border-[#E2DFD8] dark:border-[#2E3138]">
+                              <p class="text-[11px] text-[#6F7173] dark:text-[#A1A1AA] leading-relaxed">
                                 Entering your 24-word recovery phrase re-wraps your historical encryption keys under your new password, keeping all past messages decrypted immediately. If you don't have it right now, you can leave this blank and reactivate past messages later in Settings.
                               </p>
                               <textarea
@@ -4494,7 +5267,7 @@ const App: Component = () => {
                                 value={forgotRecoveryPhrase()}
                                 onInput={(e) => setForgotRecoveryPhrase(e.currentTarget.value)}
                                 placeholder="word1 word2 word3 ... word24 (optional)"
-                                class="w-full bg-[#FAF9F6] border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-1.5 text-xs text-[#3C3D3E] outline-none font-mono resize-none"
+                                class="w-full bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-1.5 text-xs text-[#3C3D3E] dark:text-[#F3F4F6] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50 outline-none font-mono resize-none"
                               />
                             </div>
                           </Show>
@@ -4504,7 +5277,7 @@ const App: Component = () => {
                           <button
                             type="button"
                             onClick={() => setForgotStep(1)}
-                            class="text-xs text-[#6F7173] hover:text-[#3C3D3E] cursor-pointer"
+                            class="text-xs text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#3C3D3E] dark:hover:text-[#F3F4F6] cursor-pointer"
                           >
                             Back
                           </button>
@@ -4527,13 +5300,13 @@ const App: Component = () => {
                     {/* Step 3: Success State */}
                     <Show when={forgotStep() === 3}>
                       <div class="text-center py-4 space-y-3">
-                        <div class="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+                        <div class="w-12 h-12 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
                           <svg class="w-6 h-6 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
                             <polyline points="20 6 9 17 4 12" />
                           </svg>
                         </div>
-                        <h4 class="text-base font-semibold text-[#3C3D3E]">Password Successfully Reset</h4>
-                        <p class="text-xs text-[#6F7173] max-w-sm mx-auto leading-relaxed">
+                        <h4 class="text-base font-semibold text-[#3C3D3E] dark:text-[#F3F4F6]">Password Successfully Reset</h4>
+                        <p class="text-xs text-[#6F7173] dark:text-[#A1A1AA] max-w-sm mx-auto leading-relaxed">
                           Your password has been updated. You can now sign in to BYOS Webmail. Historical encrypted messages remain securely sealed under your 24-word recovery phrase.
                         </p>
                         <div class="pt-3">
@@ -4751,10 +5524,19 @@ const App: Component = () => {
               }}
               onOpenCreateLabel={() => {
                 setLabelToEdit(null);
+                setInitialParentLabelId(null);
                 setCreateLabelModalOpen(true);
                 setMobileSidebarOpen(false);
               }}
               onEditLabel={handleOpenEditLabel}
+              onNewSublabel={(parent) => {
+                handleOpenNewSublabel(parent);
+                setMobileSidebarOpen(false);
+              }}
+              onChangeParent={(lbl) => {
+                setChangeParentLabel(lbl);
+                setMobileSidebarOpen(false);
+              }}
               onDeleteLabel={handleDeleteLabel}
               onMoveMessages={handleMoveMessages}
               onAttachLabel={handleAttachLabel}
@@ -4811,9 +5593,12 @@ const App: Component = () => {
             onSelectLabel={handleSelectLabel}
             onOpenCreateLabel={() => {
               setLabelToEdit(null);
+              setInitialParentLabelId(null);
               setCreateLabelModalOpen(true);
             }}
             onEditLabel={handleOpenEditLabel}
+            onNewSublabel={handleOpenNewSublabel}
+            onChangeParent={(lbl) => setChangeParentLabel(lbl)}
             onDeleteLabel={handleDeleteLabel}
             onMoveMessages={handleMoveMessages}
             onAttachLabel={handleAttachLabel}
@@ -4830,8 +5615,35 @@ const App: Component = () => {
                 : selectedMsg()
                 ? "w-full md:w-[380px] md:min-w-[340px] md:max-w-[420px] md:flex-shrink-0"
                 : "w-full flex-1"
-            } transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] h-full overflow-hidden`}
+            } transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] h-full overflow-hidden flex flex-col`}
           >
+            {/* Label Filter Chip Row */}
+            <Show when={activeLabel()}>
+              <div class="px-3.5 py-2 bg-[#FAF9F6] dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between text-xs flex-shrink-0">
+                <div class="flex items-center gap-2 truncate min-w-0">
+                  <span class="text-[#6F7173] dark:text-[#878A8E] text-[11px] font-medium flex-shrink-0">Label filter:</span>
+                  <span
+                    class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-white text-[11px] font-medium shadow-2xs truncate max-w-[280px]"
+                    style={{ "background-color": activeLabel()!.color }}
+                    title={activeLabel()!.path || activeLabel()!.name}
+                  >
+                    <span class="truncate">{activeLabel()!.path || activeLabel()!.name}</span>
+                    <Show when={getSubtreeLabelIds(activeLabel()!.id, labels()).length > 1}>
+                      <span class="text-[9px] opacity-80 flex-shrink-0">(or descendants)</span>
+                    </Show>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveLabel(null)}
+                  class="text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] text-xs hover:underline cursor-pointer flex-shrink-0 ml-2"
+                >
+                  Clear filter
+                </button>
+              </div>
+            </Show>
+
+            <div class="flex-1 min-h-0 overflow-hidden">
             <MessageList
               currentFolder={currentFolder()}
               messages={paginatedMessages()}
@@ -4889,6 +5701,7 @@ const App: Component = () => {
               onToggleViewMode={() => setViewMode((prev) => (prev === "threads" ? "flat" : "threads"))}
               onToggleThreadCheck={handleToggleThreadCheck}
             />
+            </div>
           </div>
 
           {/* ── Reading Pane (Only mounted when selectedMsg()) ── */}
@@ -4930,6 +5743,8 @@ const App: Component = () => {
                   }
                 }}
                 onDeleteDraft={handleDeleteMessage}
+                onCancelScheduled={(msg) => handleCancelScheduled(msg)}
+                onEditScheduled={(msg) => handleEditScheduled(msg)}
               />
             </div>
           </Show>
@@ -5113,9 +5928,21 @@ const App: Component = () => {
         onClose={() => {
           setCreateLabelModalOpen(false);
           setLabelToEdit(null);
+          setInitialParentLabelId(null);
         }}
         labelToEdit={labelToEdit()}
+        initialParentId={initialParentLabelId()}
+        allLabels={labels()}
         onSave={handleSaveLabel}
+      />
+
+      {/* ── Change Parent Modal ── */}
+      <ChangeParentModal
+        isOpen={Boolean(changeParentLabel())}
+        onClose={() => setChangeParentLabel(null)}
+        label={changeParentLabel()}
+        allLabels={labels()}
+        onSave={handleChangeParent}
       />
 
       {/* ── Import Emails Modal ── */}
@@ -5178,6 +6005,7 @@ const App: Component = () => {
     </Show>
     </Show>
     </Show>
+    </>
   );
 };
 

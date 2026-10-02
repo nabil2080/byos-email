@@ -10,6 +10,8 @@ import (
 // VerifyEnvelopeSignature verifies an Ed25519 signature over 
 // AAD || raw ciphertext bytes.
 //
+// canonical form is AAD || ciphertext (raw bytes). Attachment envelopes are excluded from message envelope signature.
+//
 // The signature is decoded from the envelope's base64 sig field.
 // The ciphertext is decoded from the envelope's base64 ciphertext field.
 func VerifyEnvelopeSignature(

@@ -66,3 +66,17 @@ packages/   Shared libraries for types, crypto boundaries, and storage connector
 - Mobile apps.
 - Complex key recovery.
 
+## Cleaning up test data
+
+Manual test scripts can pollute the local database, MinIO buckets, and Redis channels with orphaned rows and stale cryptographic keys.
+
+To reset all test data and restore canonical seeds:
+
+```bash
+make clean-test-data
+# or on Windows:
+.\clean-test-data.ps1
+```
+
+See [Cleaning up test data](docs/dev-testing.md) for full details on what is removed, what is preserved, and how to identify pollution symptoms.
+

@@ -29,6 +29,11 @@ func mockWebAuthnMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		if os.Getenv("BYOS_DEV_MODE") != "1" {
+			http.Error(w, "Unauthorized: mock WebAuthn disabled in production", http.StatusUnauthorized)
+			return
+		}
+
 		token := r.Header.Get("Authorization")
 		if token != "Bearer mock-support-agent" {
 			http.Error(w, "Unauthorized: WebAuthn challenge required", http.StatusUnauthorized)
@@ -39,7 +44,29 @@ func mockWebAuthnMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func mockLoginHandler(w http.ResponseWriter, r *http.Request) {
+	if os.Getenv("BYOS_DEV_MODE") != "1" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Access-Control-Allow-Origin", "http://127.0.0.1:3003")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"token": "mock-support-agent"})
+}
+
+func setupRoutes(mux *http.ServeMux) {
+	handlers.RegisterOrganizationRoutes(mux, db, mockWebAuthnMiddleware)
+	mux.HandleFunc("/admin/v1/tickets", mockWebAuthnMiddleware(ticketsHandler))
+	mux.HandleFunc("/admin/v1/mailboxes/", mockWebAuthnMiddleware(healthHandler))
+	mux.HandleFunc("/admin/v1/interventions/execute", mockWebAuthnMiddleware(interventionHandler))
+	mux.HandleFunc("/admin/v1/auth/mock-login", mockLoginHandler)
+}
+
 func main() {
+	if os.Getenv("BYOS_DEV_MODE") == "1" {
+		log.Println("[SECURITY] WARNING: BYOS_DEV_MODE is enabled in admin-api; mock WebAuthn authentication is ACTIVE!")
+	}
+
 	connStr := os.Getenv("SUPPORT_DB_URL")
 	if connStr == "" {
 		connStr = "postgres://role_support_agent:support_crm_password@localhost:5432/byos"
@@ -53,21 +80,18 @@ func main() {
 		defer db.Close()
 	}
 
-	// Register organization and audit log handlers from handlers/organizations.go
-	handlers.RegisterOrganizationRoutes(http.DefaultServeMux, db, mockWebAuthnMiddleware)
+	setupRoutes(http.DefaultServeMux)
 
-	// Auxiliary routes
-	http.HandleFunc("/admin/v1/tickets", mockWebAuthnMiddleware(ticketsHandler))
-	http.HandleFunc("/admin/v1/mailboxes/", mockWebAuthnMiddleware(healthHandler))
-	http.HandleFunc("/admin/v1/interventions/execute", mockWebAuthnMiddleware(interventionHandler))
-	http.HandleFunc("/admin/v1/auth/mock-login", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://127.0.0.1:3003")
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"token": "mock-support-agent"})
-	})
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = os.Getenv("ADMIN_PORT")
+	}
+	if port == "" {
+		port = "8090"
+	}
 
-	log.Println("Admin API (Support) listening on :8087")
-	log.Fatal(http.ListenAndServe(":8087", nil))
+	log.Printf("Admin API (Support) listening on :%s", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
 func ticketsHandler(w http.ResponseWriter, r *http.Request) {

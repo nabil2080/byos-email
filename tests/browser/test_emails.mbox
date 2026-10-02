@@ -1,0 +1,19 @@
+From MAILER-DAEMON Fri Oct 02 12:00:00 2026
+From: import-test-sender@external.com
+To: alice@byos.local
+Subject: Mbox Test Message 1
+Date: Fri, 02 Oct 2026 12:00:00 +0000
+Message-ID: <mbox-test-1@external.com>
+Content-Type: text/plain; charset=utf-8
+
+This is mbox test message number one for browser verification.
+
+From MAILER-DAEMON Fri Oct 02 12:01:00 2026
+From: import-test-sender-2@external.com
+To: alice@byos.local
+Subject: Mbox Test Message 2
+Date: Fri, 02 Oct 2026 12:01:00 +0000
+Message-ID: <mbox-test-2@external.com>
+Content-Type: text/plain; charset=utf-8
+
+This is mbox test message number two for browser verification.

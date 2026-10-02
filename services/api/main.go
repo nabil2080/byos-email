@@ -323,6 +323,9 @@ func main() {
 		log.Printf("startup check: scheduled_messages.is_path_a present")
 	}()
 
+	// Check for test pollution on startup and log warnings if detected
+	RunStartupPollutionCheck()
+
 	// Start the Path A scheduled delivery goroutine.
 	// Uses a background context tied to the process lifetime.
 	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
@@ -358,6 +361,7 @@ func main() {
 	http.HandleFunc("/v1/outbound/scheduled/cancel", withSecurityHeaders(withCORS(outboundScheduledCancelHandler)))
 	http.HandleFunc("/v1/outbound/schedule-path-a", withSecurityHeaders(withCORS(outboundSchedulePathAHandler)))
 	http.HandleFunc("/v1/outbound/send-internal", withSecurityHeaders(withCORS(internalSendHandler)))
+	http.HandleFunc("/v1/internal/scheduled/complete", scheduledCompleteHandler)
 
 	http.HandleFunc("/v1/bridge/authenticate", withSecurityHeaders(withCORS(bridgeAuthenticateHandler)))
 	http.HandleFunc("/v1/bridge/messages", withSecurityHeaders(withCORS(bridgeMessagesHandler)))
@@ -402,6 +406,8 @@ func main() {
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/read", withSecurityHeaders(withCORS(messageReadHandler)))
 	http.HandleFunc("PATCH /v1/mailboxes/{mailbox_id}/messages/{message_id}/star", withSecurityHeaders(withCORS(messageStarHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/snooze", withSecurityHeaders(withCORS(messageSnoozeHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/attachments", withSecurityHeaders(withCORS(messageAttachmentsHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/attachments/{attachment_id}/chunks/{index}", withSecurityHeaders(withCORS(messageAttachmentChunkHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/import", withSecurityHeaders(withCORS(messageImportHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/threads", withSecurityHeaders(withCORS(threadsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/threads/{thread_id}", withSecurityHeaders(withCORS(threadDetailHandler)))
@@ -421,8 +427,20 @@ func main() {
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/bridge/credentials/{credential_id}", withSecurityHeaders(withCORS(bridgeCredentialsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/attachments", withSecurityHeaders(withCORS(attachmentsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/attachments/{attachment_id}", withSecurityHeaders(withCORS(attachmentsHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/attachment-chunks", withSecurityHeaders(withCORS(uploadAttachmentChunkHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/attachments/chunks", withSecurityHeaders(withCORS(uploadAttachmentChunkHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/auto-reply", withSecurityHeaders(withCORS(autoReplyHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/settings", withSecurityHeaders(withCORS(mailboxSettingsHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/events", withSecurityHeaders(withCORS(mailboxEventsHandler)))
+	http.HandleFunc("/api/v1/mailboxes/{mailbox_id}/events", withSecurityHeaders(withCORS(mailboxEventsHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/scheduled", withSecurityHeaders(withCORS(mailboxScheduledListHandler)))
+	http.HandleFunc("/api/v1/mailboxes/{mailbox_id}/scheduled", withSecurityHeaders(withCORS(mailboxScheduledListHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/scheduled/{id}/cancel", withSecurityHeaders(withCORS(mailboxScheduledCancelHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/scheduled/{id}/draft", withSecurityHeaders(withCORS(mailboxScheduledGetHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/scheduled/{id}", withSecurityHeaders(withCORS(mailboxScheduledItemHandler)))
+	http.HandleFunc("/api/v1/mailboxes/{mailbox_id}/scheduled/{id}/cancel", withSecurityHeaders(withCORS(mailboxScheduledCancelHandler)))
+	http.HandleFunc("/api/v1/mailboxes/{mailbox_id}/scheduled/{id}/draft", withSecurityHeaders(withCORS(mailboxScheduledGetHandler)))
+	http.HandleFunc("/api/v1/mailboxes/{mailbox_id}/scheduled/{id}", withSecurityHeaders(withCORS(mailboxScheduledItemHandler)))
 	http.HandleFunc("/v1/auth/sessions", withSecurityHeaders(withCORS(sessionsHandler)))
 	http.HandleFunc("/v1/auth/sessions/revoke-others", withSecurityHeaders(withCORS(revokeOtherSessionsHandler)))
 	http.HandleFunc("/v1/auth/verify-password", withSecurityHeaders(withCORS(verifyPasswordHandler)))

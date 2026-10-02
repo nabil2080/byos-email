@@ -710,3 +710,245 @@ func TestMessageBodyRetrievalXWing(t *testing.T) {
 func connectTestPGX(ctx context.Context, dsn string) (*pgx.Conn, error) {
 	return pgx.Connect(ctx, dsn)
 }
+
+// TestPathASendSignatureRoundTrip signs a payload on the client-side mock,
+// includes attachment envelopes in the payload to prove the signed range is stable,
+// verifies on the server, and asserts match (201 Created).
+func TestPathASendSignatureRoundTrip(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	mux := setupInternalDeliveryTestMux()
+	vec := loadSignedVector(t)
+	_, senderMailboxID, senderToken, _, recipientEmail := setupInternalDeliveryTest(t, db, vec)
+	_, storage := setupAttachmentMockStorage(t)
+
+	recEnvJSON, senderEnvJSON := createSignedEnvelopes(t, db, senderMailboxID, vec)
+
+	attID := uuid.New().String()
+	chunkBytes := []byte("roundtrip_test_attachment_chunk_data")
+	recAtt, senderAtt := createTestAttachmentEnvelopes(senderMailboxID, attID, "document.pdf", chunkBytes, storage)
+
+	reqBody, _ := json.Marshal(InternalSendRequest{
+		EnvelopeJSON:              recEnvJSON,
+		SenderEnvelopeJSON:        senderEnvJSON,
+		Recipient:                 recipientEmail,
+		SenderMailboxID:           senderMailboxID,
+		AttachmentEnvelopes:       []AttachmentEnvelope{recAtt},
+		SenderAttachmentEnvelopes: []AttachmentEnvelope{senderAtt},
+	})
+
+	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(reqBody))
+	req.Header.Set("Authorization", "Bearer "+senderToken)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp InternalSendResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.Status != "delivered" {
+		t.Errorf("expected status 'delivered', got %s", resp.Status)
+	}
+
+	// Verify recipient message in DB has attachments recorded
+	var hasAtt bool
+	var attCount int
+	err := db.QueryRow("SELECT has_attachments, attachment_count FROM message_metadata WHERE id = $1", resp.MessageID).Scan(&hasAtt, &attCount)
+	if err != nil {
+		t.Fatalf("query message_metadata: %v", err)
+	}
+	if !hasAtt || attCount != 1 {
+		t.Errorf("expected has_attachments=true, count=1; got %v, %d", hasAtt, attCount)
+	}
+}
+
+// TestPathASendSignatureMismatchRejected signs one payload, verifies a mutated payload,
+// and asserts the server returns 400 invalid_signature.
+func TestPathASendSignatureMismatchRejected(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	mux := setupInternalDeliveryTestMux()
+	vec := loadSignedVector(t)
+	_, senderMailboxID, senderToken, _, recipientEmail := setupInternalDeliveryTest(t, db, vec)
+	_, storage := setupAttachmentMockStorage(t)
+
+	recEnvJSON, senderEnvJSON := createSignedEnvelopes(t, db, senderMailboxID, vec)
+
+	// Unmarshal and mutate the ciphertext
+	env, err := envelope.UnmarshalCanonical([]byte(recEnvJSON))
+	if err != nil {
+		t.Fatalf("unmarshal recEnv: %v", err)
+	}
+	ctBytes, _ := base64.StdEncoding.DecodeString(env.Ciphertext)
+	ctBytes[0] ^= 0xAA // tamper ciphertext
+	env.Ciphertext = base64.StdEncoding.EncodeToString(ctBytes)
+	tamperedRecJSONBytes, err := envelope.MarshalCanonical(env)
+	if err != nil {
+		t.Fatalf("marshal tampered recEnv: %v", err)
+	}
+
+	attID := uuid.New().String()
+	chunkBytes := []byte("mismatch_test_chunk")
+	recAtt, senderAtt := createTestAttachmentEnvelopes(senderMailboxID, attID, "data.pdf", chunkBytes, storage)
+
+	reqBody, _ := json.Marshal(InternalSendRequest{
+		EnvelopeJSON:              string(tamperedRecJSONBytes),
+		SenderEnvelopeJSON:        senderEnvJSON,
+		Recipient:                 recipientEmail,
+		SenderMailboxID:           senderMailboxID,
+		AttachmentEnvelopes:       []AttachmentEnvelope{recAtt},
+		SenderAttachmentEnvelopes: []AttachmentEnvelope{senderAtt},
+	})
+
+	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(reqBody))
+	req.Header.Set("Authorization", "Bearer "+senderToken)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "invalid_signature") {
+		t.Errorf("expected 'invalid_signature' in error response, got %s", rr.Body.String())
+	}
+}
+
+// TestPathAAppliesRules verifies that Path A internal delivery evaluates mail_rules
+// and applies matching actions (such as assigning a label).
+func TestPathAAppliesRules(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	mux := setupInternalDeliveryTestMux()
+	vec := loadSignedVector(t)
+	_, senderMailboxID, senderToken, recipientMailboxID, recipientEmail := setupInternalDeliveryTest(t, db, vec)
+	setupAttachmentMockStorage(t)
+
+	recEnvJSON, senderEnvJSON := createSignedEnvelopes(t, db, senderMailboxID, vec)
+
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, testDSN)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	senderEmail, err := recipientAddrFromMailboxID(ctx, conn, senderMailboxID)
+	if err != nil {
+		t.Fatalf("lookup sender email: %v", err)
+	}
+
+	labelID := uuid.New().String()
+	_, err = conn.Exec(ctx, `
+		INSERT INTO mailbox_labels (id, mailbox_id, name, color, color_name)
+		VALUES ($1, $2, 'VIP', '#4D6BFE', 'Cobalt')
+	`, labelID, recipientMailboxID)
+	if err != nil {
+		t.Fatalf("create label: %v", err)
+	}
+
+	ruleID := uuid.New().String()
+	_, err = conn.Exec(ctx, `
+		INSERT INTO mail_rules (id, mailbox_id, name, enabled, priority, match_sender, action_type, action_label_id)
+		VALUES ($1, $2, 'Label VIP', true, 0, $3, 'label', $4)
+	`, ruleID, recipientMailboxID, senderEmail, labelID)
+	if err != nil {
+		t.Fatalf("create mail rule: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.Exec(context.Background(), "DELETE FROM mail_rules WHERE id = $1", ruleID)
+		_, _ = conn.Exec(context.Background(), "DELETE FROM mailbox_labels WHERE id = $1", labelID)
+	})
+
+	reqBody, _ := json.Marshal(InternalSendRequest{
+		EnvelopeJSON:       recEnvJSON,
+		SenderEnvelopeJSON: senderEnvJSON,
+		Recipient:          recipientEmail,
+		SenderMailboxID:    senderMailboxID,
+	})
+
+	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(reqBody))
+	req.Header.Set("Authorization", "Bearer "+senderToken)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp InternalSendResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal send response: %v", err)
+	}
+
+	var count int
+	err = conn.QueryRow(ctx, `
+		SELECT count(*) FROM message_labels WHERE message_id = $1 AND label_id = $2
+	`, resp.MessageID, labelID).Scan(&count)
+	if err != nil {
+		t.Fatalf("query message_labels: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 row in message_labels for message %s and label %s, got %d", resp.MessageID, labelID, count)
+	}
+}
+
+// TestPathAWithoutRules verifies that Path A internal delivery succeeds normally
+// when the recipient has no mail rules configured.
+func TestPathAWithoutRules(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	mux := setupInternalDeliveryTestMux()
+	vec := loadSignedVector(t)
+	_, senderMailboxID, senderToken, recipientMailboxID, recipientEmail := setupInternalDeliveryTest(t, db, vec)
+	setupAttachmentMockStorage(t)
+
+	recEnvJSON, senderEnvJSON := createSignedEnvelopes(t, db, senderMailboxID, vec)
+
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, testDSN)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	// Ensure recipient has no mail rules
+	_, _ = conn.Exec(ctx, "DELETE FROM mail_rules WHERE mailbox_id = $1", recipientMailboxID)
+
+	reqBody, _ := json.Marshal(InternalSendRequest{
+		EnvelopeJSON:       recEnvJSON,
+		SenderEnvelopeJSON: senderEnvJSON,
+		Recipient:          recipientEmail,
+		SenderMailboxID:    senderMailboxID,
+	})
+
+	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(reqBody))
+	req.Header.Set("Authorization", "Bearer "+senderToken)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp InternalSendResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal send response: %v", err)
+	}
+
+	var folder string
+	err = conn.QueryRow(ctx, `SELECT folder FROM message_metadata WHERE id = $1`, resp.MessageID).Scan(&folder)
+	if err != nil {
+		t.Fatalf("query message folder: %v", err)
+	}
+	if folder != "inbox" {
+		t.Errorf("expected folder=inbox, got %q", folder)
+	}
+}
+

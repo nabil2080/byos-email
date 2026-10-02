@@ -260,5 +260,92 @@ export async function runPathAComposeTests(): Promise<{ passed: number; failed: 
     assert(capturedReq!.sender_envelope_json!.includes("box-1"), "sender_envelope_json has sender key_id");
   });
 
+  // 10. test_path_a_send_with_attachments_signs_correct_payload
+  await test("10. test_path_a_send_with_attachments_signs_correct_payload: signed byte range is identical with and without attachments", async () => {
+    let capturedSignedPayloadNoAtt: string | null = null;
+    let capturedSignedPayloadWithAtt: string | null = null;
+
+    const mockSeal = async (
+      _pk: string,
+      _keyId: string,
+      _epoch: number,
+      plaintextHex: string,
+      _signingSeedHex: string
+    ) => {
+      return JSON.stringify({ v: 1, key_id: _keyId, ptHexLen: plaintextHex.length, sig: "mock-sig" });
+    };
+
+    // Send without attachments
+    await tryPathASend(
+      {
+        recipient: "alice@example.com",
+        senderMailboxId: "box-1",
+        mimeMessage: "Subject: test payload\r\n\r\nHello World",
+        signingSeed: validSigningSeed,
+      },
+      {
+        lookupMailboxKeys: async () => baseRecord,
+        sealSignedEnvelope: async (_pk, _keyId, _epoch, ptHex, _seed) => {
+          capturedSignedPayloadNoAtt = ptHex;
+          return JSON.stringify({ v: 1, key_id: _keyId, sig: "sig1" });
+        },
+        sendInternal: async () => ({
+          delivery_id: "del-1",
+          message_id: "msg-1",
+          status: "delivered",
+          message_seq: 1,
+        }),
+      }
+    );
+
+    // Send with attachments
+    const dummyAtt = {
+      attachment_id: "att-123",
+      filename: "test.pdf",
+      mime_type: "application/pdf",
+      size_bytes: 1024,
+      iv: "dummy-iv",
+      wrapped_key: {
+        x25519_encapsulated: "encap",
+        mlkem_encrypted_key: "mlkem",
+      },
+      content_hash_sha256: "hash",
+      chunk_count: 1,
+      chunks: [{ index: 0, storage_ref: "path-a-attachments/box-1/att-123/chunk_000.enc", size_bytes: 1024 }],
+    };
+
+    await tryPathASend(
+      {
+        recipient: "alice@example.com",
+        senderMailboxId: "box-1",
+        mimeMessage: "Subject: test payload\r\n\r\nHello World",
+        signingSeed: validSigningSeed,
+        attachmentEnvelopes: [dummyAtt],
+        senderAttachmentEnvelopes: [dummyAtt],
+      },
+      {
+        lookupMailboxKeys: async () => baseRecord,
+        sealSignedEnvelope: async (_pk, _keyId, _epoch, ptHex, _seed) => {
+          capturedSignedPayloadWithAtt = ptHex;
+          return JSON.stringify({ v: 1, key_id: _keyId, sig: "sig2" });
+        },
+        sendInternal: async () => ({
+          delivery_id: "del-2",
+          message_id: "msg-2",
+          status: "delivered",
+          message_seq: 2,
+        }),
+      }
+    );
+
+    assert(capturedSignedPayloadNoAtt !== null, "captured signed payload without attachments");
+    assert(capturedSignedPayloadWithAtt !== null, "captured signed payload with attachments");
+    assert(
+      capturedSignedPayloadNoAtt === capturedSignedPayloadWithAtt,
+      "signed payload byte range must be identical whether attachments are present or absent"
+    );
+  });
+
   return { passed, failed };
 }
+

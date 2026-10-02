@@ -170,5 +170,80 @@ export async function runPathAReadTests(): Promise<{ passed: number; failed: num
     );
   });
 
+  // 9. test_decrypt_failure_surfaces_real_error
+  await test("9. test_decrypt_failure_surfaces_real_error: surfaces step name and underlying error, never 'unknown'", async () => {
+    // 9a. Content decrypt failure (e.g. WASM string throw)
+    let errContent: Error | null = null;
+    try {
+      await decryptPathAEnvelope(
+        RUST_VECTOR.envelope_json,
+        "alice@example.com",
+        recipientSeed,
+        {
+          wasm: {
+            wasm_open_xwing_envelope: () => {
+              throw "decryption failed"; // wasm-bindgen string throw
+            },
+            wasm_verify_xwing_envelope: () => true,
+          } as any,
+        }
+      );
+    } catch (e: any) {
+      errContent = e;
+    }
+    assert(errContent !== null, "expected decrypt to throw");
+    assert(
+      errContent!.message.includes("content decrypt: decryption failed"),
+      `expected 'content decrypt: decryption failed', got: ${errContent!.message}`
+    );
+    assert(
+      !errContent!.message.includes("unknown"),
+      `error must not contain 'unknown': ${errContent!.message}`
+    );
+
+    // 9b. Key unwrap failure
+    let errKey: Error | null = null;
+    try {
+      await decryptPathAEnvelope(
+        RUST_VECTOR.envelope_json,
+        "alice@example.com",
+        new Uint8Array(10), // invalid seed length
+      );
+    } catch (e: any) {
+      errKey = e;
+    }
+    assert(errKey !== null, "expected key unwrap error");
+    assert(
+      errKey!.message.includes("key unwrap"),
+      `expected 'key unwrap' in message, got: ${errKey!.message}`
+    );
+    assert(
+      !errKey!.message.includes("unknown"),
+      `error must not contain 'unknown': ${errKey!.message}`
+    );
+
+    // 9c. Envelope parse failure
+    let errParse: Error | null = null;
+    try {
+      await decryptPathAEnvelope(
+        "   ",
+        "alice@example.com",
+        recipientSeed,
+      );
+    } catch (e: any) {
+      errParse = e;
+    }
+    assert(errParse !== null, "expected envelope parse error");
+    assert(
+      errParse!.message.includes("envelope parse"),
+      `expected 'envelope parse' in message, got: ${errParse!.message}`
+    );
+    assert(
+      !errParse!.message.includes("unknown"),
+      `error must not contain 'unknown': ${errParse!.message}`
+    );
+  });
+
   return { passed, failed };
 }
+

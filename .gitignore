@@ -50,3 +50,10 @@ infra/secrets/ses_smtp_credentials.txt
 # Go workspace sum
 go.work.sum
 
+# Local scratch and test dumps
+scratch/
+pre_cleanup_dump_*.sql
+tests/browser/*.png
+apps/webmail/*.png
+
+

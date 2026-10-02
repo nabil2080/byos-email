@@ -17,13 +17,16 @@ import { runUndoSendTests } from "./undo_send.test.js";
 import { runKeyboardShortcutsTests } from "./keyboard_shortcuts.test.js";
 import { runSnoozeTests } from "./snooze.test.js";
 import { runScheduledFolderTests } from "./scheduled_folder.test.js";
+import { runDisplayPartyTests } from "./display_party.test.js";
+import { runNestedLabelsTests } from "./nested_labels.test.js";
+import { runApiErrorTests } from "./api_error.test.js";
 
 async function main() {
   let totalPassed = 0;
   let totalFailed = 0;
 
   console.log("Running Attachment Crypto Tests...");
-  const attachmentRes = runAttachmentCryptoTests();
+  const attachmentRes = await runAttachmentCryptoTests();
   console.log(`ATTACHMENT CRYPTO TESTS: ${attachmentRes.passed} passed, ${attachmentRes.failed} failed\n`);
   totalPassed += attachmentRes.passed;
   totalFailed += attachmentRes.failed;
@@ -134,6 +137,24 @@ async function main() {
   console.log(`SCHEDULED FOLDER TESTS: ${scheduledRes.passed} passed, ${scheduledRes.failed} failed\n`);
   totalPassed += scheduledRes.passed;
   totalFailed += scheduledRes.failed;
+
+  console.log("Running Display Party Tests...");
+  const displayPartyRes = runDisplayPartyTests();
+  console.log(`DISPLAY PARTY TESTS: ${displayPartyRes.passed} passed, ${displayPartyRes.failed} failed\n`);
+  totalPassed += displayPartyRes.passed;
+  totalFailed += displayPartyRes.failed;
+
+  console.log("Running Nested Labels Tests...");
+  const nestedLabelsRes = await runNestedLabelsTests();
+  console.log(`NESTED LABELS TESTS: ${nestedLabelsRes.passed} passed, ${nestedLabelsRes.failed} failed\n`);
+  totalPassed += nestedLabelsRes.passed;
+  totalFailed += nestedLabelsRes.failed;
+
+  console.log("Running API Error Handling Tests...");
+  const apiErrorRes = await runApiErrorTests();
+  console.log(`API ERROR HANDLING TESTS: ${apiErrorRes.passed} passed, ${apiErrorRes.failed} failed\n`);
+  totalPassed += apiErrorRes.passed;
+  totalFailed += apiErrorRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

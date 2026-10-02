@@ -5,7 +5,7 @@ use lettre::{
     address::{Address, Envelope},
     SmtpTransport, Transport,
 };
-use std::{collections::HashMap, env, sync::{Arc, OnceLock, RwLock}, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::HashMap, env, sync::{Arc, OnceLock, RwLock}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use tokio::time::sleep;
 use tokio_postgres::{Client, NoTls};
 use tracing::{error, info, warn};
@@ -265,14 +265,23 @@ async fn main() -> Result<()> {
     // Verify least privilege: cannot access restricted tables (should fail)
     verify_least_privilege(&client).await;
 
-    info!("outbound-worker polling every {}ms, postfix={}, redis={}", poll_ms, postfix_addr, redis_url);
+    let api_addr = env::var("BYOS_API_ADDR").unwrap_or_else(|_| "api:8080".into());
+    info!("outbound-worker polling every {}ms, postfix={}, redis={}, api={}", poll_ms, postfix_addr, redis_url, api_addr);
     info!("scheduled poller: filtering WHERE is_path_a = false");
 
+    // Reconcile delivered-but-pending scheduled messages on startup
+    reconcile_delivered_scheduled(&client, &api_addr).await;
+    let mut last_reconcile = Instant::now();
+
     loop {
-        if let Err(e) = poll_scheduled(&client, redis_client.as_ref()).await {
+        if last_reconcile.elapsed() >= Duration::from_secs(300) {
+            reconcile_delivered_scheduled(&client, &api_addr).await;
+            last_reconcile = Instant::now();
+        }
+        if let Err(e) = poll_scheduled(&client, &api_addr, redis_client.as_ref()).await {
             warn!("scheduled poll error: {}", e);
         }
-        if let Err(e) = poll_once(&client, &sk, &dkim_dek, &postfix_addr, redis_client.as_ref()).await {
+        if let Err(e) = poll_once(&client, &sk, &dkim_dek, &postfix_addr, &api_addr, redis_client.as_ref()).await {
             warn!("poll error: {}", e);
         }
         sleep(Duration::from_millis(poll_ms)).await;
@@ -385,14 +394,14 @@ async fn verify_least_privilege(client: &Client) {
     }
 }
 
-async fn poll_scheduled(client: &Client, redis_client: Option<&redis::Client>) -> Result<()> {
+async fn poll_scheduled(client: &Client, api_addr: &str, redis_client: Option<&redis::Client>) -> Result<()> {
     // Select pending scheduled messages ready for delivery. Use transaction with SKIP LOCKED.
     // No decryption — copy encrypted payload verbatim to outbound_queue.
     // Exclude those deferred via retry_after.
     // Path A rows (is_path_a = true) are delivered by the Go API goroutine — skip them here.
     let trans = client
         .query(
-            "SELECT id::text, delivery_id::text, mailbox_id::text, domain_id::text, recipient, encrypted_message, send_token_hpke_wrapped, outbox_seq, encryption_version, aad_version, encryption_iv, reservation_id::text, expires_at, is_path_a FROM scheduled_messages WHERE status='pending' AND is_path_a = false AND scheduled_at <= now() AND expires_at > now() AND (retry_after IS NULL OR retry_after <= now()) ORDER BY scheduled_at ASC LIMIT 10 FOR UPDATE SKIP LOCKED",
+            "SELECT sm.id::text, sm.delivery_id::text, sm.mailbox_id::text, sm.domain_id::text, sm.recipient, sm.encrypted_message, sm.send_token_hpke_wrapped, sm.outbox_seq, sm.encryption_version, sm.aad_version, sm.encryption_iv, sm.reservation_id::text, sm.expires_at, sm.is_path_a FROM scheduled_messages sm WHERE sm.status='pending' AND sm.is_path_a = false AND sm.scheduled_at <= now() AND sm.expires_at > now() AND (sm.retry_after IS NULL OR sm.retry_after <= now()) AND NOT EXISTS (SELECT 1 FROM outbound_queue oq WHERE oq.delivery_id = sm.delivery_id) ORDER BY sm.scheduled_at ASC LIMIT 10 FOR UPDATE SKIP LOCKED",
             &[],
         )
         .await
@@ -417,8 +426,8 @@ async fn poll_scheduled(client: &Client, redis_client: Option<&redis::Client>) -
         let mailbox_id: String = row.get(2);
         let domain_id: String = row.get(3);
         let recipient: String = row.get(4);
-        let encrypted_message: Vec<u8> = row.get(5);
-        let wrapped: Vec<u8> = row.get(6);
+        let encrypted_message: Option<Vec<u8>> = row.get(5);
+        let wrapped: Option<Vec<u8>> = row.get(6);
         let outbox_seq: Option<i64> = row.get(7);
         let enc_ver: Option<i32> = row.get(8);
         let aad_ver: Option<i16> = row.get(9);
@@ -433,17 +442,26 @@ async fn poll_scheduled(client: &Client, redis_client: Option<&redis::Client>) -
             continue;
         }
 
-        if outbox_seq.is_none() || enc_ver.is_none() || aad_ver.is_none() || enc_iv.is_none() || reservation_id.is_none() {
-            warn!("scheduled row {} missing V5.3 AAD/reservation, marking failed", delivery_id);
+        if encrypted_message.is_none() || wrapped.is_none() || outbox_seq.is_none() || enc_ver.is_none() || aad_ver.is_none() || enc_iv.is_none() || reservation_id.is_none() {
+            warn!("scheduled row {} missing message payload or V5.3 AAD/reservation, marking failed", delivery_id);
+            let _ = notify_scheduled_complete(
+                api_addr,
+                &delivery_id,
+                "failed",
+                Some("missing message payload or V5.3 AAD/reservation"),
+            )
+            .await;
             let _ = client
                 .execute(
-                    "UPDATE scheduled_messages SET status='failed' WHERE id=$1",
+                    "UPDATE scheduled_messages SET status='failed', updated_at=now() WHERE id=$1",
                     &[&Uuid::parse_str(&id).unwrap()],
                 )
                 .await;
             continue;
         }
 
+        let encrypted_message = encrypted_message.unwrap();
+        let wrapped = wrapped.unwrap();
         let outbox_seq = outbox_seq.unwrap();
         let enc_ver = enc_ver.unwrap();
         let aad_ver = aad_ver.unwrap();
@@ -500,47 +518,28 @@ async fn poll_scheduled(client: &Client, redis_client: Option<&redis::Client>) -
         // Insert into outbound_queue copying encrypted payload without decryption
         let insert_res = client
             .execute(
-                "INSERT INTO outbound_queue (delivery_id, mailbox_id, domain_id, recipient, encrypted_message, send_token_hpke_wrapped, outbox_seq, encryption_version, aad_version, encryption_iv, reservation_id, status, next_attempt_at, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending', now(), now() + interval '7 days') ON CONFLICT (reservation_id) DO NOTHING",
+                "INSERT INTO outbound_queue (delivery_id, mailbox_id, domain_id, recipient, encrypted_message, send_token_hpke_wrapped, outbox_seq, encryption_version, aad_version, encryption_iv, reservation_id, status, next_attempt_at, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending', now(), now() + interval '7 days') ON CONFLICT (delivery_id) DO NOTHING",
                 &[&delivery_uuid, &mailbox_uuid, &domain_uuid, &recipient, &encrypted_message, &wrapped, &outbox_seq, &enc_ver, &aad_ver, &enc_iv, &reservation_uuid],
             )
             .await;
 
         match insert_res {
             Ok(0) => {
-                // Conflict — already promoted. Mark executed if not already.
-                let _ = client
-                    .execute(
-                        "UPDATE scheduled_messages SET status='executed', sent_at=now() WHERE id=$1 AND status='pending'",
-                        &[&sched_uuid],
-                    )
-                    .await;
-                info!("scheduled {} already promoted (idempotent)", delivery_id);
+                info!("scheduled {} already promoted to outbound_queue (idempotent)", delivery_id);
                 continue;
             }
             Ok(_) => {
-                let _ = client
-                    .execute(
-                        "UPDATE scheduled_messages SET status='executed', sent_at=now() WHERE id=$1",
-                        &[&sched_uuid],
-                    )
-                    .await;
                 info!("promoted scheduled {} to outbound_queue (seq {})", delivery_id, outbox_seq);
             }
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("duplicate key") || msg.contains("23505") {
-                    let _ = client
-                        .execute(
-                            "UPDATE scheduled_messages SET status='executed', sent_at=now() WHERE id=$1 AND status='pending'",
-                            &[&sched_uuid],
-                        )
-                        .await;
                     warn!("scheduled promotion conflict {}: {}", delivery_id, msg);
                 } else {
                     warn!("scheduled promotion failed {}: {}", delivery_id, msg);
                     let _ = client
                         .execute(
-                            "UPDATE scheduled_messages SET status='failed' WHERE id=$1",
+                            "UPDATE scheduled_messages SET status='failed', updated_at=now() WHERE id=$1",
                             &[&sched_uuid],
                         )
                         .await;
@@ -551,7 +550,7 @@ async fn poll_scheduled(client: &Client, redis_client: Option<&redis::Client>) -
     Ok(())
 }
 
-async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_addr: &str, redis_client: Option<&redis::Client>) -> Result<()> {
+async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_addr: &str, api_addr: &str, redis_client: Option<&redis::Client>) -> Result<()> {
     let rows = client
         .query(
             "SELECT id::text, delivery_id::text, mailbox_id::text, domain_id::text, recipient, encrypted_message, send_token_hpke_wrapped, outbox_seq, encryption_version, aad_version, attempts, expires_at FROM outbound_queue WHERE status='pending' AND next_attempt_at <= now() AND expires_at > now() ORDER BY next_attempt_at ASC LIMIT 10 FOR UPDATE SKIP LOCKED",
@@ -733,6 +732,7 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
                 info!("delivered {} to {} via {} (dkim signed)", delivery_id, recipient, postfix_addr);
                 client.execute("UPDATE outbound_queue SET status='delivered', delivered_at=now(), attempts=attempts+1, last_attempt_at=now() WHERE id=$1", &[&Uuid::parse_str(&id).unwrap()]).await?;
                 client.execute("INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_code) VALUES ($1,'outbound',$2,$3,$4,'delivered',250)", &[&Uuid::parse_str(&delivery_id).unwrap(), &Uuid::parse_str(&mailbox_id).unwrap(), &Uuid::parse_str(&domain_id).unwrap(), &recipient]).await?;
+                notify_scheduled_complete(api_addr, &delivery_id, "delivered", None).await;
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -745,6 +745,7 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
                     client.execute("UPDATE outbound_queue SET status='bounced', failed_at=now(), attempts=attempts+1 WHERE id=$1", &[&Uuid::parse_str(&id).unwrap()]).await?;
                     client.execute("INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_message) VALUES ($1,'outbound',$2,$3,$4,'bounced',$5)", &[&Uuid::parse_str(&delivery_id).unwrap(), &Uuid::parse_str(&mailbox_id).unwrap(), &Uuid::parse_str(&domain_id).unwrap(), &recipient, &msg]).await?;
                     warn!("perm fail {}: {}", delivery_id, msg);
+                    notify_scheduled_complete(api_addr, &delivery_id, "failed", Some(&msg)).await;
                 }
             }
         }
@@ -752,4 +753,254 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
     // Silence unused warning for redis_client param if not used in recipient path
     let _ = redis_client;
     Ok(())
+}
+
+fn load_internal_api_key() -> Option<String> {
+    if let Ok(k) = env::var("INTERNAL_API_KEY") {
+        let trimmed = k.trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    let path = env::var("INTERNAL_API_KEY_FILE").unwrap_or_else(|_| "/run/secrets/internal_api_key".into());
+    if let Ok(s) = std::fs::read_to_string(&path) {
+        let trimmed = s.trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    None
+}
+
+fn format_api_url(api_addr: &str, path: &str) -> String {
+    let clean_path = path.trim_start_matches('/');
+    if api_addr.starts_with("http://") || api_addr.starts_with("https://") {
+        format!("{}/{}", api_addr.trim_end_matches('/'), clean_path)
+    } else {
+        format!("http://{}/{}", api_addr.trim_end_matches('/'), clean_path)
+    }
+}
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+fn http_client() -> reqwest::Client {
+    HTTP_CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        })
+        .clone()
+}
+
+#[derive(serde::Serialize)]
+struct ScheduledCompletePayload<'a> {
+    delivery_id: &'a str,
+    status: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_message: Option<&'a str>,
+}
+
+async fn notify_scheduled_complete_with_retries(
+    client: &reqwest::Client,
+    api_addr: &str,
+    internal_key: Option<&str>,
+    delivery_id: &str,
+    status: &str,
+    err_msg: Option<&str>,
+    max_retries: u32,
+    base_backoff: Duration,
+) -> Result<(), ()> {
+    let url = format_api_url(api_addr, "/v1/internal/scheduled/complete");
+    let payload = ScheduledCompletePayload {
+        delivery_id,
+        status,
+        error_message: err_msg,
+    };
+
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let mut req = client.post(&url).json(&payload);
+        if let Some(key) = internal_key {
+            req = req.header("X-Internal-Key", key);
+        }
+
+        match req.send().await {
+            Ok(resp) => {
+                let code = resp.status();
+                if code.is_success() {
+                    info!(
+                        "scheduled completion notified for {} (status={}, attempt={})",
+                        delivery_id, status, attempt
+                    );
+                    return Ok(());
+                } else if code.is_client_error() {
+                    let body_text = resp.text().await.unwrap_or_default();
+                    warn!(
+                        "scheduled completion rejected with client error {} for {}: {}",
+                        code, delivery_id, body_text
+                    );
+                    return Err(());
+                } else {
+                    warn!(
+                        "scheduled completion server error {} for {} on attempt {}/{}",
+                        code, delivery_id, attempt, max_retries
+                    );
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "scheduled completion network error for {} on attempt {}/{}: {}",
+                    delivery_id, attempt, max_retries, e
+                );
+            }
+        }
+
+        if attempt >= max_retries {
+            error!(
+                "SCHEDULED COMPLETION FAILED: exhausted {} retries for delivery_id={} status={}",
+                max_retries, delivery_id, status
+            );
+            return Err(());
+        }
+
+        let backoff = base_backoff * 2u32.saturating_pow(attempt - 1);
+        let backoff = backoff.min(Duration::from_secs(30));
+        sleep(backoff).await;
+    }
+}
+
+async fn notify_scheduled_complete(api_addr: &str, delivery_id: &str, status: &str, err_msg: Option<&str>) {
+    let client = http_client();
+    let key = load_internal_api_key();
+    let _ = notify_scheduled_complete_with_retries(
+        &client,
+        api_addr,
+        key.as_deref(),
+        delivery_id,
+        status,
+        err_msg,
+        4,
+        Duration::from_secs(1),
+    )
+    .await;
+}
+
+async fn reconcile_delivered_scheduled(client: &Client, api_addr: &str) {
+    let rows = match client
+        .query(
+            "SELECT sm.delivery_id::text, oq.status FROM scheduled_messages sm JOIN outbound_queue oq ON oq.delivery_id = sm.delivery_id WHERE sm.status = 'pending' AND oq.status IN ('delivered', 'bounced') LIMIT 50",
+            &[],
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("reconcile_delivered_scheduled query failed: {}", e);
+            return;
+        }
+    };
+
+    info!("scheduled reconciliation pass: checked (found {} pending completed rows)", rows.len());
+    if !rows.is_empty() {
+        for row in rows {
+            let delivery_id: String = row.get(0);
+            let oq_status: String = row.get(1);
+            let status = if oq_status == "bounced" { "failed" } else { "delivered" };
+            info!("reconciling scheduled delivery_id={} status={}", delivery_id, status);
+            notify_scheduled_complete(api_addr, &delivery_id, status, None).await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn test_completion_retries_on_5xx() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_clone = attempts.clone();
+
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let count = attempts_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                if count < 3 {
+                    let resp = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                } else {
+                    let resp = "HTTP/1.1 200 OK\r\nContent-Length: 15\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}";
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    break;
+                }
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let api_addr = format!("127.0.0.1:{}", port);
+        let res = notify_scheduled_complete_with_retries(
+            &client,
+            &api_addr,
+            Some("test-key"),
+            "test-delivery-id",
+            "delivered",
+            None,
+            4,
+            Duration::from_millis(10),
+        )
+        .await;
+
+        assert!(res.is_ok(), "expected completion to succeed on 3rd attempt");
+        assert_eq!(attempts.load(Ordering::SeqCst), 3, "expected exactly 3 attempts");
+    }
+
+    #[tokio::test]
+    async fn test_completion_does_not_retry_on_4xx() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_clone = attempts.clone();
+
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                attempts_clone.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = socket.write_all(resp.as_bytes()).await;
+                break;
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let api_addr = format!("127.0.0.1:{}", port);
+        let res = notify_scheduled_complete_with_retries(
+            &client,
+            &api_addr,
+            Some("test-key"),
+            "test-delivery-id",
+            "delivered",
+            None,
+            4,
+            Duration::from_millis(10),
+        )
+        .await;
+
+        assert!(res.is_err(), "expected completion to fail on 404");
+        assert_eq!(attempts.load(Ordering::SeqCst), 1, "expected exactly 1 attempt on 4xx");
+    }
 }

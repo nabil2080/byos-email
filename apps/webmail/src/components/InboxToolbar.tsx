@@ -592,7 +592,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                     </div>
 
                     {/* View Mode Toggle (Threads / Flat) */}
-                    <Show when={props.onToggleViewMode}>
+                    <Show when={props.onToggleViewMode && props.currentFolder !== "drafts" && props.currentFolder !== "scheduled"}>
                       <button
                         type="button"
                         onClick={props.onToggleViewMode}

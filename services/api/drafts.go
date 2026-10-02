@@ -35,7 +35,7 @@ import (
 )
 
 // draftResponse is the JSON shape for single-draft responses and list items.
-func draftResponse(id, mailboxID, subject, recipient string, envelope []byte, version int, createdAt, updatedAt time.Time) map[string]interface{} {
+func draftResponse(id, mailboxID, subject, recipient string, envelope []byte, version int, sendFailed bool, createdAt, updatedAt time.Time) map[string]interface{} {
 	return map[string]interface{}{
 		"id":                 id,
 		"mailbox_id":         mailboxID,
@@ -43,6 +43,7 @@ func draftResponse(id, mailboxID, subject, recipient string, envelope []byte, ve
 		"recipient":          recipient,
 		"encrypted_envelope": base64.StdEncoding.EncodeToString(envelope),
 		"version":            version,
+		"send_failed":        sendFailed,
 		"created_at":         createdAt.Format(time.RFC3339),
 		"updated_at":         updatedAt.Format(time.RFC3339),
 	}
@@ -121,8 +122,9 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 		var id, subject, recipient string
 		var envelope []byte
 		var version int
+		var sendFailed bool
 		var createdAt, updatedAt time.Time
-		err := conn.QueryRow(ctx, `SELECT id::text, COALESCE(subject,''), COALESCE(recipient,''), encrypted_envelope, version, created_at, updated_at FROM drafts WHERE id=$1 AND mailbox_id=$2`, draftID, mailboxID).Scan(&id, &subject, &recipient, &envelope, &version, &createdAt, &updatedAt)
+		err := conn.QueryRow(ctx, `SELECT id::text, COALESCE(subject,''), COALESCE(recipient,''), encrypted_envelope, version, send_failed, created_at, updated_at FROM drafts WHERE id=$1 AND mailbox_id=$2`, draftID, mailboxID).Scan(&id, &subject, &recipient, &envelope, &version, &sendFailed, &createdAt, &updatedAt)
 		if err != nil {
 			// Covers nonexistent IDs and IDs belonging to another mailbox
 			// (no existence leak across mailboxes).
@@ -130,7 +132,7 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, createdAt, updatedAt))
+		json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, sendFailed, createdAt, updatedAt))
 		return
 	}
 
@@ -138,7 +140,7 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		draftCreateHandler(w, r, conn, ctx, mailboxID, userID)
 	case http.MethodGet:
-		rows, err := conn.Query(ctx, `SELECT id::text, COALESCE(subject,''), COALESCE(recipient,''), encrypted_envelope, version, created_at, updated_at FROM drafts WHERE mailbox_id=$1 ORDER BY updated_at DESC, id ASC`, mailboxID)
+		rows, err := conn.Query(ctx, `SELECT id::text, COALESCE(subject,''), COALESCE(recipient,''), encrypted_envelope, version, send_failed, created_at, updated_at FROM drafts WHERE mailbox_id=$1 ORDER BY updated_at DESC, id ASC`, mailboxID)
 		if err != nil {
 			http.Error(w, "failed to list drafts", http.StatusInternalServerError)
 			return
@@ -149,11 +151,12 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 			var id, subject, recipient string
 			var envelope []byte
 			var version int
+			var sendFailed bool
 			var createdAt, updatedAt time.Time
-			if err := rows.Scan(&id, &subject, &recipient, &envelope, &version, &createdAt, &updatedAt); err != nil {
+			if err := rows.Scan(&id, &subject, &recipient, &envelope, &version, &sendFailed, &createdAt, &updatedAt); err != nil {
 				continue
 			}
-			drafts = append(drafts, draftResponse(id, mailboxID, subject, recipient, envelope, version, createdAt, updatedAt))
+			drafts = append(drafts, draftResponse(id, mailboxID, subject, recipient, envelope, version, sendFailed, createdAt, updatedAt))
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"drafts": drafts})
@@ -199,7 +202,7 @@ func draftUpdateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 	err = conn.QueryRow(ctx, `
 		UPDATE drafts
 		SET subject=$1, recipient=$2, encrypted_envelope=$3,
-		    version=version+1, updated_at=now()
+		    version=version+1, send_failed=false, updated_at=now()
 		WHERE id=$4 AND mailbox_id=$5 AND version=$6
 		RETURNING id::text, version, created_at, updated_at
 	`, subject, recipient, envelope, draftID, mailboxID, req.Version).Scan(&id, &version, &createdAt, &updatedAt)
@@ -226,8 +229,15 @@ func draftUpdateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 	var orgID string
 	_ = conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&orgID)
 	auditLog(ctx, conn, orgID, userID, "draft_update", "draft", draftID, map[string]interface{}{"mailbox_id": mailboxID, "version": version})
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.updated",
+		MailboxID:   mailboxID,
+		Folder:      "drafts",
+		MessageID:   draftID,
+		UnreadDelta: 0,
+	})
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, createdAt, updatedAt))
+	json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, false, createdAt, updatedAt))
 }
 
 func draftDeleteHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, ctx context.Context, mailboxID, userID, draftID string) {
@@ -244,6 +254,13 @@ func draftDeleteHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 	var orgID string
 	_ = conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&orgID)
 	auditLog(ctx, conn, orgID, userID, "draft_delete", "draft", deletedID, map[string]interface{}{"mailbox_id": mailboxID})
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.deleted",
+		MailboxID:   mailboxID,
+		Folder:      "drafts",
+		MessageID:   deletedID,
+		UnreadDelta: 0,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -293,7 +310,14 @@ func draftCreateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 		return
 	}
 	auditLog(ctx, conn, orgID, userID, "draft_create", "draft", draftID, map[string]interface{}{"mailbox_id": mailboxID})
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.created",
+		MailboxID:   mailboxID,
+		Folder:      "drafts",
+		MessageID:   draftID,
+		UnreadDelta: 0,
+	})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(draftResponse(draftID, mailboxID, subject, recipient, envelope, 1, createdAt, updatedAt))
+	json.NewEncoder(w).Encode(draftResponse(draftID, mailboxID, subject, recipient, envelope, 1, false, createdAt, updatedAt))
 }

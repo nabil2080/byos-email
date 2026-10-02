@@ -661,16 +661,8 @@ func main() {
 	var err error
 	defStorage, err = NewS3Storage(endpoint, accessKey, secretKey, bucket, "", true)
 	if err != nil {
-		log.Printf("Warning: failed to create default S3 storage: %v (will try per-request)", err)
-		// Fallback to mock for local dev if MinIO not reachable
-		mockRoot := os.Getenv("BYOS_GOOGLE_DRIVE_MOCK_ROOT")
-		if mockRoot == "" {
-			mockRoot = "/tmp/byos-drive-mock"
-		}
-		var mock Storage
-		mock, _ = NewMockDriveStorage(mockRoot)
-		defStorage = mock
-		// If still nil, keep nil and handle per-request
+		log.Printf("Warning: failed to create default S3 storage: %v (will resolve per-request)", err)
+		defStorage = nil
 	}
 
 	dbURL := os.Getenv("DATABASE_URL")
@@ -716,12 +708,18 @@ func main() {
 
 func (w *StorageWorker) getStorageForMailbox(ctx context.Context, mailboxID string) (Storage, string, error) {
 	if mailboxID == "" {
+		if w.defaultStorage == nil {
+			return nil, "", errors.New("default storage backend unavailable")
+		}
 		return w.defaultStorage, w.defaultBucket, nil
 	}
 	// Lookup mailbox_storage -> storage_connections
 	conn, err := pgx.Connect(ctx, w.dbURL)
 	if err != nil {
 		log.Printf("getStorageForMailbox db connect fail, fallback to default: %v", err)
+		if w.defaultStorage == nil {
+			return nil, "", fmt.Errorf("storage db connect failed and default storage unavailable: %w", err)
+		}
 		return w.defaultStorage, w.defaultBucket, nil
 	}
 	defer conn.Close(ctx)
@@ -729,6 +727,9 @@ func (w *StorageWorker) getStorageForMailbox(ctx context.Context, mailboxID stri
 	err = conn.QueryRow(ctx, `SELECT storage_connection_id::text FROM mailbox_storage WHERE mailbox_id=$1`, mailboxID).Scan(&storageConnID)
 	if err != nil {
 		// No mapping, use default
+		if w.defaultStorage == nil {
+			return nil, "", errors.New("default storage backend unavailable")
+		}
 		return w.defaultStorage, w.defaultBucket, nil
 	}
 	return w.getStorageForConnection(ctx, storageConnID)

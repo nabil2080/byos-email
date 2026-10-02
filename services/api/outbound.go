@@ -26,12 +26,15 @@ package main
 //   scheduled_e2e.ps1, rate_limit_e2e.ps1: endpoint behavior evidence.
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/mail"
 	"os"
@@ -87,10 +90,14 @@ type OutboundScheduleRequest struct {
 	EncryptionIV      string   `json:"encryption_iv"`
 	ScheduledAt       string   `json:"scheduled_at"`
 	AttachmentIDs     []string `json:"attachment_ids,omitempty"`
+	DraftEnvelope     string   `json:"draft_envelope,omitempty"`
+	DraftStorageRef   string   `json:"draft_storage_ref,omitempty"`
+	Subject           string   `json:"subject,omitempty"`
 }
 
 type OutboundScheduleResponse struct {
-	DeliveryID  string `json:"delivery_id"`
+	ID          string `json:"id"`
+	DeliveryID  string `json:"delivery_id,omitempty"`
 	ScheduledAt string `json:"scheduled_at"`
 	Status      string `json:"status"`
 }
@@ -482,10 +489,95 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to commit", http.StatusInternalServerError)
 		return
 	}
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.created",
+		MailboxID:   req.MailboxID,
+		Folder:      "sent",
+		MessageID:   deliveryID,
+		UnreadDelta: 0,
+	})
 	auditLog(ctx, conn, mailboxOrgID, userID, "outbound_send", "outbound_queue", deliveryID, map[string]interface{}{"recipient": req.Recipient})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(OutboundSendResponse{DeliveryID: deliveryID, Status: "queued"})
+}
+
+func storeScheduledDraftEnvelope(ctx context.Context, mailboxID, objectKey string, envelopeBytes []byte) error {
+	payload := map[string]interface{}{
+		"object_key": objectKey,
+		"mailbox_id": mailboxID,
+		"data":       envelopeBytes,
+		"metadata": map[string]string{
+			"mailbox_id":   mailboxID,
+			"content_type": "application/json",
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal storage payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/store", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create storage request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if k := storageInternalKey(); k != "" {
+		req.Header.Set("X-Internal-Key", k)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("storage request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("storage store failed: status %d body %s", resp.StatusCode, string(respBytes))
+	}
+	return nil
+}
+
+func retrieveScheduledDraftEnvelope(ctx context.Context, mailboxID, objectKey string) ([]byte, error) {
+	if !strings.HasPrefix(objectKey, "mailboxes/") {
+		return nil, fmt.Errorf("invalid storage key prefix: %s", objectKey)
+	}
+	payload := map[string]string{
+		"object_key": objectKey,
+		"mailbox_id": mailboxID,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal storage payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/retrieve", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create storage request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if k := storageInternalKey(); k != "" {
+		req.Header.Set("X-Internal-Key", k)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("storage request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("storage retrieve failed with status %d", resp.StatusCode)
+	}
+
+	rawBytes, _, err := decodeStorageRetrieveBody(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("decode storage body: %w", err)
+	}
+	return rawBytes, nil
 }
 
 func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
@@ -528,6 +620,14 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 	encryptedMsg, sendTokenBytes, encIV, errMsg, errStatus := validateOutboundEnvelope(sendReq)
 	if errStatus != 0 {
 		http.Error(w, errMsg, errStatus)
+		return
+	}
+	draftEnvelopeB64 := strings.TrimSpace(req.DraftEnvelope)
+	if draftEnvelopeB64 == "" {
+		draftEnvelopeB64 = strings.TrimSpace(req.DraftStorageRef)
+	}
+	if draftEnvelopeB64 == "" {
+		http.Error(w, "draft envelope or storage ref required", http.StatusBadRequest)
 		return
 	}
 	if req.ScheduledAt == "" {
@@ -609,21 +709,66 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	deliveryID := uuid.New().String()
-	sendTokenHash := sha256.Sum256(sendTokenBytes)
-	expiresAt := scheduledAt.Add(24 * time.Hour)
-	_, err = tx.Exec(ctx, `INSERT INTO scheduled_messages (mailbox_id, domain_id, recipient, encrypted_message, send_token_hpke_wrapped, send_token_hash, scheduled_at, status, delivery_id, reservation_id, outbox_seq, encryption_version, aad_version, encryption_iv, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9, $10, $11, $12, $13, $14)`, req.MailboxID, domainID, req.Recipient, encryptedMsg, sendTokenBytes, sendTokenHash[:], scheduledAt, deliveryID, req.ReservationID, req.OutboxSeq, req.EncryptionVersion, req.AADVersion, encIV, expiresAt)
-	if err != nil {
-		if isUniqueViolation(err) {
-			var existing string
-			_ = tx.QueryRow(ctx, `SELECT delivery_id::text FROM scheduled_messages WHERE reservation_id=$1`, req.ReservationID).Scan(&existing)
-			_ = tx.Commit(ctx)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(OutboundScheduleResponse{DeliveryID: existing, ScheduledAt: scheduledAt.Format(time.RFC3339), Status: "scheduled"})
+	rowID := uuid.New().String()
+	objectKey := fmt.Sprintf("mailboxes/%s/scheduled/%s.draft.enc", req.MailboxID, rowID)
+
+	if strings.HasPrefix(draftEnvelopeB64, "mailboxes/") {
+		objectKey = draftEnvelopeB64
+		log.Printf("[SCHEDULE_STEP] step=storage_upload object_key=%s mailbox_id=%s status=200 result=ok (reusing existing key)", objectKey, req.MailboxID)
+	} else {
+		envelopeBytes, decErr := base64.StdEncoding.DecodeString(draftEnvelopeB64)
+		if decErr != nil || len(envelopeBytes) == 0 {
+			log.Printf("[SCHEDULE_STEP] step=draft_decode mailbox_id=%s result=err err=%v", req.MailboxID, decErr)
+			http.Error(w, "schedule: invalid draft envelope encoding", http.StatusBadRequest)
 			return
 		}
-		http.Error(w, "failed to schedule message", http.StatusInternalServerError)
+		if err := storeScheduledDraftEnvelope(ctx, req.MailboxID, objectKey, envelopeBytes); err != nil {
+			log.Printf("[SCHEDULE_STEP] step=storage_upload object_key=%s mailbox_id=%s status=500 err=%v", objectKey, req.MailboxID, err)
+			log.Printf("[SCHEDULE_WRITE] row_id=%s mailbox_id=%s storage_key=%s error=%v", rowID, req.MailboxID, objectKey, err)
+			http.Error(w, "schedule: storage upload failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("[SCHEDULE_STEP] step=storage_upload object_key=%s mailbox_id=%s status=200 result=ok", objectKey, req.MailboxID)
+	}
+
+	sendTokenHash := sha256.Sum256(sendTokenBytes)
+	expiresAt := scheduledAt.Add(24 * time.Hour)
+	err = tx.QueryRow(ctx, `
+		INSERT INTO scheduled_messages (
+			id, mailbox_id, domain_id, recipient,
+			encrypted_message, send_token_hpke_wrapped, send_token_hash,
+			scheduled_at, send_at, status, delivery_id,
+			reservation_id, outbox_seq, encryption_version,
+			aad_version, encryption_iv, expires_at,
+			draft_storage_ref, subject
+		) VALUES (
+			$1, $2, $3, $4,
+			$5, $6, $7,
+			$8, $8, 'pending', $9,
+			$10, $11, $12,
+			$13, $14, $15,
+			$16, $17
+		) RETURNING id::text
+	`, rowID, req.MailboxID, domainID, req.Recipient,
+		encryptedMsg, sendTokenBytes, sendTokenHash[:],
+		scheduledAt, deliveryID,
+		req.ReservationID, req.OutboxSeq, req.EncryptionVersion,
+		req.AADVersion, encIV, expiresAt,
+		objectKey, req.Subject).Scan(&rowID)
+	if err != nil {
+		if isUniqueViolation(err) {
+			var existingID string
+			_ = tx.QueryRow(ctx, `SELECT id::text FROM scheduled_messages WHERE reservation_id=$1`, req.ReservationID).Scan(&existingID)
+			_ = tx.Commit(ctx)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(OutboundScheduleResponse{ID: existingID, DeliveryID: deliveryID, ScheduledAt: scheduledAt.Format(time.RFC3339), Status: "scheduled"})
+			return
+		}
+		log.Printf("[SCHEDULE_STEP] step=db_insert row_id=%s object_key=%s result=err err=%v", rowID, objectKey, err)
+		http.Error(w, "schedule: db insert failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("[SCHEDULE_STEP] step=db_insert row_id=%s object_key=%s result=ok", rowID, objectKey)
 	// Propagate attachment IDs on the schedule path, mirroring the
 	// send handler. Uses the same delivery_id-as-message_id convention (see
 	// note above) so scheduled messages list attachments consistently.
@@ -664,10 +809,18 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to commit", http.StatusInternalServerError)
 		return
 	}
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.created",
+		MailboxID:   req.MailboxID,
+		Folder:      "scheduled",
+		MessageID:   deliveryID,
+		UnreadDelta: 0,
+	})
 	auditLog(ctx, conn, mailboxOrgID, userID, "outbound_schedule", "scheduled_messages", deliveryID, map[string]interface{}{"recipient": req.Recipient})
+	log.Printf("[SCHEDULE_WRITE] row_id=%s mailbox_id=%s storage_key=%s send_at=%s", rowID, req.MailboxID, objectKey, scheduledAt.Format(time.RFC3339))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(OutboundScheduleResponse{DeliveryID: deliveryID, ScheduledAt: scheduledAt.Format(time.RFC3339), Status: "scheduled"})
+	json.NewEncoder(w).Encode(OutboundScheduleResponse{ID: rowID, DeliveryID: deliveryID, ScheduledAt: scheduledAt.Format(time.RFC3339), Status: "scheduled"})
 }
 
 func outboundScheduledCancelHandler(w http.ResponseWriter, r *http.Request) {
@@ -736,10 +889,15 @@ func outboundScheduledCancelHandler(w http.ResponseWriter, r *http.Request) {
 // OutboundSchedulePathARequest is the request body for POST /v1/outbound/schedule-path-a.
 // The client pre-seals the XWing envelope at compose time; the server stores it opaquely.
 type OutboundSchedulePathARequest struct {
-	MailboxID    string `json:"mailbox_id"`
-	Recipient    string `json:"recipient"`
-	EnvelopeJSON string `json:"envelope_json"`
-	DeliverAt    string `json:"deliver_at"` // RFC3339
+	MailboxID                 string               `json:"mailbox_id"`
+	Recipient                 string               `json:"recipient"`
+	EnvelopeJSON              string               `json:"envelope_json"`
+	DeliverAt                 string               `json:"deliver_at"` // RFC3339
+	DraftEnvelope             string               `json:"draft_envelope,omitempty"`
+	DraftStorageRef           string               `json:"draft_storage_ref,omitempty"`
+	Subject                   string               `json:"subject,omitempty"`
+	AttachmentEnvelopes       []AttachmentEnvelope `json:"attachment_envelopes,omitempty"`
+	SenderAttachmentEnvelopes []AttachmentEnvelope `json:"sender_attachment_envelopes,omitempty"`
 }
 
 type OutboundSchedulePathAResponse struct {
@@ -899,38 +1057,108 @@ func outboundSchedulePathAHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 10. INSERT into scheduled_messages with is_path_a=true
+	// 10. Process draft envelope and upload to customer storage
+	draftEnvelopeB64 := strings.TrimSpace(req.DraftEnvelope)
+	if draftEnvelopeB64 == "" {
+		draftEnvelopeB64 = strings.TrimSpace(req.DraftStorageRef)
+	}
+	if draftEnvelopeB64 == "" {
+		http.Error(w, "draft envelope or storage ref required", http.StatusBadRequest)
+		return
+	}
+
+	rowID := uuid.New().String()
+	objectKey := fmt.Sprintf("mailboxes/%s/scheduled/%s.draft.enc", req.MailboxID, rowID)
+
+	if strings.HasPrefix(draftEnvelopeB64, "mailboxes/") {
+		objectKey = draftEnvelopeB64
+		log.Printf("[SCHEDULE_STEP] step=storage_upload (path_a) object_key=%s mailbox_id=%s status=200 result=ok (reusing existing key)", objectKey, req.MailboxID)
+	} else {
+		envelopeBytes, decErr := base64.StdEncoding.DecodeString(draftEnvelopeB64)
+		if decErr != nil || len(envelopeBytes) == 0 {
+			log.Printf("[SCHEDULE_STEP] step=draft_decode (path_a) mailbox_id=%s result=err err=%v", req.MailboxID, decErr)
+			http.Error(w, "schedule: invalid draft envelope encoding", http.StatusBadRequest)
+			return
+		}
+		if err := storeScheduledDraftEnvelope(ctx, req.MailboxID, objectKey, envelopeBytes); err != nil {
+			log.Printf("[SCHEDULE_STEP] step=storage_upload (path_a) object_key=%s mailbox_id=%s status=500 err=%v", objectKey, req.MailboxID, err)
+			log.Printf("[SCHEDULE_WRITE] row_id=%s mailbox_id=%s storage_key=%s error=%v", rowID, req.MailboxID, objectKey, err)
+			http.Error(w, "schedule: storage upload failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("[SCHEDULE_STEP] step=storage_upload (path_a) object_key=%s mailbox_id=%s status=200 result=ok", objectKey, req.MailboxID)
+	}
+
+	// 11. INSERT into scheduled_messages with is_path_a=true
 	// send_token_hash must be NOT NULL per schema — use empty bytes as placeholder (no semantic use for Path A)
 	expiresAt := deliverAt.Add(7 * 24 * time.Hour)
-	var rowID string
+	attBytes := []byte("[]")
+	if len(req.AttachmentEnvelopes) > 0 {
+		var mErr error
+		attBytes, mErr = json.Marshal(req.AttachmentEnvelopes)
+		if mErr != nil {
+			http.Error(w, "schedule: invalid attachment_envelopes", http.StatusBadRequest)
+			return
+		}
+	}
+	senderAttBytes := []byte("[]")
+	if len(req.SenderAttachmentEnvelopes) > 0 {
+		var mErr error
+		senderAttBytes, mErr = json.Marshal(req.SenderAttachmentEnvelopes)
+		if mErr != nil {
+			http.Error(w, "schedule: invalid sender_attachment_envelopes", http.StatusBadRequest)
+			return
+		}
+	}
+
 	err = conn.QueryRow(ctx, `
 		INSERT INTO scheduled_messages (
+			id,
 			mailbox_id, domain_id, recipient,
 			send_token_hash,
-			scheduled_at, status,
+			scheduled_at, send_at, status,
 			expires_at,
-			is_path_a, envelope_json
+			is_path_a, envelope_json,
+			draft_storage_ref, subject,
+			attachment_envelopes, sender_attachment_envelopes
 		) VALUES (
-			$1, $2, $3,
-			$4,
-			$5, 'pending',
-			$6,
-			true, $7
+			$1,
+			$2, $3, $4,
+			$5,
+			$6, $6, 'pending',
+			$7,
+			true, $8,
+			$9, $10,
+			$11, $12
 		) RETURNING id::text
-	`, req.MailboxID, senderDomainID, cleanRecipient,
+	`, rowID, req.MailboxID, senderDomainID, cleanRecipient,
 		[]byte{}, // send_token_hash placeholder
 		deliverAt, expiresAt,
 		req.EnvelopeJSON,
+		objectKey, req.Subject,
+		attBytes, senderAttBytes,
 	).Scan(&rowID)
 	if err != nil {
-		http.Error(w, "failed to schedule message", http.StatusInternalServerError)
+		log.Printf("[SCHEDULE_STEP] step=db_insert (path_a) row_id=%s object_key=%s result=err err=%v", rowID, objectKey, err)
+		http.Error(w, "schedule: db insert failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("[SCHEDULE_STEP] step=db_insert (path_a) row_id=%s object_key=%s result=ok", rowID, objectKey)
 
 	auditLog(ctx, conn, senderOrgID, userID, "schedule_path_a", "scheduled_messages", rowID, map[string]interface{}{
 		"recipient":  cleanRecipient,
 		"deliver_at": deliverAt.Format(time.RFC3339),
 	})
+
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.created",
+		MailboxID:   req.MailboxID,
+		Folder:      "scheduled",
+		MessageID:   rowID,
+		UnreadDelta: 0,
+	})
+
+	log.Printf("[SCHEDULE_WRITE] row_id=%s mailbox_id=%s storage_key=%s send_at=%s", rowID, req.MailboxID, objectKey, deliverAt.Format(time.RFC3339))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -940,4 +1168,425 @@ func outboundSchedulePathAHandler(w http.ResponseWriter, r *http.Request) {
 		Status:      "scheduled",
 	})
 }
+
+// mailboxScheduledCancelHandler handles POST /v1/mailboxes/{mailbox_id}/scheduled/{id}/cancel
+// and DELETE /v1/mailboxes/{mailbox_id}/scheduled/{id}
+func mailboxScheduledCancelHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mailboxID := r.PathValue("mailbox_id")
+	schedID := r.PathValue("id")
+	if schedID == "" {
+		schedID = r.PathValue("scheduled_id")
+	}
+	if _, err := uuid.Parse(mailboxID); err != nil {
+		http.Error(w, "invalid mailbox_id UUID", http.StatusBadRequest)
+		return
+	}
+	if _, err := uuid.Parse(schedID); err != nil {
+		http.Error(w, "invalid id UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	// Verify mailbox belongs to user
+	var authorized string
+	if err := conn.QueryRow(ctx, `SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true`, mailboxID, userID).Scan(&authorized); err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		http.Error(w, "failed to start transaction", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var subj, rcpt, draftRef string
+	var resID *string
+	err = tx.QueryRow(ctx, `
+		SELECT COALESCE(subject, ''), recipient, COALESCE(draft_storage_ref, ''), reservation_id::text
+		FROM scheduled_messages
+		WHERE id=$1 AND mailbox_id=$2 AND status='pending'
+		FOR UPDATE
+	`, schedID, mailboxID).Scan(&subj, &rcpt, &draftRef, &resID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("[SCHEDULE_CANCEL] requested_id=%s mailbox_id=%s status=not_found found=false", schedID, mailboxID)
+			http.Error(w, "scheduled message not found or not pending", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Update scheduled_messages to cancelled
+	if _, err := tx.Exec(ctx, `UPDATE scheduled_messages SET status='cancelled', updated_at=now() WHERE id=$1 AND mailbox_id=$2`, schedID, mailboxID); err != nil {
+		http.Error(w, "failed to cancel scheduled message", http.StatusInternalServerError)
+		return
+	}
+
+	// Expire reservation if applicable
+	if resID != nil && *resID != "" {
+		_, _ = tx.Exec(ctx, `UPDATE outbound_reservations SET status='expired' WHERE reservation_id=$1`, *resID)
+	}
+
+	draftID := uuid.New().String()
+	// Retrieve encrypted envelope from customer storage and copy into drafts
+	if draftRef != "" && strings.HasPrefix(draftRef, "mailboxes/") {
+		envBytes, retErr := retrieveScheduledDraftEnvelope(ctx, mailboxID, draftRef)
+		if retErr == nil && len(envBytes) > 0 {
+			_, _ = tx.Exec(ctx, `
+				INSERT INTO drafts (id, mailbox_id, subject, recipient, encrypted_envelope, version, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, 1, now(), now())
+			`, draftID, mailboxID, subj, rcpt, envBytes)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		http.Error(w, "failed to commit cancellation", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[SCHEDULE_CANCEL] row_id=%s mailbox_id=%s draft_id=%s", schedID, mailboxID, draftID)
+
+	// Publish real-time events
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.deleted",
+		MailboxID:   mailboxID,
+		Folder:      "scheduled",
+		MessageID:   schedID,
+		UnreadDelta: 0,
+	})
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.created",
+		MailboxID:   mailboxID,
+		Folder:      "drafts",
+		MessageID:   draftID,
+		UnreadDelta: 0,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "cancelled",
+		"id":       schedID,
+		"draft_id": draftID,
+	})
+}
+
+type OutboundScheduleUpdateRequest struct {
+	ScheduledAt     string `json:"scheduled_at,omitempty"`
+	DraftEnvelope   string `json:"draft_envelope,omitempty"`
+	DraftStorageRef string `json:"draft_storage_ref,omitempty"`
+	Subject         string `json:"subject,omitempty"`
+}
+
+func mailboxScheduledUpdateHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mailboxID := r.PathValue("mailbox_id")
+	schedID := r.PathValue("id")
+	if schedID == "" {
+		schedID = r.PathValue("scheduled_id")
+	}
+	if _, err := uuid.Parse(mailboxID); err != nil {
+		http.Error(w, "invalid mailbox_id UUID", http.StatusBadRequest)
+		return
+	}
+	if _, err := uuid.Parse(schedID); err != nil {
+		http.Error(w, "invalid id UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
+	var req OutboundScheduleUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var scheduledAt *time.Time
+	if strings.TrimSpace(req.ScheduledAt) != "" {
+		t, err := time.Parse(time.RFC3339Nano, req.ScheduledAt)
+		if err != nil {
+			if t, err = time.Parse(time.RFC3339, req.ScheduledAt); err != nil {
+				http.Error(w, "scheduled_at must be RFC3339", http.StatusBadRequest)
+				return
+			}
+		}
+		now := time.Now()
+		if t.Before(now.Add(5*time.Second)) || t.After(now.Add(30*24*time.Hour)) {
+			http.Error(w, "scheduled_at must be between 5 seconds and 30 days in the future", http.StatusBadRequest)
+			return
+		}
+		scheduledAt = &t
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	var authorized string
+	if err := conn.QueryRow(ctx, `SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true`, mailboxID, userID).Scan(&authorized); err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		http.Error(w, "failed to start transaction", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var currentID, currentDraftRef string
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, COALESCE(draft_storage_ref, '')
+		FROM scheduled_messages
+		WHERE id=$1 AND mailbox_id=$2 AND status='pending'
+		FOR UPDATE
+	`, schedID, mailboxID).Scan(&currentID, &currentDraftRef)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("[SCHEDULE_UPDATE] requested_id=%s mailbox_id=%s status=not_found found=false", schedID, mailboxID)
+			http.Error(w, "scheduled message not found or not pending", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+
+	draftEnvelopeB64 := strings.TrimSpace(req.DraftEnvelope)
+	if draftEnvelopeB64 == "" && strings.TrimSpace(req.DraftStorageRef) != "" && !strings.HasPrefix(req.DraftStorageRef, "mailboxes/") {
+		draftEnvelopeB64 = strings.TrimSpace(req.DraftStorageRef)
+	}
+
+	var targetStorageRef = currentDraftRef
+	payloadChanged := false
+	reuploaded := false
+
+	if draftEnvelopeB64 != "" {
+		payloadChanged = true
+		envelopeBytes, decErr := base64.StdEncoding.DecodeString(draftEnvelopeB64)
+		if decErr != nil || len(envelopeBytes) == 0 {
+			http.Error(w, "invalid draft envelope encoding", http.StatusBadRequest)
+			return
+		}
+		if targetStorageRef == "" || !strings.HasPrefix(targetStorageRef, "mailboxes/") {
+			targetStorageRef = fmt.Sprintf("mailboxes/%s/scheduled/%s.draft.enc", mailboxID, currentID)
+		}
+		if err := storeScheduledDraftEnvelope(ctx, mailboxID, targetStorageRef, envelopeBytes); err != nil {
+			log.Printf("[SCHEDULE_UPDATE] row_id=%s mailbox_id=%s payload_changed=true reuploaded=false error=%v", currentID, mailboxID, err)
+			http.Error(w, "failed to update scheduled message in customer storage", http.StatusInternalServerError)
+			return
+		}
+		reuploaded = true
+	} else if strings.HasPrefix(req.DraftStorageRef, "mailboxes/") {
+		targetStorageRef = req.DraftStorageRef
+	}
+
+	if targetStorageRef == "" || !strings.HasPrefix(targetStorageRef, "mailboxes/") {
+		http.Error(w, "invalid or missing draft storage reference", http.StatusBadRequest)
+		return
+	}
+
+	if scheduledAt != nil {
+		expiresAt := (*scheduledAt).Add(7 * 24 * time.Hour)
+		_, err = tx.Exec(ctx, `
+			UPDATE scheduled_messages
+			SET draft_storage_ref = $1,
+			    subject = COALESCE($2, subject),
+			    scheduled_at = $3,
+			    send_at = $3,
+			    expires_at = $4,
+			    updated_at = now()
+			WHERE id = $5 AND mailbox_id = $6 AND status = 'pending'
+		`, targetStorageRef, req.Subject, *scheduledAt, expiresAt, currentID, mailboxID)
+	} else {
+		_, err = tx.Exec(ctx, `
+			UPDATE scheduled_messages
+			SET draft_storage_ref = $1,
+			    subject = COALESCE($2, subject),
+			    updated_at = now()
+			WHERE id = $3 AND mailbox_id = $4 AND status = 'pending'
+		`, targetStorageRef, req.Subject, currentID, mailboxID)
+	}
+	if err != nil {
+		http.Error(w, "failed to update scheduled message", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		http.Error(w, "failed to commit update", http.StatusInternalServerError)
+		return
+	}
+
+	sendAtStr := "unchanged"
+	if scheduledAt != nil {
+		sendAtStr = scheduledAt.Format(time.RFC3339)
+	}
+	log.Printf("[SCHEDULE_UPDATE] row_id=%s mailbox_id=%s payload_changed=%t reuploaded=%t send_at=%s status=pending", currentID, mailboxID, payloadChanged, reuploaded, sendAtStr)
+
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.updated",
+		MailboxID:   mailboxID,
+		Folder:      "scheduled",
+		MessageID:   currentID,
+		UnreadDelta: 0,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "updated",
+		"id":     currentID,
+	})
+}
+
+// mailboxScheduledGetHandler retrieves a scheduled message and its encrypted draft envelope from customer storage.
+func mailboxScheduledGetHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mailboxID := r.PathValue("mailbox_id")
+	schedID := r.PathValue("id")
+	if schedID == "" {
+		schedID = r.PathValue("scheduled_id")
+	}
+	if _, err := uuid.Parse(mailboxID); err != nil {
+		http.Error(w, "invalid mailbox_id UUID", http.StatusBadRequest)
+		return
+	}
+	if _, err := uuid.Parse(schedID); err != nil {
+		http.Error(w, "invalid id UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	var authorized string
+	if err := conn.QueryRow(ctx, `SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true`, mailboxID, userID).Scan(&authorized); err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	var draftRef string
+	var sendAt time.Time
+	var status string
+	err = conn.QueryRow(ctx, `
+		SELECT COALESCE(draft_storage_ref, ''), COALESCE(send_at, scheduled_at), status
+		FROM scheduled_messages
+		WHERE id=$1 AND mailbox_id=$2
+	`, schedID, mailboxID).Scan(&draftRef, &sendAt, &status)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "scheduled message not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+
+	if draftRef == "" || !strings.HasPrefix(draftRef, "mailboxes/") {
+		log.Printf("[SCHEDULE_RETRIEVE] row_id=%s storage_key=%s success=false error=invalid_storage_ref", schedID, draftRef)
+		http.Error(w, "scheduled message missing valid customer storage reference", http.StatusNotFound)
+		return
+	}
+
+	rawBytes, err := retrieveScheduledDraftEnvelope(ctx, mailboxID, draftRef)
+	if err != nil {
+		log.Printf("[SCHEDULE_RETRIEVE] row_id=%s storage_key=%s success=false error=%v", schedID, draftRef, err)
+		http.Error(w, "failed to retrieve scheduled draft from customer storage", http.StatusBadGateway)
+		return
+	}
+
+	log.Printf("[SCHEDULE_RETRIEVE] row_id=%s storage_key=%s success=true", schedID, draftRef)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":                 schedID,
+		"mailbox_id":         mailboxID,
+		"draft_storage_ref":  draftRef,
+		"encrypted_envelope": base64.StdEncoding.EncodeToString(rawBytes),
+		"send_at":            sendAt.Format(time.RFC3339),
+		"status":             status,
+	})
+}
+
+// mailboxScheduledItemHandler handles GET, DELETE, and PUT/POST for scheduled items.
+func mailboxScheduledItemHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		mailboxScheduledGetHandler(w, r)
+		return
+	}
+	if r.Method == http.MethodDelete {
+		mailboxScheduledCancelHandler(w, r)
+		return
+	}
+	if r.Method == http.MethodPut || r.Method == http.MethodPost {
+		mailboxScheduledUpdateHandler(w, r)
+		return
+	}
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+// mailboxScheduledListHandler routes to messagesHandler with folder=scheduled.
+func mailboxScheduledListHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query()
+	q.Set("folder", "scheduled")
+	r.URL.RawQuery = q.Encode()
+	messagesHandler(w, r)
+}
+
 

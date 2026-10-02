@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -64,10 +65,11 @@ func TestSchedulePathAStoresEnvelope(t *testing.T) {
 
 	deliverAt := time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)
 	body := map[string]string{
-		"mailbox_id":    senderMailboxID,
-		"recipient":     recipientEmail,
-		"envelope_json": vec.EnvelopeJSON,
-		"deliver_at":    deliverAt,
+		"mailbox_id":        senderMailboxID,
+		"recipient":         recipientEmail,
+		"envelope_json":     vec.EnvelopeJSON,
+		"deliver_at":        deliverAt,
+		"draft_storage_ref": "mailboxes/" + senderMailboxID + "/scheduled/test.draft.enc",
 	}
 	bodyJSON, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/v1/outbound/schedule-path-a", strings.NewReader(string(bodyJSON)))
@@ -207,24 +209,27 @@ func TestScheduledPathADelivery(t *testing.T) {
 	// Insert a row that is due right now (scheduled_at in the past)
 	scheduledAt := time.Now().Add(-1 * time.Second)
 	expiresAt := time.Now().Add(7 * 24 * time.Hour)
-	var rowID string
-	err = conn.QueryRow(ctx, `
+	rowID := uuid.New().String()
+	_, err = conn.Exec(ctx, `
 		INSERT INTO scheduled_messages (
-			mailbox_id, domain_id, recipient,
+			id, mailbox_id, domain_id, recipient,
 			send_token_hash,
 			scheduled_at, status,
 			expires_at,
-			is_path_a, envelope_json
+			is_path_a, envelope_json,
+			draft_storage_ref
 		) VALUES (
-			$1, $2, $3,
+			$1, $2, $3, $4,
 			decode('', 'hex'),
-			$4, 'pending',
-			$5,
-			true, $6
-		) RETURNING id::text
-	`, senderMailboxID, senderDomainID, recipientEmail,
+			$5, 'pending',
+			$6,
+			true, $7,
+			$8
+		)
+	`, rowID, senderMailboxID, senderDomainID, recipientEmail,
 		scheduledAt, expiresAt, vec.EnvelopeJSON,
-	).Scan(&rowID)
+		"mailboxes/"+senderMailboxID+"/scheduled/"+rowID+".draft.enc",
+	)
 	if err != nil {
 		t.Fatalf("insert scheduled row: %v", err)
 	}
@@ -239,14 +244,14 @@ func TestScheduledPathADelivery(t *testing.T) {
 		t.Fatalf("processPathAScheduled: %v", err)
 	}
 
-	// Check the row is now 'executed'
+	// Check the row is now 'sent'
 	var status string
 	err = conn.QueryRow(ctx, `SELECT status FROM scheduled_messages WHERE id = $1`, rowID).Scan(&status)
 	if err != nil {
 		t.Fatalf("query scheduled_messages status: %v", err)
 	}
-	if status != "executed" {
-		t.Errorf("expected status=executed, got %q", status)
+	if status != "sent" {
+		t.Errorf("expected status=sent, got %q", status)
 	}
 
 	// Check the recipient got a message
@@ -260,6 +265,19 @@ func TestScheduledPathADelivery(t *testing.T) {
 	}
 	if msgCount == 0 {
 		t.Error("expected at least 1 message in recipient mailbox with HPKE-XWing-AES256GCM-v1")
+	}
+
+	// Check the sender got a sent copy in Sent folder
+	var sentCount int
+	err = conn.QueryRow(ctx, `
+		SELECT count(*) FROM message_metadata
+		WHERE mailbox_id = $1 AND folder = 'sent' AND direction = 'sent'
+	`, senderMailboxID).Scan(&sentCount)
+	if err != nil {
+		t.Fatalf("query sender sent copy: %v", err)
+	}
+	if sentCount == 0 {
+		t.Error("expected sent copy for sender in message_metadata with folder='sent'")
 	}
 }
 
@@ -287,18 +305,21 @@ func TestRustWorkerSkipsPathARows(t *testing.T) {
 
 	scheduledAt := time.Now().Add(-1 * time.Second)
 	expiresAt := time.Now().Add(7 * 24 * time.Hour)
-	var rowID string
-	err = conn.QueryRow(ctx, `
+	rowID := uuid.New().String()
+	_, err = conn.Exec(ctx, `
 		INSERT INTO scheduled_messages (
-			mailbox_id, domain_id, recipient, send_token_hash,
-			scheduled_at, status, expires_at, is_path_a, envelope_json
+			id, mailbox_id, domain_id, recipient, send_token_hash,
+			scheduled_at, status, expires_at, is_path_a, envelope_json,
+			draft_storage_ref
 		) VALUES (
-			$1, $2, $3, decode('', 'hex'),
-			$4, 'pending', $5, true, $6
-		) RETURNING id::text
-	`, senderMailboxID, senderDomainID, recipientEmail,
+			$1, $2, $3, $4, decode('', 'hex'),
+			$5, 'pending', $6, true, $7,
+			$8
+		)
+	`, rowID, senderMailboxID, senderDomainID, recipientEmail,
 		scheduledAt, expiresAt, vec.EnvelopeJSON,
-	).Scan(&rowID)
+		"mailboxes/"+senderMailboxID+"/scheduled/"+rowID+".draft.enc",
+	)
 	if err != nil {
 		t.Fatalf("insert path a row: %v", err)
 	}
@@ -331,5 +352,281 @@ func TestRustWorkerSkipsPathARows(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("Path A goroutine query (is_path_a=true) should select this row, got count=%d", count)
+	}
+}
+
+// TestScheduledPathAAttachmentPreserved verifies that attachments on scheduled Path A
+// messages are stored in scheduled_messages and preserved on the recipient's message_metadata.
+func TestScheduledPathAAttachmentPreserved(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	vec := loadSignedVector(t)
+	_, senderMailboxID, _, recipientMailboxID, _ := setupInternalDeliveryTest(t, db, vec)
+	_, storage := setupAttachmentMockStorage(t)
+
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, testDSN)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	recipientEmail, err := recipientAddrFromMailboxID(ctx, conn, recipientMailboxID)
+	if err != nil {
+		t.Fatalf("lookup recipient addr: %v", err)
+	}
+
+	var senderDomainID string
+	err = conn.QueryRow(ctx, `SELECT domain_id::text FROM mailboxes WHERE id = $1`, senderMailboxID).Scan(&senderDomainID)
+	if err != nil {
+		t.Fatalf("lookup sender domain: %v", err)
+	}
+
+	_, _ = conn.Exec(ctx, "DELETE FROM scheduled_messages WHERE is_path_a = true")
+	_, _ = conn.Exec(ctx, "DELETE FROM message_metadata WHERE mailbox_id IN ($1, $2)", recipientMailboxID, senderMailboxID)
+
+	attID := uuid.New().String()
+	chunkBytes := []byte("scheduled_attachment_payload_100kb")
+	recAtt, senderAtt := createTestAttachmentEnvelopes(senderMailboxID, attID, "contract.pdf", chunkBytes, storage)
+	recAttJSON, _ := json.Marshal([]AttachmentEnvelope{recAtt})
+	senderAttJSON, _ := json.Marshal([]AttachmentEnvelope{senderAtt})
+
+	scheduledAt := time.Now().Add(-1 * time.Second)
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	rowID := uuid.New().String()
+	_, err = conn.Exec(ctx, `
+		INSERT INTO scheduled_messages (
+			id, mailbox_id, domain_id, recipient,
+			send_token_hash, scheduled_at, status, expires_at,
+			is_path_a, envelope_json, draft_storage_ref,
+			attachment_envelopes, sender_attachment_envelopes
+		) VALUES (
+			$1, $2, $3, $4,
+			decode('', 'hex'), $5, 'pending', $6,
+			true, $7, $8,
+			$9, $10
+		)
+	`, rowID, senderMailboxID, senderDomainID, recipientEmail,
+		scheduledAt, expiresAt, vec.EnvelopeJSON,
+		"mailboxes/"+senderMailboxID+"/scheduled/"+rowID+".draft.enc",
+		recAttJSON, senderAttJSON,
+	)
+	if err != nil {
+		t.Fatalf("insert scheduled row: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = conn.Exec(context.Background(), "DELETE FROM scheduled_messages WHERE id = $1", rowID)
+		_, _ = conn.Exec(context.Background(), "DELETE FROM message_metadata WHERE mailbox_id IN ($1, $2)", recipientMailboxID, senderMailboxID)
+	})
+
+	if err := processPathAScheduled(ctx, testDSN); err != nil {
+		t.Fatalf("processPathAScheduled: %v", err)
+	}
+
+	// Verify recipient message metadata
+	var hasAtt bool
+	var attCount int
+	var storedEnvsJSON []byte
+	err = conn.QueryRow(ctx, `
+		SELECT has_attachments, attachment_count, attachment_envelopes
+		FROM message_metadata
+		WHERE mailbox_id = $1 AND wrapped_key_algorithm = 'HPKE-XWing-AES256GCM-v1'
+		ORDER BY received_at DESC LIMIT 1
+	`, recipientMailboxID).Scan(&hasAtt, &attCount, &storedEnvsJSON)
+	if err != nil {
+		t.Fatalf("query recipient message_metadata: %v", err)
+	}
+	if !hasAtt {
+		t.Error("expected has_attachments=true for recipient")
+	}
+	if attCount != 1 {
+		t.Errorf("expected attachment_count=1, got %d", attCount)
+	}
+	var storedEnvs []AttachmentEnvelope
+	if err := json.Unmarshal(storedEnvsJSON, &storedEnvs); err != nil {
+		t.Fatalf("unmarshal recipient attachment envelopes: %v", err)
+	}
+	if len(storedEnvs) != 1 || storedEnvs[0].Filename != "contract.pdf" {
+		t.Errorf("expected recipient attachment contract.pdf, got %+v", storedEnvs)
+	}
+}
+
+// TestScheduledPathAAttachmentSentCopy verifies that the sender Sent folder copy retains
+// the sender's attachment envelopes when a scheduled Path A message executes.
+func TestScheduledPathAAttachmentSentCopy(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	vec := loadSignedVector(t)
+	_, senderMailboxID, _, recipientMailboxID, _ := setupInternalDeliveryTest(t, db, vec)
+	_, storage := setupAttachmentMockStorage(t)
+
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, testDSN)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	recipientEmail, err := recipientAddrFromMailboxID(ctx, conn, recipientMailboxID)
+	if err != nil {
+		t.Fatalf("lookup recipient addr: %v", err)
+	}
+
+	var senderDomainID string
+	err = conn.QueryRow(ctx, `SELECT domain_id::text FROM mailboxes WHERE id = $1`, senderMailboxID).Scan(&senderDomainID)
+	if err != nil {
+		t.Fatalf("lookup sender domain: %v", err)
+	}
+
+	_, _ = conn.Exec(ctx, "DELETE FROM scheduled_messages WHERE is_path_a = true")
+	_, _ = conn.Exec(ctx, "DELETE FROM message_metadata WHERE mailbox_id IN ($1, $2)", recipientMailboxID, senderMailboxID)
+
+	attID := uuid.New().String()
+	chunkBytes := []byte("sent_copy_test_attachment")
+	recAtt, senderAtt := createTestAttachmentEnvelopes(senderMailboxID, attID, "invoice.pdf", chunkBytes, storage)
+	recAttJSON, _ := json.Marshal([]AttachmentEnvelope{recAtt})
+	senderAttJSON, _ := json.Marshal([]AttachmentEnvelope{senderAtt})
+
+	scheduledAt := time.Now().Add(-1 * time.Second)
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	rowID := uuid.New().String()
+	_, err = conn.Exec(ctx, `
+		INSERT INTO scheduled_messages (
+			id, mailbox_id, domain_id, recipient,
+			send_token_hash, scheduled_at, status, expires_at,
+			is_path_a, envelope_json, draft_storage_ref,
+			attachment_envelopes, sender_attachment_envelopes
+		) VALUES (
+			$1, $2, $3, $4,
+			decode('', 'hex'), $5, 'pending', $6,
+			true, $7, $8,
+			$9, $10
+		)
+	`, rowID, senderMailboxID, senderDomainID, recipientEmail,
+		scheduledAt, expiresAt, vec.EnvelopeJSON,
+		"mailboxes/"+senderMailboxID+"/scheduled/"+rowID+".draft.enc",
+		recAttJSON, senderAttJSON,
+	)
+	if err != nil {
+		t.Fatalf("insert scheduled row: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = conn.Exec(context.Background(), "DELETE FROM scheduled_messages WHERE id = $1", rowID)
+		_, _ = conn.Exec(context.Background(), "DELETE FROM message_metadata WHERE mailbox_id IN ($1, $2)", recipientMailboxID, senderMailboxID)
+	})
+
+	if err := processPathAScheduled(ctx, testDSN); err != nil {
+		t.Fatalf("processPathAScheduled: %v", err)
+	}
+
+	// Verify sender Sent copy
+	var senderHasAtt bool
+	var senderAttCount int
+	var senderEnvsJSON []byte
+	err = conn.QueryRow(ctx, `
+		SELECT has_attachments, attachment_count, attachment_envelopes
+		FROM message_metadata
+		WHERE mailbox_id = $1 AND folder = 'sent' AND direction = 'sent'
+		ORDER BY sent_at DESC LIMIT 1
+	`, senderMailboxID).Scan(&senderHasAtt, &senderAttCount, &senderEnvsJSON)
+	if err != nil {
+		t.Fatalf("query sender sent copy message_metadata: %v", err)
+	}
+	if !senderHasAtt {
+		t.Error("expected has_attachments=true on sender sent copy")
+	}
+	if senderAttCount != 1 {
+		t.Errorf("expected sender attachment_count=1, got %d", senderAttCount)
+	}
+	var senderEnvs []AttachmentEnvelope
+	if err := json.Unmarshal(senderEnvsJSON, &senderEnvs); err != nil {
+		t.Fatalf("unmarshal sender sent attachment envelopes: %v", err)
+	}
+	if len(senderEnvs) != 1 || senderEnvs[0].Filename != "invoice.pdf" {
+		t.Errorf("expected sender attachment invoice.pdf, got %+v", senderEnvs)
+	}
+}
+
+// TestScheduledPathANoAttachmentStillWorks tests regression when a scheduled Path A
+// message is delivered without any attachments.
+func TestScheduledPathANoAttachmentStillWorks(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	vec := loadSignedVector(t)
+	_, senderMailboxID, _, recipientMailboxID, _ := setupInternalDeliveryTest(t, db, vec)
+	setupMockStorageServer(t)
+
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, testDSN)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	recipientEmail, err := recipientAddrFromMailboxID(ctx, conn, recipientMailboxID)
+	if err != nil {
+		t.Fatalf("lookup recipient addr: %v", err)
+	}
+
+	var senderDomainID string
+	err = conn.QueryRow(ctx, `SELECT domain_id::text FROM mailboxes WHERE id = $1`, senderMailboxID).Scan(&senderDomainID)
+	if err != nil {
+		t.Fatalf("lookup sender domain: %v", err)
+	}
+
+	_, _ = conn.Exec(ctx, "DELETE FROM scheduled_messages WHERE is_path_a = true")
+	_, _ = conn.Exec(ctx, "DELETE FROM message_metadata WHERE mailbox_id IN ($1, $2)", recipientMailboxID, senderMailboxID)
+
+	scheduledAt := time.Now().Add(-1 * time.Second)
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	rowID := uuid.New().String()
+	_, err = conn.Exec(ctx, `
+		INSERT INTO scheduled_messages (
+			id, mailbox_id, domain_id, recipient,
+			send_token_hash, scheduled_at, status, expires_at,
+			is_path_a, envelope_json, draft_storage_ref,
+			attachment_envelopes, sender_attachment_envelopes
+		) VALUES (
+			$1, $2, $3, $4,
+			decode('', 'hex'), $5, 'pending', $6,
+			true, $7, $8,
+			'[]'::jsonb, '[]'::jsonb
+		)
+	`, rowID, senderMailboxID, senderDomainID, recipientEmail,
+		scheduledAt, expiresAt, vec.EnvelopeJSON,
+		"mailboxes/"+senderMailboxID+"/scheduled/"+rowID+".draft.enc",
+	)
+	if err != nil {
+		t.Fatalf("insert scheduled row: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = conn.Exec(context.Background(), "DELETE FROM scheduled_messages WHERE id = $1", rowID)
+		_, _ = conn.Exec(context.Background(), "DELETE FROM message_metadata WHERE mailbox_id IN ($1, $2)", recipientMailboxID, senderMailboxID)
+	})
+
+	if err := processPathAScheduled(ctx, testDSN); err != nil {
+		t.Fatalf("processPathAScheduled: %v", err)
+	}
+
+	// Verify recipient received message
+	var hasAtt bool
+	var attCount int
+	err = conn.QueryRow(ctx, `
+		SELECT has_attachments, attachment_count
+		FROM message_metadata
+		WHERE mailbox_id = $1 AND wrapped_key_algorithm = 'HPKE-XWing-AES256GCM-v1'
+		ORDER BY received_at DESC LIMIT 1
+	`, recipientMailboxID).Scan(&hasAtt, &attCount)
+	if err != nil {
+		t.Fatalf("query recipient message_metadata: %v", err)
+	}
+	if hasAtt {
+		t.Error("expected has_attachments=false for message with no attachments")
+	}
+	if attCount != 0 {
+		t.Errorf("expected attachment_count=0, got %d", attCount)
 	}
 }

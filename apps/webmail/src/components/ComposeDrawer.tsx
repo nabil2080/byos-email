@@ -1,4 +1,4 @@
-import { Component, createSignal, For, Show } from "solid-js";
+import { Component, createSignal, createEffect, For, Show } from "solid-js";
 import { AttachmentItem } from "../api";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { RichTextEditor } from "./RichTextEditor";
@@ -35,8 +35,22 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
   const [drawerMode, setDrawerMode] = createSignal<DrawerMode>("docked");
   const [showScheduleInput, setShowScheduleInput] = createSignal(false);
 
-  // Hidden file input ref
+  // Input refs
+  let toInputRef: HTMLInputElement | undefined;
+  let subjectInputRef: HTMLInputElement | undefined;
   let fileInputRef: HTMLInputElement | undefined;
+
+  createEffect(() => {
+    if (toInputRef && toInputRef.value !== props.to) {
+      toInputRef.value = props.to;
+    }
+  });
+
+  createEffect(() => {
+    if (subjectInputRef && subjectInputRef.value !== props.subject) {
+      subjectInputRef.value = props.subject;
+    }
+  });
 
   function toggleMinimize(e?: Event) {
     e?.stopPropagation();
@@ -172,6 +186,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                 </label>
                 <input
                   id="composeToInput"
+                  ref={toInputRef}
                   type="email"
                   placeholder="recipient@example.com"
                   value={props.to}
@@ -188,6 +203,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                 </label>
                 <input
                   id="composeSubjectInput"
+                  ref={subjectInputRef}
                   type="text"
                   placeholder="Message subject"
                   value={props.subject}
@@ -198,7 +214,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
               </div>
 
               {/* Scheduled Send Bar (optional toggle) */}
-              <Show when={showScheduleInput()}>
+              <Show when={showScheduleInput() || Boolean(props.scheduledTime)}>
                 <div class="flex items-center gap-2 text-xs border-t border-[#E2DFD8]/60 dark:border-[#2E3138] pt-2 bg-amber-50/70 dark:bg-amber-950/40 -mx-4 px-4 py-2">
                   <span class="w-16 text-amber-900 dark:text-amber-200 font-medium">Schedule:</span>
                   <input

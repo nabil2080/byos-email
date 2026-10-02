@@ -65,6 +65,21 @@ select:disabled {
   cursor: not-allowed !important;
 }
 
+/* Ensure inputs, textareas, and autofill respect active theme palette */
+input, textarea, select {
+  color: inherit;
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover, 
+input:-webkit-autofill:focus, 
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--text-main) !important;
+  -webkit-box-shadow: 0 0 0 1000px var(--surface-card) inset !important;
+  box-shadow: 0 0 0 1000px var(--surface-card) inset !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
 
 /* Custom minimal scrollbar */
 .custom-scrollbar::-webkit-scrollbar {

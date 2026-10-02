@@ -2,13 +2,14 @@ import { Component, Show, For, createEffect } from "solid-js";
 import { ThreadSummary, MailboxLabel } from "../api";
 import { DisplayMessage } from "./MessageList";
 import { ProfileAvatar } from "./ProfileAvatar";
-import { formatSmartDate } from "./MessageRow";
+import { formatSmartDate, formatAddress, getDisplayParty, getDisplayPartyEmail } from "./MessageRow";
+import { Folder } from "./Sidebar";
 
 export function formatParticipants(parts: string[]): string {
   if (!parts || parts.length === 0) return "(no sender)";
-  if (parts.length === 1) return parts[0];
-  if (parts.length === 2) return parts.join(", ");
-  return `${parts[0]}, ${parts[1]} +${parts.length - 2}`;
+  if (parts.length === 1) return formatAddress(parts[0]);
+  if (parts.length === 2) return `${formatAddress(parts[0])}, ${formatAddress(parts[1])}`;
+  return `${formatAddress(parts[0])}, ${formatAddress(parts[1])} +${parts.length - 2}`;
 }
 
 export function getUnreadClass(unreadCount: number): string {
@@ -29,6 +30,8 @@ export interface ThreadRowProps {
   selectedIds?: Set<string>;
   onToggleThreadCheck?: (threadId: string, checked: boolean) => void;
   targetMessage?: DisplayMessage;
+  latestMessage?: DisplayMessage;
+  currentFolder?: Folder;
   labels?: MailboxLabel[];
   onToggleStarred?: (msg: DisplayMessage) => void;
   onToggleRead?: (msg: DisplayMessage) => void;
@@ -49,8 +52,12 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
     return hasAny && !isAllChecked();
   };
 
-  const isUnread = () =>
-    props.targetMessage ? !props.targetMessage.read : props.thread.unread_count > 0;
+  const isSent = () => (props.currentFolder || props.thread.folder) === "sent";
+
+  const isUnread = () => {
+    if (isSent()) return false;
+    return props.targetMessage ? !props.targetMessage.read : props.thread.unread_count > 0;
+  };
 
   const densityPadding = () => {
     if (props.density === "compact") return props.isSplit ? "py-2 px-3" : "py-1.5 px-3";
@@ -59,6 +66,42 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
   };
 
   const participantLabel = () => formatParticipants(props.thread.participants);
+
+  const threadLatestMsg = () => props.latestMessage || props.targetMessage;
+
+  const displayParty = () => {
+    if (isSent()) {
+      if (props.thread.recipients && props.thread.recipients.length > 0) {
+        return getDisplayParty(
+          { recipients: props.thread.recipients } as DisplayMessage,
+          "sent"
+        );
+      }
+      const msg = threadLatestMsg();
+      if (msg) {
+        return getDisplayParty(msg, "sent");
+      }
+    }
+    return participantLabel();
+  };
+
+  const avatarEmail = () => {
+    if (isSent()) {
+      if (props.thread.recipients && props.thread.recipients.length > 0) {
+        return getDisplayPartyEmail(
+          { recipients: props.thread.recipients } as DisplayMessage,
+          "sent"
+        );
+      }
+      const msg = threadLatestMsg();
+      if (msg) {
+        return getDisplayPartyEmail(msg, "sent");
+      }
+    }
+    return props.thread.participants && props.thread.participants.length > 0
+      ? props.thread.participants[0]
+      : "";
+  };
 
   return (
     <div
@@ -72,7 +115,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
         }
       }}
       aria-expanded={props.expanded}
-      aria-label={`Thread with ${participantLabel()}, ${props.thread.message_count} messages, ${props.subject || "No subject"}`}
+      aria-label={`Thread with ${displayParty()}, ${props.thread.message_count} messages, ${props.subject || "No subject"}`}
       class={`group relative cursor-pointer border-b border-[#E2DFD8]/60 dark:border-[#2A2D35] transition-all select-none min-w-0 overflow-hidden focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${densityPadding()} ${
         props.isSelected || props.expanded
           ? "bg-[#F3ECE8] dark:bg-[#2D2522] border-l-4 border-l-[#A27561]"
@@ -147,13 +190,13 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
 
             {/* Sender / Participants cluster */}
             <div class="w-28 sm:w-48 md:w-56 min-w-0 flex-shrink-0 flex items-center gap-2 truncate">
-              <Show when={props.thread.participants && props.thread.participants.length > 0}>
-                <ProfileAvatar email={props.thread.participants[0]} size="xs" />
+              <Show when={avatarEmail()}>
+                <ProfileAvatar email={avatarEmail()} size="xs" />
               </Show>
               <span
                 class={`truncate font-sans text-sm ${isUnread() ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]" : "font-normal text-[#6F7173] dark:text-[#8A8E94]"}`}
               >
-                {participantLabel()}
+                {displayParty()}
               </span>
               <Show when={props.thread.message_count > 1}>
                 <span class="text-[11px] font-mono font-medium px-1.5 py-0.2 rounded-full bg-[#F0EEE9] dark:bg-[#2E3138] text-[#6F7173] dark:text-[#A1A1AA] flex-shrink-0">
@@ -171,11 +214,11 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                     return (
                       <Show when={lbl()}>
                         <span
-                          class="text-[10px] font-semibold text-white px-2 py-0.5 rounded-full shadow-2xs truncate max-w-[90px]"
+                          class="text-[10px] font-semibold text-white px-2 py-0.5 rounded-full shadow-2xs truncate max-w-[140px]"
                           style={{ "background-color": lbl()!.color }}
-                          title={lbl()!.name}
+                          title={lbl()!.path || lbl()!.name}
                         >
-                          {lbl()!.name}
+                          {lbl()!.path || lbl()!.name}
                         </span>
                       </Show>
                     );
@@ -344,13 +387,13 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                   title="Unread"
                 ></span>
               </Show>
-              <Show when={props.thread.participants && props.thread.participants.length > 0}>
-                <ProfileAvatar email={props.thread.participants[0]} size="xs" />
+              <Show when={avatarEmail()}>
+                <ProfileAvatar email={avatarEmail()} size="xs" />
               </Show>
               <span
                 class={`truncate font-sans text-sm ${isUnread() ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]" : "font-normal text-[#6F7173] dark:text-[#8A8E94]"}`}
               >
-                {participantLabel()}
+                {displayParty()}
               </span>
               <Show when={props.thread.message_count > 1}>
                 <span class="text-[11px] font-mono font-medium px-1.5 py-0.2 rounded-full bg-[#F0EEE9] dark:bg-[#2E3138] text-[#6F7173] dark:text-[#A1A1AA] flex-shrink-0">
@@ -445,11 +488,11 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                     return (
                       <Show when={lbl()}>
                         <span
-                          class="text-[9px] font-semibold text-white px-1.5 py-0.2 rounded-full shadow-2xs truncate max-w-[65px]"
+                          class="text-[9px] font-semibold text-white px-1.5 py-0.2 rounded-full shadow-2xs truncate max-w-[110px]"
                           style={{ "background-color": lbl()!.color }}
-                          title={lbl()!.name}
+                          title={lbl()!.path || lbl()!.name}
                         >
-                          {lbl()!.name}
+                          {lbl()!.path || lbl()!.name}
                         </span>
                       </Show>
                     );

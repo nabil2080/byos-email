@@ -16,14 +16,14 @@ import (
 
 func setupAdminTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	connStr := os.Getenv("SUPPORT_DB_URL")
+	connStr := os.Getenv("DATABASE_URL")
 	if connStr == "" {
-		connStr = "postgres://role_support_agent:support_crm_password@localhost:5432/byos"
+		connStr = "postgres://byos:byos_dev_password@localhost:5432/byos"
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, connStr)
 	if err != nil {
-		t.Fatalf("failed to connect to support db: %v", err)
+		t.Fatalf("failed to connect to test db: %v", err)
 	}
 	return pool
 }
@@ -161,13 +161,20 @@ func TestAdminAdjustCapacityLimits(t *testing.T) {
 }
 
 func TestAdminZeroKnowledgeIsolation(t *testing.T) {
-	pool := setupAdminTestPool(t)
-	defer pool.Close()
+	connStr := os.Getenv("SUPPORT_DB_URL")
+	if connStr == "" {
+		connStr = "postgres://role_support_agent:support_crm_password@localhost:5432/byos"
+	}
 	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, connStr)
+	if err != nil {
+		t.Fatalf("failed to connect to support db: %v", err)
+	}
+	defer pool.Close()
 
 	// role_support_agent must NEVER have access to org_recovery_pk
 	var pk []byte
-	err := pool.QueryRow(ctx, `SELECT org_recovery_pk FROM organizations LIMIT 1`).Scan(&pk)
+	err = pool.QueryRow(ctx, `SELECT org_recovery_pk FROM organizations LIMIT 1`).Scan(&pk)
 	if err == nil {
 		t.Fatalf("CRITICAL SECURITY VIOLATION: role_support_agent was able to SELECT org_recovery_pk!")
 	}

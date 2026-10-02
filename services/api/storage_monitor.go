@@ -81,7 +81,7 @@ func runStorageHealthCheck() {
 			log.Printf("storage health monitor row failed: %v", err)
 			continue
 		}
-		if ciphertext == "" || ciphertext == "mock_seed" {
+		if ciphertext == "" {
 			continue
 		}
 		connections = append(connections, storageConnection{id: id, provider: provider, ciphertext: ciphertext})

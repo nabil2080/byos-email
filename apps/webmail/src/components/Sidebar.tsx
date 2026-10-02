@@ -1,7 +1,13 @@
-import { Component, Show, For, createSignal, onMount, onCleanup } from "solid-js";
+import { Component, Show, For, createSignal, createEffect, onMount, onCleanup } from "solid-js";
 import { StorageStatusPill } from "./StorageStatusPill";
 import { UserMe, Mailbox, ConnectedAccount, MailboxFolder, MailboxLabel } from "../api";
 import { AccountSwitcher } from "./AccountSwitcher";
+import {
+  buildLabelTree,
+  flattenVisibleLabelTree,
+  loadExpandedLabels,
+  saveExpandedLabels,
+} from "../utils/nested_labels";
 
 export type Folder = "inbox" | "sent" | "scheduled" | "drafts" | "snoozed" | "archive" | "spam" | "trash";
 
@@ -32,6 +38,8 @@ interface SidebarProps {
   onSelectLabel?: (label: MailboxLabel) => void;
   onOpenCreateLabel?: () => void;
   onEditLabel?: (label: MailboxLabel) => void;
+  onNewSublabel?: (parentLabel: MailboxLabel) => void;
+  onChangeParent?: (label: MailboxLabel) => void;
   onDeleteLabel?: (label: MailboxLabel) => void;
   onMoveMessages?: (messageIds: string[], folderOrId: string) => void;
   onAttachLabel?: (messageIds: string[], labelId: string) => void;
@@ -48,6 +56,34 @@ export const Sidebar: Component<SidebarProps> = (props) => {
   const [dragOverTarget, setDragOverTarget] = createSignal<string | null>(null);
   const [openFolderMenuId, setOpenFolderMenuId] = createSignal<string | null>(null);
   const [openLabelMenuId, setOpenLabelMenuId] = createSignal<string | null>(null);
+  const [expandedLabelIds, setExpandedLabelIds] = createSignal<Set<string>>(new Set());
+
+  // Load expanded labels on mount or mailbox change
+  createEffect(() => {
+    const boxId = props.selectedMailbox?.id;
+    if (boxId) {
+      setExpandedLabelIds(loadExpandedLabels(boxId));
+    }
+  });
+
+  function toggleExpandLabel(labelId: string) {
+    const boxId = props.selectedMailbox?.id;
+    setExpandedLabelIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(labelId)) {
+        next.delete(labelId);
+      } else {
+        next.add(labelId);
+      }
+      if (boxId) {
+        saveExpandedLabels(boxId, next);
+      }
+      return next;
+    });
+  }
+
+  const labelTree = () => buildLabelTree(props.labels || []);
+  const visibleLabels = () => flattenVisibleLabelTree(labelTree(), expandedLabelIds());
 
   onMount(() => {
     const handleGlobalClick = () => {
@@ -462,48 +498,107 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               </svg>
             </button>
           </div>
-          <div class="space-y-0.5 mt-0.5">
-            <For each={props.labels || []}>
-              {(l) => {
-                const isActive = () => props.activeLabelId === l.id;
-                const isDropTarget = () => dragOverTarget() === l.id;
+          <div class="space-y-0.5 mt-0.5" role="tree" aria-label="Labels">
+            <For each={visibleLabels()}>
+              {(node) => {
+                const isActive = () => props.activeLabelId === node.label.id;
+                const isDropTarget = () => dragOverTarget() === node.label.id;
                 return (
                   <div
+                    tabIndex={0}
+                    role="treeitem"
+                    aria-expanded={node.hasChildren ? node.isExpanded : undefined}
+                    aria-label={`${node.label.name}${node.hasChildren ? (node.isExpanded ? ", expanded" : ", collapsed") : ""}`}
                     onClick={() => {
-                      props.onSelectLabel?.(l);
+                      props.onSelectLabel?.(node.label);
                       props.onCloseMobile?.();
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setOpenLabelMenuId(openLabelMenuId() === node.label.id ? null : node.label.id);
+                      setOpenFolderMenuId(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        props.onSelectLabel?.(node.label);
+                        props.onCloseMobile?.();
+                      } else if (e.key === "ArrowRight") {
+                        if (node.hasChildren && !node.isExpanded) {
+                          e.preventDefault();
+                          toggleExpandLabel(node.label.id);
+                        }
+                      } else if (e.key === "ArrowLeft") {
+                        if (node.hasChildren && node.isExpanded) {
+                          e.preventDefault();
+                          toggleExpandLabel(node.label.id);
+                        }
+                      }
                     }}
                     onDragOver={(e) => {
                       e.preventDefault();
                       if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-                      setDragOverTarget(l.id);
+                      setDragOverTarget(node.label.id);
                     }}
                     onDragLeave={() => {
-                      if (dragOverTarget() === l.id) setDragOverTarget(null);
+                      if (dragOverTarget() === node.label.id) setDragOverTarget(null);
                     }}
-                    onDrop={(e) => handleDrop(e, l.id, true)}
-                    class={`group relative w-full flex items-center justify-between px-2.5 py-2 md:py-1.5 min-h-[38px] text-xs rounded-xl transition-all cursor-pointer ${
+                    onDrop={(e) => handleDrop(e, node.label.id, true)}
+                    style={{ "padding-left": `${node.depth * 12 + 6}px` }}
+                    class={`group relative w-full flex items-center justify-between pr-2.5 py-1.5 min-h-[36px] text-xs rounded-xl transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
                       isDropTarget()
-                        ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
+                        ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#9E725F] border-dashed rounded-xl scale-[1.02]"
                         : isActive()
-                        ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold"
+                        ? "bg-[#F2E8E2] text-[#9E725F] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold"
                         : "text-[#3C3D3E] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
                     }`}
                   >
-                    <div class="flex items-center gap-2 truncate min-w-0 flex-1">
+                    <div class="flex items-center gap-1.5 truncate min-w-0 flex-1">
+                      {/* Chevron or Spacer */}
+                      <Show
+                        when={node.hasChildren}
+                        fallback={<span class="w-4 h-4 flex-shrink-0" />}
+                      >
+                        <button
+                          type="button"
+                          aria-label={node.isExpanded ? "Collapse" : "Expand"}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleExpandLabel(node.label.id);
+                          }}
+                          class="w-4 h-4 flex items-center justify-center rounded hover:bg-black/10 dark:hover:bg-white/10 transition-transform duration-150 cursor-pointer flex-shrink-0 text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6]"
+                          style={{
+                            transform: node.isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                          }}
+                        >
+                          <svg class="w-3 h-3 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                            <polyline points="9 18 15 12 9 6" />
+                          </svg>
+                        </button>
+                      </Show>
+
+                      {/* Color Dot */}
                       <span
                         class="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                        style={{ "background-color": l.color }}
+                        style={{ "background-color": node.label.color }}
                       />
-                      <span class="truncate">{l.name}</span>
+                      <span class="truncate" title={node.label.path || node.label.name}>
+                        {node.label.name}
+                      </span>
                     </div>
 
                     <div class="flex items-center gap-1 flex-shrink-0">
-                      <Show when={props.labelCounts && (props.labelCounts[l.id] || 0) > 0}>
-                        <span class={`text-xs font-mono px-1.5 py-0.2 rounded ${
-                          isActive() ? "text-[#A27561] dark:text-[#D4A38F] font-semibold" : "text-[#6F7173] dark:text-[#808288]"
-                        }`}>
-                          {props.labelCounts![l.id]}
+                      {/* Unread badge: sum of own + descendants */}
+                      <Show when={props.labelCounts && (props.labelCounts[node.label.id] || 0) > 0}>
+                        <span
+                          class={`text-xs font-mono px-1.5 py-0.2 rounded ${
+                            isActive()
+                              ? "text-[#9E725F] dark:text-[#D4A38F] font-semibold"
+                              : "text-[#6F7173] dark:text-[#808288]"
+                          }`}
+                        >
+                          {props.labelCounts![node.label.id]}
                         </span>
                       </Show>
 
@@ -513,11 +608,11 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            setOpenLabelMenuId(openLabelMenuId() === l.id ? null : l.id);
+                            setOpenLabelMenuId(openLabelMenuId() === node.label.id ? null : node.label.id);
                             setOpenFolderMenuId(null);
                           }}
                           class={`p-1 rounded text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer ${
-                            openLabelMenuId() === l.id ? "opacity-100" : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                            openLabelMenuId() === node.label.id ? "opacity-100" : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                           }`}
                           title="Label options"
                         >
@@ -528,26 +623,46 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                           </svg>
                         </button>
 
-                        <Show when={openLabelMenuId() === l.id}>
+                        <Show when={openLabelMenuId() === node.label.id}>
                           <div
-                            class="absolute right-0 top-full mt-1 w-24 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] shadow-lg py-1 z-30 text-xs font-sans"
+                            class="absolute right-0 top-full mt-1 w-32 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] shadow-lg py-1 z-30 text-xs font-sans"
                             onClick={(e) => e.stopPropagation()}
                           >
                             <button
                               type="button"
                               onClick={() => {
                                 setOpenLabelMenuId(null);
-                                props.onEditLabel?.(l);
+                                props.onEditLabel?.(node.label);
                               }}
-                              class="w-full text-left px-3 py-1.5 hover:bg-[#F3ECE8] dark:hover:bg-[#2A2522] text-[#3C3D3E] dark:text-[#ECEBE8] hover:text-[#A27561] dark:hover:text-[#D4A38F] transition cursor-pointer"
+                              class="w-full text-left px-3 py-1.5 hover:bg-[#F3ECE8] dark:hover:bg-[#2A2522] text-[#3C3D3E] dark:text-[#ECEBE8] hover:text-[#9E725F] dark:hover:text-[#D4A38F] transition cursor-pointer"
                             >
-                              Edit
+                              Rename
                             </button>
                             <button
                               type="button"
                               onClick={() => {
                                 setOpenLabelMenuId(null);
-                                props.onDeleteLabel?.(l);
+                                props.onNewSublabel?.(node.label);
+                              }}
+                              class="w-full text-left px-3 py-1.5 hover:bg-[#F3ECE8] dark:hover:bg-[#2A2522] text-[#3C3D3E] dark:text-[#ECEBE8] hover:text-[#9E725F] dark:hover:text-[#D4A38F] transition cursor-pointer"
+                            >
+                              New sublabel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenLabelMenuId(null);
+                                props.onChangeParent?.(node.label);
+                              }}
+                              class="w-full text-left px-3 py-1.5 hover:bg-[#F3ECE8] dark:hover:bg-[#2A2522] text-[#3C3D3E] dark:text-[#ECEBE8] hover:text-[#9E725F] dark:hover:text-[#D4A38F] transition cursor-pointer"
+                            >
+                              Change parent
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenLabelMenuId(null);
+                                props.onDeleteLabel?.(node.label);
                               }}
                               class="w-full text-left px-3 py-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 transition cursor-pointer"
                             >

@@ -34,11 +34,11 @@ func TestScheduledFolderQuery(t *testing.T) {
 	futureTime1 := time.Now().Add(1 * time.Hour)
 	_, err = conn.Exec(ctx, `
 		INSERT INTO scheduled_messages (
-			id, mailbox_id, domain_id, recipient, scheduled_at, status, expires_at, is_path_a, send_token_hash, envelope_json
+			id, mailbox_id, domain_id, recipient, scheduled_at, status, expires_at, is_path_a, send_token_hash, envelope_json, draft_storage_ref
 		) VALUES (
-			$1, $2, $3, $4, $5, 'pending', $6, true, decode('', 'hex'), '{"v":1}'
+			$1, $2, $3, $4, $5, 'pending', $6, true, decode('', 'hex'), '{"v":1}', $7
 		)
-	`, idFuture1, mailboxID, domainID, rcpt1, futureTime1, futureTime1.Add(24*time.Hour))
+	`, idFuture1, mailboxID, domainID, rcpt1, futureTime1, futureTime1.Add(24*time.Hour), fmt.Sprintf("mailboxes/%s/scheduled/%s.draft.enc", mailboxID, idFuture1))
 	if err != nil {
 		t.Fatalf("insert scheduled future 1: %v", err)
 	}
@@ -49,40 +49,39 @@ func TestScheduledFolderQuery(t *testing.T) {
 	futureTime2 := time.Now().Add(2 * time.Hour)
 	_, err = conn.Exec(ctx, `
 		INSERT INTO scheduled_messages (
-			id, mailbox_id, domain_id, recipient, scheduled_at, status, expires_at, is_path_a, send_token_hash, envelope_json
+			id, mailbox_id, domain_id, recipient, scheduled_at, status, expires_at, is_path_a, send_token_hash, envelope_json, draft_storage_ref
 		) VALUES (
-			$1, $2, $3, $4, $5, 'pending', $6, false, decode('', 'hex'), '{"v":1}'
+			$1, $2, $3, $4, $5, 'pending', $6, false, decode('', 'hex'), '{"v":1}', $7
 		)
-	`, idFuture2, mailboxID, domainID, rcpt2, futureTime2, futureTime2.Add(24*time.Hour))
+	`, idFuture2, mailboxID, domainID, rcpt2, futureTime2, futureTime2.Add(24*time.Hour), fmt.Sprintf("mailboxes/%s/scheduled/%s.draft.enc", mailboxID, idFuture2))
 	if err != nil {
 		t.Fatalf("insert scheduled future 2: %v", err)
 	}
 
-	// 3. Executed message (should NOT appear)
-	idExecuted := uuid.New().String()
+	// 3. Sent message (should NOT appear)
+	idSent := uuid.New().String()
 	_, err = conn.Exec(ctx, `
 		INSERT INTO scheduled_messages (
-			id, mailbox_id, domain_id, recipient, scheduled_at, status, expires_at, is_path_a, send_token_hash, envelope_json
+			id, mailbox_id, domain_id, recipient, scheduled_at, status, expires_at, is_path_a, send_token_hash, envelope_json, draft_storage_ref
 		) VALUES (
-			$1, $2, $3, 'exec@test.local', $4, 'executed', $5, true, decode('', 'hex'), '{"v":1}'
+			$1, $2, $3, 'sent@test.local', $4, 'sent', $5, true, decode('', 'hex'), '{"v":1}', $6
 		)
-	`, idExecuted, mailboxID, domainID, futureTime1, futureTime1.Add(24*time.Hour))
+	`, idSent, mailboxID, domainID, futureTime1, futureTime1.Add(24*time.Hour), fmt.Sprintf("mailboxes/%s/scheduled/%s.draft.enc", mailboxID, idSent))
 	if err != nil {
-		t.Fatalf("insert scheduled executed: %v", err)
+		t.Fatalf("insert scheduled sent: %v", err)
 	}
 
-	// 4. Past-due message (scheduled_at <= now() -> should NOT appear)
-	idPast := uuid.New().String()
-	pastTime := time.Now().Add(-1 * time.Hour)
+	// 4. Failed message (status = 'failed' -> should NOT appear, moved to drafts)
+	idFailed := uuid.New().String()
 	_, err = conn.Exec(ctx, `
 		INSERT INTO scheduled_messages (
-			id, mailbox_id, domain_id, recipient, scheduled_at, status, expires_at, is_path_a, send_token_hash, envelope_json
+			id, mailbox_id, domain_id, recipient, scheduled_at, status, expires_at, is_path_a, send_token_hash, envelope_json, draft_storage_ref
 		) VALUES (
-			$1, $2, $3, 'past@test.local', $4, 'pending', $5, true, decode('', 'hex'), '{"v":1}'
+			$1, $2, $3, 'failed@test.local', $4, 'failed', $5, true, decode('', 'hex'), '{"v":1}', $6
 		)
-	`, idPast, mailboxID, domainID, pastTime, time.Now().Add(24*time.Hour))
+	`, idFailed, mailboxID, domainID, futureTime1, futureTime1.Add(24*time.Hour), fmt.Sprintf("mailboxes/%s/scheduled/%s.draft.enc", mailboxID, idFailed))
 	if err != nil {
-		t.Fatalf("insert scheduled past: %v", err)
+		t.Fatalf("insert scheduled failed: %v", err)
 	}
 
 	// Cleanup at the end

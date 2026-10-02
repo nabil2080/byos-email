@@ -4,11 +4,14 @@ import { MailboxLabel } from "../api";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { AttachmentBadge } from "./AttachmentBadge";
 
+import { Folder } from "./Sidebar";
+
 interface MessageRowProps {
   message: DisplayMessage;
   isSelected: boolean;
   isChecked: boolean;
   isSplit: boolean;
+  currentFolder?: Folder;
   density?: "compact" | "cozy" | "comfortable";
   selectedIds?: Set<string>;
   onSelect: (msg: DisplayMessage) => void;
@@ -19,6 +22,67 @@ interface MessageRowProps {
   onTrash: (msg: DisplayMessage) => void;
   onDeleteForever?: (msg: DisplayMessage) => void;
   labels?: MailboxLabel[];
+}
+
+export function formatAddress(raw: string): string {
+  if (!raw) return "";
+  const trimmed = raw.trim();
+  const match = trimmed.match(/^["']?([^"'<]+)["']?\s*<([^>]+)>/);
+  if (match && match[1].trim()) {
+    return match[1].trim();
+  }
+  const angleMatch = trimmed.match(/^<([^>]+)>$/);
+  if (angleMatch && angleMatch[1].trim()) {
+    return angleMatch[1].trim();
+  }
+  return trimmed;
+}
+
+export function getDisplayParty(message: DisplayMessage, folder?: Folder): string {
+  const currentFolder = folder || message.folder;
+  if (currentFolder === "sent" || currentFolder === "drafts" || currentFolder === "scheduled") {
+    let recipients: string[] = [];
+    if (message.recipients && message.recipients.length > 0) {
+      recipients = message.recipients
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0 && r.toLowerCase() !== "(no recipient)" && r.toLowerCase() !== "no recipient");
+    } else if (message.recipient && message.recipient.trim()) {
+      recipients = message.recipient
+        .split(",")
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0 && r.toLowerCase() !== "(no recipient)" && r.toLowerCase() !== "no recipient");
+    }
+    if (recipients.length === 0) {
+      return currentFolder === "drafts" ? "No recipient" : "(no recipient)";
+    }
+    const first = formatAddress(recipients[0]);
+    return recipients.length > 1 ? `${first} +${recipients.length - 1}` : first;
+  }
+  return formatAddress(message.sender);
+}
+
+export function getDisplayPartyEmail(message: DisplayMessage, folder?: Folder): string {
+  const currentFolder = folder || message.folder;
+  if (currentFolder === "sent" || currentFolder === "drafts" || currentFolder === "scheduled") {
+    let recipients: string[] = [];
+    if (message.recipients && message.recipients.length > 0) {
+      recipients = message.recipients
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0 && r.toLowerCase() !== "(no recipient)" && r.toLowerCase() !== "no recipient");
+    } else if (message.recipient && message.recipient.trim()) {
+      recipients = message.recipient
+        .split(",")
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0 && r.toLowerCase() !== "(no recipient)" && r.toLowerCase() !== "no recipient");
+    }
+    if (recipients.length > 0) {
+      const match = recipients[0].match(/<([^>]+)>/);
+      return match ? match[1].trim() : recipients[0].trim();
+    }
+    return "";
+  }
+  const match = message.sender ? message.sender.match(/<([^>]+)>/) : null;
+  return match ? match[1].trim() : (message.sender || "").trim();
 }
 
 export function formatSmartDate(
@@ -52,7 +116,14 @@ export function formatSmartDate(
   return d.toLocaleDateString(lang, { month: "short", day: "numeric", year: "2-digit" });
 }
 
+import { formatScheduledChip } from "../utils/dateTime";
+
 export const MessageRow: Component<MessageRowProps> = (props) => {
+  const isSent = () => (props.currentFolder || props.message.folder) === "sent";
+  const isUnread = () => !props.message.read && !isSent();
+  const partyLabel = () => getDisplayParty(props.message, props.currentFolder);
+  const partyEmail = () => getDisplayPartyEmail(props.message, props.currentFolder);
+
   const densityPadding = () => {
     if (props.density === "compact") return props.isSplit ? "py-2 px-3" : "py-1.5 px-3";
     if (props.density === "comfortable") return props.isSplit ? "py-3 px-4" : "py-3 px-4";
@@ -60,8 +131,10 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
   };
 
   const formattedDate = () => {
-    const d = formatSmartDate(props.message.date);
-    return props.message.folder === "scheduled" ? `Sends ${d}` : d;
+    if (props.message.folder === "scheduled") {
+      return formatScheduledChip(props.message.scheduledAt || props.message.date, props.message.status);
+    }
+    return formatSmartDate(props.message.date);
   };
 
   const handleDragStart = (e: DragEvent) => {
@@ -162,7 +235,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
 
             {/* Unread Indicator Dot */}
             <Show
-              when={!props.message.read}
+              when={isUnread()}
               fallback={<span class="w-1.5 h-1.5 flex-shrink-0"></span>}
             >
               <span
@@ -171,17 +244,17 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
               ></span>
             </Show>
 
-            {/* Sender (or To: for scheduled) Column with ProfileAvatar */}
+            {/* Display Party Column with ProfileAvatar */}
             <div class="w-28 sm:w-48 md:w-56 min-w-0 flex-shrink-0 flex items-center gap-2 truncate">
-              <ProfileAvatar email={props.message.folder === "scheduled" ? props.message.recipient : props.message.sender} size="xs" />
+              <ProfileAvatar email={partyEmail()} size="xs" />
               <span
                 class={`truncate font-sans text-sm ${
-                  props.message.read
-                    ? "font-normal text-[#878A8E] dark:text-[#8A8E94]"
-                    : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                  isUnread()
+                    ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                    : "font-normal text-[#878A8E] dark:text-[#8A8E94]"
                 }`}
               >
-                {props.message.folder === "scheduled" ? props.message.recipient : props.message.sender}
+                {partyLabel()}
               </span>
             </div>
 
@@ -194,11 +267,11 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     return (
                       <Show when={lbl()}>
                         <span
-                          class="text-[10px] font-semibold text-white px-2 py-0.5 rounded-full shadow-2xs truncate max-w-[90px]"
+                          class="text-[10px] font-semibold text-white px-2 py-0.5 rounded-full shadow-2xs truncate max-w-[140px]"
                           style={{ "background-color": lbl()!.color }}
-                          title={lbl()!.name}
+                          title={lbl()!.path || lbl()!.name}
                         >
-                          {lbl()!.name}
+                          {lbl()!.path || lbl()!.name}
                         </span>
                       </Show>
                     );
@@ -208,15 +281,25 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
             </Show>
 
             {/* Streamlined Subject Line */}
-            <div class="flex-1 min-w-0 overflow-hidden text-sm">
+            <div class="flex-1 min-w-0 overflow-hidden text-sm flex items-center gap-2">
+              <Show when={props.message.sendFailed}>
+                <span class="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900/60 px-1.5 py-0.5 rounded flex-shrink-0">
+                  <svg class="w-2.5 h-2.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  Send failed
+                </span>
+              </Show>
               <span
                 class={`truncate block ${
-                  props.message.read
-                    ? "font-normal text-[#2B2C2D] dark:text-[#E2DFD8]"
-                    : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                  isUnread()
+                    ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                    : "font-normal text-[#2B2C2D] dark:text-[#E2DFD8]"
                 }`}
               >
-                {props.message.subject || (props.message.folder === "scheduled" ? "(scheduled)" : "(No subject)")}
+                {props.message.subject || "(no subject)"}
               </span>
             </div>
 
@@ -373,7 +456,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
 
               {/* Unread Dot */}
               <Show
-                when={!props.message.read}
+                when={isUnread()}
                 fallback={<span class="w-1.5 h-1.5 flex-shrink-0"></span>}
               >
                 <span
@@ -382,17 +465,17 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                 ></span>
               </Show>
 
-              {/* Sender with ProfileAvatar */}
+              {/* Display Party with ProfileAvatar */}
               <div class="flex items-center gap-1.5 min-w-0 flex-1 truncate">
-                <ProfileAvatar email={props.message.folder === "scheduled" ? props.message.recipient : props.message.sender} size="xs" />
+                <ProfileAvatar email={partyEmail()} size="xs" />
                 <span
                   class={`truncate min-w-0 font-sans text-sm ${
-                    props.message.read
-                      ? "font-normal text-[#878A8E] dark:text-[#8A8E94]"
-                      : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                    isUnread()
+                      ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                      : "font-normal text-[#878A8E] dark:text-[#8A8E94]"
                   }`}
                 >
-                  {props.message.folder === "scheduled" ? props.message.recipient : props.message.sender}
+                  {partyLabel()}
                 </span>
               </div>
             </div>
@@ -496,11 +579,11 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                       return (
                         <Show when={lbl()}>
                           <span
-                            class="text-[9px] font-semibold text-white px-1.5 py-0.2 rounded-full shadow-2xs truncate max-w-[65px]"
+                            class="text-[9px] font-semibold text-white px-1.5 py-0.2 rounded-full shadow-2xs truncate max-w-[110px]"
                             style={{ "background-color": lbl()!.color }}
-                            title={lbl()!.name}
+                            title={lbl()!.path || lbl()!.name}
                           >
-                            {lbl()!.name}
+                            {lbl()!.path || lbl()!.name}
                           </span>
                         </Show>
                       );
@@ -508,14 +591,19 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                   </For>
                 </div>
               </Show>
+              <Show when={props.message.sendFailed}>
+                <span class="inline-flex items-center gap-1 text-[9px] font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900/60 px-1.5 py-0.2 rounded flex-shrink-0">
+                  Send failed
+                </span>
+              </Show>
               <span
                 class={`truncate min-w-0 text-[13px] flex-1 ${
-                  props.message.read
-                    ? "font-normal text-[#2B2C2D] dark:text-[#E2DFD8]"
-                    : "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                  isUnread()
+                    ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                    : "font-normal text-[#2B2C2D] dark:text-[#E2DFD8]"
                 }`}
               >
-                {props.message.subject || (props.message.folder === "scheduled" ? "(scheduled)" : "(No subject)")}
+                {props.message.subject || "(no subject)"}
               </span>
             </div>
             <Show when={props.message.hasAttachments || (props.message.attachmentCount && props.message.attachmentCount > 0)}>

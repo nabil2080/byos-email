@@ -401,17 +401,42 @@ export async function decryptPathAEnvelope(
   recipientXWingSeed: Uint8Array,
   deps?: PathAReadDeps,
 ): Promise<PathADecryptResult> {
-  const wasm = deps?.wasm ?? (await import("./generated/crypto-core/byos_crypto_core.js"));
+  // Input validation
+  if (!recipientXWingSeed || recipientXWingSeed.length !== 32) {
+    throw new Error(
+      "Failed to decrypt end-to-end message: key unwrap: recipient X-Wing seed is missing or invalid length",
+    );
+  }
+  if (!envelopeJson || !envelopeJson.trim()) {
+    throw new Error(
+      "Failed to decrypt end-to-end message: envelope parse: envelope JSON is empty",
+    );
+  }
+
   const recipientSeedHex = bytesToHex(recipientXWingSeed);
+  const wasm = deps?.wasm ?? (await import("./generated/crypto-core/byos_crypto_core.js"));
 
   // 1. Decrypt
   let plaintextHex: string;
   try {
     plaintextHex = wasm.wasm_open_xwing_envelope(recipientSeedHex, envelopeJson);
-  } catch (e) {
-    throw new Error(
-      `Failed to decrypt end-to-end message: ${e instanceof Error ? e.message : "unknown"}`,
-    );
+  } catch (e: unknown) {
+    const rawMsg =
+      e instanceof Error
+        ? e.message
+        : typeof e === "string"
+        ? e
+        : JSON.stringify(e) || String(e);
+    const step =
+      rawMsg.includes("Format") ||
+      rawMsg.includes("Json") ||
+      rawMsg.includes("Base64") ||
+      rawMsg.includes("syntax")
+        ? "envelope parse"
+        : rawMsg.includes("KeyLength") || rawMsg.includes("NonceLength")
+        ? "key unwrap"
+        : "content decrypt";
+    throw new Error(`Failed to decrypt end-to-end message: ${step}: ${rawMsg}`);
   }
   const plaintext = new TextDecoder().decode(hexToBytes(plaintextHex));
 

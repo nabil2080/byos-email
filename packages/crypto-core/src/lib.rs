@@ -1601,6 +1601,8 @@ pub fn wasm_seal_xwing_envelope(
 ///   4. Signs AAD || ciphertext with the sender's Ed25519 seed
 ///   5. Marshals to canonical JSON with a populated sig field
 ///
+/// Canonical form is AAD || ciphertext (raw bytes). Attachment envelopes are excluded from message envelope signature.
+///
 /// The recipient's public key must be 1216 bytes. The sender's signing 
 /// seed must be 32 bytes.
 #[wasm_bindgen]

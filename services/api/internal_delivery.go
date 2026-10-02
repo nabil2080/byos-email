@@ -19,11 +19,36 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+type AttachmentWrappedKey struct {
+	X25519Encapsulated string `json:"x25519_encapsulated"`
+	MLKEMEncryptedKey  string `json:"mlkem_encrypted_key"`
+}
+
+type AttachmentChunk struct {
+	Index      int    `json:"index"`
+	StorageRef string `json:"storage_ref"`
+	SizeBytes  int64  `json:"size_bytes"`
+}
+
+type AttachmentEnvelope struct {
+	AttachmentID      string               `json:"attachment_id"`
+	Filename          string               `json:"filename"`
+	MimeType          string               `json:"mime_type"`
+	SizeBytes         int64                `json:"size_bytes"`
+	IV                string               `json:"iv"`
+	WrappedKey        AttachmentWrappedKey `json:"wrapped_key"`
+	ContentHashSHA256 string               `json:"content_hash_sha256"`
+	ChunkCount        int                  `json:"chunk_count"`
+	Chunks            []AttachmentChunk    `json:"chunks"`
+}
+
 type InternalSendRequest struct {
-	EnvelopeJSON       string `json:"envelope_json"`
-	SenderEnvelopeJSON string `json:"sender_envelope_json,omitempty"`
-	Recipient          string `json:"recipient"`
-	SenderMailboxID    string `json:"sender_mailbox_id"`
+	EnvelopeJSON              string               `json:"envelope_json"`
+	SenderEnvelopeJSON        string               `json:"sender_envelope_json,omitempty"`
+	Recipient                 string               `json:"recipient"`
+	SenderMailboxID           string               `json:"sender_mailbox_id"`
+	AttachmentEnvelopes       []AttachmentEnvelope `json:"attachment_envelopes,omitempty"`
+	SenderAttachmentEnvelopes []AttachmentEnvelope `json:"sender_attachment_envelopes,omitempty"`
 }
 
 type InternalSendResponse struct {
@@ -81,6 +106,148 @@ func storeInternalEnvelope(ctx context.Context, mailboxID, objectKey string, mes
 	return nil
 }
 
+func checkChunkStorageExists(ctx context.Context, mailboxID, storageRef string) error {
+	payload, err := json.Marshal(map[string]string{
+		"object_key": storageRef,
+		"mailbox_id": mailboxID,
+	})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/head", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if k := storageInternalKey(); k != "" {
+		req.Header.Set("X-Internal-Key", k)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("storage request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("chunk not found: %s", storageRef)
+	}
+	return nil
+}
+
+
+// createSentMessageCopy writes an encrypted sent copy into customer storage and records
+// it in message_metadata under the Sent folder. Used by both internalSendHandler and scheduled delivery.
+func createSentMessageCopy(
+	ctx context.Context,
+	tx pgx.Tx,
+	senderMailboxID, senderDomainID string,
+	senderEmail, recipient string,
+	envelopeBytes []byte,
+	keyEpoch, version int,
+	wrappedKeyAlg string,
+	idempotencyKey string,
+	attachmentEnvelopes []AttachmentEnvelope,
+) (messageID string, storageObjectID string, err error) {
+	if len(envelopeBytes) == 0 {
+		return "", "", errors.New("envelope bytes empty")
+	}
+
+	var senderDeliveryIdentity [32]byte
+	if idempotencyKey != "" {
+		senderDeliveryIdentity = sha256.Sum256([]byte("sent_copy:" + senderMailboxID + ":" + idempotencyKey))
+	} else {
+		senderDeliveryIdentity = sha256.Sum256(envelopeBytes)
+	}
+
+	// Idempotency check: see if a sent copy with this delivery_identity already exists
+	var existingID string
+	var existingStorageID string
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, storage_object_id
+		FROM message_metadata
+		WHERE mailbox_id = $1 AND delivery_identity = $2
+	`, senderMailboxID, senderDeliveryIdentity[:]).Scan(&existingID, &existingStorageID)
+	if err == nil {
+		return existingID, existingStorageID, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return "", "", fmt.Errorf("idempotency check: %w", err)
+	}
+
+	// Allocate sender sequence
+	var senderMessageSeq int64
+	if err := tx.QueryRow(ctx, "SELECT nextval('mailbox_message_seq')").Scan(&senderMessageSeq); err != nil {
+		return "", "", fmt.Errorf("sequence allocation: %w", err)
+	}
+
+	senderStorageObjectID := fmt.Sprintf("mailboxes/%s/%020d.eml.enc", senderMailboxID, senderMessageSeq)
+
+	if err := storeInternalEnvelope(ctx, senderMailboxID, senderStorageObjectID, senderMessageSeq, envelopeBytes); err != nil {
+		return "", "", fmt.Errorf("store envelope: %w", err)
+	}
+
+	if wrappedKeyAlg == "" {
+		wrappedKeyAlg = "HPKE-XWing-AES256GCM-v1"
+	}
+	if keyEpoch == 0 {
+		keyEpoch = 1
+	}
+	if version == 0 {
+		version = 1
+	}
+
+	hasAttachments := len(attachmentEnvelopes) > 0
+	attCount := len(attachmentEnvelopes)
+	var attBytes []byte
+	if hasAttachments {
+		attBytes, err = json.Marshal(attachmentEnvelopes)
+		if err != nil {
+			return "", "", fmt.Errorf("marshal attachment envelopes: %w", err)
+		}
+	} else {
+		attBytes = []byte("[]")
+	}
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO message_metadata (
+			mailbox_id, domain_id, message_seq, direction, folder, delivery_identity,
+			sender, recipients, has_attachments, attachment_count,
+			storage_object_id, content_key_hpke_wrapped,
+			mailbox_sk_version, encryption_version, encryption_iv, aad_version,
+			bundle_hash, status, wrapped_key_algorithm, is_read, sent_at,
+			attachment_envelopes, sender_attachment_envelopes
+		) VALUES (
+			$1, $2, $3, 'sent', 'sent', $4,
+			$5, $6, $7, $8,
+			$9, $10,
+			$11, $12, $13, $14,
+			$15, 'sent', $16, true, now(),
+			$17, $17
+		) RETURNING id::text
+	`,
+		senderMailboxID, senderDomainID, senderMessageSeq, senderDeliveryIdentity[:],
+		senderEmail, []string{recipient},
+		hasAttachments, attCount,
+		senderStorageObjectID, []byte{},
+		keyEpoch, version, []byte{}, 1,
+		senderDeliveryIdentity[:],
+		wrappedKeyAlg, attBytes,
+	).Scan(&messageID)
+	if err != nil {
+		if reErr := tx.QueryRow(ctx, `
+			SELECT id::text, storage_object_id
+			FROM message_metadata
+			WHERE mailbox_id = $1 AND delivery_identity = $2
+		`, senderMailboxID, senderDeliveryIdentity[:]).Scan(&existingID, &existingStorageID); reErr == nil {
+			return existingID, existingStorageID, nil
+		}
+		return "", "", fmt.Errorf("insert message_metadata: %w", err)
+	}
+
+	return messageID, senderStorageObjectID, nil
+}
+
 // deliverEnvelopeToMailbox stores a Path A envelope into the recipient's mailbox.
 // It is used by both internalSendHandler (HTTP) and the scheduled Path A delivery goroutine.
 //
@@ -94,6 +261,7 @@ func storeInternalEnvelope(ctx context.Context, mailboxID, objectKey string, mes
 //   - cleanRecipient: normalised recipient address
 //   - envelopeJSON: the raw JSON XWing envelope string
 //   - env: the already-parsed and signature-verified CryptoEnvelope
+//   - attachmentEnvelopes: attachment metadata envelopes (if any)
 //
 // Returns (messageID, messageSeq, error).
 // On "already delivered" the function returns ("", 0, nil) — caller should treat
@@ -106,6 +274,7 @@ func deliverEnvelopeToMailbox(
 	senderEmail, cleanRecipient string,
 	envelopeJSON string,
 	env *envelope.CryptoEnvelope,
+	attachmentEnvelopes []AttachmentEnvelope,
 ) (messageID string, messageSeq int64, err error) {
 	// 1. Compute delivery_identity = SHA256(envelope_json)
 	deliveryIdentity := sha256.Sum256([]byte(envelopeJSON))
@@ -144,24 +313,37 @@ func deliverEnvelopeToMailbox(
 	// start new threads. Cross-message threading for Path A is deferred
 	// to V2 (see Appendix D).
 
+	hasAttachments := len(attachmentEnvelopes) > 0
+	attCount := len(attachmentEnvelopes)
+	var attBytes []byte
+	if hasAttachments {
+		attBytes, err = json.Marshal(attachmentEnvelopes)
+		if err != nil {
+			return "", 0, fmt.Errorf("marshal attachment envelopes: %w", err)
+		}
+	} else {
+		attBytes = []byte("[]")
+	}
+
 	// 6. INSERT message_metadata
+	// Data hygiene: recipient row must NOT store sender's wrapped keys (sender_attachment_envelopes = '[]'::jsonb).
 	err = tx.QueryRow(ctx, `
 		INSERT INTO message_metadata (
 			mailbox_id, domain_id, message_seq, direction, delivery_identity, sender, recipients,
 			has_attachments, attachment_count, storage_object_id, content_key_hpke_wrapped,
 			mailbox_sk_version, encryption_version, encryption_iv, aad_version, bundle_hash,
-			status, wrapped_key_algorithm
+			status, wrapped_key_algorithm, attachment_envelopes, sender_attachment_envelopes
 		) VALUES (
 			$1, $2, $3, 'received', $4, $5, $6,
-			false, 0, $7, $8,
-			$9, $10, $11, $12, $13,
-			'received', $14
+			$7, $8, $9, $10,
+			$11, $12, $13, $14, $15,
+			'received', $16, $17, '[]'::jsonb
 		) RETURNING id::text
 	`,
 		recipientMailboxID, recipientDomainID, messageSeq, deliveryIdentity[:], senderEmail, []string{cleanRecipient},
-		storageObjectID, []byte{},
+		hasAttachments, attCount, storageObjectID, []byte{},
 		int(env.KeyEpoch), int(env.V), []byte{}, 1, deliveryIdentity[:],
-		"HPKE-XWing-AES256GCM-v1",
+		"HPKE-XWing-AES256GCM-v1", attBytes,
 	).Scan(&messageID)
 	if err != nil {
 		// Check for unique violation (concurrent insert of same delivery_identity)
@@ -217,6 +399,92 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 	if _, err := uuid.Parse(req.SenderMailboxID); err != nil {
 		writeInternalSendError(w, http.StatusBadRequest, "invalid_sender_mailbox_id")
 		return
+	}
+
+	// Validate total attachment payload size <= 40 MB
+	var totalRecipientBytes int64
+	for _, att := range req.AttachmentEnvelopes {
+		attSize := att.SizeBytes
+		var attChunkSum int64
+		for _, chunk := range att.Chunks {
+			attChunkSum += chunk.SizeBytes
+		}
+		if attChunkSum > attSize {
+			attSize = attChunkSum
+		}
+		totalRecipientBytes += attSize
+	}
+	var totalSenderBytes int64
+	for _, att := range req.SenderAttachmentEnvelopes {
+		attSize := att.SizeBytes
+		var attChunkSum int64
+		for _, chunk := range att.Chunks {
+			attChunkSum += chunk.SizeBytes
+		}
+		if attChunkSum > attSize {
+			attSize = attChunkSum
+		}
+		totalSenderBytes += attSize
+	}
+	if totalRecipientBytes > MaxAttachmentSize || totalSenderBytes > MaxAttachmentSize {
+		writeInternalSendError(w, http.StatusBadRequest, "attachments exceed 40 MB limit")
+		return
+	}
+
+	if len(req.AttachmentEnvelopes) > 0 {
+		if req.SenderEnvelopeJSON != "" {
+			if len(req.SenderAttachmentEnvelopes) != len(req.AttachmentEnvelopes) {
+				writeInternalSendError(w, http.StatusBadRequest, "sender_attachment_envelopes required for path a attachments")
+				return
+			}
+			for i, sEnv := range req.SenderAttachmentEnvelopes {
+				recEnv := req.AttachmentEnvelopes[i]
+				if sEnv.WrappedKey.X25519Encapsulated == recEnv.WrappedKey.X25519Encapsulated &&
+					sEnv.WrappedKey.MLKEMEncryptedKey == recEnv.WrappedKey.MLKEMEncryptedKey &&
+					sEnv.WrappedKey.X25519Encapsulated != "" {
+					writeInternalSendError(w, http.StatusBadRequest, "sent copy must not reuse recipient wrapped key")
+					return
+				}
+				if len(sEnv.Chunks) != len(recEnv.Chunks) {
+					writeInternalSendError(w, http.StatusBadRequest, "sent copy chunk count mismatch")
+					return
+				}
+				for j, sChunk := range sEnv.Chunks {
+					recChunk := recEnv.Chunks[j]
+					if sChunk.StorageRef == recChunk.StorageRef {
+						writeInternalSendError(w, http.StatusBadRequest, "sent copy chunks must not share storage refs with recipient")
+						return
+					}
+					if !strings.Contains(sChunk.StorageRef, "sent-attachments/") {
+						writeInternalSendError(w, http.StatusBadRequest, "sender chunk ref must use sent-attachments prefix")
+						return
+					}
+				}
+			}
+		}
+
+		// Verify recipient chunk storage refs exist and use namespaced prefix
+		for _, att := range req.AttachmentEnvelopes {
+			for _, chunk := range att.Chunks {
+				if !strings.Contains(chunk.StorageRef, "path-a-attachments/") {
+					writeInternalSendError(w, http.StatusBadRequest, "recipient chunk ref must use path-a-attachments prefix")
+					return
+				}
+				if err := checkChunkStorageExists(r.Context(), req.SenderMailboxID, chunk.StorageRef); err != nil {
+					writeInternalSendError(w, http.StatusBadRequest, fmt.Sprintf("chunk missing: %s", chunk.StorageRef))
+					return
+				}
+			}
+		}
+		// Verify sender chunk storage refs exist
+		for _, att := range req.SenderAttachmentEnvelopes {
+			for _, chunk := range att.Chunks {
+				if err := checkChunkStorageExists(r.Context(), req.SenderMailboxID, chunk.StorageRef); err != nil {
+					writeInternalSendError(w, http.StatusBadRequest, fmt.Sprintf("chunk missing: %s", chunk.StorageRef))
+					return
+				}
+			}
+		}
 	}
 
 	dsn := os.Getenv("DATABASE_URL")
@@ -315,6 +583,7 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 9. Verify signature
+	// Canonical form is AAD || ciphertext (raw bytes). Attachment envelopes are excluded from message envelope signature.
 	if err := envelope.VerifyEnvelopeSignature(senderEd25519PK, env); err != nil {
 		writeInternalSendError(w, http.StatusBadRequest, "invalid_signature")
 		return
@@ -363,6 +632,7 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 		recipientMailboxID, recipientDomainID,
 		senderEmail, cleanRecipient,
 		req.EnvelopeJSON, env,
+		req.AttachmentEnvelopes,
 	)
 	if err != nil {
 		writeInternalSendError(w, http.StatusInternalServerError, "database_insert_failed")
@@ -392,48 +662,61 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	finalFolder := "inbox"
+	finalIsRead := false
+	if messageID != "" {
+		sizeBytes := int64(len(req.EnvelopeJSON))
+		hasAttachments := len(req.AttachmentEnvelopes) > 0
+		folderOverride, labelIDs, markRead, deleteMessage, ruleErr := EvaluateRules(
+			ctx, tx, recipientMailboxID, senderEmail, []string{cleanRecipient}, sizeBytes, hasAttachments,
+		)
+		if ruleErr != nil {
+			writeInternalSendError(w, http.StatusInternalServerError, "rule_evaluation_failed")
+			return
+		}
+		if deleteMessage {
+			finalFolder = "trash"
+		} else if folderOverride != "" {
+			finalFolder = folderOverride
+		}
+		if markRead {
+			finalIsRead = true
+		}
+		if finalFolder != "inbox" || finalIsRead {
+			if _, updateErr := tx.Exec(ctx, `
+				UPDATE message_metadata
+				SET folder = $1, is_read = $2
+				WHERE id = $3
+			`, finalFolder, finalIsRead, messageID); updateErr != nil {
+				writeInternalSendError(w, http.StatusInternalServerError, "rule_update_failed")
+				return
+			}
+		}
+		for _, labelID := range labelIDs {
+			if _, lErr := tx.Exec(ctx, `
+				INSERT INTO message_labels (message_id, label_id)
+				VALUES ($1, $2)
+				ON CONFLICT DO NOTHING
+			`, messageID, labelID); lErr != nil {
+				writeInternalSendError(w, http.StatusInternalServerError, "rule_label_failed")
+				return
+			}
+		}
+	}
+
 	if req.SenderEnvelopeJSON != "" {
-		// Allocate sender sequence
-		var senderMessageSeq int64
-		if err := tx.QueryRow(ctx, "SELECT nextval('mailbox_message_seq')").Scan(&senderMessageSeq); err != nil {
-			writeInternalSendError(w, http.StatusInternalServerError, "sequence_allocation_failed")
-			return
-		}
+		sentEnvelopes := req.SenderAttachmentEnvelopes
 
-		senderDeliveryIdentity := sha256.Sum256([]byte(req.SenderEnvelopeJSON))
-		senderStorageObjectID := fmt.Sprintf("mailboxes/%s/%020d.eml.enc", req.SenderMailboxID, senderMessageSeq)
-
-		if err := storeInternalEnvelope(ctx, req.SenderMailboxID, senderStorageObjectID, senderMessageSeq, []byte(req.SenderEnvelopeJSON)); err != nil {
-			writeInternalSendError(w, http.StatusBadGateway, "sender_storage_failed")
-			return
-		}
-
-		// TODO: read sender's current key_epoch from mailboxes table when key
-		// rotation is implemented. For now, rotation is not supported and epoch
-		// is always 1.
-		var senderMessageID string
-		err = tx.QueryRow(ctx, `
-			INSERT INTO message_metadata (
-				mailbox_id, domain_id, message_seq, direction, folder, delivery_identity,
-				sender, recipients, has_attachments, attachment_count,
-				storage_object_id, content_key_hpke_wrapped,
-				mailbox_sk_version, encryption_version, encryption_iv, aad_version,
-				bundle_hash, status, wrapped_key_algorithm, is_read, sent_at
-			) VALUES (
-				$1, $2, $3, 'sent', 'sent', $4,
-				$5, $6, false, 0,
-				$7, $8,
-				$9, $10, $11, $12,
-				$13, 'sent', $14, true, now()
-			) RETURNING id::text
-		`,
-			req.SenderMailboxID, senderDomainID, senderMessageSeq, senderDeliveryIdentity[:],
-			senderEmail, []string{cleanRecipient},
-			senderStorageObjectID, []byte{},
-			int(senderEnv.KeyEpoch), int(senderEnv.V), []byte{}, 1,
-			senderDeliveryIdentity[:],
+		senderMessageID, _, err := createSentMessageCopy(
+			ctx, tx,
+			req.SenderMailboxID, senderDomainID,
+			senderEmail, cleanRecipient,
+			[]byte(req.SenderEnvelopeJSON),
+			int(senderEnv.KeyEpoch), int(senderEnv.V),
 			"HPKE-XWing-AES256GCM-v1",
-		).Scan(&senderMessageID)
+			hex.EncodeToString(deliveryIdentity[:]),
+			sentEnvelopes,
+		)
 		if err != nil {
 			writeInternalSendError(w, http.StatusInternalServerError, "sender_insert_failed")
 			return
@@ -447,6 +730,25 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 		writeInternalSendError(w, http.StatusInternalServerError, "transaction_commit_failed")
 		return
 	}
+
+	unreadDelta := 1
+	if finalIsRead || finalFolder == "trash" {
+		unreadDelta = 0
+	}
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.created",
+		MailboxID:   recipientMailboxID,
+		Folder:      finalFolder,
+		MessageID:   messageID,
+		UnreadDelta: unreadDelta,
+	})
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.created",
+		MailboxID:   req.SenderMailboxID,
+		Folder:      "sent",
+		MessageID:   messageID,
+		UnreadDelta: 0,
+	})
 
 	// 17. Audit log
 	auditLog(ctx, conn, senderOrgID, userID, "send_internal_message", "message", messageID, map[string]interface{}{

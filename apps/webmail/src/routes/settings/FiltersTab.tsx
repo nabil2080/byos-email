@@ -291,7 +291,7 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
   function getLabelName(labelId?: string | null): string {
     if (!labelId) return "Label";
     const found = labels().find((l) => l.id === labelId);
-    return found ? found.name : "Label";
+    return found ? (found.path || found.name) : "Label";
   }
 
   function formatConditions(rule: MailRule): string {
@@ -743,7 +743,7 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
                         <For each={labels()}>
                           {(lbl) => (
                             <option value={lbl.id}>
-                              {lbl.name} ({lbl.color_name})
+                              {lbl.path || lbl.name} ({lbl.color_name})
                             </option>
                           )}
                         </For>

@@ -20,6 +20,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -83,9 +84,10 @@ func requireMailRouterInternalKey(w http.ResponseWriter, r *http.Request) bool {
 }
 
 type App struct {
-	cfg        Config
-	pool       *pgxpool.Pool
-	httpClient *http.Client
+	cfg         Config
+	pool        *pgxpool.Pool
+	httpClient  *http.Client
+	redisClient *redis.Client
 }
 
 type InboundRequest struct {
@@ -177,10 +179,20 @@ func main() {
 		log.Fatalf("database ping: %v", err)
 	}
 
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = os.Getenv("REDIS_URL")
+	}
+	var rClient *redis.Client
+	if redisAddr != "" {
+		rClient = redis.NewClient(&redis.Options{Addr: redisAddr})
+	}
+
 	app := &App{
-		cfg:        cfg,
-		pool:       pool,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		cfg:         cfg,
+		pool:        pool,
+		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		redisClient: rClient,
 	}
 
 	mux := http.NewServeMux()
@@ -485,6 +497,21 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 
 	if err := tx.Commit(ctx); err != nil {
 		return StoredMessage{}, fmt.Errorf("commit metadata: %w", err)
+	}
+
+	if a.redisClient != nil {
+		delta := 1
+		if isRead {
+			delta = 0
+		}
+		evData, _ := json.Marshal(map[string]interface{}{
+			"type":        "message.created",
+			"mailboxId":   route.MailboxID,
+			"folder":      folder,
+			"messageId":   messageID,
+			"unreadDelta": delta,
+		})
+		_ = a.redisClient.Publish(ctx, fmt.Sprintf("mailbox:%s:events", route.MailboxID), evData).Err()
 	}
 
 	// Section 4 & 30: evaluate auto-reply rules in background

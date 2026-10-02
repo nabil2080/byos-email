@@ -1,5 +1,6 @@
-import { Component, createSignal, createEffect, For, Show } from "solid-js";
+import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } from "solid-js";
 import { MailboxLabel } from "../../api";
+import { buildLabelTree, getSubtreeLabelIds, validateReparent, LabelTreeNode } from "../../utils/nested_labels";
 
 export interface ColorSwatch {
   name: string;
@@ -33,20 +34,38 @@ interface CreateLabelModalProps {
   isOpen: boolean;
   onClose: () => void;
   labelToEdit?: MailboxLabel | null;
-  onSave: (name: string, color: string, colorName: string) => Promise<void> | void;
+  initialParentId?: string | null;
+  allLabels?: MailboxLabel[];
+  onSave: (name: string, color: string, colorName: string, parentLabelId?: string | null) => Promise<void> | void;
 }
 
 export const CreateLabelModal: Component<CreateLabelModalProps> = (props) => {
   const [labelName, setLabelName] = createSignal("");
   const [selectedColor, setSelectedColor] = createSignal<ColorSwatch>(LABEL_SWATCHES[4]); // Mocha default
+  const [parentLabelId, setParentLabelId] = createSignal<string>("");
   const [hoveredColor, setHoveredColor] = createSignal<ColorSwatch | null>(null);
   const [isSaving, setIsSaving] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+
+  // Close on Escape key
+  function handleKeyDown(e: KeyboardEvent) {
+    if (e.key === "Escape" && props.isOpen) {
+      props.onClose();
+    }
+  }
+
+  onMount(() => {
+    window.addEventListener("keydown", handleKeyDown);
+    onCleanup(() => {
+      window.removeEventListener("keydown", handleKeyDown);
+    });
+  });
 
   createEffect(() => {
     if (props.isOpen) {
       if (props.labelToEdit) {
         setLabelName(props.labelToEdit.name);
+        setParentLabelId(props.labelToEdit.parent_label_id || "");
         const match = LABEL_SWATCHES.find(
           (s) => s.hex.toLowerCase() === props.labelToEdit!.color.toLowerCase()
         ) || {
@@ -56,6 +75,7 @@ export const CreateLabelModal: Component<CreateLabelModalProps> = (props) => {
         setSelectedColor(match);
       } else {
         setLabelName("");
+        setParentLabelId(props.initialParentId || "");
         setSelectedColor(LABEL_SWATCHES[4]);
       }
       setHoveredColor(null);
@@ -64,6 +84,36 @@ export const CreateLabelModal: Component<CreateLabelModalProps> = (props) => {
     }
   });
 
+  // Flat list of parent options with indentation
+  const parentOptions = () => {
+    const all = props.allLabels || [];
+    const tree = buildLabelTree(all);
+    const editingId = props.labelToEdit?.id;
+    const forbiddenIds = editingId ? new Set(getSubtreeLabelIds(editingId, all)) : new Set<string>();
+
+    const options: { id: string; name: string; path: string; depth: number; disabled: boolean }[] = [];
+
+    function walk(node: LabelTreeNode) {
+      const isForbidden = forbiddenIds.has(node.label.id);
+      options.push({
+        id: node.label.id,
+        name: node.label.name,
+        path: node.label.path || node.label.name,
+        depth: node.depth,
+        disabled: isForbidden,
+      });
+      for (const child of node.children) {
+        walk(child);
+      }
+    }
+
+    for (const root of tree) {
+      walk(root);
+    }
+
+    return options;
+  };
+
   async function handleSubmit(e?: Event) {
     if (e) e.preventDefault();
     const name = labelName().trim();
@@ -71,10 +121,22 @@ export const CreateLabelModal: Component<CreateLabelModalProps> = (props) => {
       setError("Label name is required.");
       return;
     }
+
+    const chosenParent = parentLabelId().trim() || null;
+
+    // Validate reparenting if editing
+    if (props.labelToEdit) {
+      const validation = validateReparent(props.labelToEdit.id, chosenParent, props.allLabels || []);
+      if (!validation.valid) {
+        setError(validation.error || "Invalid parent label selection.");
+        return;
+      }
+    }
+
     setIsSaving(true);
     setError(null);
     try {
-      await props.onSave(name, selectedColor().hex, selectedColor().name);
+      await props.onSave(name, selectedColor().hex, selectedColor().name, chosenParent);
       props.onClose();
     } catch (err: any) {
       setError(err?.message || "Failed to save label.");
@@ -99,7 +161,7 @@ export const CreateLabelModal: Component<CreateLabelModalProps> = (props) => {
             </h3>
             <button
               onClick={props.onClose}
-              class="text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] cursor-pointer p-1.5 rounded-lg hover:bg-[#F0EEE9]/60 dark:hover:bg-[#26282E] transition"
+              class="text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] cursor-pointer p-1.5 rounded-lg hover:bg-[#F0EEE9]/60 dark:hover:bg-[#26282E] transition focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
               aria-label="Close"
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -125,13 +187,36 @@ export const CreateLabelModal: Component<CreateLabelModalProps> = (props) => {
               <input
                 id="label-name-input"
                 type="text"
-                placeholder="Label name"
+                placeholder="e.g. ProjectA"
                 value={labelName()}
                 onInput={(e) => setLabelName(e.currentTarget.value)}
                 autofocus
                 disabled={isSaving()}
-                class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2.5 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] focus:outline-none focus:ring-1 focus:ring-[#A27561] focus:border-[#A27561] bg-[#FAF9F6] dark:bg-[#18191D] transition"
+                class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2.5 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 focus:border-[#9E725F] bg-[#FAF9F6] dark:bg-[#18191D] transition"
               />
+            </div>
+
+            {/* Parent Label Selector */}
+            <div class="space-y-1.5">
+              <label for="label-parent-select" class="block text-xs font-medium text-[#5E6063] dark:text-[#A1A1AA]">
+                Parent label (nest under)
+              </label>
+              <select
+                id="label-parent-select"
+                value={parentLabelId()}
+                onChange={(e) => setParentLabelId(e.currentTarget.value)}
+                disabled={isSaving()}
+                class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2.5 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] bg-[#FAF9F6] dark:bg-[#18191D] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 focus:border-[#9E725F] transition cursor-pointer"
+              >
+                <option value="">(None - Top Level / Root)</option>
+                <For each={parentOptions()}>
+                  {(opt) => (
+                    <option value={opt.id} disabled={opt.disabled}>
+                      {"\u00A0\u00A0".repeat(opt.depth * 2) + (opt.depth > 0 ? "↳ " : "") + opt.name + (opt.disabled ? " (Self/Descendant)" : "")}
+                    </option>
+                  )}
+                </For>
+              </select>
             </div>
 
             {/* Color Swatches Grid */}
@@ -150,7 +235,7 @@ export const CreateLabelModal: Component<CreateLabelModalProps> = (props) => {
                         onMouseEnter={() => setHoveredColor(swatch)}
                         onMouseLeave={() => setHoveredColor(null)}
                         style={{ "background-color": swatch.hex }}
-                        class="w-8 h-8 rounded-full cursor-pointer flex items-center justify-center transition-transform hover:scale-110 shadow-2xs focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#A27561] dark:focus:ring-offset-[#1E2025]"
+                        class="w-8 h-8 rounded-full cursor-pointer flex items-center justify-center transition-transform hover:scale-110 shadow-2xs focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#9E725F] dark:focus:ring-offset-[#1E2025]"
                         title={swatch.name}
                         aria-label={swatch.name}
                       >
@@ -170,14 +255,14 @@ export const CreateLabelModal: Component<CreateLabelModalProps> = (props) => {
                 type="button"
                 onClick={props.onClose}
                 disabled={isSaving()}
-                class="px-4 py-2 rounded-xl text-xs font-medium text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] transition cursor-pointer"
+                class="px-4 py-2 rounded-xl text-xs font-medium text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] transition cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={isSaving() || !labelName().trim()}
-                class="px-5 py-2 rounded-xl bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold shadow-2xs transition disabled:opacity-50 cursor-pointer"
+                class="px-5 py-2 rounded-xl bg-[#9E725F] hover:bg-[#865E4D] text-white text-xs font-semibold shadow-2xs transition disabled:opacity-50 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
               >
                 {isSaving() ? "Saving…" : "Save"}
               </button>
