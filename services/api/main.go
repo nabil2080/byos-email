@@ -346,6 +346,8 @@ func main() {
 	http.HandleFunc("/v1/auth/recovery-verify", withSecurityHeaders(withCORS(recoveryVerifyHandler)))
 	http.HandleFunc("/v1/auth/change-password", withSecurityHeaders(withCORS(changePasswordHandler)))
 	http.HandleFunc("/v1/auth/me", withSecurityHeaders(withCORS(meHandler)))
+	http.HandleFunc("/v1/users/me/mailboxes", withSecurityHeaders(withCORS(userMailboxesHandler)))
+	http.HandleFunc("/api/v1/users/me/mailboxes", withSecurityHeaders(withCORS(userMailboxesHandler)))
 	http.HandleFunc("/v1/auth/logout", withSecurityHeaders(withCORS(logoutHandler)))
 	http.HandleFunc("/v1/auth/invitations/verify", withSecurityHeaders(withCORS(invitationVerifyHandler)))
 	http.HandleFunc("/v1/auth/invitations/claim", withSecurityHeaders(withCORS(invitationClaimHandler)))

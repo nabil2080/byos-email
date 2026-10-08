@@ -37,6 +37,9 @@ export interface DisplayMessage {
   status?: string;
   decryptedContent?: string;
   sendFailed?: boolean;
+  mailboxId?: string;
+  accountEmail?: string;
+  accountColor?: string;
 }
 
 interface MessageListProps {
@@ -101,6 +104,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
     spam: "Spam",
     trash: "Trash",
     snoozed: "Snoozed",
+    unified_inbox: "Unified Inbox",
   };
 
   const isAllSelectedRead = () => {

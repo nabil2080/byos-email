@@ -190,6 +190,14 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
 
             {/* Sender / Participants cluster */}
             <div class="w-28 sm:w-48 md:w-56 min-w-0 flex-shrink-0 flex items-center gap-2 truncate">
+              <Show when={threadLatestMsg()?.accountColor}>
+                <span
+                  class="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                  style={{ "background-color": threadLatestMsg()!.accountColor }}
+                  title={threadLatestMsg()?.accountEmail || "Connected Account"}
+                  data-testid="account-chip"
+                />
+              </Show>
               <Show when={avatarEmail()}>
                 <ProfileAvatar email={avatarEmail()} size="xs" />
               </Show>
@@ -386,6 +394,14 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                   class="w-1.5 h-1.5 rounded-full bg-[#A27561] flex-shrink-0"
                   title="Unread"
                 ></span>
+              </Show>
+              <Show when={threadLatestMsg()?.accountColor}>
+                <span
+                  class="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                  style={{ "background-color": threadLatestMsg()!.accountColor }}
+                  title={threadLatestMsg()?.accountEmail || "Connected Account"}
+                  data-testid="account-chip"
+                />
               </Show>
               <Show when={avatarEmail()}>
                 <ProfileAvatar email={avatarEmail()} size="xs" />

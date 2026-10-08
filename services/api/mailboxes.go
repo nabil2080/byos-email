@@ -1179,3 +1179,79 @@ func mailboxPrivacyModeHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type UserMailboxItem struct {
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	OrgID       string `json:"org_id"`
+	IsActive    bool   `json:"is_active"`
+}
+
+func userMailboxesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	var userOrgID, userRole string
+	var userActive bool
+	err = conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member'), is_active FROM users WHERE id=$1`, userID).Scan(&userOrgID, &userRole, &userActive)
+	if err != nil || !userActive {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	query := `
+		SELECT DISTINCT m.id::text,
+			CASE 
+				WHEN d.name IS NOT NULL AND d.name != '' THEN m.local_part || '@' || d.name 
+				ELSE m.local_part 
+			END AS email,
+			COALESCE(NULLIF(mu.display_name, ''), NULLIF(u.display_name, ''), m.local_part) AS display_name,
+			m.org_id::text,
+			m.is_active
+		FROM mailboxes m
+		JOIN users u ON u.id = $1
+		LEFT JOIN users mu ON mu.id = m.user_id
+		LEFT JOIN domains d ON d.id = m.domain_id
+		WHERE (m.user_id = $1 OR (m.org_id = u.org_id AND u.role IN ('admin', 'owner')))
+		ORDER BY email ASC, m.id::text ASC
+	`
+	rows, err := conn.Query(ctx, query, userID)
+	if err != nil {
+		http.Error(w, "failed to query mailboxes: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	items := make([]UserMailboxItem, 0)
+	for rows.Next() {
+		var item UserMailboxItem
+		if err := rows.Scan(&item.ID, &item.Email, &item.DisplayName, &item.OrgID, &item.IsActive); err != nil {
+			http.Error(w, "failed to scan mailbox row: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		items = append(items, item)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"mailboxes": items,
+	})
+}

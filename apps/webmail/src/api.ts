@@ -228,9 +228,12 @@ export interface ScheduledDraftResponse {
 export async function fetchScheduledDraft(
   mailboxId: string,
   id: string,
+  token?: string,
 ): Promise<ScheduledDraftResponse> {
   return apiRequest<ScheduledDraftResponse>(
     `/v1/mailboxes/${mailboxId}/scheduled/${id}`,
+    undefined,
+    token,
   );
 }
 
@@ -258,13 +261,43 @@ export interface ConnectedAccount {
   sessionToken: string;   // Auth token for this mailbox
   mailboxSkHex: string;   // Unsealed private key in memory
   searchKeyHex: string;
+  signingSeedHex?: string;
+  xwingSeedHex?: string;
+  isLocked?: boolean;
 }
 
-export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+export interface UserMailboxSummary {
+  id: string;
+  email: string;
+  display_name: string;
+  org_id: string;
+  is_active: boolean;
+}
+
+export async function fetchUserMailboxes(token?: string): Promise<UserMailboxSummary[]> {
+  const res = await apiRequest<{ mailboxes: UserMailboxSummary[] }>("/v1/users/me/mailboxes", undefined, token);
+  return res.mailboxes || [];
+}
+
+export function getAccountColor(id: string): string {
+  if (!id) return "hsl(20, 25%, 50%)";
+  let hash = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0x45d9f3b);
+  hash ^= hash >>> 16;
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 70%, 45%)`;
+}
+
+export async function apiRequest<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
   const impersonationToken =
     typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
   const activeToken =
-    typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null;
+    token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
   const authHeaders: Record<string, string> = {};
   if (activeToken) {
     authHeaders["Authorization"] = `Bearer ${activeToken}`;
@@ -527,55 +560,63 @@ export async function updateMessageFolder(
   mailboxId: string,
   messageId: string,
   folder: string,
-  folderId?: string | null
+  folderId?: string | null,
+  token?: string
 ): Promise<{ status: string; message_id: string; folder: string; folder_id?: string }> {
   return apiRequest<{ status: string; message_id: string; folder: string; folder_id?: string }>(
     `/v1/mailboxes/${mailboxId}/messages/${messageId}/folder`,
     {
       method: "PUT",
       body: JSON.stringify({ folder, folder_id: folderId ?? null }),
-    }
+    },
+    token
   );
 }
 
 export async function attachMessageLabel(
   mailboxId: string,
   messageId: string,
-  labelId: string
+  labelId: string,
+  token?: string
 ): Promise<{ status: string; message_id: string; label_id: string }> {
   return apiRequest<{ status: string; message_id: string; label_id: string }>(
     `/v1/mailboxes/${mailboxId}/messages/${messageId}/labels`,
     {
       method: "POST",
       body: JSON.stringify({ label_id: labelId }),
-    }
+    },
+    token
   );
 }
 
 export async function detachMessageLabel(
   mailboxId: string,
   messageId: string,
-  labelId: string
+  labelId: string,
+  token?: string
 ): Promise<void> {
   return apiRequest<void>(
     `/v1/mailboxes/${mailboxId}/messages/${messageId}/labels/${labelId}`,
     {
       method: "DELETE",
-    }
+    },
+    token
   );
 }
 
 export async function setMessageRead(
   mailboxId: string,
   messageId: string,
-  read: boolean
+  read: boolean,
+  token?: string
 ): Promise<void> {
   return apiRequest<void>(
     `/v1/mailboxes/${mailboxId}/messages/${messageId}/read`,
     {
       method: "PUT",
       body: JSON.stringify({ read }),
-    }
+    },
+    token
   );
 }
 
@@ -583,6 +624,7 @@ export async function toggleMessageStar(
   mailboxId: string,
   messageId: string,
   starred: boolean,
+  token?: string
 ): Promise<{ is_starred: boolean }> {
   return apiRequest<{ is_starred: boolean }>(
     `/v1/mailboxes/${mailboxId}/messages/${messageId}/star`,
@@ -590,23 +632,24 @@ export async function toggleMessageStar(
       method: "PATCH",
       body: JSON.stringify({ starred }),
     },
+    token
   );
 }
 
-export async function fetchAttachments(mailboxId: string): Promise<AttachmentItem[]> {
-  const res = await apiRequest<{ attachments: AttachmentItem[] }>(`/v1/mailboxes/${mailboxId}/attachments`);
+export async function fetchAttachments(mailboxId: string, token?: string): Promise<AttachmentItem[]> {
+  const res = await apiRequest<{ attachments: AttachmentItem[] }>(`/v1/mailboxes/${mailboxId}/attachments`, undefined, token);
   return res.attachments || [];
 }
 
-export async function fetchMailboxDetail(mailboxId: string): Promise<MailboxDetail> {
-  return apiRequest<MailboxDetail>(`/v1/mailboxes/${mailboxId}`);
+export async function fetchMailboxDetail(mailboxId: string, token?: string): Promise<MailboxDetail> {
+  return apiRequest<MailboxDetail>(`/v1/mailboxes/${mailboxId}`, undefined, token);
 }
 
-export async function fetchMessages(mailboxId: string, folder?: string): Promise<MessageMetadata[]> {
+export async function fetchMessages(mailboxId: string, folder?: string, token?: string): Promise<MessageMetadata[]> {
   const url = folder
     ? `/v1/mailboxes/${mailboxId}/messages?folder=${encodeURIComponent(folder)}`
     : `/v1/mailboxes/${mailboxId}/messages`;
-  const res = await apiRequest<{ messages: MessageMetadata[] }>(url);
+  const res = await apiRequest<{ messages: MessageMetadata[] }>(url, undefined, token);
   return res.messages || [];
 }
 
@@ -614,36 +657,41 @@ export async function snoozeMessage(
   mailboxId: string,
   messageId: string,
   snoozedUntil: string | null,
+  token?: string
 ): Promise<{ snoozed_until: string | null }> {
   return apiRequest(`/v1/mailboxes/${mailboxId}/messages/${messageId}/snooze`, {
     method: "POST",
     body: JSON.stringify({ snoozed_until: snoozedUntil }),
-  });
+  }, token);
 }
 
 export async function fetchThreads(
   mailboxId: string,
   folder?: string,
+  token?: string
 ): Promise<ThreadSummary[]> {
   const url = folder
     ? `/v1/mailboxes/${mailboxId}/threads?folder=${encodeURIComponent(folder)}`
     : `/v1/mailboxes/${mailboxId}/threads`;
-  const resp = await apiRequest<{ threads: ThreadSummary[] }>(url);
+  const resp = await apiRequest<{ threads: ThreadSummary[] }>(url, undefined, token);
   return resp.threads || [];
 }
 
 export async function fetchThreadMessages(
   mailboxId: string,
   threadId: string,
+  token?: string
 ): Promise<MessageMetadata[]> {
   const resp = await apiRequest<{ messages: MessageMetadata[] }>(
     `/v1/mailboxes/${mailboxId}/threads/${threadId}`,
+    undefined,
+    token
   );
   return resp.messages || [];
 }
 
-export async function fetchMessageBody(mailboxId: string, messageId: string): Promise<MessageBodyResponse> {
-  return apiRequest<MessageBodyResponse>(`/v1/mailboxes/${mailboxId}/messages/${messageId}/body`);
+export async function fetchMessageBody(mailboxId: string, messageId: string, token?: string): Promise<MessageBodyResponse> {
+  return apiRequest<MessageBodyResponse>(`/v1/mailboxes/${mailboxId}/messages/${messageId}/body`, undefined, token);
 }
 
 export async function uploadEncryptedAttachment(
@@ -679,9 +727,22 @@ export async function uploadEncryptedAttachment(
   return (await response.json()) as AttachmentItem;
 }
 
-export async function downloadAttachment(mailboxId: string, attachmentId: string): Promise<Blob> {
+export async function downloadAttachment(mailboxId: string, attachmentId: string, token?: string): Promise<Blob> {
+  const impersonationToken =
+    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
+  const activeToken = token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
+  const authHeaders: Record<string, string> = {};
+  if (activeToken) {
+    authHeaders["Authorization"] = `Bearer ${activeToken}`;
+  } else if (impersonationToken) {
+    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  }
+
   const response = await fetch(`${apiBase()}/v1/mailboxes/${mailboxId}/attachments/${attachmentId}?download=true`, {
     credentials: "include",
+    headers: {
+      ...authHeaders,
+    },
   });
 
   if (!response.ok) {
@@ -695,9 +756,10 @@ export async function downloadAttachment(mailboxId: string, attachmentId: string
 export async function downloadAndDecryptAttachment(
   mailboxId: string,
   attachmentId: string,
-  mailboxKey: Uint8Array
+  mailboxKey: Uint8Array,
+  token?: string,
 ): Promise<Blob> {
-  const encryptedBlob = await downloadAttachment(mailboxId, attachmentId);
+  const encryptedBlob = await downloadAttachment(mailboxId, attachmentId, token);
   const encryptedBytes = new Uint8Array(await encryptedBlob.arrayBuffer());
 
   // Decrypt client-side using Section 12 WASM primitive.
@@ -770,18 +832,20 @@ export interface SearchTokensResponse {
   message_ids: string[];
 }
 
-export async function searchMailboxTokens(mailboxId: string, tokenHex: string): Promise<string[]> {
+export async function searchMailboxTokens(mailboxId: string, tokenHex: string, token?: string): Promise<string[]> {
   const res = await apiRequest<SearchTokensResponse>(
-    `/v1/mailboxes/${mailboxId}/search?token=${encodeURIComponent(tokenHex)}`
+    `/v1/mailboxes/${mailboxId}/search?token=${encodeURIComponent(tokenHex)}`,
+    undefined,
+    token
   );
   return res.message_ids || [];
 }
 
-export async function indexSearchToken(mailboxId: string, messageId: string, tokenHex: string): Promise<void> {
+export async function indexSearchToken(mailboxId: string, messageId: string, tokenHex: string, token?: string): Promise<void> {
   return apiRequest<void>(`/v1/mailboxes/${mailboxId}/search`, {
     method: "POST",
     body: JSON.stringify({ message_id: messageId, token: tokenHex }),
-  });
+  }, token);
 }
 
 export interface VerifyInvitationResponse {
@@ -1437,11 +1501,12 @@ export interface InternalSendResponse {
 
 export async function sendInternal(
   req: InternalSendRequest,
+  token?: string,
 ): Promise<InternalSendResponse> {
   return apiRequest<InternalSendResponse>("/v1/outbound/send-internal", {
     method: "POST",
     body: JSON.stringify(req),
-  });
+  }, token);
 }
 
 export async function uploadAttachmentChunk(
@@ -1461,10 +1526,13 @@ export async function uploadAttachmentChunk(
 export async function fetchMessageAttachmentEnvelopes(
   mailboxId: string,
   messageId: string,
+  token?: string,
 ): Promise<AttachmentEnvelope[]> {
   try {
     const res = await apiRequest<{ attachments: AttachmentEnvelope[] }>(
       `/v1/mailboxes/${mailboxId}/messages/${messageId}/attachments`,
+      undefined,
+      token,
     );
     return res.attachments || [];
   } catch (err) {
@@ -1478,11 +1546,12 @@ export async function fetchMessageAttachmentChunk(
   messageId: string,
   attachmentId: string,
   chunkIndex: number,
+  token?: string,
 ): Promise<Uint8Array> {
   const impersonationToken =
     typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
   const activeToken =
-    typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null;
+    token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
   const authHeaders: Record<string, string> = {};
   if (activeToken) {
     authHeaders["Authorization"] = `Bearer ${activeToken}`;

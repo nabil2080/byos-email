@@ -20,6 +20,7 @@ import { runScheduledFolderTests } from "./scheduled_folder.test.js";
 import { runDisplayPartyTests } from "./display_party.test.js";
 import { runNestedLabelsTests } from "./nested_labels.test.js";
 import { runApiErrorTests } from "./api_error.test.js";
+import { runUnifiedInboxTests } from "./unified_inbox.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -49,7 +50,7 @@ async function main() {
   totalPassed += fileTypeRes.passed;
   totalFailed += fileTypeRes.failed;
 
-  const multiAccountRes = runMultiAccountTests();
+  const multiAccountRes = await runMultiAccountTests();
   console.log(`MULTI ACCOUNT TESTS: ${multiAccountRes.passed} passed, ${multiAccountRes.failed} failed\n`);
   totalPassed += multiAccountRes.passed;
   totalFailed += multiAccountRes.failed;
@@ -155,6 +156,12 @@ async function main() {
   console.log(`API ERROR HANDLING TESTS: ${apiErrorRes.passed} passed, ${apiErrorRes.failed} failed\n`);
   totalPassed += apiErrorRes.passed;
   totalFailed += apiErrorRes.failed;
+
+  console.log("Running Unified Inbox Tests...");
+  const unifiedInboxRes = runUnifiedInboxTests();
+  console.log(`UNIFIED INBOX TESTS: ${unifiedInboxRes.passed} passed, ${unifiedInboxRes.failed} failed\n`);
+  totalPassed += unifiedInboxRes.passed;
+  totalFailed += unifiedInboxRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

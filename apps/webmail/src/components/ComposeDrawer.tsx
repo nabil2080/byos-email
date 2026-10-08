@@ -1,5 +1,5 @@
 import { Component, createSignal, createEffect, For, Show } from "solid-js";
-import { AttachmentItem } from "../api";
+import { AttachmentItem, ConnectedAccount } from "../api";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { RichTextEditor } from "./RichTextEditor";
 
@@ -29,6 +29,10 @@ interface ComposeDrawerProps {
   errorMessage: string | null;
   isEditingDraft: boolean;
   senderAddress: string;
+  connectedAccounts?: ConnectedAccount[];
+  selectedAccountId?: string;
+  onSelectAccount?: (accountId: string) => void;
+  isUnified?: boolean;
 }
 
 export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
@@ -171,9 +175,28 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
               {/* From Row */}
               <div class="flex items-center gap-2 text-xs">
                 <span class="w-16 text-[#55575B] dark:text-[#A1A1AA] font-medium">From:</span>
-                <span class="font-mono text-[#1A1B1E] dark:text-[#F3F4F6] font-medium select-all">
-                  {props.senderAddress}
-                </span>
+                <Show
+                  when={props.isUnified && (props.connectedAccounts?.length || 0) > 1}
+                  fallback={
+                    <span class="font-mono text-[#1A1B1E] dark:text-[#F3F4F6] font-medium select-all">
+                      {props.senderAddress}
+                    </span>
+                  }
+                >
+                  <select
+                    value={props.selectedAccountId || props.connectedAccounts?.[0]?.id}
+                    onChange={(e) => props.onSelectAccount?.(e.currentTarget.value)}
+                    class="font-mono text-xs bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] rounded-lg px-2 py-1 text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-1 focus:ring-[#A27561] cursor-pointer"
+                    aria-label="Sender account"
+                    data-testid="compose-from-select"
+                  >
+                    <For each={props.connectedAccounts}>
+                      {(acc) => (
+                        <option value={acc.id}>{acc.email}</option>
+                      )}
+                    </For>
+                  </select>
+                </Show>
                 <span class="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-[#F3ECE8] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-bold">
                   Sovereign Outbound
                 </span>

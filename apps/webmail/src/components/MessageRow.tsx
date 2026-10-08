@@ -177,6 +177,8 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
       draggable={true}
       onDragStart={handleDragStart}
       onClick={() => props.onSelect(props.message)}
+      data-testid="message-row"
+      data-message-id={props.message.id}
       class={`group relative cursor-pointer border-b border-[#E2DFD8]/60 dark:border-[#2A2D35] transition-all select-none min-w-0 overflow-hidden ${densityPadding()} ${
         props.isSelected
           ? "bg-[#F3ECE8] dark:bg-[#2D2522] border-l-4 border-l-[#A27561]"
@@ -246,6 +248,14 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
 
             {/* Display Party Column with ProfileAvatar */}
             <div class="w-28 sm:w-48 md:w-56 min-w-0 flex-shrink-0 flex items-center gap-2 truncate">
+              <Show when={props.message.accountColor}>
+                <span
+                  class="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                  style={{ "background-color": props.message.accountColor }}
+                  title={props.message.accountEmail || "Connected Account"}
+                  data-testid="account-chip"
+                />
+              </Show>
               <ProfileAvatar email={partyEmail()} size="xs" />
               <span
                 class={`truncate font-sans text-sm ${
@@ -467,6 +477,14 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
 
               {/* Display Party with ProfileAvatar */}
               <div class="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+                <Show when={props.message.accountColor}>
+                  <span
+                    class="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                    style={{ "background-color": props.message.accountColor }}
+                    title={props.message.accountEmail || "Connected Account"}
+                    data-testid="account-chip"
+                  />
+                </Show>
                 <ProfileAvatar email={partyEmail()} size="xs" />
                 <span
                   class={`truncate min-w-0 font-sans text-sm ${

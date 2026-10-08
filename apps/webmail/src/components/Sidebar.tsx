@@ -1,6 +1,6 @@
 import { Component, Show, For, createSignal, createEffect, onMount, onCleanup } from "solid-js";
 import { StorageStatusPill } from "./StorageStatusPill";
-import { UserMe, Mailbox, ConnectedAccount, MailboxFolder, MailboxLabel } from "../api";
+import { UserMe, Mailbox, ConnectedAccount, MailboxFolder, MailboxLabel, getAccountColor } from "../api";
 import { AccountSwitcher } from "./AccountSwitcher";
 import {
   buildLabelTree,
@@ -9,7 +9,7 @@ import {
   saveExpandedLabels,
 } from "../utils/nested_labels";
 
-export type Folder = "inbox" | "sent" | "scheduled" | "drafts" | "snoozed" | "archive" | "spam" | "trash";
+export type Folder = "inbox" | "sent" | "scheduled" | "drafts" | "snoozed" | "archive" | "spam" | "trash" | "unified_inbox";
 
 interface SidebarProps {
   currentUser: UserMe | null;
@@ -26,6 +26,8 @@ interface SidebarProps {
   storageError?: string | null;
   connectedAccounts?: ConnectedAccount[];
   onSelectAccount?: (account: ConnectedAccount) => void;
+  onSelectAllInboxes?: () => void;
+  activeAccountId?: string;
   onOpenAddMailbox?: () => void;
   customFolders?: MailboxFolder[];
   activeFolderId?: string | null;
@@ -50,6 +52,10 @@ interface SidebarProps {
   onSetTheme?: (theme: "cloud_dancer" | "dark") => void;
   class?: string;
   onCloseMobile?: () => void;
+  unifiedUnreadCount?: number;
+  accountUnreadCounts?: Record<string, number>;
+  excludedAccountIds?: Set<string> | string[];
+  onToggleAccountInclusion?: (accountId: string, included?: boolean) => void;
 }
 
 export const Sidebar: Component<SidebarProps> = (props) => {
@@ -57,6 +63,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
   const [openFolderMenuId, setOpenFolderMenuId] = createSignal<string | null>(null);
   const [openLabelMenuId, setOpenLabelMenuId] = createSignal<string | null>(null);
   const [expandedLabelIds, setExpandedLabelIds] = createSignal<Set<string>>(new Set());
+  const [showUnifiedConfig, setShowUnifiedConfig] = createSignal(false);
 
   // Load expanded labels on mount or mailbox change
   createEffect(() => {
@@ -121,6 +128,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
     spam: "Spam",
     trash: "Trash",
     snoozed: "Snoozed",
+    unified_inbox: "Unified Inbox",
   };
 
   function renderFolderIcon(f: Folder) {
@@ -204,6 +212,17 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
   const isPrivate = () => props.selectedMailbox?.mode === "private";
 
+  const isAllInboxes = () =>
+    props.activeAccountId === "__all__" || props.currentFolder === "unified_inbox";
+
+  const currentSelectionColor = () => {
+    if (isAllInboxes()) {
+      return "#A27561";
+    }
+    const targetId = props.activeAccountId || props.selectedMailbox?.id || props.connectedAccounts?.[0]?.id || "";
+    return getAccountColor(targetId);
+  };
+
   return (
     <aside class={`w-full md:w-64 flex-shrink-0 bg-[#F0EEE9] dark:bg-[#18191D] border-r border-[#E2DFD8]/80 dark:border-[#2E3138] flex flex-col justify-between select-none h-full relative ${props.class || ""}`}>
       {/* FIXED TOP: Brand Header & Mode Toggle, Account Switcher, Compose, Quick Actions */}
@@ -237,9 +256,17 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           currentEmail={mailboxEmail()}
           isPrivate={isPrivate()}
           connectedAccounts={props.connectedAccounts || []}
-          activeAccountId={props.selectedMailbox?.id || ""}
+          activeAccountId={props.activeAccountId || (isAllInboxes() ? "__all__" : props.selectedMailbox?.id || "")}
           onSelectAccount={(acc) => {
             props.onSelectAccount?.(acc);
+            props.onCloseMobile?.();
+          }}
+          onSelectAllInboxes={() => {
+            if (props.onSelectAllInboxes) {
+              props.onSelectAllInboxes();
+            } else {
+              props.onSelectFolder("unified_inbox");
+            }
             props.onCloseMobile?.();
           }}
           onOpenAddMailbox={() => {
@@ -247,6 +274,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
             props.onCloseMobile?.();
           }}
           onSignOut={props.onLogout}
+          unreadCounts={props.accountUnreadCounts}
+          totalUnifiedUnread={props.unifiedUnreadCount}
         />
 
         {/* Compose Pill & Quick Actions */}
@@ -320,7 +349,139 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       <div class="flex-1 min-h-0 overflow-y-auto px-2 py-1 space-y-3 custom-scrollbar relative z-10">
         {/* Navigation Folders List */}
         <nav class="space-y-0.5">
-          {(["inbox", "sent", "scheduled", "drafts", "snoozed", "archive", "spam", "trash"] as Folder[]).map((f) => {
+          {/* Dynamic Top Inbox Folder: 'All Inboxes' when Unified, or 'Inbox' for selected account */}
+          <div class="relative group">
+            <button
+              type="button"
+              onClick={() => {
+                if (isAllInboxes()) {
+                  if (props.onSelectAllInboxes) {
+                    props.onSelectAllInboxes();
+                  } else {
+                    props.onSelectFolder("unified_inbox");
+                  }
+                } else {
+                  props.onSelectFolder("inbox");
+                }
+                props.onCloseMobile?.();
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                setDragOverTarget(isAllInboxes() ? "unified_inbox" : "inbox");
+              }}
+              onDragLeave={() => {
+                if (dragOverTarget() === (isAllInboxes() ? "unified_inbox" : "inbox")) {
+                  setDragOverTarget(null);
+                }
+              }}
+              onDrop={(e) => handleDrop(e, isAllInboxes() ? "unified_inbox" : "inbox", false)}
+              class={`w-full flex items-center justify-between px-3 py-2.5 md:py-2 min-h-[40px] text-sm rounded-xl transition-all cursor-pointer ${
+                dragOverTarget() === (isAllInboxes() ? "unified_inbox" : "inbox")
+                  ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
+                  : (isAllInboxes() ? props.currentFolder === "unified_inbox" : props.currentFolder === "inbox")
+                  ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold"
+                  : "text-[#3C3D3E] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+              }`}
+              data-testid={isAllInboxes() ? "unified-inbox-button" : "folder-inbox"}
+            >
+              <div class="flex items-center gap-2.5">
+                <span
+                  class="w-2 h-2 rounded-full flex-shrink-0 transition-colors"
+                  style={{ "background-color": currentSelectionColor() }}
+                  data-testid="folder-selection-dot"
+                />
+                <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5] flex-shrink-0" viewBox="0 0 24 24">
+                  <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+                  <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+                  <line x1="6" y1="2" x2="18" y2="2" />
+                </svg>
+                <span data-testid="folder-name-inbox">{isAllInboxes() ? "All Inboxes" : "Inbox"}</span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <Show when={(isAllInboxes() ? (props.unifiedUnreadCount || 0) : (props.folderCounts?.inbox || 0)) > 0}>
+                  <span
+                    class={`text-xs font-mono px-1.5 py-0.2 rounded-full ${
+                      (isAllInboxes() ? props.currentFolder === "unified_inbox" : props.currentFolder === "inbox")
+                        ? "bg-[#A27561] text-white font-semibold"
+                        : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
+                    }`}
+                    data-testid="folder-unread-inbox"
+                  >
+                    {isAllInboxes() ? props.unifiedUnreadCount : props.folderCounts?.inbox}
+                  </span>
+                </Show>
+                <Show when={isAllInboxes() && (props.connectedAccounts?.length || 0) > 1}>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowUnifiedConfig(!showUnifiedConfig());
+                    }}
+                    class="p-1 rounded-md text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                    title="Configure accounts in Unified Inbox"
+                    aria-label="Configure accounts in Unified Inbox"
+                    data-testid="configure-unified-inbox-btn"
+                  >
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75" />
+                    </svg>
+                  </button>
+                </Show>
+              </div>
+            </button>
+
+            {/* Popover to configure which accounts are included */}
+            <Show when={isAllInboxes() && showUnifiedConfig()}>
+              <div class="absolute left-2 right-2 top-full mt-1 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-xl p-2.5 z-50 text-xs space-y-2">
+                <div class="flex items-center justify-between">
+                  <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] text-[10px] uppercase tracking-wider font-mono">
+                    Included Accounts
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowUnifiedConfig(false)}
+                    class="text-[#878A8E] hover:text-[#1A1B1E] text-xs font-bold cursor-pointer"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div class="space-y-1 max-h-40 overflow-y-auto custom-scrollbar">
+                  <For each={props.connectedAccounts || []}>
+                    {(acc) => {
+                      const isIncluded = () => {
+                        if (!props.excludedAccountIds) return true;
+                        if (props.excludedAccountIds instanceof Set) {
+                          return !props.excludedAccountIds.has(acc.id);
+                        }
+                        return !props.excludedAccountIds.includes(acc.id);
+                      };
+                      return (
+                        <label class="flex items-center gap-2 cursor-pointer hover:bg-[#FAF9F7] dark:hover:bg-[#26282E] p-1 rounded-lg">
+                          <input
+                            type="checkbox"
+                            checked={isIncluded()}
+                            onChange={(e) => props.onToggleAccountInclusion?.(acc.id, e.currentTarget.checked)}
+                            class="accent-[#A27561] rounded w-3.5 h-3.5 cursor-pointer"
+                          />
+                          <span
+                            class="w-2 h-2 rounded-full flex-shrink-0"
+                            style={{ "background-color": getAccountColor(acc.id) }}
+                          />
+                          <span class="truncate font-medium text-[#2B2C2D] dark:text-[#ECEBE8]">
+                            {acc.email}
+                          </span>
+                        </label>
+                      );
+                    }}
+                  </For>
+                </div>
+              </div>
+            </Show>
+          </div>
+
+          {/* Remaining Folders */}
+          {(["sent", "scheduled", "drafts", "snoozed", "archive", "spam", "trash"] as Folder[]).map((f) => {
             const isActive = () => props.currentFolder === f;
             const isDropTarget = () => dragOverTarget() === f;
             const count = () => (props.folderCounts ? props.folderCounts[f] || 0 : 0);
@@ -347,8 +508,14 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                     ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold"
                     : "text-[#3C3D3E] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
                 }`}
+                data-testid={`folder-${f}`}
               >
                 <div class="flex items-center gap-2.5">
+                  <span
+                    class="w-2 h-2 rounded-full flex-shrink-0 transition-colors"
+                    style={{ "background-color": currentSelectionColor() }}
+                    data-testid="folder-selection-dot"
+                  />
                   {renderFolderIcon(f)}
                   <span>{folderLabels[f]}</span>
                 </div>

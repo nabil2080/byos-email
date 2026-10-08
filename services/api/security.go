@@ -30,6 +30,12 @@ func (w *metricsResponseWriter) Write(body []byte) (int, error) {
 	return w.ResponseWriter.Write(body)
 }
 
+func (w *metricsResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 // withSecurityHeaders wraps an http.Handler to enforce strict security headers (Section 21).
 func withSecurityHeaders(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

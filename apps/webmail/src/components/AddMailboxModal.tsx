@@ -1,6 +1,7 @@
 import { Component, createSignal, Show, For } from "solid-js";
 import { ConnectedAccount, login, verifyLogin2FA, sendLogin2FACode, LoginResponse, apiBase } from "../api";
 import { autoUnwrapMailboxKey, autoUnwrapKeys } from "../message_crypto";
+import { unsealAccountKeys, persistAccountListForDisplay } from "../session_isolation";
 
 interface AddMailboxModalProps {
   isOpen: boolean;
@@ -49,18 +50,21 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
   async function processAccountLogin(res: LoginResponse, mail: string, pass: string) {
     let skHex = "";
     let searchKeyHex = "";
+    let signingSeedHex: string | undefined = undefined;
+    let xwingSeedHex: string | undefined = undefined;
 
-    // Client-side key unwrapping or self-healing
+    // Client-side key unwrapping or self-healing (Rule 3)
     if (res.wrapped_sk_user) {
       try {
-        const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
-        const unwrapped = autoUnwrapKeys(wasm, pass, res.wrapped_sk_user);
+        const unwrapped = await unsealAccountKeys(res.mailbox_id || "", pass, res.wrapped_sk_user);
         const skBytes = unwrapped.mailboxSk;
         skHex = Array.from(skBytes, (b) => b.toString(16).padStart(2, "0")).join("");
-        searchKeyHex = wasm.wasm_derive_search_key(skHex);
+        searchKeyHex = unwrapped.searchKeyHex;
         if (unwrapped.signingSeed && res.mailbox_id) {
-          const seedHex = Array.from(unwrapped.signingSeed, (b) => b.toString(16).padStart(2, "0")).join("");
-          sessionStorage.setItem("byos_signing_seed_" + res.mailbox_id, seedHex);
+          signingSeedHex = Array.from(unwrapped.signingSeed, (b) => b.toString(16).padStart(2, "0")).join("");
+        }
+        if (unwrapped.xwingSeed && res.mailbox_id) {
+          xwingSeedHex = Array.from(unwrapped.xwingSeed, (b) => b.toString(16).padStart(2, "0")).join("");
         }
       } catch (unwrapErr) {
         console.warn("Could not unwrap mailbox key with password:", unwrapErr);
@@ -118,6 +122,8 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
       sessionToken: res.token || "",
       mailboxSkHex: skHex,
       searchKeyHex: searchKeyHex,
+      signingSeedHex,
+      xwingSeedHex,
     };
 
     // Persist to byos_connected_accounts in sessionStorage (with in-memory keys)
@@ -137,24 +143,14 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
       console.warn("Failed saving connected accounts to sessionStorage:", e);
     }
 
-    // Persist to localStorage for cross-tab metadata (stripping unsealed private keys for zero-knowledge safety)
+    // Persist to localStorage for cross-tab metadata (Rule 4 & 6: strictly strip all tokens and key material)
     try {
-      const durableAccount: ConnectedAccount = {
-        ...newAccount,
-        mailboxSkHex: "",
-        searchKeyHex: "",
-      };
-      const existingStr = localStorage.getItem("byos_connected_accounts");
-      let accounts: ConnectedAccount[] = [];
+      const existingStr = sessionStorage.getItem("byos_connected_accounts");
+      let allAccounts: ConnectedAccount[] = [];
       if (existingStr) {
-        try { accounts = JSON.parse(existingStr); } catch {}
+        try { allAccounts = JSON.parse(existingStr); } catch {}
       }
-      if (!Array.isArray(accounts)) accounts = [];
-      accounts = accounts.filter(
-        (a) => a.id !== durableAccount.id && a.email.toLowerCase() !== durableAccount.email.toLowerCase()
-      );
-      accounts.push(durableAccount);
-      localStorage.setItem("byos_connected_accounts", JSON.stringify(accounts));
+      persistAccountListForDisplay(allAccounts);
     } catch (e) {
       console.warn("Failed saving connected accounts to localStorage:", e);
     }

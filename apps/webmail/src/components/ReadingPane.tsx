@@ -11,6 +11,8 @@ export interface ReadingPaneProps {
   message: DisplayMessage;
   isDecrypting: boolean;
   decryptedContent: string | null;
+  lockedAccount?: { email: string; mailboxId: string } | null;
+  onUnlockAccount?: (account: { email: string; mailboxId: string }) => void;
   senderVerification?: { verified: boolean; error?: string } | null;
   attachments: AttachmentItem[];
   downloadingAttachmentId: string | null;
@@ -232,9 +234,11 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
     props.message.folder !== "drafts" &&
     props.message.folder !== "scheduled" &&
     !props.isDecrypting &&
+    !props.lockedAccount &&
     props.decryptedContent !== null &&
     !props.decryptedContent.startsWith("Failed to open") &&
-    !props.decryptedContent.startsWith("Mailbox is locked");
+    !props.decryptedContent.startsWith("Mailbox is locked") &&
+    !props.decryptedContent.startsWith("Unlock ");
 
   return (
     <main class="flex-1 bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2A2D35] rounded-2xl flex flex-col min-w-0 shadow-2xs overflow-hidden h-full">
@@ -307,6 +311,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
           <button
             type="button"
             onClick={() => setSnoozeMenuOpen(true)}
+            data-testid="reading-pane-snooze-btn"
             class="p-1.5 text-[#464748] dark:text-[#A3A3A3] hover:text-[#A27561] dark:hover:text-[#A27561] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
             title="Snooze"
           >
@@ -795,9 +800,17 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                   <button
                     type="button"
                     onClick={() => setDetailsOpen(!detailsOpen())}
-                    class="inline-flex items-center gap-1 text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] cursor-pointer"
+                    class="inline-flex items-center gap-1.5 text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] cursor-pointer"
                   >
-                    <span>to {props.message.recipient}</span>
+                    <Show when={props.message.accountColor}>
+                      <span
+                        class="w-2 h-2 rounded-full flex-shrink-0"
+                        style={{ "background-color": props.message.accountColor }}
+                        title={props.message.accountEmail || "Account"}
+                        data-testid="reading-pane-account-dot"
+                      />
+                    </Show>
+                    <span>to {props.message.accountEmail || props.message.recipient}</span>
                     <svg class="w-2.5 h-2.5 text-[#6E7075] dark:text-[#878A8E]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
                     </svg>
@@ -811,7 +824,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                       </div>
                       <div class="grid grid-cols-[50px_1fr] gap-1">
                         <span class="text-[#6E7075] dark:text-[#878A8E] font-medium">to:</span>
-                        <span class="text-[#1A1B1E] dark:text-[#F3F4F6] break-all">{props.message.recipient}</span>
+                        <span class="text-[#1A1B1E] dark:text-[#F3F4F6] break-all">{props.message.accountEmail || props.message.recipient}</span>
                       </div>
                       <div class="grid grid-cols-[50px_1fr] gap-1">
                         <span class="text-[#6E7075] dark:text-[#878A8E] font-medium">date:</span>
@@ -951,7 +964,38 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
             </div>
           </Show>
 
-          <Show when={!props.isDecrypting && props.decryptedContent}>
+          {/* Locked Account Placeholder & Unlock Button (Rule 2) */}
+          <Show when={props.lockedAccount}>
+            <div
+              data-testid="locked-account-placeholder"
+              class="my-8 p-6 rounded-2xl bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] flex flex-col items-center justify-center text-center space-y-3"
+            >
+              <div class="w-12 h-12 rounded-full bg-[#A27561]/10 flex items-center justify-center text-[#A27561]">
+                <svg class="w-6 h-6 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+              </div>
+              <div class="space-y-1">
+                <p class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]" data-testid="locked-account-message">
+                  Unlock {props.lockedAccount?.email} to read this message.
+                </p>
+                <p class="text-xs text-[#878A8E] dark:text-[#A1A1AA]">
+                  End-to-end encryption keys for {props.lockedAccount?.email} are not currently in memory.
+                </p>
+              </div>
+              <button
+                type="button"
+                data-testid="unlock-account-btn"
+                onClick={() => props.lockedAccount && props.onUnlockAccount?.(props.lockedAccount)}
+                class="mt-2 px-5 py-2.5 rounded-xl bg-[#A27561] text-white text-xs font-semibold hover:bg-[#8F6452] transition cursor-pointer shadow-xs"
+              >
+                Unlock {props.lockedAccount?.email}
+              </button>
+            </div>
+          </Show>
+
+          <Show when={!props.lockedAccount && !props.isDecrypting && props.decryptedContent}>
             <Show
               when={/<[a-z][\s\S]*>/i.test(props.decryptedContent || "")}
               fallback={props.decryptedContent}
@@ -1017,6 +1061,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
           <button
             type="button"
             onClick={() => props.onReply(props.message)}
+            data-testid="reading-pane-reply-btn"
             class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561] dark:hover:border-[#A27561] text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] hover:text-[#A27561] dark:hover:text-[#A27561] transition cursor-pointer shadow-2xs"
           >
             <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">

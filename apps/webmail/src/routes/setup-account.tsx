@@ -3,6 +3,7 @@ import { verifyInvitation, claimInvitation, VerifyInvitationResponse, updateMail
 import { mailboxIdHex, hexToBase64 } from "../message_crypto";
 import { generateQRCodeSVG } from "../utils/qr";
 import { generateTOTPSecret, formatTOTPSecret, verifyTOTPClient } from "../utils/totp";
+import { persistAccountListForDisplay } from "../session_isolation";
 
 export const SetupAccount: Component = () => {
   const [loading, setLoading] = createSignal(true);
@@ -391,20 +392,14 @@ export const SetupAccount: Component = () => {
         console.warn("Failed saving connected accounts in sessionStorage:", e);
       }
 
-      // 2. Persist metadata to localStorage without unsealed secret keys
+      // 2. Persist metadata to localStorage without tokens or secret keys (Rule 4 & 6)
       try {
-        const durableAccount = { ...newAccount, mailboxSkHex: "", searchKeyHex: "" };
-        const existingStr = localStorage.getItem("byos_connected_accounts");
-        let accounts: any[] = [];
+        const existingStr = sessionStorage.getItem("byos_connected_accounts");
+        let allAccounts: any[] = [];
         if (existingStr) {
-          try { accounts = JSON.parse(existingStr); } catch {}
+          try { allAccounts = JSON.parse(existingStr); } catch {}
         }
-        if (!Array.isArray(accounts)) accounts = [];
-        accounts = accounts.filter(
-          (a) => a.id !== durableAccount.id && a.email?.toLowerCase() !== durableAccount.email.toLowerCase()
-        );
-        accounts.unshift(durableAccount);
-        localStorage.setItem("byos_connected_accounts", JSON.stringify(accounts));
+        persistAccountListForDisplay(allAccounts);
       } catch (e) {
         console.warn("Failed saving connected accounts in localStorage:", e);
       }
