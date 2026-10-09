@@ -34,6 +34,68 @@ type MaskedAliasResponse struct {
 type CreateAliasRequest struct {
 	Label     string `json:"label"`
 	MailboxID string `json:"mailbox_id,omitempty"`
+	LocalPart string `json:"local_part,omitempty"`
+}
+
+var reservedAliasLocalParts = map[string]bool{
+	"admin":         true,
+	"administrator": true,
+	"postmaster":    true,
+	"abuse":         true,
+	"support":       true,
+	"help":          true,
+	"info":          true,
+	"noreply":       true,
+	"no-reply":      true,
+	"mailer-daemon": true,
+	"root":          true,
+	"webmaster":     true,
+	"security":      true,
+	"billing":       true,
+	"sales":         true,
+	"marketing":     true,
+	"system":        true,
+	"test":          true,
+	"demo":          true,
+	"api":           true,
+	"www":           true,
+}
+
+func validateCustomLocalPart(lp string) (string, error) {
+	lp = strings.ToLower(strings.TrimSpace(lp))
+	if len(lp) < 3 {
+		return "", errors.New("Must be at least 3 characters")
+	}
+	if len(lp) > 32 {
+		return "", errors.New("Must be at most 32 characters")
+	}
+	for i := 0; i < len(lp); i++ {
+		c := lp[i]
+		isLower := c >= 'a' && c <= 'z'
+		isDigit := c >= '0' && c <= '9'
+		isSpecial := c == '.' || c == '-' || c == '_'
+		if !isLower && !isDigit && !isSpecial {
+			return "", errors.New("Only lowercase letters, numbers, and . - _ are allowed")
+		}
+	}
+	first := lp[0]
+	last := lp[len(lp)-1]
+	if first == '.' || first == '-' || first == '_' || last == '.' || last == '-' || last == '_' {
+		return "", errors.New("Must not start or end with ., -, or _")
+	}
+	for i := 0; i < len(lp)-1; i++ {
+		c1 := lp[i]
+		c2 := lp[i+1]
+		isSpec1 := c1 == '.' || c1 == '-' || c1 == '_'
+		isSpec2 := c2 == '.' || c2 == '-' || c2 == '_'
+		if isSpec1 && isSpec2 {
+			return "", errors.New("Must not contain two consecutive ., -, or _ characters")
+		}
+	}
+	if reservedAliasLocalParts[lp] {
+		return "", errors.New("This alias name is reserved")
+	}
+	return lp, nil
 }
 
 type UpdateAliasRequest struct {
@@ -235,10 +297,41 @@ func aliasesHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		aliasAddress, err := generateUniqueMaskedAddress(ctx, conn)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		var aliasAddress string
+		if strings.TrimSpace(req.LocalPart) != "" {
+			cleanLP, valErr := validateCustomLocalPart(req.LocalPart)
+			if valErr != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":   "invalid_local_part",
+					"message": valErr.Error(),
+				})
+				return
+			}
+			candidate := cleanLP + "@" + maskedAliasDomain
+			var exists bool
+			err = conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM masked_aliases WHERE lower(alias_address) = lower($1))`, candidate).Scan(&exists)
+			if err != nil {
+				http.Error(w, "failed to check alias uniqueness: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if exists {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error": "alias_taken",
+				})
+				return
+			}
+			aliasAddress = candidate
+		} else {
+			var err error
+			aliasAddress, err = generateUniqueMaskedAddress(ctx, conn)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 
 		var created MaskedAliasResponse

@@ -84,6 +84,8 @@ import {
   fetchThreadMessages,
   ThreadSummary,
   toggleMessageStar,
+  fetchMaskedAliases,
+  MaskedAliasItem,
 } from "./api";
 import {
   preparePathAAttachment,
@@ -474,6 +476,15 @@ const App: Component = () => {
   const [composeOpen, setComposeOpen] = createSignal(false);
   const [composeAccountId, setComposeAccountId] = createSignal<string | null>(null);
   const [composeFromAlias, setComposeFromAlias] = createSignal<string | null>(null);
+  const [maskedAliases, setMaskedAliases] = createSignal<MaskedAliasItem[]>([]);
+  const refreshMaskedAliases = async () => {
+    try {
+      const res = await fetchMaskedAliases();
+      setMaskedAliases(res.aliases || []);
+    } catch {
+      // ignore
+    }
+  };
   const [accountUnreadCounts, setAccountUnreadCounts] = createSignal<Record<string, number>>({});
   const [excludedAccountIds, setExcludedAccountIds] = createSignal<string[]>(
     (() => {
@@ -4312,6 +4323,7 @@ const App: Component = () => {
     setEditingDraft(null);
     setEditingScheduledId(null);
     setComposeSignatureApplied(false);
+    setComposeAccountId(null);
     setComposeFromAlias(null);
     setErrorMessage(null);
     setComposeStatus(null);
@@ -4321,7 +4333,7 @@ const App: Component = () => {
     clearComposeForm();
     const accounts = connectedAccounts();
     const activeBox = selectedMailbox();
-    const defaultAccId = composeAccountId() || (activeBox?.id) || (accounts.length > 0 ? accounts[0].id : null);
+    const defaultAccId = (activeBox?.id) || (accounts.length > 0 ? accounts[0].id : null);
     if (defaultAccId) {
       setComposeAccountId(defaultAccId);
       const sigPlain = loadSignature(defaultAccId);
@@ -4338,6 +4350,7 @@ const App: Component = () => {
         setComposeSignatureApplied(true);
       }
     }
+    refreshMaskedAliases();
     setComposeOpen(true);
   }
 
@@ -4489,6 +4502,9 @@ const App: Component = () => {
   }
 
   function restoreComposeFromPayload(payload: PendingSend) {
+    if (payload.mailboxId) {
+      setComposeAccountId(payload.mailboxId);
+    }
     restoreComposeState(payload, {
       setTo: setComposeTo,
       setSubject: setComposeSubject,
@@ -4582,6 +4598,7 @@ const App: Component = () => {
         }
       }
 
+      const senderFrom = payload.fromAlias || matchingAccount?.email || (currentUser()?.email ? currentUser()!.email : (box?.local_part ? `${box.local_part}@byos.local` : undefined));
       const mimeMessage = buildMimeString({
         to,
         subject,
@@ -4589,8 +4606,8 @@ const App: Component = () => {
         htmlBody,
         trackingToken,
         body: signedBody,
-        from: payload.fromAlias,
-        replyTo: payload.fromAlias,
+        from: senderFrom,
+        replyTo: senderFrom,
       });
 
       // Path A routing
@@ -6128,11 +6145,6 @@ const App: Component = () => {
                 setSettingsOpen(true);
                 setMobileSidebarOpen(false);
               }}
-              onOpenMaskedEmail={() => {
-                setActiveSettingsTab("masked-email");
-                setSettingsOpen(true);
-                setMobileSidebarOpen(false);
-              }}
               onLogout={handleLogout}
               isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
               storageError={storageErrorBanner()}
@@ -6233,10 +6245,6 @@ const App: Component = () => {
             onOpenImport={() => setImportEmailsModalOpen(true)}
             onOpenSettings={() => {
               setActiveSettingsTab("signatures");
-              setSettingsOpen(true);
-            }}
-            onOpenMaskedEmail={() => {
-              setActiveSettingsTab("masked-email");
               setSettingsOpen(true);
             }}
             onLogout={handleLogout}
@@ -6452,7 +6460,11 @@ const App: Component = () => {
         isEditingDraft={Boolean(editingDraft())}
         connectedAccounts={connectedAccounts()}
         selectedAccountId={composeAccountId() || selectedMailbox()?.id}
+        aliases={maskedAliases().filter((a) => a.is_enabled)}
+        fromAlias={composeFromAlias()}
+        onSelectFromAlias={(alias) => setComposeFromAlias(alias)}
         onSelectAccount={(id) => {
+          setComposeFromAlias(null);
           setComposeAccountId(id);
           const sigPlain = loadSignature(id);
           const sigHtml = loadSignatureHtml(id);
@@ -6467,7 +6479,7 @@ const App: Component = () => {
         senderAddress={
           (() => {
             if (composeFromAlias()) return composeFromAlias()!;
-            const accId = composeAccountId();
+            const accId = composeAccountId() || selectedMailbox()?.id;
             if (accId) {
               const acc = connectedAccounts().find((a) => a.id === accId);
               if (acc) return acc.email;

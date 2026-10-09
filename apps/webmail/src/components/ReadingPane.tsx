@@ -1036,7 +1036,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <For each={props.attachments}>
                   {(att) => (
-                    <div class="flex items-center justify-between p-3 bg-[#FAF9F6] dark:bg-[#18191D] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561]/50 transition group">
+                    <div data-testid="reading-pane-attachment-item" class="flex items-center justify-between p-3 bg-[#FAF9F6] dark:bg-[#18191D] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561]/50 transition group">
                       <div class="flex items-center gap-2.5 min-w-0 pr-2">
                         <AttachmentBadge filename={att.filename} contentType={att.content_type} size="md" showLabel={false} />
                         <div class="min-w-0">
@@ -1054,6 +1054,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
 
                       <button
                         type="button"
+                        data-testid="reading-pane-attachment-download-btn"
                         onClick={() => props.onDownloadAttachment(att)}
                         disabled={props.downloadingAttachmentId === att.id}
                         class="rounded-lg bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561] px-2.5 py-1 text-xs font-medium text-[#1A1B1E] dark:text-[#F3F4F6] hover:text-[#A27561] dark:hover:text-[#A27561] disabled:opacity-50 cursor-pointer shadow-2xs transition-all flex-shrink-0"

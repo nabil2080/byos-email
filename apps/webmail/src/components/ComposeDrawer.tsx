@@ -1,5 +1,5 @@
 import { Component, createSignal, createEffect, For, Show } from "solid-js";
-import { AttachmentItem, ConnectedAccount } from "../api";
+import { AttachmentItem, ConnectedAccount, MaskedAliasItem } from "../api";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { RichTextEditor } from "./RichTextEditor";
 
@@ -33,6 +33,9 @@ interface ComposeDrawerProps {
   selectedAccountId?: string;
   onSelectAccount?: (accountId: string) => void;
   isUnified?: boolean;
+  aliases?: MaskedAliasItem[];
+  fromAlias?: string | null;
+  onSelectFromAlias?: (aliasAddress: string | null) => void;
 }
 
 export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
@@ -43,6 +46,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
   let toInputRef: HTMLInputElement | undefined;
   let subjectInputRef: HTMLInputElement | undefined;
   let fileInputRef: HTMLInputElement | undefined;
+  let fromSelectRef: HTMLSelectElement | undefined;
 
   createEffect(() => {
     if (toInputRef && toInputRef.value !== props.to) {
@@ -53,6 +57,15 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
   createEffect(() => {
     if (subjectInputRef && subjectInputRef.value !== props.subject) {
       subjectInputRef.value = props.subject;
+    }
+  });
+
+  createEffect(() => {
+    const targetVal = props.fromAlias
+      ? `alias:${props.fromAlias}`
+      : `account:${props.selectedAccountId || props.connectedAccounts?.[0]?.id || ""}`;
+    if (fromSelectRef && fromSelectRef.value !== targetVal) {
+      fromSelectRef.value = targetVal;
     }
   });
 
@@ -156,6 +169,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
             <button
               type="button"
               onClick={handleClose}
+              data-testid="compose-close-btn"
               title="Save draft & Close (Esc)"
               class="w-8 h-8 rounded-lg hover:bg-stone-700/70 dark:hover:bg-[#26282E] flex items-center justify-center text-xs transition cursor-pointer text-stone-300 hover:text-white"
             >
@@ -176,7 +190,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
               <div class="flex items-center gap-2 text-xs">
                 <span class="w-16 text-[#55575B] dark:text-[#A1A1AA] font-medium">From:</span>
                 <Show
-                  when={props.isUnified && (props.connectedAccounts?.length || 0) > 1}
+                  when={(props.connectedAccounts?.length || 0) > 1 || (props.aliases?.length || 0) > 0}
                   fallback={
                     <span class="font-mono text-[#1A1B1E] dark:text-[#F3F4F6] font-medium select-all">
                       {props.senderAddress}
@@ -184,17 +198,48 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                   }
                 >
                   <select
-                    value={props.selectedAccountId || props.connectedAccounts?.[0]?.id}
-                    onChange={(e) => props.onSelectAccount?.(e.currentTarget.value)}
+                    ref={fromSelectRef}
+                    value={props.fromAlias ? `alias:${props.fromAlias}` : `account:${props.selectedAccountId || props.connectedAccounts?.[0]?.id || ""}`}
+                    onChange={(e) => {
+                      const val = e.currentTarget.value;
+                      if (val.startsWith("alias:")) {
+                        props.onSelectFromAlias?.(val.slice(6));
+                      } else if (val.startsWith("account:")) {
+                        props.onSelectFromAlias?.(null);
+                        props.onSelectAccount?.(val.slice(8));
+                      } else {
+                        props.onSelectFromAlias?.(null);
+                        props.onSelectAccount?.(val);
+                      }
+                    }}
                     class="font-mono text-xs bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] rounded-lg px-2 py-1 text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-1 focus:ring-[#A27561] cursor-pointer"
                     aria-label="Sender account"
                     data-testid="compose-from-select"
                   >
                     <For each={props.connectedAccounts}>
                       {(acc) => (
-                        <option value={acc.id}>{acc.email}</option>
+                        <option
+                          value={`account:${acc.id}`}
+                          selected={!props.fromAlias && (props.selectedAccountId ? props.selectedAccountId === acc.id : acc.id === props.connectedAccounts?.[0]?.id)}
+                        >
+                          {acc.email}
+                        </option>
                       )}
                     </For>
+                    <Show when={!props.connectedAccounts || props.connectedAccounts.length === 0}>
+                      <option value={`account:${props.selectedAccountId || ""}`} selected={!props.fromAlias}>
+                        {props.senderAddress}
+                      </option>
+                    </Show>
+                    <Show when={props.aliases && props.aliases.length > 0}>
+                      <For each={props.aliases}>
+                        {(al) => (
+                          <option value={`alias:${al.alias_address}`} selected={props.fromAlias === al.alias_address}>
+                            {al.alias_address} (alias)
+                          </option>
+                        )}
+                      </For>
+                    </Show>
                   </select>
                 </Show>
                 <span class="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-[#F3ECE8] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-bold">
@@ -265,7 +310,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
               <div class="px-4 py-2 bg-[#F8F7F4] dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2E3138] flex flex-wrap gap-2 flex-shrink-0">
                 <For each={props.attachments}>
                   {(att) => (
-                    <div class="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] text-xs font-mono text-[#1A1B1E] dark:text-[#F3F4F6] shadow-2xs">
+                    <div data-testid="compose-attachment-pill" class="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] text-xs font-mono text-[#1A1B1E] dark:text-[#F3F4F6] shadow-2xs">
                       <AttachmentBadge filename={att.filename} contentType={att.content_type} size="xs" showLabel={false} />
                       <span class="truncate max-w-[160px]">{att.filename}</span>
                       <span class="text-[10px] text-[#55575B] dark:text-[#A1A1AA]">
@@ -321,6 +366,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
             <input
               ref={fileInputRef}
               type="file"
+              data-testid="compose-file-input"
               onChange={props.onAttachmentSelected}
               class="hidden"
             />

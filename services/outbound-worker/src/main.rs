@@ -1084,4 +1084,27 @@ mod tests {
         assert!(res.is_err(), "expected completion to fail on 404");
         assert_eq!(attempts.load(Ordering::SeqCst), 1, "expected exactly 1 attempt on 4xx");
     }
+
+    #[test]
+    fn test_dkim_identity_is_single_at_domain() {
+        let sender = "x@y.byos.local";
+        let email_raw = format!("From: {}\r\nSubject: Test\r\n\r\nHello", sender);
+        let (_extracted_sender, extracted_domain) = extract_from_header(email_raw.as_bytes());
+        assert_eq!(extracted_domain.as_deref(), Some("y.byos.local"));
+
+        let domain_name = extracted_domain.unwrap();
+        let header_i = format!("@{}", domain_name);
+
+        assert_eq!(header_i, "@y.byos.local");
+        assert_ne!(header_i, format!("@{}", sender));
+        assert_ne!(header_i, "@x@y.byos.local");
+        assert_eq!(header_i.matches('@').count(), 1, "header.i must contain exactly one @ symbol");
+
+        let auth_results_hdr = format!(
+            "Authentication-Results: byos.local; dkim=pass (2048-bit key) header.d={} header.i={} header.s=byos\r\n",
+            domain_name, header_i
+        );
+        assert!(auth_results_hdr.contains("header.i=@y.byos.local"));
+        assert!(!auth_results_hdr.contains("@x@y.byos.local"));
+    }
 }

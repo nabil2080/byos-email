@@ -14,17 +14,61 @@ interface MaskedEmailTabProps {
   currentUser: UserMe | null;
 }
 
+export const RESERVED_LOCAL_PARTS = new Set([
+  "admin", "administrator", "postmaster", "abuse", "support", "help", "info",
+  "noreply", "no-reply", "mailer-daemon", "root", "webmaster", "security",
+  "billing", "sales", "marketing", "system", "test", "demo", "api", "www"
+]);
+
+export function validateLocalPart(lp: string): { valid: boolean; error: string | null } {
+  const trimmed = lp.trim().toLowerCase();
+  if (trimmed.length === 0) {
+    return { valid: false, error: null };
+  }
+  if (/[^a-z0-9._-]/.test(trimmed)) {
+    return { valid: false, error: "Only lowercase letters, numbers, and . - _ are allowed" };
+  }
+  if (trimmed.length < 3) {
+    return { valid: false, error: "Must be at least 3 characters" };
+  }
+  if (trimmed.length > 32) {
+    return { valid: false, error: "Must be at most 32 characters" };
+  }
+  if (/^[._-]/.test(trimmed) || /[._-]$/.test(trimmed)) {
+    return { valid: false, error: "Must not start or end with ., -, or _" };
+  }
+  if (/[._-]{2,}/.test(trimmed)) {
+    return { valid: false, error: "Must not contain two consecutive ., -, or _ characters" };
+  }
+  if (RESERVED_LOCAL_PARTS.has(trimmed)) {
+    return { valid: false, error: "This alias name is reserved" };
+  }
+  return { valid: true, error: null };
+}
+
 export const MaskedEmailTab: Component<MaskedEmailTabProps> = (props) => {
   const [aliases, setAliases] = createSignal<MaskedAliasItem[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [generating, setGenerating] = createSignal(false);
   const [rateLimitError, setRateLimitError] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
+  const [createError, setCreateError] = createSignal<string | null>(null);
   const [copiedId, setCopiedId] = createSignal<string | null>(null);
 
   // Modals state
   const [generateModalOpen, setGenerateModalOpen] = createSignal(false);
+  const [creationMode, setCreationMode] = createSignal<"random" | "custom">("random");
+  const [customLocalPart, setCustomLocalPart] = createSignal("");
+  const [customCharError, setCustomCharError] = createSignal<string | null>(null);
   const [newLabel, setNewLabel] = createSignal("");
+
+  const customValidation = () => validateLocalPart(customLocalPart());
+  const isCustomValid = () => customValidation().valid && !customCharError();
+  const canSubmit = () => {
+    if (generating()) return false;
+    if (creationMode() === "random") return true;
+    return isCustomValid();
+  };
 
   const [editModalOpen, setEditModalOpen] = createSignal(false);
   const [editingAlias, setEditingAlias] = createSignal<MaskedAliasItem | null>(null);
@@ -69,19 +113,41 @@ export const MaskedEmailTab: Component<MaskedEmailTabProps> = (props) => {
 
   async function handleCreateAlias(e?: Event) {
     if (e) e.preventDefault();
+    if (!canSubmit()) return;
     setGenerating(true);
     setRateLimitError(null);
     setError(null);
+    setCreateError(null);
     try {
-      const created = await createMaskedAlias(newLabel().trim());
+      let created: MaskedAliasItem;
+      if (creationMode() === "custom") {
+        created = await createMaskedAlias({
+          label: newLabel().trim(),
+          local_part: customLocalPart().trim().toLowerCase(),
+        });
+      } else {
+        created = await createMaskedAlias(newLabel().trim());
+      }
       setAliases([created, ...aliases()]);
       setGenerateModalOpen(false);
       setNewLabel("");
+      setCustomLocalPart("");
+      setCustomCharError(null);
+      setCreateError(null);
+      setCreationMode("random");
     } catch (err: any) {
       if (err.message && (err.message.includes("429") || err.message.includes("rate_limit_exceeded"))) {
-        setRateLimitError("You've reached the daily limit for new aliases. Try again tomorrow.");
+        const msg = "You've reached the daily limit for new aliases. Try again tomorrow.";
+        setCreateError(msg);
+        setRateLimitError(msg);
+      } else if (err.status === 409 || err.message?.includes("already taken") || err.message?.includes("already exists") || err.message?.includes("alias_taken")) {
+        const msg = "That alias is already taken. Try a different name.";
+        setCreateError(msg);
+        setError(msg);
       } else {
-        setError(err.message || "Failed to create alias");
+        const msg = err.message || "Failed to create alias";
+        setCreateError(msg);
+        setError(msg);
       }
     } finally {
       setGenerating(false);
@@ -197,6 +263,10 @@ export const MaskedEmailTab: Component<MaskedEmailTabProps> = (props) => {
         <button
           onClick={() => {
             setNewLabel("");
+            setCustomLocalPart("");
+            setCustomCharError(null);
+            setCreateError(null);
+            setCreationMode("random");
             setGenerateModalOpen(true);
           }}
           data-testid="generate-alias-btn"
@@ -279,6 +349,9 @@ export const MaskedEmailTab: Component<MaskedEmailTabProps> = (props) => {
             <button
               onClick={() => {
                 setNewLabel("");
+                setCustomLocalPart("");
+                setCustomCharError(null);
+                setCreationMode("random");
                 setGenerateModalOpen(true);
               }}
               data-testid="generate-alias-btn"
@@ -431,7 +504,7 @@ export const MaskedEmailTab: Component<MaskedEmailTabProps> = (props) => {
       <Show when={generateModalOpen()}>
         <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div
-            class="bg-white dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] rounded-xl shadow-xl max-w-md w-full p-6 space-y-4"
+            class="bg-white dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] rounded-xl shadow-xl max-w-md w-full p-6 space-y-4 font-sans"
             role="dialog"
             aria-modal="true"
             aria-labelledby="generate-modal-title"
@@ -441,7 +514,7 @@ export const MaskedEmailTab: Component<MaskedEmailTabProps> = (props) => {
                 <svg class="w-5 h-5 text-[#9E725F] stroke-current fill-none stroke-[1.75]" viewBox="0 0 24 24">
                   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                 </svg>
-                Generate Masked Email
+                Create Masked Email
               </h2>
               <button
                 onClick={() => setGenerateModalOpen(false)}
@@ -452,9 +525,101 @@ export const MaskedEmailTab: Component<MaskedEmailTabProps> = (props) => {
               </button>
             </div>
 
-            <p class="text-xs sm:text-sm text-[#6F7173] dark:text-neutral-400">
-              A random, unique address at <span class="font-mono font-medium text-[#3C3D3E] dark:text-neutral-200">masked.byos.local</span> will be generated and routed to your mailbox.
-            </p>
+            {/* Mode toggle */}
+            <div class="flex items-center p-1 bg-[#F0EEE9] dark:bg-[#252830] rounded-lg border border-[#E2DFD8] dark:border-[#2E3138]">
+              <button
+                type="button"
+                onClick={() => {
+                  setCreationMode("random");
+                  setCustomCharError(null);
+                  setCreateError(null);
+                }}
+                data-testid="alias-mode-random"
+                class={`flex-1 py-1.5 px-3 rounded-md text-xs font-medium transition cursor-pointer ${
+                  creationMode() === "random"
+                    ? "bg-white dark:bg-[#18191D] text-[#3C3D3E] dark:text-white shadow-xs font-semibold"
+                    : "text-[#6F7173] dark:text-neutral-400 hover:text-[#3C3D3E] dark:hover:text-white"
+                }`}
+              >
+                Random
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCreationMode("custom");
+                  setCreateError(null);
+                }}
+                data-testid="alias-mode-custom"
+                class={`flex-1 py-1.5 px-3 rounded-md text-xs font-medium transition cursor-pointer ${
+                  creationMode() === "custom"
+                    ? "bg-white dark:bg-[#18191D] text-[#3C3D3E] dark:text-white shadow-xs font-semibold"
+                    : "text-[#6F7173] dark:text-neutral-400 hover:text-[#3C3D3E] dark:hover:text-white"
+                }`}
+              >
+                Custom
+              </button>
+            </div>
+
+            {/* Error display inside modal */}
+            <Show when={createError()}>
+              <div data-testid="alias-modal-error" class="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs text-rose-700 dark:text-rose-300">
+                {createError()}
+              </div>
+            </Show>
+
+            <Show
+              when={creationMode() === "custom"}
+              fallback={
+                <p class="text-xs sm:text-sm text-[#6F7173] dark:text-neutral-400">
+                  A random, unique address at <span class="font-mono font-medium text-[#3C3D3E] dark:text-neutral-200">masked.byos.local</span> will be generated and routed to your mailbox.
+                </p>
+              }
+            >
+              <div class="space-y-1.5">
+                <label for="custom-local-part-input" class="block text-xs font-medium text-[#3C3D3E] dark:text-neutral-300">
+                  Alias Name
+                </label>
+                <div class="flex items-center rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#252830] overflow-hidden focus-within:ring-2 focus-within:ring-[#9E725F]/50">
+                  <input
+                    id="custom-local-part-input"
+                    data-testid="custom-local-part-input"
+                    type="text"
+                    placeholder="amazon"
+                    value={customLocalPart()}
+                    onInput={(e) => {
+                      const lower = e.currentTarget.value.toLowerCase();
+                      e.currentTarget.value = lower;
+                      setCustomLocalPart(lower);
+                      if (/[^a-z0-9._-]/.test(lower)) {
+                        setCustomCharError("Only lowercase letters, numbers, and . - _ are allowed");
+                      } else {
+                        setCustomCharError(null);
+                      }
+                    }}
+                    class="flex-1 px-3 py-2 text-xs sm:text-sm font-mono text-[#3C3D3E] dark:text-neutral-100 bg-transparent focus:outline-none"
+                    autofocus
+                  />
+                  <span class="px-3 py-2 text-xs sm:text-sm font-mono text-[#6F7173] dark:text-neutral-400 bg-[#F0EEE9]/60 dark:bg-[#1E2025] border-l border-[#E2DFD8] dark:border-[#2E3138] select-none">
+                    @masked.byos.local
+                  </span>
+                </div>
+
+                {/* Inline error or help text */}
+                <Show when={customCharError() || customValidation().error}>
+                  <p data-testid="alias-validation-error" class="text-[11px] text-rose-600 dark:text-rose-400 font-medium pt-0.5">
+                    {customCharError() || customValidation().error}
+                  </p>
+                </Show>
+
+                {/* Live address preview */}
+                <div class="mt-2 p-2 rounded-lg bg-[#FAF9F7] dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between text-xs">
+                  <span class="text-[#6F7173] dark:text-neutral-400">Address Preview:</span>
+                  <span data-testid="alias-address-preview" class="font-mono font-medium text-[#9E725F] dark:text-[#D4A38F]">
+                    {(customLocalPart().trim().toLowerCase() || "…") + "@masked.byos.local"}
+                  </span>
+                </div>
+              </div>
+            </Show>
 
             <form onSubmit={handleCreateAlias} class="space-y-4">
               <div>
@@ -463,12 +628,12 @@ export const MaskedEmailTab: Component<MaskedEmailTabProps> = (props) => {
                 </label>
                 <input
                   id="alias-label-input"
+                  data-testid="alias-label-input"
                   type="text"
                   placeholder="e.g. Shopping, Newsletter, Forum..."
                   value={newLabel()}
                   onInput={(e) => setNewLabel(e.currentTarget.value)}
                   class="w-full px-3 py-2 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#252830] text-xs sm:text-sm text-[#3C3D3E] dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
-                  autofocus
                 />
               </div>
 
@@ -483,12 +648,13 @@ export const MaskedEmailTab: Component<MaskedEmailTabProps> = (props) => {
                 </button>
                 <button
                   type="submit"
-                  disabled={generating()}
-                  class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#9E725F] hover:bg-[#865E4D] text-white text-xs sm:text-sm font-medium transition shadow-sm focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 disabled:opacity-50 cursor-pointer"
+                  disabled={!canSubmit()}
+                  data-testid="alias-create-submit-btn"
+                  class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#9E725F] hover:bg-[#865E4D] text-white text-xs sm:text-sm font-medium transition shadow-sm focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  <Show when={generating()} fallback="Generate Alias">
+                  <Show when={generating()} fallback={creationMode() === "custom" ? "Create Alias" : "Generate Alias"}>
                     <span class="inline-block animate-spin w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full"></span>
-                    <span>Generating…</span>
+                    <span>Creating…</span>
                   </Show>
                 </button>
               </div>

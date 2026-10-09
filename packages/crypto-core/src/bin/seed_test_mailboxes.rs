@@ -226,6 +226,11 @@ fn print_sql(
         );
         println!();
 
+        println!(
+            "INSERT INTO mailbox_storage (mailbox_id, storage_connection_id, object_prefix, status)\nVALUES ('{}'::uuid, COALESCE((SELECT id FROM storage_connections WHERE status = 'active' LIMIT 1), 'a0000000-0000-0000-0000-000000000001'::uuid), 'mailboxes/{}', 'active')\nON CONFLICT DO NOTHING;",
+            mb.mailbox_id, mb.mailbox_id
+        );
+        println!();
     }
 
     println!("COMMIT;");

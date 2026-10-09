@@ -1600,12 +1600,71 @@ export async function fetchMaskedAliases(token?: string): Promise<MaskedAliasesR
   return apiRequest<MaskedAliasesResponse>("/v1/users/me/aliases", undefined, token);
 }
 
-export async function createMaskedAlias(label?: string, token?: string): Promise<MaskedAliasItem> {
-  return apiRequest<MaskedAliasItem>("/v1/users/me/aliases", {
-    method: "POST",
-    body: JSON.stringify({ label: label || "" }),
-  }, token);
+export interface CreateMaskedAliasOptions {
+  label?: string;
+  local_part?: string;
 }
+
+export async function createMaskedAlias(
+  arg1?: string | CreateMaskedAliasOptions,
+  arg2?: string,
+  arg3?: string
+): Promise<MaskedAliasItem> {
+  let label = "";
+  let localPart: string | undefined;
+  let token: string | undefined;
+
+  if (typeof arg1 === "object" && arg1 !== null) {
+    label = arg1.label || "";
+    localPart = arg1.local_part;
+    token = arg2;
+  } else {
+    label = arg1 || "";
+    if (arg3 !== undefined) {
+      localPart = arg2;
+      token = arg3;
+    } else {
+      token = arg2;
+    }
+  }
+
+  const payload: { label: string; local_part?: string } = { label };
+  if (localPart && localPart.trim()) {
+    payload.local_part = localPart.trim();
+  }
+
+  try {
+    return await apiRequest<MaskedAliasItem>("/v1/users/me/aliases", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }, token);
+  } catch (err: any) {
+    if (err?.status === 409) {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(err.message);
+      } catch {}
+      if (parsed?.error === "alias_taken" || err.message?.includes("alias_taken") || err.message?.includes("alias already exists")) {
+        const error = new Error("That alias is already taken. Try a different name.") as Error & { status: number };
+        error.status = 409;
+        throw error;
+      }
+    } else if (err?.status === 400) {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(err.message);
+      } catch {}
+      if (parsed?.error === "invalid_local_part" && parsed?.message) {
+        const error = new Error(parsed.message) as Error & { status: number };
+        error.status = 400;
+        throw error;
+      }
+    }
+    throw err;
+  }
+}
+
+export const createAlias = createMaskedAlias;
 
 export async function updateMaskedAlias(
   aliasId: string,

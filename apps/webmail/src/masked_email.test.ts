@@ -8,6 +8,7 @@ import {
   MaskedAliasItem,
   MessageMetadata,
 } from "./api";
+import { validateLocalPart } from "./routes/settings/MaskedEmailTab";
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -89,7 +90,7 @@ export async function runMaskedEmailTests(): Promise<{ passed: number; failed: n
     let restoredSubject = "";
     let restoredBody = "";
     let restoredAlias: string | null = null;
-    let restoredOpen = false;
+    let restoredOpen: any = false;
 
     restoreComposeState(payload, {
       setTo: (v) => { restoredTo = v; },
@@ -264,6 +265,164 @@ export async function runMaskedEmailTests(): Promise<{ passed: number; failed: n
 
     assert(meta.reply_via_alias === "a1b2c3d4e5f6@masked.byos.local", "reply_via_alias mapped");
     assert(meta.alias_label === "Shopping Signup", "alias_label mapped");
+  });
+
+  // 7. test_custom_alias_validation_shows_errors
+  await test("7. test_custom_alias_validation_shows_errors", () => {
+    // Valid cases
+    const validNames = ["amazon", "Amazon", "my-store", "service_123", "a.b.c", "abc"];
+    for (const name of validNames) {
+      const res = validateLocalPart(name);
+      assert(res.valid === true, `expected ${name} to be valid`);
+      assert(res.error === null, `expected error to be null for ${name}`);
+    }
+
+    // Invalid cases with exact errors
+    assert(validateLocalPart("").valid === false, "empty is invalid");
+    assert(validateLocalPart("ab").error === "Must be at least 3 characters", "too short error");
+    assert(validateLocalPart("a".repeat(33)).error === "Must be at most 32 characters", "too long error");
+    assert(validateLocalPart(".start").error === "Must not start or end with ., -, or _", "starts with dot");
+    assert(validateLocalPart("-start").error === "Must not start or end with ., -, or _", "starts with hyphen");
+    assert(validateLocalPart("_start").error === "Must not start or end with ., -, or _", "starts with underscore");
+    assert(validateLocalPart("end.").error === "Must not start or end with ., -, or _", "ends with dot");
+    assert(validateLocalPart("end-").error === "Must not start or end with ., -, or _", "ends with hyphen");
+    assert(validateLocalPart("end_").error === "Must not start or end with ., -, or _", "ends with underscore");
+    assert(validateLocalPart("two..dots").error === "Must not contain two consecutive ., -, or _ characters", "consecutive dots");
+    assert(validateLocalPart("two--dashes").error === "Must not contain two consecutive ., -, or _ characters", "consecutive dashes");
+    assert(validateLocalPart("two__underscores").error === "Must not contain two consecutive ., -, or _ characters", "consecutive underscores");
+    assert(validateLocalPart("two.-mixed").error === "Must not contain two consecutive ., -, or _ characters", "consecutive mixed");
+    assert(validateLocalPart("admin").error === "This alias name is reserved", "reserved admin");
+    assert(validateLocalPart("ADMIN").error === "This alias name is reserved", "reserved uppercase ADMIN");
+    assert(validateLocalPart("support").error === "This alias name is reserved", "reserved support");
+    assert(validateLocalPart("root").error === "This alias name is reserved", "reserved root");
+    assert(validateLocalPart("no-reply").error === "This alias name is reserved", "reserved no-reply");
+    assert(validateLocalPart("invalid@char").error === "Only lowercase letters, numbers, and . - _ are allowed", "invalid @ character");
+    assert(validateLocalPart("space here").error === "Only lowercase letters, numbers, and . - _ are allowed", "space character");
+    assert(validateLocalPart("special!mark").error === "Only lowercase letters, numbers, and . - _ are allowed", "exclamation mark");
+  });
+
+  // 8. test_custom_alias_preview_updates
+  await test("8. test_custom_alias_preview_updates", () => {
+    const formatPreview = (lp: string) => (lp.trim().toLowerCase() || "…") + "@masked.byos.local";
+    assert(formatPreview("") === "…@masked.byos.local", "empty preview shows placeholder");
+    assert(formatPreview("   ") === "…@masked.byos.local", "whitespace preview shows placeholder");
+    assert(formatPreview("amazon") === "amazon@masked.byos.local", "standard preview matches");
+    assert(formatPreview("AMAZON") === "amazon@masked.byos.local", "uppercase is lowercased in preview");
+    assert(formatPreview("my-store.123") === "my-store.123@masked.byos.local", "symbols preserved in preview");
+  });
+
+  // 9. test_custom_alias_409_shows_friendly_error
+  await test("9. test_custom_alias_409_shows_friendly_error", async () => {
+    const originalFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/v1/users/me/aliases") && init?.method === "POST") {
+        return {
+          ok: false,
+          status: 409,
+          text: async () => JSON.stringify({ error: "alias_taken" }),
+        };
+      }
+      return { ok: false, status: 500, text: async () => "server error" };
+    };
+
+    try {
+      let threw = false;
+      try {
+        await createMaskedAlias({ label: "Duplicate", local_part: "taken-name" });
+      } catch (err: any) {
+        threw = true;
+        assert(err.status === 409, "error status is 409");
+        assert(err.message === "That alias is already taken. Try a different name.", "friendly error message returned on 409");
+      }
+      assert(threw, "should have thrown 409 friendly error");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // 10. test_random_mode_hides_custom_input
+  await test("10. test_random_mode_hides_custom_input", async () => {
+    const originalFetch = globalThis.fetch;
+    let sentBody: any = null;
+
+    (globalThis as any).fetch = async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/v1/users/me/aliases") && init?.method === "POST") {
+        sentBody = init?.body ? JSON.parse(init.body as string) : {};
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            id: "alias-uuid-random",
+            alias_address: "rnd123456789@masked.byos.local",
+            label: "Random Label",
+            is_enabled: true,
+            created_at: "2026-10-09T14:00:00Z",
+            disabled_at: null,
+            reply_count: 0,
+          }),
+        };
+      }
+      return { ok: false, status: 500, text: async () => "server error" };
+    };
+
+    try {
+      // In random mode, local_part is omitted from the request
+      const created = await createMaskedAlias("Random Label");
+      assert(created.id === "alias-uuid-random", "random alias created");
+      assert(sentBody !== null, "request body was sent");
+      assert(sentBody.label === "Random Label", "label was passed");
+      assert(sentBody.local_part === undefined, "local_part is omitted in random mode");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // 11. TestCreateCustomAliasAPI
+  await test("11. TestCreateCustomAliasAPI", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls: { url: string; method?: string; body?: any }[] = [];
+
+    (globalThis as any).fetch = async (url: string, init?: RequestInit) => {
+      calls.push({
+        url,
+        method: init?.method || "GET",
+        body: init?.body ? JSON.parse(init.body as string) : undefined,
+      });
+
+      if (url.endsWith("/v1/users/me/aliases") && init?.method === "POST") {
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            id: "alias-uuid-custom",
+            alias_address: "amazon@masked.byos.local",
+            label: "Amazon Orders",
+            is_enabled: true,
+            created_at: "2026-10-09T14:00:00Z",
+            disabled_at: null,
+            reply_count: 0,
+          }),
+        };
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        text: async () => "not found",
+      };
+    };
+
+    try {
+      const created = await createMaskedAlias({ label: "Amazon Orders", local_part: "amazon" }, "mock-token");
+      assert(created.id === "alias-uuid-custom", "custom alias created");
+      assert(created.alias_address === "amazon@masked.byos.local", "alias address matches");
+      assert(
+        calls.some(c => c.method === "POST" && c.body?.label === "Amazon Orders" && c.body?.local_part === "amazon"),
+        "POST payload includes label and local_part",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   return { passed, failed };

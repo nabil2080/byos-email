@@ -138,10 +138,25 @@ async function runMaskedEmailBrowserTest() {
     await sleep(1500);
     console.log("  Alice logged in successfully.");
 
-    // Step 2: Navigate to Settings > Masked Email
-    console.log("\n--- [STEP 2] Open Masked Email settings tab ---");
-    await page.waitForSelector('[data-testid="sidebar-masked-aliases-btn"]', { timeout: 5000 });
-    await page.click('[data-testid="sidebar-masked-aliases-btn"]');
+    // Step 2: Verify Sidebar does NOT have Masked Aliases, then open Settings > Masked Email
+    console.log("\n--- [STEP 2] Verify Sidebar and Open Masked Email via Settings ---");
+    const sidebarAliasBtn = await page.$('[data-testid="sidebar-masked-aliases-btn"]');
+    assert(!sidebarAliasBtn, "Sidebar must NOT have Masked Aliases button");
+    console.log("  Confirmed: 'Masked Aliases' is removed from the sidebar.");
+
+    // Screenshot sidebar without Masked Aliases
+    const sidebarScreenshotPath = path.resolve(artifactsDir, 'masked_email_sidebar_clean.png');
+    await page.screenshot({ path: sidebarScreenshotPath, fullPage: false });
+    console.log(`  Captured screenshot: ${sidebarScreenshotPath}`);
+
+    // Navigate to Settings
+    await page.waitForSelector('[data-testid="sidebar-settings-btn"]', { timeout: 5000 });
+    await page.click('[data-testid="sidebar-settings-btn"]');
+    await sleep(800);
+
+    // Click Masked Email tab
+    await page.waitForSelector('[data-testid="settings-tab-masked-email"]', { timeout: 5000 });
+    await page.click('[data-testid="settings-tab-masked-email"]');
     await sleep(1200);
 
     const headingText = await page.evaluate(() => {
@@ -155,23 +170,78 @@ async function runMaskedEmailBrowserTest() {
     await page.screenshot({ path: tabScreenshotPath, fullPage: false });
     console.log(`  Captured screenshot: ${tabScreenshotPath}`);
 
-    // Step 3: Open Generate Modal
-    console.log("\n--- [STEP 3] Open Generate Modal ---");
+    // Step 3: Open Create Modal & Test Custom Mode
+    console.log("\n--- [STEP 3] Open Create Modal & Test Custom Mode ---");
     const generateBtn = await page.waitForSelector('[data-testid="generate-alias-btn"]', { timeout: 5000 });
     await generateBtn.click();
     await sleep(800);
 
-    await page.waitForSelector('#alias-label-input', { timeout: 5000 });
-    await page.type('#alias-label-input', 'Shopping Test');
+    // Toggle to Custom mode
+    const customModeBtn = await page.waitForSelector('[data-testid="alias-mode-custom"]', { timeout: 5000 });
+    await customModeBtn.click();
+    await sleep(500);
 
-    // Screenshot 2: Generate modal
-    const generateModalScreenshotPath = path.resolve(artifactsDir, 'masked_email_generate_modal.png');
-    await page.screenshot({ path: generateModalScreenshotPath, fullPage: false });
-    console.log(`  Captured screenshot: ${generateModalScreenshotPath}`);
+    // Verify custom input is visible
+    await page.waitForSelector('[data-testid="custom-local-part-input"]', { timeout: 5000 });
 
-    // Step 4: Submit form & verify generated alias
-    console.log("\n--- [STEP 4] Generate alias and verify table row ---");
-    await page.click('button[type="submit"]');
+    // Test invalid characters and validation
+    await page.type('[data-testid="custom-local-part-input"]', 'bad@alias!');
+    await sleep(500);
+    const hasValidationError = await page.evaluate(() => {
+      const err = document.querySelector('[data-testid="alias-validation-error"]');
+      return err ? err.textContent.trim() : '';
+    });
+    console.log(`  Validation message for invalid input: "${hasValidationError}"`);
+    assert(hasValidationError.length > 0, "Validation error displayed for invalid characters");
+
+    // Check submit button is disabled
+    const isSubmitDisabled = await page.evaluate(() => {
+      const btn = document.querySelector('[data-testid="alias-create-submit-btn"]');
+      return btn ? btn.disabled : false;
+    });
+    assert(isSubmitDisabled, "Create button is disabled while input is invalid");
+
+    const runId = Date.now().toString(36).slice(-6);
+    const targetCustomLocal = `amazon-${runId}`;
+    const targetCustomAddress = `${targetCustomLocal}@masked.byos.local`;
+    const targetSubject = `Order #${runId} Confirmation`;
+
+    // Clear input and enter valid custom name with uppercase to test silent lowercase
+    await page.evaluate(() => {
+      const input = document.querySelector('[data-testid="custom-local-part-input"]');
+      if (input) input.value = '';
+    });
+    await page.type('[data-testid="custom-local-part-input"]', `AMAZON-${runId.toUpperCase()}`);
+    await sleep(500);
+
+    // Verify lowercase
+    const inputVal = await page.evaluate(() => {
+      const input = document.querySelector('[data-testid="custom-local-part-input"]');
+      return input ? input.value : '';
+    });
+    console.log(`  Input value after typing uppercase: "${inputVal}"`);
+    assert(inputVal === targetCustomLocal, "Uppercase characters were silently lowercased");
+
+    // Verify preview
+    const previewText = await page.evaluate(() => {
+      const prev = document.querySelector('[data-testid="alias-address-preview"]');
+      return prev ? prev.textContent.trim() : '';
+    });
+    console.log(`  Live address preview: "${previewText}"`);
+    assert(previewText === targetCustomAddress, "Live preview shows full address");
+
+    // Enter label
+    await page.type('[data-testid="alias-label-input"]', 'Amazon Shopping');
+
+    // Screenshot: Custom alias modal
+    const customModalScreenshotPath = path.resolve(artifactsDir, 'masked_email_custom_modal.png');
+    await page.screenshot({ path: customModalScreenshotPath, fullPage: false });
+    console.log(`  Captured screenshot: ${customModalScreenshotPath}`);
+
+    // Step 4: Submit custom alias and verify table row
+    console.log("\n--- [STEP 4] Submit custom alias and verify table row ---");
+    const submitBtn = await page.waitForSelector('[data-testid="alias-create-submit-btn"]', { timeout: 5000 });
+    await submitBtn.click();
     await sleep(2000);
 
     // Look for alias in table
@@ -182,9 +252,8 @@ async function runMaskedEmailBrowserTest() {
       return addressSpan ? addressSpan.textContent.trim() : '';
     });
 
-    console.log(`  Generated alias address: "${aliasAddress}"`);
-    assert(aliasAddress.endsWith("@masked.byos.local"), "Alias ends with @masked.byos.local");
-    assert(aliasAddress.length === 12 + "@masked.byos.local".length, "Local part is 12 characters");
+    console.log(`  Created custom alias address: "${aliasAddress}"`);
+    assert(aliasAddress === targetCustomAddress, "Custom alias address matches created value");
 
     // Step 5: Test Copy to clipboard
     console.log("\n--- [STEP 5] Copy alias to clipboard ---");
@@ -198,12 +267,49 @@ async function runMaskedEmailBrowserTest() {
     });
     assert(copiedTooltip, "Copied! tooltip appeared on click");
 
+    // Step 5b: Verify Compose From: dropdown lists alias
+    console.log("\n--- [STEP 5b] Verify Compose From: dropdown lists alias ---");
+    const backToInboxBtn = await page.waitForSelector('[data-testid="settings-back-to-inbox-btn"]', { timeout: 5000 });
+    await backToInboxBtn.click();
+    await sleep(1500);
+
+    // Open Compose drawer
+    const composeBtn = await page.waitForSelector('[data-testid="sidebar-compose-btn"]', { timeout: 5000 });
+    await composeBtn.click();
+    await sleep(1500);
+
+    // Check compose From: select
+    await page.waitForSelector('[data-testid="compose-from-select"]', { timeout: 5000 });
+    const fromOptions = await page.evaluate(() => {
+      const select = document.querySelector('[data-testid="compose-from-select"]');
+      if (!select) return [];
+      return Array.from(select.querySelectorAll('option')).map(opt => ({
+        value: opt.value,
+        text: opt.textContent.trim(),
+      }));
+    });
+    console.log("  Compose From options:", JSON.stringify(fromOptions));
+    assert(
+      fromOptions.some(opt => opt.text.includes(aliasAddress)),
+      `Compose From: dropdown includes alias ${aliasAddress}`
+    );
+
+    // Screenshot Compose From dropdown
+    const composeFromScreenshotPath = path.resolve(artifactsDir, 'masked_email_compose_from_dropdown.png');
+    await page.screenshot({ path: composeFromScreenshotPath, fullPage: false });
+    console.log(`  Captured screenshot: ${composeFromScreenshotPath}`);
+
+    // Close compose
+    const closeComposeBtn = await page.waitForSelector('[data-testid="compose-close-btn"]', { timeout: 5000 });
+    await closeComposeBtn.click();
+    await sleep(1000);
+
     // Step 6: Inbound SMTP delivery to alias
     console.log(`\n--- [STEP 6] Inbound SMTP delivery to alias ${aliasAddress} ---`);
     const inboundRes = await sendInboundSMTP({
       from: 'shop@external-merchant.com',
       to: aliasAddress,
-      subject: 'Order #98765 Confirmation',
+      subject: targetSubject,
       body: 'Your purchase has been confirmed via your masked alias!',
     });
     console.log(`  Inbound SMTP result: code=${inboundRes.code} response="${inboundRes.response}"`);
@@ -211,27 +317,29 @@ async function runMaskedEmailBrowserTest() {
 
     // Step 7: Back to Inbox & Verify Message with Reading Pane Badge
     console.log("\n--- [STEP 7] Navigate to Inbox & Open received message ---");
-    // Click Back to Inbox button in Settings header
-    const backBtn = await page.waitForSelector('[data-testid="settings-back-to-inbox-btn"]', { timeout: 5000 });
-    await backBtn.click();
-    await sleep(2000);
+    // If settings view is open, click Back to Inbox button
+    const backBtn = await page.$('[data-testid="settings-back-to-inbox-btn"]');
+    if (backBtn) {
+      await backBtn.click();
+      await sleep(1500);
+    }
 
     // Refresh inbox messages
     const inboxFolderBtn = await page.waitForSelector('[data-testid="folder-inbox"]', { timeout: 5000 });
     await inboxFolderBtn.click();
     await sleep(3000);
 
-    // Find message from sender "shop@external-merchant.com" or subject "Order #98765 Confirmation"
-    const messageFound = await page.evaluate(() => {
+    // Find message from sender "shop@external-merchant.com" or subject
+    const messageFound = await page.evaluate((subj) => {
       const rows = document.querySelectorAll('[data-testid="message-row"]');
       for (const row of rows) {
-        if (row.textContent.includes('shop@external-merchant.com') || row.textContent.includes('Order #98765 Confirmation')) {
+        if (row.textContent.includes('shop@external-merchant.com') || row.textContent.includes(subj)) {
           row.click();
           return true;
         }
       }
       return false;
-    });
+    }, targetSubject);
     assert(messageFound, "Message found in Inbox and clicked");
     await sleep(2000);
 
@@ -239,7 +347,7 @@ async function runMaskedEmailBrowserTest() {
     await page.waitForSelector('[data-testid="reading-pane-alias-badge"]', { timeout: 8000 });
     const badgeText = await page.$eval('[data-testid="reading-pane-alias-badge"]', el => el.textContent.trim());
     console.log(`  Reading Pane alias badge: "${badgeText}"`);
-    assert(badgeText.includes("Received via Shopping Test") || badgeText.includes(aliasAddress), "Alias badge contains label or address");
+    assert(badgeText.includes("Received via Shopping Test") || badgeText.includes("Received via Amazon Shopping") || badgeText.includes(aliasAddress), "Alias badge contains label or address");
 
     // Screenshot 3: Reading Pane badge
     const readingBadgeScreenshotPath = path.resolve(artifactsDir, 'masked_email_reading_pane_badge.png');
@@ -387,7 +495,11 @@ async function runMaskedEmailBrowserTest() {
 
     // Step 9: Disable Alias & Verify Inbound 550 Rejection
     console.log("\n--- [STEP 9] Disable alias and assert inbound SMTP 550 rejection ---");
-    await page.click('[data-testid="sidebar-masked-aliases-btn"]');
+    await page.waitForSelector('[data-testid="sidebar-settings-btn"]', { timeout: 5000 });
+    await page.click('[data-testid="sidebar-settings-btn"]');
+    await sleep(800);
+    await page.waitForSelector('[data-testid="settings-tab-masked-email"]', { timeout: 5000 });
+    await page.click('[data-testid="settings-tab-masked-email"]');
     await sleep(1500);
 
     // Click Disable button in table

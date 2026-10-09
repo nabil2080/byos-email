@@ -147,6 +147,7 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
                 return (
                   <button
                     onClick={() => props.onTabChange(tab.id)}
+                    data-testid={`settings-tab-${tab.id}`}
                     class={`flex-shrink-0 md:w-full text-left px-3 py-2 md:p-3 rounded-xl transition flex items-center md:items-start gap-2 md:gap-3 border cursor-pointer min-h-[38px] ${
                       isActive()
                         ? "bg-[#F3ECE8] dark:bg-[#2D2522] border-[#A27561] text-[#A27561] dark:text-[#D4A38F] shadow-xs"

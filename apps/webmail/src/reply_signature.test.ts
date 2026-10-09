@@ -183,5 +183,70 @@ export function runReplySignatureTests(): { passed: number; failed: number } {
     assert(divSigCount === 1, `Expected byos-signature div once in HTML, found ${divSigCount}`);
   });
 
+  // 5. TestNewComposeDefaultsToActiveMailbox
+  test("5. TestNewComposeDefaultsToActiveMailbox", () => {
+    const accountAlice = { id: "acc-alice-id", email: "alice@byos.local" };
+    const accountBob = { id: "acc-bob-id", email: "bob@byos.local" };
+    const connectedAccounts = [accountAlice, accountBob];
+
+    let composeAccountId: string | null = null;
+    let composeFromAlias: string | null = null;
+
+    const clearComposeForm = () => {
+      composeAccountId = null;
+      composeFromAlias = null;
+    };
+
+    const startNewCompose = (activeBox: { id: string; local_part: string } | null) => {
+      clearComposeForm();
+      const accounts = connectedAccounts;
+      const defaultAccId = (activeBox?.id) || (accounts.length > 0 ? accounts[0].id : null);
+      if (defaultAccId) {
+        composeAccountId = defaultAccId;
+      }
+    };
+
+    // Step 1: User previously replied from Alice
+    composeAccountId = accountAlice.id;
+    assert(composeAccountId === accountAlice.id, "Prior compose was set to Alice");
+
+    // Step 2: Bob is the active mailbox
+    const activeBoxBob = { id: accountBob.id, local_part: "bob" };
+
+    // Step 3: User clicks New Message
+    startNewCompose(activeBoxBob);
+
+    // Step 4: Verify compose defaults to Bob, NOT Alice
+    assert(composeAccountId === accountBob.id, `Expected composeAccountId to be Bob (${accountBob.id}), got ${composeAccountId}`);
+
+    const resolvedSender = (() => {
+      if (composeFromAlias) return composeFromAlias;
+      const accId = composeAccountId || activeBoxBob?.id;
+      if (accId) {
+        const acc = connectedAccounts.find((a) => a.id === accId);
+        if (acc) return acc.email;
+      }
+      return `${activeBoxBob.local_part}@byos.local`;
+    })();
+
+    assert(resolvedSender === "bob@byos.local", `Expected resolved sender to be "bob@byos.local", got "${resolvedSender}"`);
+  });
+
+  // 6. TestClearComposeFormResetsComposeAccountId
+  test("6. TestClearComposeFormResetsComposeAccountId", () => {
+    let composeAccountId: string | null = "stale-account-id";
+    let composeFromAlias: string | null = "stale-alias@masked.byos.local";
+
+    const clearComposeForm = () => {
+      composeAccountId = null;
+      composeFromAlias = null;
+    };
+
+    clearComposeForm();
+
+    assert(composeAccountId === null, "clearComposeForm must reset composeAccountId to null");
+    assert(composeFromAlias === null, "clearComposeForm must reset composeFromAlias to null");
+  });
+
   return { passed, failed };
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -487,3 +488,445 @@ func TestReplyFromAliasUsesAliasAddress(t *testing.T) {
 }
 
 const dummyXWingPKHex = "0000000000000000000000000000000000000000000000000000000000000000"
+
+func TestValidateCustomLocalPartUnit(t *testing.T) {
+	// Valid cases
+	validCases := []struct {
+		input    string
+		expected string
+	}{
+		{"amazon", "amazon"},
+		{"Amazon", "amazon"},
+		{"AMAZON-123", "amazon-123"},
+		{"user.name_123", "user.name_123"},
+		{"abc", "abc"},                                // minimum length (3)
+		{"a1234567890123456789012345678901", "a1234567890123456789012345678901"}, // max length (32)
+	}
+
+	for _, tc := range validCases {
+		res, err := validateCustomLocalPart(tc.input)
+		if err != nil {
+			t.Fatalf("expected valid for %q, got error: %v", tc.input, err)
+		}
+		if res != tc.expected {
+			t.Fatalf("expected %q, got %q", tc.expected, res)
+		}
+	}
+
+	// Invalid cases
+	invalidCases := []struct {
+		input string
+		desc  string
+	}{
+		{"ab", "too short"},
+		{"a123456789012345678901234567890123", "too long (33 chars)"},
+		{".start", "starts with dot"},
+		{"-start", "starts with hyphen"},
+		{"_start", "starts with underscore"},
+		{"end.", "ends with dot"},
+		{"end-", "ends with hyphen"},
+		{"end_", "ends with underscore"},
+		{"con..sec", "consecutive dots"},
+		{"con--sec", "consecutive hyphens"},
+		{"con__sec", "consecutive underscores"},
+		{"con.-sec", "consecutive dot-hyphen"},
+		{"con._sec", "consecutive dot-underscore"},
+		{"con-_sec", "consecutive hyphen-underscore"},
+		{"bad@char", "invalid character @"},
+		{"bad char", "invalid space character"},
+		{"bad!char", "invalid exclamation mark"},
+		{"admin", "reserved name admin"},
+		{"ADMIN", "reserved name uppercase ADMIN"},
+		{"administrator", "reserved name administrator"},
+		{"root", "reserved name root"},
+		{"support", "reserved name support"},
+		{"security", "reserved name security"},
+		{"no-reply", "reserved name no-reply"},
+		{"noreply", "reserved name noreply"},
+		{"api", "reserved name api"},
+		{"www", "reserved name www"},
+	}
+
+	for _, tc := range invalidCases {
+		_, err := validateCustomLocalPart(tc.input)
+		if err == nil {
+			t.Fatalf("expected error for %q (%s), but got nil", tc.input, tc.desc)
+		}
+	}
+}
+
+func TestCreateAliasCustomLocalPart(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping test; db unreachable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	orgID, _, _, _, token := setupTestUser(t, conn, "Custom Local Part Org", "customlp")
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
+
+	body := bytes.NewBufferString(`{"label":"Amazon Orders","local_part":"amazon"}`)
+	req := httptest.NewRequest("POST", "/v1/users/me/aliases", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+
+	aliasesHandler(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp MaskedAliasResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.AliasAddress != "amazon@masked.byos.local" {
+		t.Fatalf("expected amazon@masked.byos.local, got %s", resp.AliasAddress)
+	}
+	if resp.Label != "Amazon Orders" {
+		t.Fatalf("expected label 'Amazon Orders', got %s", resp.Label)
+	}
+}
+
+func TestCreateAliasCustomRejectsDuplicate(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping test; db unreachable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	orgID, _, _, _, token := setupTestUser(t, conn, "Custom Dup Org", "customdup")
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
+
+	customName := "duplicate-" + uuid.New().String()[:8]
+
+	// First creation succeeds
+	body1 := bytes.NewBufferString(`{"label":"First","local_part":"` + customName + `"}`)
+	req1 := httptest.NewRequest("POST", "/v1/users/me/aliases", body1)
+	req1.Header.Set("Authorization", "Bearer "+token)
+	w1 := httptest.NewRecorder()
+	aliasesHandler(w1, req1)
+	if w1.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", w1.Code, w1.Body.String())
+	}
+
+	// Second creation with uppercase fails with 409 alias_taken
+	body2 := bytes.NewBufferString(`{"label":"Second","local_part":"` + strings.ToUpper(customName) + `"}`)
+	req2 := httptest.NewRequest("POST", "/v1/users/me/aliases", body2)
+	req2.Header.Set("Authorization", "Bearer "+token)
+	w2 := httptest.NewRecorder()
+	aliasesHandler(w2, req2)
+	if w2.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict, got %d: %s", w2.Code, w2.Body.String())
+	}
+
+	var errResp map[string]string
+	if err := json.NewDecoder(w2.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to decode JSON error: %v", err)
+	}
+	if errResp["error"] != "alias_taken" {
+		t.Fatalf("expected error='alias_taken', got %v", errResp["error"])
+	}
+}
+
+func TestCreateAliasCustomRejectsReserved(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping test; db unreachable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	orgID, _, _, _, token := setupTestUser(t, conn, "Custom Reserved Org", "customres")
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
+
+	reservedWords := []string{"admin", "support", "root", "api", "www", "noreply", "no-reply"}
+	for _, word := range reservedWords {
+		body := bytes.NewBufferString(`{"label":"Reserved","local_part":"` + word + `"}`)
+		req := httptest.NewRequest("POST", "/v1/users/me/aliases", body)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		aliasesHandler(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for reserved word %q, got %d: %s", word, w.Code, w.Body.String())
+		}
+		var errResp map[string]string
+		if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+			t.Fatalf("failed to decode JSON error: %v", err)
+		}
+		if errResp["error"] != "invalid_local_part" {
+			t.Fatalf("expected error='invalid_local_part', got %v", errResp["error"])
+		}
+		if errResp["message"] != "This alias name is reserved" {
+			t.Fatalf("expected message='This alias name is reserved', got %v", errResp["message"])
+		}
+	}
+}
+
+func TestCreateAliasCustomRejectsInvalidChars(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping test; db unreachable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	orgID, _, _, _, token := setupTestUser(t, conn, "Custom Invalid Chars Org", "custominv")
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
+
+	invalidInputs := []string{"bad@alias", "bad alias", "bad!alias", "bad#alias"}
+	for _, input := range invalidInputs {
+		body := bytes.NewBufferString(`{"label":"Invalid","local_part":"` + input + `"}`)
+		req := httptest.NewRequest("POST", "/v1/users/me/aliases", body)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		aliasesHandler(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for input %q, got %d: %s", input, w.Code, w.Body.String())
+		}
+		var errResp map[string]string
+		if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+			t.Fatalf("failed to decode JSON error: %v", err)
+		}
+		if errResp["error"] != "invalid_local_part" {
+			t.Fatalf("expected error='invalid_local_part', got %v", errResp["error"])
+		}
+		if errResp["message"] != "Only lowercase letters, numbers, and . - _ are allowed" {
+			t.Fatalf("expected message='Only lowercase letters, numbers, and . - _ are allowed', got %v", errResp["message"])
+		}
+	}
+}
+
+func TestCreateAliasCustomRejectsLeadingTrailingPunct(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping test; db unreachable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	orgID, _, _, _, token := setupTestUser(t, conn, "Custom Punct Org", "custompunct")
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
+
+	cases := []string{".start", "-start", "_start", "end.", "end-", "end_"}
+	for _, c := range cases {
+		body := bytes.NewBufferString(`{"label":"Punct","local_part":"` + c + `"}`)
+		req := httptest.NewRequest("POST", "/v1/users/me/aliases", body)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		aliasesHandler(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for %q, got %d: %s", c, w.Code, w.Body.String())
+		}
+		var errResp map[string]string
+		if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+			t.Fatalf("failed to decode JSON error: %v", err)
+		}
+		if errResp["message"] != "Must not start or end with ., -, or _" {
+			t.Fatalf("expected 'Must not start or end with ., -, or _', got %v", errResp["message"])
+		}
+	}
+}
+
+func TestCreateAliasCustomRejectsConsecutivePunct(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping test; db unreachable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	orgID, _, _, _, token := setupTestUser(t, conn, "Custom Consec Org", "customconsec")
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
+
+	cases := []string{"con..sec", "con--sec", "con__sec", "con.-sec", "con._sec", "con-_sec"}
+	for _, c := range cases {
+		body := bytes.NewBufferString(`{"label":"Consec","local_part":"` + c + `"}`)
+		req := httptest.NewRequest("POST", "/v1/users/me/aliases", body)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		aliasesHandler(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for %q, got %d: %s", c, w.Code, w.Body.String())
+		}
+		var errResp map[string]string
+		if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+			t.Fatalf("failed to decode JSON error: %v", err)
+		}
+		if errResp["message"] != "Must not contain two consecutive ., -, or _ characters" {
+			t.Fatalf("expected 'Must not contain two consecutive ., -, or _ characters', got %v", errResp["message"])
+		}
+	}
+}
+
+func TestCreateAliasCustomRejectsTooShort(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping test; db unreachable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	orgID, _, _, _, token := setupTestUser(t, conn, "Custom Short Org", "customshort")
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
+
+	body := bytes.NewBufferString(`{"label":"Short","local_part":"ab"}`)
+	req := httptest.NewRequest("POST", "/v1/users/me/aliases", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	aliasesHandler(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for 'ab', got %d: %s", w.Code, w.Body.String())
+	}
+	var errResp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to decode JSON error: %v", err)
+	}
+	if errResp["message"] != "Must be at least 3 characters" {
+		t.Fatalf("expected 'Must be at least 3 characters', got %v", errResp["message"])
+	}
+}
+
+func TestCreateAliasCustomRejectsTooLong(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping test; db unreachable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	orgID, _, _, _, token := setupTestUser(t, conn, "Custom Long Org", "customlong")
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
+
+	tooLong := "a123456789012345678901234567890123" // 33 chars
+	body := bytes.NewBufferString(`{"label":"Long","local_part":"` + tooLong + `"}`)
+	req := httptest.NewRequest("POST", "/v1/users/me/aliases", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	aliasesHandler(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for 33 chars, got %d: %s", w.Code, w.Body.String())
+	}
+	var errResp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to decode JSON error: %v", err)
+	}
+	if errResp["message"] != "Must be at most 32 characters" {
+		t.Fatalf("expected 'Must be at most 32 characters', got %v", errResp["message"])
+	}
+}
+
+func TestCreateAliasCustomLowercases(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping test; db unreachable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	orgID, _, _, _, token := setupTestUser(t, conn, "Custom Lowercase Org", "customlower")
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
+
+	body := bytes.NewBufferString(`{"label":"Mixed Case","local_part":"MyCustomAlias"}`)
+	req := httptest.NewRequest("POST", "/v1/users/me/aliases", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	aliasesHandler(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp MaskedAliasResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.AliasAddress != "mycustomalias@masked.byos.local" {
+		t.Fatalf("expected 'mycustomalias@masked.byos.local', got %s", resp.AliasAddress)
+	}
+}
+
+func TestCreateAliasCustomRespectsRateLimit(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping test; db unreachable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	orgID, _, _, _, token := setupTestUser(t, conn, "Custom Rate Limit Org", "customrate")
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
+
+	// Create 20 aliases
+	for i := 0; i < 20; i++ {
+		body := bytes.NewBufferString(`{"label":"batch"}`)
+		req := httptest.NewRequest("POST", "/v1/users/me/aliases", body)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+
+		aliasesHandler(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("alias %d: expected 201 Created, got %d: %s", i+1, w.Code, w.Body.String())
+		}
+	}
+
+	// 21st attempt with custom local part must be 429
+	body := bytes.NewBufferString(`{"label":"excess","local_part":"custom-21"}`)
+	req := httptest.NewRequest("POST", "/v1/users/me/aliases", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+
+	aliasesHandler(w, req)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 Too Many Requests, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var errResp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to parse 429 response: %v", err)
+	}
+	if errResp["error"] != "rate_limit_exceeded" {
+		t.Fatalf("expected error='rate_limit_exceeded', got %v", errResp["error"])
+	}
+}
+

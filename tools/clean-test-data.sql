@@ -216,6 +216,7 @@ SELECT id FROM domains
 WHERE id NOT IN (
     '00000000-0000-0000-0000-000000000bbb'::uuid,
     'ca1fbf8e-9561-4dc2-8657-dc1ceeee7800'::uuid,
+    'ca1fbf8e-9561-4dc2-8657-dc1ceeee7801'::uuid,
     'd0d0d0d0-d0d0-d0d0-d0d0-d0d0d0d0d0d0'::uuid,
     'bbbbbbbb-0000-0000-0000-000000000001'::uuid
 );
@@ -224,6 +225,17 @@ WITH del_d AS (
     DELETE FROM domains WHERE id IN (SELECT id FROM target_test_domains) RETURNING 1
 )
 INSERT INTO cleanup_counts (table_name, deleted_count) VALUES ('domains', (SELECT count(*) FROM del_d));
+
+-- Clean masked aliases and reply map
+WITH del_marm AS (
+    DELETE FROM masked_alias_reply_map RETURNING 1
+)
+INSERT INTO cleanup_counts (table_name, deleted_count) VALUES ('masked_alias_reply_map', (SELECT count(*) FROM del_marm));
+
+WITH del_ma AS (
+    DELETE FROM masked_aliases RETURNING 1
+)
+INSERT INTO cleanup_counts (table_name, deleted_count) VALUES ('masked_aliases', (SELECT count(*) FROM del_ma));
 
 -- Target test organizations to delete (organizations other than seed orgs)
 CREATE TEMP TABLE target_test_orgs ON COMMIT DROP AS
