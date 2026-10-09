@@ -40,6 +40,8 @@ $tests = @(
     "tests/browser/test_unified_inbox_browser.mjs",
     "tests/browser/test_account_switch_crypto.mjs",
     "tests/browser/test_masked_email.mjs",
+    "tests/browser/test_alias_custom.mjs",
+    "tests/browser/test_compose_default_account.mjs",
     "tests/browser/test_wire_integrity.mjs"
 )
 

@@ -33,8 +33,8 @@ const Alice = {
   mailboxId: "c0000000-0000-0000-0000-000000000001",
   email: "alice@byos.local",
   token: "alice_compose_test_session_token_123",
-  xwingSeed: "11".repeat(32),
-  signingSeed: "33".repeat(32),
+  xwingSeed: "ea01f553ee1988202f1c41f1d3d478afdf7ef0cddf611a28d2e3c2c3af42b13a",
+  signingSeed: "006848f2e6583e34ab8a011d53b48f167c3bb3b50b7f59aa5fef669be8d99eff",
 };
 
 const Bob = {
@@ -42,8 +42,8 @@ const Bob = {
   mailboxId: "c0000000-0000-0000-0000-000000000002",
   email: "bob@byos.local",
   token: "bob_compose_test_session_token_123",
-  xwingSeed: "22".repeat(32),
-  signingSeed: "44".repeat(32),
+  xwingSeed: "f74ba1810c540588f4ccce97eaa0efc82937c060c63453496147d6430183e376",
+  signingSeed: "d2f874cbca57aa4df01b579d5fa48a8c3358721f0a73ede153fabadc9c4ee59a",
 };
 
 Alice.xwingPkHex = wasm.wasm_xwing_public_key_from_seed(Alice.xwingSeed);

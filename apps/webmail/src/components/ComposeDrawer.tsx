@@ -231,6 +231,11 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                         {props.senderAddress}
                       </option>
                     </Show>
+                    <Show when={props.fromAlias && !props.aliases?.some((a) => a.alias_address === props.fromAlias)}>
+                      <option value={`alias:${props.fromAlias}`} selected={true}>
+                        {props.fromAlias} (alias)
+                      </option>
+                    </Show>
                     <Show when={props.aliases && props.aliases.length > 0}>
                       <For each={props.aliases}>
                         {(al) => (

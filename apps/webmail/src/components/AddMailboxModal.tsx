@@ -160,6 +160,12 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
       sessionStorage.setItem("byos_mailbox_sk_" + mailboxId, skHex);
       sessionStorage.setItem("byos_mailbox_skey_" + mailboxId, searchKeyHex);
     }
+    if (mailboxId && xwingSeedHex) {
+      sessionStorage.setItem("byos_xwing_seed_" + mailboxId, xwingSeedHex);
+    }
+    if (mailboxId && signingSeedHex) {
+      sessionStorage.setItem("byos_signing_seed_" + mailboxId, signingSeedHex);
+    }
     if (newAccount.sessionToken) {
       sessionStorage.setItem("byos_active_session_token", newAccount.sessionToken);
     }

@@ -4429,6 +4429,7 @@ const App: Component = () => {
     if (sigPlain || sigHtml) {
       setComposeSignatureApplied(true);
     }
+    refreshMaskedAliases();
     setComposeOpen(true);
   }
 

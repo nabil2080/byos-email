@@ -10,7 +10,7 @@ test-webmail:
 	cd apps/webmail && npm run typecheck && npm test -- --run
 
 smoke:
-	@powershell -NoProfile -ExecutionPolicy Bypass -File ./smoke.ps1
+	@powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/smoke.ps1
 
 help:
 	@echo "BYOS Development Targets:"

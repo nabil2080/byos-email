@@ -126,3 +126,52 @@ Smoke tests verify password changes and session rotation within a single browser
 
 ### Why it is hard to automate
 Requires millisecond-accurate distributed concurrency orchestration across distinct browser instances with coordinated race condition injection.
+
+---
+
+## 7. Mobile Responsive Viewports (375px) & Touch Navigation
+
+### What is not covered
+Automated browser tests execute on desktop viewport (1280x800) with synthetic mouse clicks. They do not validate:
+- Layout reflow down to 375px mobile viewports (e.g. iPhone SE / Android compact).
+- Responsive collapsing of the sidebar into mobile slide-out drawer or bottom navigation bar.
+- Touch gesture ergonomics (pinch-to-zoom prevention, touch target minimum sizes of 44x44px).
+- Horizontal scroll prevention (`overflow-x: hidden`) on data tables, compose modal, and message reading panes.
+- Virtual on-screen keyboard occlusion of compose inputs and action buttons.
+
+### Manual pre-release verification steps
+1. Open Chrome DevTools in device emulation mode set to **iPhone SE (375 x 667)** and physical mobile devices (iOS Safari & Android Chrome).
+2. Verify that no horizontal scrollbars appear on any page (`window.innerWidth === document.documentElement.clientWidth`).
+3. Open the sidebar navigation menu: confirm drawer opens smoothly with a backdrop overlay and closes on backdrop tap.
+4. Open the Compose drawer: verify the composer takes full mobile screen, sender dropdown is touch-friendly, and virtual keyboard does not obscure Send or Discard actions.
+5. In the message list and reading pane, verify attachment pills and action buttons have at least 44x44px touch targets.
+
+### Why it is hard to automate
+Headless desktop Chromium emulation does not fully simulate software keyboard viewport resize/reposition behaviors (`visualViewport`), hardware safe area insets (`env(safe-area-inset-*)`), or real touch gesture friction.
+
+---
+
+## 8. Accessibility (a11y) & Screen Reader Assistive Technology
+
+### What is not covered
+The automated tests check DOM selectors and CSS attributes, but do not validate assistive technology compliance under WCAG 2.1 AA:
+- Keyboard focus traps in modal dialogs (Create Alias modal, Add Mailbox modal, Settings dialog).
+- Visible focus rings (`focus-visible`) across all interactive elements.
+- Screen reader announcements via live regions (`aria-live="polite"`) for background events (new mail notifications, upload progress, encryption status).
+- ARIA semantics on custom interactive widgets (e.g., account switcher dropdown, folder tree, compose attachment pills).
+- Color contrast ratios in dark and light themes (minimum 4.5:1 for normal text, 3:1 for large text and UI components).
+
+### Manual pre-release verification steps
+1. Enable screen readers (NVDA on Windows, VoiceOver on macOS/iOS, TalkBack on Android).
+2. Navigate the entire application using keyboard only (`Tab`, `Shift+Tab`, `Enter`, `Space`, `Esc`, Arrow keys):
+   - Confirm focus is trapped within open modals and returns to trigger element on close.
+   - Confirm high-contrast focus rings are visible on every focused element.
+3. Verify screen readers announce:
+   - Account switcher state ("Account menu, collapsed/expanded, Alice active").
+   - Decryption badges ("Verified Sovereign Outbound", "Received via custom alias").
+   - Form validation errors immediately when inputs become invalid.
+4. Run axe-core / Lighthouse Accessibility audit across all routes and verify 0 critical/serious violations.
+
+### Why it is hard to automate
+Simulating assistive speech synthesis, operating system accessibility APIs (IAccessible2, AT-SPI, NSAccessibility), and user navigation workflows requires manual testing with assistive software rather than DOM-level test runners.
+

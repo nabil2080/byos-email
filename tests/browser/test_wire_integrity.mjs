@@ -100,7 +100,7 @@ function sendInboundSMTP({ from, to, subject, body }) {
 
 async function runWireIntegrityTest() {
   console.log("================================================================================");
-  console.log("             WIRE FORMAT INTEGRITY INTEGRATION SMOKE TEST                       ");
+  console.log("             WIRE INTEGRITY CONSOLIDATION SMOKE TEST (SCENARIOS A-D)            ");
   console.log("================================================================================\n");
 
   const unallowedErrors = [];
@@ -161,101 +161,131 @@ async function runWireIntegrityTest() {
   });
 
   try {
-    // =========================================================================
-    // STEP 1: Real login flow for two accounts (Alice & Bob)
-    // =========================================================================
-    console.log("\n--- [STEP 1] Real Login Flow: Alice and Bob ---");
-    const pageAlice = await browser.newPage();
-    await pageAlice.setViewport({ width: 1280, height: 800 });
-    registerErrorTracking(pageAlice, 'Alice');
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
+    registerErrorTracking(page, 'Webmail');
 
-    await pageAlice.goto('http://127.0.0.1:3001', { waitUntil: 'domcontentloaded' });
-    await pageAlice.evaluate(() => {
+    // =========================================================================
+    // SETUP: Real login flow for Alice, add Bob as second connected account
+    // =========================================================================
+    console.log("\n--- [SETUP] Real Login Flow: Alice & Connect Bob ---");
+    await page.goto('http://127.0.0.1:3001', { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => {
       localStorage.clear();
       sessionStorage.clear();
     });
-    await pageAlice.reload({ waitUntil: 'networkidle2' });
+    await page.reload({ waitUntil: 'networkidle2' });
     await sleep(1000);
 
     // Login Alice
     console.log("  Authenticating Alice (alice@byos.local)...");
-    await pageAlice.waitForSelector('input[type="email"]', { timeout: 10000 });
-    await pageAlice.type('input[type="email"]', 'alice@byos.local');
-    await pageAlice.type('input[type="password"]', 'test-password-123');
-    await pageAlice.click('button[type="submit"]');
-    await pageAlice.waitForSelector('[data-testid="folder-name-inbox"]', { timeout: 15000 });
-    await sleep(1000);
+    await page.waitForSelector('input[type="email"]', { timeout: 10000 });
+    await page.type('input[type="email"]', 'alice@byos.local');
+    await page.type('input[type="password"]', 'test-password-123');
+    await page.click('button[type="submit"]');
+    await page.waitForSelector('[data-testid="account-chip-selector"]', { timeout: 15000 });
+    await sleep(1500);
 
-    const shotAliceLogin = path.resolve(artifactsDir, 'wire_integrity_1_alice_logged_in.png');
-    await pageAlice.screenshot({ path: shotAliceLogin });
-    console.log(`  Saved screenshot: ${shotAliceLogin}`);
-    assert(true, "Alice logged in successfully via real credentials");
+    const initialChipText = await page.$eval('[data-testid="account-chip-text"]', (el) => el.textContent.trim());
+    console.log(`  Active account chip: "${initialChipText}"`);
+    assert(initialChipText.includes("alice@byos.local"), "Alice logged in successfully via real credentials");
 
-    // Login Bob in an isolated browser context
-    console.log("  Authenticating Bob (bob@byos.local) in isolated context...");
-    const contextBob = await browser.createBrowserContext();
-    const pageBob = await contextBob.newPage();
-    await pageBob.setViewport({ width: 1280, height: 800 });
-    registerErrorTracking(pageBob, 'Bob');
+    // Connect Bob as second account via AddMailboxModal
+    console.log("  Connecting secondary account Bob (bob@byos.local)...");
+    await page.click('[data-testid="account-chip-selector"]');
+    await sleep(500);
+    await page.waitForSelector('[data-testid="add-mailbox-button"]', { timeout: 5000 });
+    await page.click('[data-testid="add-mailbox-button"]');
+    await sleep(600);
 
-    await pageBob.goto('http://127.0.0.1:3001', { waitUntil: 'domcontentloaded' });
-    await pageBob.evaluate(() => {
-      localStorage.clear();
-      sessionStorage.clear();
+    const emailInputs = await page.$$('input[type="email"]');
+    const modalEmailInput = emailInputs[emailInputs.length - 1];
+    await modalEmailInput.type('bob@byos.local');
+
+    const passInputs = await page.$$('input[type="password"]');
+    const modalPassInput = passInputs[passInputs.length - 1];
+    await modalPassInput.type('test-password-123');
+
+    const modalSubmitBtn = await page.evaluateHandle(() => {
+      const modal = document.querySelector('[role="dialog"], .fixed.inset-0.z-50');
+      return modal ? modal.querySelector('button[type="submit"]') : null;
     });
-    await pageBob.reload({ waitUntil: 'networkidle2' });
-    await sleep(1000);
+    await modalSubmitBtn.click();
+    await sleep(2500);
 
-    await pageBob.waitForSelector('input[type="email"]', { timeout: 10000 });
-    await pageBob.type('input[type="email"]', 'bob@byos.local');
-    await pageBob.type('input[type="password"]', 'test-password-123');
-    await pageBob.click('button[type="submit"]');
-    await pageBob.waitForSelector('[data-testid="folder-name-inbox"]', { timeout: 15000 });
-    await sleep(1000);
+    // Verify both accounts in session
+    const sessionAccounts = await page.evaluate(() => {
+      const stored = sessionStorage.getItem('byos_connected_accounts');
+      return stored ? JSON.parse(stored) : [];
+    });
+    console.log("  Connected accounts in session:", JSON.stringify(sessionAccounts.map(a => ({ email: a.email, id: a.id }))));
+    assert(sessionAccounts.some(a => a.email.includes('alice')), "Alice present in connected accounts");
+    assert(sessionAccounts.some(a => a.email.includes('bob')), "Bob present in connected accounts");
 
-    const shotBobLogin = path.resolve(artifactsDir, 'wire_integrity_2_bob_logged_in.png');
-    await pageBob.screenshot({ path: shotBobLogin });
-    console.log(`  Saved screenshot: ${shotBobLogin}`);
-    assert(true, "Bob logged in successfully via real credentials");
+    const aliceId = sessionAccounts.find(a => a.email.includes('alice'))?.id || "c0000000-0000-0000-0000-000000000001";
+    const bobId = sessionAccounts.find(a => a.email.includes('bob'))?.id || "c0000000-0000-0000-0000-000000000002";
+
+    // Verify Bob's keys unsealed in sessionStorage
+    const bobXwingSeed = await page.evaluate((bId) => {
+      return sessionStorage.getItem(`byos_xwing_seed_${bId}`) ||
+             sessionStorage.getItem(`byos_mailbox_sk_${bId}`);
+    }, bobId);
+    assert(bobXwingSeed && bobXwingSeed.length === 64, "Bob's X-Wing secret seed is unsealed in session");
+
+    // Ensure Alice is the active account
+    const curChip = await page.$eval('[data-testid="account-chip-text"]', el => el.textContent.trim());
+    if (!curChip.includes('alice@byos.local')) {
+      console.log("  Switching back to Alice for Scenario A...");
+      await page.click('[data-testid="account-chip-selector"]');
+      await sleep(500);
+      await page.waitForSelector(`[data-testid="account-dropdown-${aliceId}"]`, { timeout: 5000 });
+      await page.click(`[data-testid="account-dropdown-${aliceId}"]`);
+      await sleep(1500);
+    }
+    assert((await page.$eval('[data-testid="account-chip-text"]', el => el.textContent.trim())).includes('alice@byos.local'), "Alice is active account for Scenario A");
 
     // =========================================================================
-    // STEP 2: Path A message from Alice to Bob with 100 KB attachment
+    // SCENARIO A — Path A message from Alice to Bob with 100 KB attachment
     // =========================================================================
-    console.log("\n--- [STEP 2] Path A message from Alice to Bob with 100 KB attachment ---");
-    const composeBtnAlice = await pageAlice.waitForSelector('[data-testid="sidebar-compose-btn"]', { timeout: 5000 });
+    console.log("\n================================================================================");
+    console.log("  SCENARIO A: PATH A WITH 100 KB ATTACHMENT                                      ");
+    console.log("================================================================================");
+
+    const scenarioASubject = `wire_test_a_${Date.now()}`;
+    const composeBtnAlice = await page.waitForSelector('[data-testid="sidebar-compose-btn"]', { timeout: 5000 });
     await composeBtnAlice.click();
     await sleep(1000);
 
-    await pageAlice.waitForSelector('#composeToInput', { timeout: 5000 });
-    await pageAlice.type('#composeToInput', 'bob@byos.local');
-    await pageAlice.type('#composeSubjectInput', 'Path A Wire Integrity Test 100KB');
+    await page.waitForSelector('#composeToInput', { timeout: 5000 });
+    await page.type('#composeToInput', 'bob@byos.local');
+    await page.type('#composeSubjectInput', scenarioASubject);
 
-    const bodyEl = await pageAlice.waitForSelector('[data-testid="compose-body-input"]', { timeout: 5000 });
+    const bodyEl = await page.waitForSelector('[data-testid="compose-body-input"]', { timeout: 5000 });
     await bodyEl.click();
     await bodyEl.type('Hello Bob, this is an end-to-end encrypted Path A message with 100 KB payload.');
 
     // Upload attachment
     console.log("  Uploading 100 KB attachment in ComposeDrawer...");
-    const fileInput = await pageAlice.waitForSelector('input[data-testid="compose-file-input"]', { timeout: 5000 });
+    const fileInput = await page.waitForSelector('input[data-testid="compose-file-input"]', { timeout: 5000 });
     await fileInput.uploadFile(tempAttachmentPath);
-    await pageAlice.waitForSelector('[data-testid="compose-attachment-pill"]', { timeout: 15000 });
+    await page.waitForSelector('[data-testid="compose-attachment-pill"]', { timeout: 15000 });
     console.log("  Attachment pill rendered in ComposeDrawer.");
-    await sleep(1000);
-
-    const shotCompose = path.resolve(artifactsDir, 'wire_integrity_3_path_a_compose.png');
-    await pageAlice.screenshot({ path: shotCompose });
-    console.log(`  Saved screenshot: ${shotCompose}`);
+    await sleep(800);
 
     // Set up send promise for Path A internal delivery
-    const pathASendPromise = pageAlice.waitForResponse(
+    const pathASendPromise = page.waitForResponse(
       (res) => (res.url().includes('/v1/outbound/send-internal') || res.url().includes('/v1/outbound/send')) &&
                res.request().method() === 'POST',
       { timeout: 35000 }
     );
 
-    const sendBtnAlice = await pageAlice.waitForSelector('[data-testid="compose-send-btn"]', { timeout: 5000 });
+    const sendBtnAlice = await page.waitForSelector('[data-testid="compose-send-btn"]', { timeout: 5000 });
     await sendBtnAlice.click();
     console.log("  Clicked Send button in ComposeDrawer");
+
+    const shotA = path.resolve(artifactsDir, 'wire_a_attachment_sent.png');
+    await page.screenshot({ path: shotA });
+    console.log(`  Saved screenshot: ${shotA}`);
 
     const pathASendRes = await pathASendPromise;
     console.log(`  Path A send response HTTP status: ${pathASendRes.status()}`);
@@ -265,36 +295,28 @@ async function runWireIntegrityTest() {
     assert(pathASendJson.message_id, "Path A response contains message_id");
     const pathAMessageId = pathASendJson.message_id;
 
-    // Assert recipient's attachment_envelopes in Postgres has one entry
-    console.log("\n  [DB Check] Querying recipient's attachment_envelopes in Postgres...");
-    const envCountRaw = execSync(
-      `docker exec -i byos-postgres psql -U byos -d byos -t -A -c "SELECT jsonb_array_length(attachment_envelopes) FROM message_metadata WHERE mailbox_id = 'c0000000-0000-0000-0000-000000000002' AND folder = 'inbox' AND id = '${pathAMessageId}';"`,
+    // Assert recipient's message_metadata in Postgres: has_attachments = true, jsonb_array_length(attachment_envelopes) = 1
+    console.log("\n  [DB Check] Querying recipient's message_metadata in Postgres...");
+    const dbMetaRaw = execSync(
+      `docker exec -i byos-postgres psql -U byos -d byos -t -A -c "SELECT has_attachments, jsonb_array_length(attachment_envelopes) FROM message_metadata WHERE mailbox_id = '${bobId}' AND id = '${pathAMessageId}';"`,
       { encoding: 'utf8' }
     ).trim();
-    console.log(`  recipient attachment_envelopes count in DB: ${envCountRaw}`);
-    assert(parseInt(envCountRaw, 10) === 1, "The recipient's attachment_envelopes in Postgres has exactly one entry");
-
-    // Fetch Bob's unlocked X-Wing seed from Bob's sessionStorage
-    const bobXwingSeedHex = await pageBob.evaluate(() => {
-      return sessionStorage.getItem("byos_xwing_seed_c0000000-0000-0000-0000-000000000002") ||
-             sessionStorage.getItem("byos_mailbox_sk_c0000000-0000-0000-0000-000000000002");
-    });
-    console.log(`  Bob unlocked X-Wing seed retrieved from session (length=${bobXwingSeedHex?.length})`);
-    assert(bobXwingSeedHex && bobXwingSeedHex.length === 64, "Bob unlocked X-Wing seed is 32 bytes hex");
+    console.log(`  recipient message_metadata (has_attachments | envelope_count): "${dbMetaRaw}"`);
+    assert(dbMetaRaw === "t|1", `recipient message_metadata has_attachments=true and envelope_count=1 (got "${dbMetaRaw}")`);
 
     // Extract attachment envelope from Postgres
     const envelopeJsonStr = execSync(
-      `docker exec -i byos-postgres psql -U byos -d byos -t -A -c "SELECT attachment_envelopes->0 FROM message_metadata WHERE mailbox_id = 'c0000000-0000-0000-0000-000000000002' AND id = '${pathAMessageId}';"`,
+      `docker exec -i byos-postgres psql -U byos -d byos -t -A -c "SELECT attachment_envelopes->0 FROM message_metadata WHERE mailbox_id = '${bobId}' AND id = '${pathAMessageId}';"`,
       { encoding: 'utf8' }
     ).trim();
     const envelope = JSON.parse(envelopeJsonStr);
     console.log(`  Envelope attachment_id: ${envelope.attachment_id}, chunk_count: ${envelope.chunk_count}, size_bytes: ${envelope.size_bytes}`);
     assert(envelope.size_bytes === testAttachmentSize, `Envelope size_bytes equals ${testAttachmentSize}`);
 
-    // Fetch chunk 0 via API
-    const bobToken = await pageBob.evaluate(() => sessionStorage.getItem("byos_active_session_token"));
+    // Fetch chunk 0 via API using Bob's session token
+    const bobToken = sessionAccounts.find(a => a.id === bobId)?.sessionToken;
     const chunkResp = await fetch(
-      `http://127.0.0.1:8080/v1/mailboxes/c0000000-0000-0000-0000-000000000002/messages/${pathAMessageId}/attachments/${envelope.attachment_id}/chunks/0`,
+      `http://127.0.0.1:8080/v1/mailboxes/${bobId}/messages/${pathAMessageId}/attachments/${envelope.attachment_id}/chunks/0`,
       { headers: { Authorization: `Bearer ${bobToken}` } }
     );
     assert(chunkResp.ok, `Fetched encrypted chunk from API: HTTP ${chunkResp.status}`);
@@ -302,12 +324,12 @@ async function runWireIntegrityTest() {
     const chunkBytes = new Uint8Array(chunkArrayBuf);
     console.log(`  Fetched encrypted chunk 0 bytes: ${chunkBytes.length} bytes`);
 
-    // Decrypt Path A attachment
+    // Decrypt Path A attachment client-side
     const decResult = await decryptPathAAttachment(
       envelope,
       [chunkBytes],
-      bobXwingSeedHex,
-      'c0000000-0000-0000-0000-000000000002'
+      bobXwingSeed,
+      bobId
     );
     assert(!decResult.isCorrupted, `Path A decryption succeeded without corruption: ${decResult.error || 'OK'}`);
     assert(decResult.data !== undefined, "Decrypted data is present");
@@ -315,31 +337,8 @@ async function runWireIntegrityTest() {
     console.log(`  Decrypted bytes size: ${decResult.data.length}`);
     console.log(`  Decrypted SHA-256: ${decryptedSha256}`);
     console.log(`  Expected  SHA-256: ${expectedAttachmentSha256}`);
-    assert(decryptedSha256 === expectedAttachmentSha256, "Fetching encrypted chunk and decrypting yields original bytes (SHA-256 match)");
-
-    // Open message in Bob's UI to verify ReadingPane view and screenshot
-    console.log("  Refreshing Bob's inbox and viewing received message...");
-    const bobInboxFolder = await pageBob.waitForSelector('[data-testid="folder-inbox"]', { timeout: 5000 });
-    await bobInboxFolder.click();
-    await sleep(2000);
-
-    const messageClicked = await pageBob.evaluate((targetSubject) => {
-      const rows = document.querySelectorAll('[data-testid="message-row"]');
-      for (const row of rows) {
-        if (row.textContent.includes(targetSubject)) {
-          row.click();
-          return true;
-        }
-      }
-      return false;
-    }, 'Path A Wire Integrity Test 100KB');
-    assert(messageClicked, "Clicked Path A message in Bob's inbox");
-    await sleep(1500);
-
-    await pageBob.waitForSelector('[data-testid="reading-pane-attachment-item"]', { timeout: 8000 });
-    const shotBobReceived = path.resolve(artifactsDir, 'wire_integrity_4_path_a_received_bob.png');
-    await pageBob.screenshot({ path: shotBobReceived });
-    console.log(`  Saved screenshot: ${shotBobReceived}`);
+    assert(decryptedSha256 === expectedAttachmentSha256, "Decrypted attachment SHA-256 matches original 100 KB payload");
+    console.log("  Scenario A: Path A attachment wire integrity verified successfully!");
 
     // Helper function to assert Mailpit outbound headers
     async function assertMailpitOutbound({ expectedRecipient, expectedSender, expectedDomain, label, screenshotName }) {
@@ -422,114 +421,138 @@ async function runWireIntegrityTest() {
     }
 
     // =========================================================================
-    // STEP 3: Path B message from Alice to external address (external@test.local)
+    // SCENARIO B — Reply from custom alias
     // =========================================================================
-    console.log("\n--- [STEP 3] Path B message from Alice to external@test.local ---");
-    // Clear Mailpit
-    await fetch('http://localhost:8025/api/v1/messages', { method: 'DELETE' }).catch(() => {});
+    console.log("\n================================================================================");
+    console.log("  SCENARIO B: REPLY FROM CUSTOM ALIAS                                           ");
+    console.log("================================================================================");
 
-    const composeBtnPathB = await pageAlice.waitForSelector('[data-testid="sidebar-compose-btn"]', { timeout: 5000 });
-    await composeBtnPathB.click();
+    const aliasTimestamp = Date.now().toString(36).slice(-6);
+    const customAliasLocal = `wiresmoke${aliasTimestamp}`;
+    const customAliasAddress = `${customAliasLocal}@masked.byos.local`;
+    console.log(`  Target custom alias: "${customAliasAddress}"`);
+
+    // Navigate to Settings > Masked Email
+    console.log("  Navigating to Settings > Masked Email...");
+    await page.waitForSelector('[data-testid="sidebar-settings-btn"]', { timeout: 5000 });
+    await page.click('[data-testid="sidebar-settings-btn"]');
     await sleep(800);
 
-    await pageAlice.waitForSelector('#composeToInput', { timeout: 5000 });
-    await pageAlice.type('#composeToInput', 'external@test.local');
-    await pageAlice.type('#composeSubjectInput', 'Path B Wire Integrity External Test');
-
-    const bodyPathB = await pageAlice.waitForSelector('[data-testid="compose-body-input"]', { timeout: 5000 });
-    await bodyPathB.click();
-    await bodyPathB.type('Hello external recipient, this is a Path B message sent via sovereign outbound.');
-
-    const pathBSendPromise = pageAlice.waitForResponse(
-      (res) => res.url().includes('/v1/outbound/send') && res.request().method() === 'POST',
-      { timeout: 30000 }
-    );
-    const sendBtnPathB = await pageAlice.waitForSelector('[data-testid="compose-send-btn"]', { timeout: 5000 });
-    await sendBtnPathB.click();
-    const pathBSendRes = await pathBSendPromise;
-    assert(pathBSendRes.status() === 201, `Path B outbound send returned HTTP 201 (got ${pathBSendRes.status()})`);
-
-    await assertMailpitOutbound({
-      expectedRecipient: 'external@test.local',
-      expectedSender: 'alice@byos.local',
-      expectedDomain: 'byos.local',
-      label: 'Step 3 Path B External',
-      screenshotName: 'wire_integrity_5_path_b_mailpit.png',
-    });
-
-    // =========================================================================
-    // STEP 4: Reply from a masked alias to an external sender
-    // =========================================================================
-    console.log("\n--- [STEP 4] Reply from a masked alias to an external sender ---");
-    // Navigate to Settings > Masked Email
-    const maskedNavBtn = await pageAlice.waitForSelector('[data-testid="sidebar-masked-aliases-btn"]', { timeout: 5000 });
-    await maskedNavBtn.click();
+    await page.waitForSelector('[data-testid="settings-tab-masked-email"]', { timeout: 5000 });
+    await page.click('[data-testid="settings-tab-masked-email"]');
     await sleep(1200);
 
-    const generateBtn = await pageAlice.waitForSelector('[data-testid="generate-alias-btn"]', { timeout: 5000 });
-    await generateBtn.click();
-    await sleep(800);
+    // Open Create Modal & Switch to Custom mode
+    await page.waitForSelector('[data-testid="generate-alias-btn"]', { timeout: 5000 });
+    await page.click('[data-testid="generate-alias-btn"]');
+    await sleep(600);
 
-    await pageAlice.waitForSelector('#alias-label-input', { timeout: 5000 });
-    await pageAlice.type('#alias-label-input', 'Wire Test Merchant');
-    await pageAlice.click('button[type="submit"]');
-    await sleep(2000);
+    await page.waitForSelector('[data-testid="alias-mode-custom"]', { timeout: 5000 });
+    await page.click('[data-testid="alias-mode-custom"]');
+    await sleep(500);
 
-    await pageAlice.waitForSelector('table tbody tr', { timeout: 8000 });
-    const aliasAddress = await pageAlice.evaluate(() => {
-      const firstRow = document.querySelector('table tbody tr');
-      const addressSpan = firstRow?.querySelector('td font-mono, td .select-all');
-      return addressSpan ? addressSpan.textContent.trim() : '';
+    await page.waitForSelector('[data-testid="custom-local-part-input"]', { timeout: 5000 });
+    await page.type('[data-testid="custom-local-part-input"]', customAliasLocal);
+    await page.type('[data-testid="alias-label-input"]', 'Wire Smoke Order Alias');
+    await sleep(400);
+
+    await page.click('[data-testid="alias-create-submit-btn"]');
+    await sleep(1500);
+
+    const aliasesTableText = await page.evaluate(() => {
+      const tbl = document.querySelector('table');
+      return tbl ? tbl.innerText : '';
     });
-    console.log(`  Generated alias address: "${aliasAddress}"`);
-    assert(aliasAddress.endsWith("@masked.byos.local"), "Alias address has domain @masked.byos.local");
+    assert(aliasesTableText.includes(customAliasAddress), `Custom alias ${customAliasAddress} appears in settings table`);
+
+    // Verify initial reply_count is 0 in Postgres
+    const initialReplyCountRaw = execSync(
+      `docker exec -i byos-postgres psql -U byos -d byos -t -A -c "SELECT reply_count FROM masked_aliases WHERE alias_address = '${customAliasAddress}';"`,
+      { encoding: 'utf8' }
+    ).trim();
+    console.log(`  Initial reply_count in DB: ${initialReplyCountRaw}`);
+    assert(parseInt(initialReplyCountRaw, 10) === 0, "Initial reply_count is 0");
+
+    // Return to Inbox
+    const backToInboxBtn = await page.waitForSelector('[data-testid="settings-back-to-inbox-btn"]', { timeout: 5000 });
+    await backToInboxBtn.click();
+    await sleep(1500);
 
     // Send inbound SMTP to the alias
-    console.log(`  Delivering inbound SMTP to alias ${aliasAddress}...`);
+    console.log(`  Delivering inbound SMTP to alias ${customAliasAddress}...`);
+    const inboundSubject = `Wire Smoke Inbound Order #${aliasTimestamp}`;
     const inboundRes = await sendInboundSMTP({
       from: 'merchant@external-store.com',
-      to: aliasAddress,
-      subject: 'Wire Test Merchant Order #11223',
+      to: customAliasAddress,
+      subject: inboundSubject,
       body: 'Thank you for your order! Reply to this message to verify delivery.',
     });
     assert(inboundRes.code === 250, "Inbound SMTP delivered to alias successfully (250 OK)");
 
-    // Back to Inbox and open message
-    const backToInboxBtn = await pageAlice.waitForSelector('[data-testid="settings-back-to-inbox-btn"]', { timeout: 5000 });
-    await backToInboxBtn.click();
-    await sleep(2000);
-
-    const inboxFolderAlice = await pageAlice.waitForSelector('[data-testid="folder-inbox"]', { timeout: 5000 });
+    // Refresh Inbox and find received message
+    const inboxFolderAlice = await page.waitForSelector('[data-testid="folder-inbox"]', { timeout: 5000 });
     await inboxFolderAlice.click();
     await sleep(2500);
 
-    const inboundMsgClicked = await pageAlice.evaluate((target) => {
-      const rows = document.querySelectorAll('[data-testid="message-row"]');
-      for (const row of rows) {
-        if (row.textContent.includes('merchant@external-store.com') || row.textContent.includes('Wire Test Merchant Order #11223')) {
-          row.click();
-          return true;
+    let inboundMsgClicked = false;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      inboundMsgClicked = await page.evaluate((targetSubj) => {
+        const rows = document.querySelectorAll('[data-testid="message-row"]');
+        for (const row of rows) {
+          if (row.textContent.includes(targetSubj) || row.textContent.includes('merchant@external-store.com')) {
+            row.click();
+            return true;
+          }
         }
-      }
-      return false;
-    });
-    assert(inboundMsgClicked, "Clicked inbound merchant email in Inbox");
-    await sleep(1500);
+        return false;
+      }, inboundSubject);
+      if (inboundMsgClicked) break;
+      await inboxFolderAlice.click();
+      await sleep(1500);
+    }
+    assert(inboundMsgClicked, "Inbound message received via alias opened in Alice's inbox");
+    await sleep(2000);
 
     // Verify Reading Pane alias badge
-    await pageAlice.waitForSelector('[data-testid="reading-pane-alias-badge"]', { timeout: 8000 });
-    console.log("  Verified alias badge in Reading Pane");
+    await page.waitForSelector('[data-testid="reading-pane-alias-badge"]', { timeout: 8000 });
+    const badgeText = await page.$eval('[data-testid="reading-pane-alias-badge"]', el => el.textContent.trim());
+    console.log(`  Reading Pane alias badge text: "${badgeText}"`);
+    assert(badgeText.includes("Received via"), "Reading Pane displays 'Received via' alias badge");
 
     // Click Reply
-    const replyBtn = await pageAlice.waitForSelector('[data-testid="reading-pane-reply-btn"]', { timeout: 5000 });
+    const replyBtn = await page.waitForSelector('[data-testid="reading-pane-reply-btn"]', { timeout: 8000 });
     await replyBtn.click();
     await sleep(1500);
 
+    // Assert From: is the alias
+    await page.waitForSelector('[data-testid="compose-from-select"]', { timeout: 8000 });
+    let replyFromDetails = { value: '', text: '' };
+    for (let i = 0; i < 10; i++) {
+      replyFromDetails = await page.evaluate(() => {
+        const select = document.querySelector('[data-testid="compose-from-select"]');
+        const opt = select && select.selectedIndex >= 0 ? select.options[select.selectedIndex] : null;
+        return {
+          value: select ? select.value : '',
+          text: opt ? opt.textContent.trim() : '',
+        };
+      });
+      if (replyFromDetails.value && replyFromDetails.value.startsWith('alias:')) break;
+      await sleep(300);
+    }
+    console.log(`  Reply From dropdown: text="${replyFromDetails.text}" value="${replyFromDetails.value}"`);
+    assert(replyFromDetails.value === `alias:${customAliasAddress}`, `Reply From value is alias:${customAliasAddress}`);
+    assert(replyFromDetails.text.includes(customAliasAddress), `Reply From text contains ${customAliasAddress}`);
+    assert(!replyFromDetails.text.includes('alice@byos.local'), "Reply From does NOT leak Alice's real address");
+
+    const shotBCompose = path.resolve(artifactsDir, 'wire_b_alias_reply_compose.png');
+    await page.screenshot({ path: shotBCompose });
+    console.log(`  Saved screenshot: ${shotBCompose}`);
+
     // Fill reply body
-    const replyBody = await pageAlice.waitForSelector('[data-testid="compose-body-input"]', { timeout: 5000 });
+    const replyBody = await page.waitForSelector('[data-testid="compose-body-input"]', { timeout: 5000 });
     await replyBody.click();
     await replyBody.type("\n\nConfirming order delivery via masked alias reply.");
-    await pageAlice.evaluate(() => {
+    await page.evaluate(() => {
       const el = document.querySelector('[data-testid="compose-body-input"]');
       if (el) el.dispatchEvent(new Event('input', { bubbles: true }));
     });
@@ -539,61 +562,179 @@ async function runWireIntegrityTest() {
     await fetch('http://localhost:8025/api/v1/messages', { method: 'DELETE' }).catch(() => {});
 
     // Send reply
-    const replySendPromise = pageAlice.waitForResponse(
+    const replySendPromise = page.waitForResponse(
       (res) => res.url().includes('/v1/outbound/send') && res.request().method() === 'POST',
       { timeout: 30000 }
     );
-    const sendBtnReply = await pageAlice.waitForSelector('[data-testid="compose-send-btn"]', { timeout: 5000 });
+    const sendBtnReply = await page.waitForSelector('[data-testid="compose-send-btn"]', { timeout: 5000 });
     await sendBtnReply.click();
     const replySendRes = await replySendPromise;
     assert(replySendRes.status() === 201, `Masked alias reply send returned HTTP 201 (got ${replySendRes.status()})`);
 
+    // Verify delivered message in Mailpit
     await assertMailpitOutbound({
       expectedRecipient: 'merchant@external-store.com',
-      expectedSender: aliasAddress,
+      expectedSender: customAliasAddress,
       expectedDomain: 'masked.byos.local',
-      label: 'Step 4 Masked Alias Reply',
-      screenshotName: 'wire_integrity_6_alias_reply_mailpit.png',
+      label: 'Scenario B Custom Alias Reply',
+      screenshotName: 'wire_b_mailpit_delivered.png',
     });
 
+    // Assert reply_count on the alias incremented by exactly 1 in Postgres
+    const afterReplyCountRaw = execSync(
+      `docker exec -i byos-postgres psql -U byos -d byos -t -A -c "SELECT reply_count FROM masked_aliases WHERE alias_address = '${customAliasAddress}';"`,
+      { encoding: 'utf8' }
+    ).trim();
+    console.log(`  Updated reply_count in DB: ${afterReplyCountRaw}`);
+    assert(parseInt(afterReplyCountRaw, 10) === 1, "reply_count on alias in Postgres incremented by exactly 1 (0 -> 1)");
+    console.log("  Scenario B: Reply from custom alias wire integrity verified successfully!");
+
     // =========================================================================
-    // STEP 5: Send a plain non-alias message to external@test.local
+    // SCENARIO C — Non-alias outbound to external@test.local
     // =========================================================================
-    console.log("\n--- [STEP 5] Send plain non-alias message to external@test.local ---");
+    console.log("\n================================================================================");
+    console.log("  SCENARIO C: NON-ALIAS OUTBOUND TO external@test.local                          ");
+    console.log("================================================================================");
+
     // Clear Mailpit
     await fetch('http://localhost:8025/api/v1/messages', { method: 'DELETE' }).catch(() => {});
 
-    const composeBtnStep5 = await pageAlice.waitForSelector('[data-testid="sidebar-compose-btn"]', { timeout: 5000 });
-    await composeBtnStep5.click();
+    // Ensure on inbox view
+    await inboxFolderAlice.click();
+    await sleep(1000);
+
+    const composeBtnC = await page.waitForSelector('[data-testid="sidebar-compose-btn"]', { timeout: 5000 });
+    await composeBtnC.click();
     await sleep(800);
 
-    await pageAlice.waitForSelector('#composeToInput', { timeout: 5000 });
-    await pageAlice.type('#composeToInput', 'external@test.local');
-    await pageAlice.type('#composeSubjectInput', 'Plain Non-Alias Post-Alias Outbound Test');
+    await page.waitForSelector('#composeToInput', { timeout: 5000 });
+    await page.type('#composeToInput', 'external@test.local');
+    await page.type('#composeSubjectInput', `Wire Test C Non-Alias Outbound ${Date.now()}`);
 
-    const bodyStep5 = await pageAlice.waitForSelector('[data-testid="compose-body-input"]', { timeout: 5000 });
-    await bodyStep5.click();
-    await bodyStep5.type('Verifying that sending after alias reply restores standard domain DKIM and headers.');
+    const bodyC = await page.waitForSelector('[data-testid="compose-body-input"]', { timeout: 5000 });
+    await bodyC.click();
+    await bodyC.type('Hello external recipient, this is a non-alias outbound message sent via sovereign outbound.');
 
-    const step5SendPromise = pageAlice.waitForResponse(
+    const shotC = path.resolve(artifactsDir, 'wire_c_non_alias_sent.png');
+    await page.screenshot({ path: shotC });
+    console.log(`  Saved screenshot: ${shotC}`);
+
+    const pathCSendPromise = page.waitForResponse(
       (res) => res.url().includes('/v1/outbound/send') && res.request().method() === 'POST',
       { timeout: 30000 }
     );
-    const sendBtnStep5 = await pageAlice.waitForSelector('[data-testid="compose-send-btn"]', { timeout: 5000 });
-    await sendBtnStep5.click();
-    const step5SendRes = await step5SendPromise;
-    assert(step5SendRes.status() === 201, `Step 5 plain outbound send returned HTTP 201 (got ${step5SendRes.status()})`);
+    const sendBtnC = await page.waitForSelector('[data-testid="compose-send-btn"]', { timeout: 5000 });
+    await sendBtnC.click();
+    const pathCSendRes = await pathCSendPromise;
+    assert(pathCSendRes.status() === 201, `Non-alias outbound send returned HTTP 201 (got ${pathCSendRes.status()})`);
 
     await assertMailpitOutbound({
       expectedRecipient: 'external@test.local',
       expectedSender: 'alice@byos.local',
       expectedDomain: 'byos.local',
-      label: 'Step 5 Plain Non-Alias Message',
-      screenshotName: 'wire_integrity_7_plain_nonalias_mailpit.png',
+      label: 'Scenario C Non-Alias Outbound',
+      screenshotName: 'wire_c_mailpit_delivered.png',
     });
+    console.log("  Scenario C: Non-alias outbound wire integrity verified successfully!");
 
     // =========================================================================
-    // Console error & HTTP failure assertion against allowlist
+    // SCENARIO D — Account switch crypto isolation & 10 rapid cycles
+    // =========================================================================
+    console.log("\n================================================================================");
+    console.log("  SCENARIO D: ACCOUNT SWITCH CRYPTO ISOLATION & 10 RAPID CYCLES                 ");
+    console.log("================================================================================");
+
+    async function switchToAccount(targetMailboxId, targetEmail) {
+      const trigger = await page.waitForSelector('[data-testid="account-chip-selector"]', { timeout: 5000 });
+      await trigger.click();
+      await sleep(500);
+      const opt = await page.waitForSelector(`[data-testid="account-dropdown-${targetMailboxId}"]`, { timeout: 5000 });
+      await opt.click();
+      await sleep(1500);
+
+      const activeText = await page.evaluate(() => {
+        const chip = document.querySelector('[data-testid="account-chip-selector"]');
+        return chip ? chip.textContent.trim() : '';
+      });
+      assert(activeText.includes(targetEmail), `Active account switched to ${targetEmail}`);
+    }
+
+    async function getComposeFromDetails() {
+      await page.waitForSelector('[data-testid="compose-from-select"]', { timeout: 5000 });
+      return await page.evaluate(() => {
+        const select = document.querySelector('[data-testid="compose-from-select"]');
+        const opt = select ? select.options[select.selectedIndex] : null;
+        return {
+          value: select ? select.value : '',
+          text: opt ? opt.textContent.trim() : '',
+        };
+      });
+    }
+
+    async function closeCompose() {
+      const closeBtn = await page.waitForSelector('[data-testid="compose-close-btn"]', { timeout: 5000 });
+      await closeBtn.click();
+      await sleep(500);
+    }
+
+    // Step 1: Switch Alice -> Bob -> Alice, verifying From: dropdown at each step
+    console.log("  Testing switch Alice -> Bob -> Alice...");
+    await switchToAccount(bobId, 'bob@byos.local');
+    const compBtnBob = await page.waitForSelector('[data-testid="sidebar-compose-btn"]', { timeout: 5000 });
+    await compBtnBob.click();
+    await sleep(600);
+    const bobFrom = await getComposeFromDetails();
+    console.log(`  Bob active -> Compose From: "${bobFrom.text}" (value: "${bobFrom.value}")`);
+    assert(bobFrom.value === `account:${bobId}` && bobFrom.text.includes('bob@byos.local'), "Compose From is Bob when Bob is active");
+    await closeCompose();
+
+    await switchToAccount(aliceId, 'alice@byos.local');
+    const compBtnAliceAgain = await page.waitForSelector('[data-testid="sidebar-compose-btn"]', { timeout: 5000 });
+    await compBtnAliceAgain.click();
+    await sleep(600);
+    const aliceFrom = await getComposeFromDetails();
+    console.log(`  Alice active -> Compose From: "${aliceFrom.text}" (value: "${aliceFrom.value}")`);
+    assert(aliceFrom.value === `account:${aliceId}` && aliceFrom.text.includes('alice@byos.local'), "Compose From is Alice when Alice is active");
+    await closeCompose();
+
+    // Step 2: Switch to Bob and perform 10 rapid open/close cycles
+    console.log("\n  Running 10 rapid open/close compose cycles with Bob active...");
+    await switchToAccount(bobId, 'bob@byos.local');
+
+    let driftedCount = 0;
+    for (let cycle = 1; cycle <= 10; cycle++) {
+      const btn = await page.waitForSelector('[data-testid="sidebar-compose-btn"]', { timeout: 5000 });
+      await btn.click();
+      await sleep(300);
+
+      const fromState = await getComposeFromDetails();
+      const isBob = fromState.value === `account:${bobId}` && fromState.text.includes('bob@byos.local');
+      const isAlice = fromState.value.includes(aliceId) || fromState.text.includes('alice@byos.local');
+
+      if (isAlice) {
+        driftedCount++;
+      }
+
+      console.log(`  Cycle ${cycle.toString().padStart(2, ' ')}: From = "${fromState.text}" | Drifted: ${isAlice ? 'YES' : 'NO'}`);
+      assert(isBob, `Cycle ${cycle}: From must be Bob`);
+      assert(!isAlice, `Cycle ${cycle}: From must NOT be Alice`);
+
+      if (cycle === 10) {
+        const shotD = path.resolve(artifactsDir, 'wire_d_account_switch.png');
+        await page.screenshot({ path: shotD });
+        console.log(`  Saved screenshot: ${shotD}`);
+      }
+
+      await closeCompose();
+      await sleep(200);
+    }
+
+    console.log(`  Rapid cycles summary: 10/10 iterations remained stable as bob@byos.local (Drifted: ${driftedCount})`);
+    assert(driftedCount === 0, "From: never drifted to Alice across 10 rapid open/close cycles");
+    console.log("  Scenario D: Account switch crypto isolation verified successfully!");
+
+    // =========================================================================
+    // CONSOLE & HTTP ERROR ALLOWLIST ENFORCEMENT
     // =========================================================================
     console.log("\n--- [Console & HTTP Error Allowlist Enforcement] ---");
     console.log(`  Total unallowed errors captured: ${unallowedErrors.length}`);
@@ -604,11 +745,10 @@ async function runWireIntegrityTest() {
     assert(unallowedErrors.length === 0, "No unallowed console or HTTP errors occurred during execution");
 
     console.log("\n================================================================================");
-    console.log("             ALL WIRE INTEGRITY CHECKS PASSED CLEANLY                           ");
+    console.log("             ALL WIRE INTEGRITY CHECKS (SCENARIOS A-D) PASSED CLEANLY           ");
     console.log("================================================================================\n");
 
   } finally {
-    // Clean up temporary attachment
     try {
       if (fs.existsSync(tempAttachmentPath)) {
         fs.unlinkSync(tempAttachmentPath);
