@@ -49,6 +49,8 @@ type MessageMetadataResponse struct {
 	Subject               string   `json:"subject,omitempty"`
 	DraftStorageRef       string   `json:"draft_storage_ref,omitempty"`
 	SendAt                *string  `json:"send_at,omitempty"`
+	ReplyViaAlias         *string  `json:"reply_via_alias,omitempty"`
+	AliasLabel            *string  `json:"alias_label,omitempty"`
 }
 
 type ThreadSummary struct {
@@ -137,7 +139,9 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 			  true::bool,
 			  false::bool,
 			  NULL::timestamptz,
-			  0::bigint
+			  0::bigint,
+			  NULL::text,
+			  NULL::text
 			FROM scheduled_messages sm
 			WHERE sm.mailbox_id = $1
 			  AND sm.status = 'pending'
@@ -154,9 +158,13 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 			       COALESCE(m.is_read, false),
 			       COALESCE(m.is_starred, false),
 			       m.snoozed_until,
-			       COALESCE(m.size_bytes, 0)
+			       COALESCE(m.size_bytes, 0),
+			       MAX(ma.alias_address)::text as reply_via_alias,
+			       MAX(ma.label)::text as alias_label
 			FROM message_metadata m
 			LEFT JOIN message_labels ml ON ml.message_id = m.id
+			LEFT JOIN masked_alias_reply_map marm ON marm.message_id = m.id
+			LEFT JOIN masked_aliases ma ON ma.id = marm.alias_id
 			WHERE m.mailbox_id = $1
 			  AND m.snoozed_until IS NOT NULL
 			  AND m.snoozed_until > now()
@@ -174,9 +182,13 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 			       COALESCE(m.is_read, false),
 			       COALESCE(m.is_starred, false),
 			       m.snoozed_until,
-			       COALESCE(m.size_bytes, 0)
+			       COALESCE(m.size_bytes, 0),
+			       MAX(ma.alias_address)::text as reply_via_alias,
+			       MAX(ma.label)::text as alias_label
 			FROM message_metadata m
 			LEFT JOIN message_labels ml ON ml.message_id = m.id
+			LEFT JOIN masked_alias_reply_map marm ON marm.message_id = m.id
+			LEFT JOIN masked_aliases ma ON ma.id = marm.alias_id
 			WHERE m.mailbox_id = $1
 			  AND m.folder = $2
 			  AND (
@@ -198,9 +210,13 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 			       COALESCE(m.is_read, false),
 			       COALESCE(m.is_starred, false),
 			       m.snoozed_until,
-			       COALESCE(m.size_bytes, 0)
+			       COALESCE(m.size_bytes, 0),
+			       MAX(ma.alias_address)::text as reply_via_alias,
+			       MAX(ma.label)::text as alias_label
 			FROM message_metadata m
 			LEFT JOIN message_labels ml ON ml.message_id = m.id
+			LEFT JOIN masked_alias_reply_map marm ON marm.message_id = m.id
+			LEFT JOIN masked_aliases ma ON ma.id = marm.alias_id
 			WHERE m.mailbox_id = $1
 			  AND (
 			    m.folder IN ('sent', 'trash')
@@ -226,13 +242,17 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 		var folder, folderIDStr string
 		var labelIDs []string
 		var snoozedUntil *time.Time
+		var replyViaAlias, aliasLabel *string
 		if err := rows.Scan(&m.ID, &m.MessageSeq, &m.Direction, &m.Sender, &m.Recipients, &m.StorageObjectID,
 			&wrapped, &m.EncryptionVersion, &iv, &m.AADVersion, &hash,
 			&receivedAt, &sentAt, &m.Status, &m.HasAttachments, &m.AttachmentCount,
-			&folder, &folderIDStr, &labelIDs, &m.IsRead, &m.IsStarred, &snoozedUntil, &m.SizeBytes); err != nil {
+			&folder, &folderIDStr, &labelIDs, &m.IsRead, &m.IsStarred, &snoozedUntil, &m.SizeBytes,
+			&replyViaAlias, &aliasLabel); err != nil {
 			http.Error(w, "failed to read message metadata", http.StatusInternalServerError)
 			return
 		}
+		m.ReplyViaAlias = replyViaAlias
+		m.AliasLabel = aliasLabel
 		m.MailboxID = mailboxID
 		m.ReceivedAt = receivedAt.Format(time.RFC3339)
 		m.ContentKeyHPKEWrapped = base64.StdEncoding.EncodeToString(wrapped)
@@ -470,9 +490,13 @@ func threadDetailHandler(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(m.is_read, false),
 		       COALESCE(m.is_starred, false),
 		       m.snoozed_until,
-		       COALESCE(m.size_bytes, 0)
+		       COALESCE(m.size_bytes, 0),
+		       MAX(ma.alias_address)::text as reply_via_alias,
+		       MAX(ma.label)::text as alias_label
 		FROM message_metadata m
 		LEFT JOIN message_labels ml ON ml.message_id = m.id
+		LEFT JOIN masked_alias_reply_map marm ON marm.message_id = m.id
+		LEFT JOIN masked_aliases ma ON ma.id = marm.alias_id
 		WHERE m.mailbox_id=$1 AND m.thread_id=$2
 		GROUP BY m.id
 		ORDER BY COALESCE(m.sent_at, m.received_at) ASC`, mailboxID, threadID)
@@ -491,13 +515,17 @@ func threadDetailHandler(w http.ResponseWriter, r *http.Request) {
 		var folder, folderIDStr string
 		var labelIDs []string
 		var snoozedUntil *time.Time
+		var replyViaAlias, aliasLabel *string
 		if err := rows.Scan(&m.ID, &m.MessageSeq, &m.Direction, &m.Sender, &m.Recipients, &m.StorageObjectID,
 			&wrapped, &m.EncryptionVersion, &iv, &m.AADVersion, &hash,
 			&receivedAt, &sentAt, &m.Status, &m.HasAttachments, &m.AttachmentCount,
-			&folder, &folderIDStr, &labelIDs, &m.IsRead, &m.IsStarred, &snoozedUntil, &m.SizeBytes); err != nil {
+			&folder, &folderIDStr, &labelIDs, &m.IsRead, &m.IsStarred, &snoozedUntil, &m.SizeBytes,
+			&replyViaAlias, &aliasLabel); err != nil {
 			http.Error(w, "failed to read message metadata", http.StatusInternalServerError)
 			return
 		}
+		m.ReplyViaAlias = replyViaAlias
+		m.AliasLabel = aliasLabel
 		m.MailboxID = mailboxID
 		m.ReceivedAt = receivedAt.Format(time.RFC3339)
 		m.ContentKeyHPKEWrapped = base64.StdEncoding.EncodeToString(wrapped)
@@ -613,7 +641,7 @@ func loadEncryptedMessageBody(ctx context.Context, conn *pgx.Conn, mailboxID, me
 		return nil, &messageBodyLoadError{status: http.StatusBadGateway, msg: "storage returned invalid payload", err: err}
 	}
 
-	if wrappedKeyAlg == "HPKE-XWing-AES256GCM-v1" {
+	if wrappedKeyAlg == "HPKE-XWing-AES256GCM-v1" && len(wrapped) == 0 {
 		return &MessageBodyResponse{
 			XWingEnvelopeJSON: string(rawBody),
 			AADVersion:        aadVersion,

@@ -90,6 +90,8 @@ export interface MessageMetadata {
   draft_storage_ref?: string;
   send_at?: string;
   scheduled_at?: string;
+  reply_via_alias?: string;
+  alias_label?: string;
 }
 
 export interface ThreadSummary {
@@ -150,6 +152,7 @@ export interface SendPayload {
   aad_version: number;
   encryption_iv: string;
   attachment_ids?: string[];
+  alias_id?: string;
 }
 
 export interface SchedulePayload extends SendPayload {
@@ -1577,5 +1580,47 @@ export async function fetchMessageAttachmentChunk(
 
   const arrayBuffer = await response.arrayBuffer();
   return new Uint8Array(arrayBuffer);
+}
+
+export interface MaskedAliasItem {
+  id: string;
+  alias_address: string;
+  label: string;
+  is_enabled: boolean;
+  created_at: string;
+  disabled_at: string | null;
+  reply_count: number;
+}
+
+export interface MaskedAliasesResponse {
+  aliases: MaskedAliasItem[];
+}
+
+export async function fetchMaskedAliases(token?: string): Promise<MaskedAliasesResponse> {
+  return apiRequest<MaskedAliasesResponse>("/v1/users/me/aliases", undefined, token);
+}
+
+export async function createMaskedAlias(label?: string, token?: string): Promise<MaskedAliasItem> {
+  return apiRequest<MaskedAliasItem>("/v1/users/me/aliases", {
+    method: "POST",
+    body: JSON.stringify({ label: label || "" }),
+  }, token);
+}
+
+export async function updateMaskedAlias(
+  aliasId: string,
+  payload: { label?: string; is_enabled?: boolean },
+  token?: string
+): Promise<MaskedAliasItem> {
+  return apiRequest<MaskedAliasItem>(`/v1/users/me/aliases/${aliasId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function deleteMaskedAlias(aliasId: string, token?: string): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/v1/users/me/aliases/${aliasId}`, {
+    method: "DELETE",
+  }, token);
 }
 

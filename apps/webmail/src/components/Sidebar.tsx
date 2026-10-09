@@ -20,6 +20,7 @@ interface SidebarProps {
   onCompose: () => void;
   onOpenContacts: () => void;
   onOpenSettings: () => void;
+  onOpenMaskedEmail?: () => void;
   onOpenImport?: () => void;
   onLogout: (accountId?: string, logOutAll?: boolean) => void;
   isUnlocked?: boolean;
@@ -527,6 +528,28 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               </button>
             );
           })}
+
+          {/* Masked Aliases quick link */}
+          <button
+            type="button"
+            onClick={() => {
+              props.onOpenMaskedEmail?.();
+              props.onCloseMobile?.();
+            }}
+            class="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-medium text-[#3C3D3E] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] transition group cursor-pointer"
+            data-testid="sidebar-masked-aliases-btn"
+          >
+            <div class="flex items-center gap-2.5">
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5] text-[#9E725F]" viewBox="0 0 24 24">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                <path d="M9 12l2 2 4-4" />
+              </svg>
+              <span>Masked Aliases</span>
+            </div>
+            <span class="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-[#F2E8E2] dark:bg-[#2D2522] text-[#9E725F] dark:text-[#D4A38F] font-semibold">
+              Aliases
+            </span>
+          </button>
         </nav>
 
         {/* Custom Folders Section */}

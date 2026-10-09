@@ -40,6 +40,8 @@ export interface DisplayMessage {
   mailboxId?: string;
   accountEmail?: string;
   accountColor?: string;
+  replyViaAlias?: string;
+  aliasLabel?: string;
 }
 
 interface MessageListProps {

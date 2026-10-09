@@ -14,7 +14,7 @@ Write-Host "=== Bootstrap Storage (explicit, no DB DEK) ===" -ForegroundColor Cy
 
 # 1. Verify DEK file exists and is 32 bytes after base64 decode (precise format)
 if (-not (Test-Path $DekFile)) {
-  Write-Error "DEK file not found at $DekFile — create via: openssl rand -base64 32 > $DekFile"
+  Write-Error "DEK file not found at $DekFile - create via: openssl rand -base64 32 > $DekFile"
   exit 1
 }
 $b64 = (Get-Content $DekFile -Raw).Trim()

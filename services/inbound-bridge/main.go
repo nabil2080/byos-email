@@ -196,7 +196,11 @@ func (s *Session) Data(r io.Reader) error {
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Printf("router rejected message status=%s body=%s", resp.Status, strings.TrimSpace(string(respBody)))
+		msg := strings.TrimSpace(string(respBody))
+		log.Printf("router rejected message status=%s body=%s", resp.Status, msg)
+		if strings.Contains(msg, "550") {
+			return &smtp.SMTPError{Code: 550, Message: msg}
+		}
 		return &smtp.SMTPError{Code: 451, Message: "Router rejected message"}
 	}
 	log.Printf("accepted message from=%s recipients=%d bytes=%d", s.from, len(s.to), len(rawMessage))

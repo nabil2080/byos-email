@@ -49,6 +49,8 @@ type InternalSendRequest struct {
 	SenderMailboxID           string               `json:"sender_mailbox_id"`
 	AttachmentEnvelopes       []AttachmentEnvelope `json:"attachment_envelopes,omitempty"`
 	SenderAttachmentEnvelopes []AttachmentEnvelope `json:"sender_attachment_envelopes,omitempty"`
+	AliasID                   string               `json:"alias_id,omitempty"`
+	SenderEmail               string               `json:"sender_email,omitempty"`
 }
 
 type InternalSendResponse struct {
@@ -520,6 +522,43 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	senderEmail := strings.ToLower(senderLocalPart) + "@" + strings.ToLower(senderDomainName)
+	if req.AliasID != "" {
+		var aliasAddr string
+		var isEnabled bool
+		err = conn.QueryRow(ctx, `
+			SELECT alias_address, is_enabled
+			FROM masked_aliases
+			WHERE id = $1 AND mailbox_id = $2
+		`, req.AliasID, req.SenderMailboxID).Scan(&aliasAddr, &isEnabled)
+		if err != nil {
+			writeInternalSendError(w, http.StatusBadRequest, "invalid_alias")
+			return
+		}
+		if !isEnabled {
+			writeInternalSendError(w, http.StatusBadRequest, "alias_disabled")
+			return
+		}
+		senderEmail = strings.ToLower(aliasAddr)
+		_, _ = conn.Exec(ctx, `UPDATE masked_aliases SET reply_count = reply_count + 1 WHERE id = $1`, req.AliasID)
+	} else if req.SenderEmail != "" && strings.HasSuffix(strings.ToLower(req.SenderEmail), "@masked.byos.local") {
+		var aliasID string
+		var isEnabled bool
+		err = conn.QueryRow(ctx, `
+			SELECT id::text, is_enabled
+			FROM masked_aliases
+			WHERE lower(alias_address) = lower($1) AND mailbox_id = $2
+		`, req.SenderEmail, req.SenderMailboxID).Scan(&aliasID, &isEnabled)
+		if err != nil {
+			writeInternalSendError(w, http.StatusBadRequest, "invalid_alias")
+			return
+		}
+		if !isEnabled {
+			writeInternalSendError(w, http.StatusBadRequest, "alias_disabled")
+			return
+		}
+		senderEmail = strings.ToLower(req.SenderEmail)
+		_, _ = conn.Exec(ctx, `UPDATE masked_aliases SET reply_count = reply_count + 1 WHERE id = $1`, aliasID)
+	}
 
 	// 6. Parse and validate recipient
 	cleanRecipient := strings.TrimSpace(req.Recipient)

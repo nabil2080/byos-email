@@ -793,6 +793,20 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                       </span>
                     </Show>
                   </Show>
+                  <Show when={props.message.replyViaAlias}>
+                    <span
+                      class="inline-flex items-center gap-1.5 text-[11px] font-medium text-[#9E725F] dark:text-[#D4A38F] bg-[#F2E8E2] dark:bg-[#2D2522] border border-[#E2DFD8] dark:border-[#3E332E] px-2 py-0.5 rounded-full shadow-2xs font-mono"
+                      data-testid="reading-pane-alias-badge"
+                    >
+                      <svg class="w-3 h-3 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                        <path d="M9 12l2 2 4-4" />
+                      </svg>
+                      <span>
+                        Received via {props.message.aliasLabel ? props.message.aliasLabel : props.message.replyViaAlias}
+                      </span>
+                    </span>
+                  </Show>
                 </div>
 
                 {/* Recipient summary pill with interactive dropdown */}

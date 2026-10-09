@@ -37,6 +37,8 @@ export interface DisplayMessage {
   mailboxId?: string;
   accountEmail?: string;
   accountColor?: string;
+  replyViaAlias?: string;
+  aliasLabel?: string;
 }
 
 function getAttachmentExt(filename: string): string {
@@ -122,6 +124,8 @@ export function mergeUnifiedMessages(
         mailboxId: account.id,
         accountEmail: account.email,
         accountColor: color,
+        replyViaAlias: m.reply_via_alias,
+        aliasLabel: m.alias_label,
       });
     }
   }

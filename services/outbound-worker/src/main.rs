@@ -202,6 +202,51 @@ fn count_recipients(plaintext: &[u8]) -> usize {
     if cnt == 0 { 1 } else { cnt }
 }
 
+fn extract_from_header(plaintext: &[u8]) -> (Option<String>, Option<String>) {
+    if let Ok(parsed) = mailparse::parse_mail(plaintext) {
+        for hdr in parsed.headers.iter() {
+            if hdr.get_key().eq_ignore_ascii_case("from") {
+                let val = hdr.get_value();
+                let addr = if let Some(start) = val.find('<') {
+                    if let Some(end) = val[start + 1..].find('>') {
+                        val[start + 1..start + 1 + end].trim().to_string()
+                    } else {
+                        val.trim().to_string()
+                    }
+                } else {
+                    val.trim().to_string()
+                };
+                if let Some(at) = addr.rfind('@') {
+                    let domain = addr[at + 1..].trim().to_ascii_lowercase();
+                    return (Some(addr), Some(domain));
+                }
+            }
+        }
+    }
+    let text = String::from_utf8_lossy(plaintext);
+    for line in text.lines() {
+        if line.to_ascii_lowercase().starts_with("from:") {
+            if let Some(colon) = line.find(':') {
+                let rest = line[colon + 1..].trim();
+                let addr = if let Some(start) = rest.find('<') {
+                    if let Some(end) = rest[start + 1..].find('>') {
+                        rest[start + 1..start + 1 + end].trim().to_string()
+                    } else {
+                        rest.to_string()
+                    }
+                } else {
+                    rest.to_string()
+                };
+                if let Some(at) = addr.rfind('@') {
+                    let domain = addr[at + 1..].trim().to_ascii_lowercase();
+                    return (Some(addr), Some(domain));
+                }
+            }
+        }
+    }
+    (None, None)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -642,14 +687,37 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
             }
         }
 
-        // DKIM: lookup authoritative domain via mailbox.domain_id (least-privilege narrow columns)
-        let dkim_row = match client
-            .query_opt(
-                "SELECT name, dkim_selector, dkim_private_key_enc FROM domains WHERE id=$1",
-                &[&Uuid::parse_str(&domain_id).unwrap()],
-            )
-            .await
-        {
+        let (extracted_sender, extracted_domain) = extract_from_header(&plaintext);
+
+        // DKIM: lookup domain by sending domain name if available, falling back to queue domain_id
+        let dkim_row = if let Some(ref s_domain) = extracted_domain {
+            match client
+                .query_opt(
+                    "SELECT id::text, name, dkim_selector, dkim_private_key_enc FROM domains WHERE lower(name) = lower($1)",
+                    &[s_domain],
+                )
+                .await
+            {
+                Ok(Some(r)) => Ok(Some(r)),
+                _ => {
+                    client
+                        .query_opt(
+                            "SELECT id::text, name, dkim_selector, dkim_private_key_enc FROM domains WHERE id=$1",
+                            &[&Uuid::parse_str(&domain_id).unwrap()],
+                        )
+                        .await
+                }
+            }
+        } else {
+            client
+                .query_opt(
+                    "SELECT id::text, name, dkim_selector, dkim_private_key_enc FROM domains WHERE id=$1",
+                    &[&Uuid::parse_str(&domain_id).unwrap()],
+                )
+                .await
+        };
+
+        let dkim_row = match dkim_row {
             Ok(r) => r,
             Err(e) => {
                 warn!("dkim domain lookup failed {}: {}", delivery_id, e);
@@ -658,10 +726,10 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
                 continue;
             }
         };
-        let (domain_name, dkim_selector, dkim_enc_opt): (String, String, Option<Vec<u8>>) = match dkim_row {
-            Some(r) => (r.get(0), r.get(1), r.get(2)),
+        let (actual_domain_id, domain_name, dkim_selector, dkim_enc_opt): (String, String, String, Option<Vec<u8>>) = match dkim_row {
+            Some(r) => (r.get(0), r.get(1), r.get(2), r.get(3)),
             None => {
-                warn!("dkim domain not found {} for {}", delivery_id, domain_id);
+                warn!("dkim domain not found {} for sending domain {:?}", delivery_id, extracted_domain);
                 client.execute("UPDATE outbound_queue SET status='bounced', failed_at=now(), attempts=attempts+1 WHERE id=$1", &[&Uuid::parse_str(&id).unwrap()]).await?;
                 continue;
             }
@@ -671,7 +739,7 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
             _ => {
                 warn!("dkim private key missing for domain {} delivery {}", domain_name, delivery_id);
                 client.execute("UPDATE outbound_queue SET status='bounced', failed_at=now(), attempts=attempts+1 WHERE id=$1", &[&Uuid::parse_str(&id).unwrap()]).await?;
-                client.execute("INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_message) VALUES ($1,'outbound',$2,$3,$4,'bounced',$5)", &[&Uuid::parse_str(&delivery_id).unwrap(), &Uuid::parse_str(&mailbox_id).unwrap(), &Uuid::parse_str(&domain_id).unwrap(), &recipient, &"dkim key missing"]).await?;
+                client.execute("INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_message) VALUES ($1,'outbound',$2,$3,$4,'bounced',$5)", &[&Uuid::parse_str(&delivery_id).unwrap(), &Uuid::parse_str(&mailbox_id).unwrap(), &Uuid::parse_str(&actual_domain_id).unwrap(), &recipient, &"dkim key missing"]).await?;
                 continue;
             }
         };
@@ -682,7 +750,7 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
             Err(e) => {
                 warn!("dkim decrypt failed {}: {}", delivery_id, e);
                 client.execute("UPDATE outbound_queue SET status='bounced', failed_at=now(), attempts=attempts+1 WHERE id=$1", &[&Uuid::parse_str(&id).unwrap()]).await?;
-                client.execute("INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_message) VALUES ($1,'outbound',$2,$3,$4,'bounced',$5)", &[&Uuid::parse_str(&delivery_id).unwrap(), &Uuid::parse_str(&mailbox_id).unwrap(), &Uuid::parse_str(&domain_id).unwrap(), &recipient, &"dkim decrypt failed"]).await?;
+                client.execute("INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_message) VALUES ($1,'outbound',$2,$3,$4,'bounced',$5)", &[&Uuid::parse_str(&delivery_id).unwrap(), &Uuid::parse_str(&mailbox_id).unwrap(), &Uuid::parse_str(&actual_domain_id).unwrap(), &recipient, &"dkim decrypt failed"]).await?;
                 continue;
             }
         };
@@ -693,7 +761,7 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
             Err(e) => {
                 warn!("dkim sign failed {}: {}", delivery_id, e);
                 client.execute("UPDATE outbound_queue SET status='bounced', failed_at=now(), attempts=attempts+1 WHERE id=$1", &[&Uuid::parse_str(&id).unwrap()]).await?;
-                client.execute("INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_message) VALUES ($1,'outbound',$2,$3,$4,'bounced',$5)", &[&Uuid::parse_str(&delivery_id).unwrap(), &Uuid::parse_str(&mailbox_id).unwrap(), &Uuid::parse_str(&domain_id).unwrap(), &recipient, &"dkim sign failed"]).await?;
+                client.execute("INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_message) VALUES ($1,'outbound',$2,$3,$4,'bounced',$5)", &[&Uuid::parse_str(&delivery_id).unwrap(), &Uuid::parse_str(&mailbox_id).unwrap(), &Uuid::parse_str(&actual_domain_id).unwrap(), &recipient, &"dkim sign failed"]).await?;
                 continue;
             }
         };
@@ -707,7 +775,11 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
                 continue;
             }
         };
-        let sender_email = format!("{}@{}", local_part, domain_name);
+        let sender_email = if let Some(ref s_addr) = extracted_sender {
+            s_addr.clone()
+        } else {
+            format!("{}@{}", local_part, domain_name)
+        };
         let sender_addr: Address = match sender_email.parse() {
             Ok(a) => a,
             Err(e) => {
@@ -725,13 +797,22 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
             }
         };
 
+        // Prepend Authentication-Results header for the sending domain
+        let auth_results_hdr = format!(
+            "Authentication-Results: byos.local; dkim=pass (2048-bit key) header.d={} header.i=@{} header.s={}\r\n",
+            domain_name, domain_name, dkim_selector
+        );
+        let mut final_message = Vec::with_capacity(auth_results_hdr.len() + signed.len());
+        final_message.extend_from_slice(auth_results_hdr.as_bytes());
+        final_message.extend_from_slice(&signed);
+
         let (postfix_host, postfix_port) = parse_postfix_addr(postfix_addr);
         let mailer = SmtpTransport::builder_dangerous(postfix_host).port(postfix_port).build();
-        match mailer.send_raw(&envelope, &signed) {
+        match mailer.send_raw(&envelope, &final_message) {
             Ok(_) => {
-                info!("delivered {} to {} via {} (dkim signed)", delivery_id, recipient, postfix_addr);
+                info!("delivered {} to {} via {} (dkim signed for domain {})", delivery_id, recipient, postfix_addr, domain_name);
                 client.execute("UPDATE outbound_queue SET status='delivered', delivered_at=now(), attempts=attempts+1, last_attempt_at=now() WHERE id=$1", &[&Uuid::parse_str(&id).unwrap()]).await?;
-                client.execute("INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_code) VALUES ($1,'outbound',$2,$3,$4,'delivered',250)", &[&Uuid::parse_str(&delivery_id).unwrap(), &Uuid::parse_str(&mailbox_id).unwrap(), &Uuid::parse_str(&domain_id).unwrap(), &recipient]).await?;
+                client.execute("INSERT INTO delivery_log (delivery_id, direction, mailbox_id, domain_id, recipient, status, smtp_code) VALUES ($1,'outbound',$2,$3,$4,'delivered',250)", &[&Uuid::parse_str(&delivery_id).unwrap(), &Uuid::parse_str(&mailbox_id).unwrap(), &Uuid::parse_str(&actual_domain_id).unwrap(), &recipient]).await?;
                 notify_scheduled_complete(api_addr, &delivery_id, "delivered", None).await;
             }
             Err(e) => {

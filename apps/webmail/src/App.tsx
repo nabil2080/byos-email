@@ -121,6 +121,7 @@ import { AppearanceTab } from "./routes/settings/AppearanceTab";
 import { AutoReplyTab } from "./routes/settings/AutoReplyTab";
 import { SecurityTab } from "./routes/settings/SecurityTab";
 import { FiltersTab } from "./routes/settings/FiltersTab";
+import { MaskedEmailTab } from "./routes/settings/MaskedEmailTab";
 import { ComposeDrawer } from "./components/ComposeDrawer";
 import { StorageStatusPill } from "./components/StorageStatusPill";
 import { Sidebar } from "./components/Sidebar";
@@ -201,6 +202,8 @@ interface DisplayMessage {
   mailboxId?: string;
   accountEmail?: string;
   accountColor?: string;
+  replyViaAlias?: string;
+  aliasLabel?: string;
 }
 
 export function buildMimeString(params: {
@@ -210,17 +213,24 @@ export function buildMimeString(params: {
   htmlBody: string;
   trackingToken?: string;
   body?: string;
+  from?: string;
+  replyTo?: string;
 }): string {
-  const { to, subject, signedBody, htmlBody, trackingToken, body } = params;
+  const { to, subject, signedBody, htmlBody, trackingToken, body, from, replyTo } = params;
   const trackingPixelHtml = trackingToken
     ? `<img src="${getTrackingPixelUrl(trackingToken)}" alt="" width="1" height="1" style="display:none !important; width:1px; height:1px; border:0;" />`
     : "";
+
+  const extraHeaders: string[] = [];
+  if (from) extraHeaders.push(`From: ${from}`);
+  if (replyTo) extraHeaders.push(`Reply-To: ${replyTo}`);
 
   const isHtml = body !== undefined ? htmlBody !== body : htmlBody !== signedBody;
   if (htmlBody && htmlBody.trim() && isHtml) {
     const fullHtml = trackingPixelHtml ? `${htmlBody}\r\n${trackingPixelHtml}` : htmlBody;
     const boundary = "----=_Part_" + Date.now() + "_" + Math.random().toString(36).slice(2);
     return [
+      ...extraHeaders,
       `To: ${to}`,
       `Subject: ${subject}`,
       "MIME-Version: 1.0",
@@ -240,6 +250,7 @@ export function buildMimeString(params: {
     const boundary = "----=_Part_" + Date.now() + "_" + Math.random().toString(36).slice(2);
     const autoHtml = `<div style="font-family: sans-serif; font-size: 14px; color: #1a1a1a; white-space: pre-wrap;">${signedBody}</div>\r\n${trackingPixelHtml}`;
     return [
+      ...extraHeaders,
       `To: ${to}`,
       `Subject: ${subject}`,
       "MIME-Version: 1.0",
@@ -257,6 +268,7 @@ export function buildMimeString(params: {
     ].join("\r\n");
   } else {
     return [
+      ...extraHeaders,
       `To: ${to}`,
       `Subject: ${subject}`,
       "Content-Type: text/plain; charset=utf-8",
@@ -461,6 +473,7 @@ const App: Component = () => {
   const [searchQuery, setSearchQuery] = createSignal("");
   const [composeOpen, setComposeOpen] = createSignal(false);
   const [composeAccountId, setComposeAccountId] = createSignal<string | null>(null);
+  const [composeFromAlias, setComposeFromAlias] = createSignal<string | null>(null);
   const [accountUnreadCounts, setAccountUnreadCounts] = createSignal<Record<string, number>>({});
   const [excludedAccountIds, setExcludedAccountIds] = createSignal<string[]>(
     (() => {
@@ -3003,6 +3016,8 @@ const App: Component = () => {
           attachmentTypes: uniqueTypes,
           mailboxId: mailboxId,
           accountEmail: currentUser()?.email,
+          replyViaAlias: m.reply_via_alias,
+          aliasLabel: m.alias_label,
         };
       });
       const draftMessages: DisplayMessage[] = draftsList.map((d: DraftMessage) => {
@@ -4297,6 +4312,7 @@ const App: Component = () => {
     setEditingDraft(null);
     setEditingScheduledId(null);
     setComposeSignatureApplied(false);
+    setComposeFromAlias(null);
     setErrorMessage(null);
     setComposeStatus(null);
   }
@@ -4362,6 +4378,9 @@ const App: Component = () => {
     const plaintext = messagePlaintext();
     if (plaintext === null) return;
     clearComposeForm();
+    if (msg.replyViaAlias) {
+      setComposeFromAlias(msg.replyViaAlias);
+    }
     const replyBoxId = msg.mailboxId || selectedMailbox()?.id || null;
     if (replyBoxId) {
       setComposeAccountId(replyBoxId);
@@ -4465,6 +4484,7 @@ const App: Component = () => {
       attachments: composeAttachments(),
       scheduledTime: scheduledTime(),
       trackOpens: composeTrackOpens(),
+      fromAlias: composeFromAlias() || undefined,
     });
   }
 
@@ -4478,6 +4498,7 @@ const App: Component = () => {
       setScheduledTime: setScheduledTime,
       setTrackOpens: setComposeTrackOpens,
       setSignatureApplied: setComposeSignatureApplied,
+      setFromAlias: setComposeFromAlias,
       setOpen: setComposeOpen,
     });
   }
@@ -4568,6 +4589,8 @@ const App: Component = () => {
         htmlBody,
         trackingToken,
         body: signedBody,
+        from: payload.fromAlias,
+        replyTo: payload.fromAlias,
       });
 
       // Path A routing
@@ -4902,6 +4925,7 @@ const App: Component = () => {
           aad_version: reservation.aad_version,
           encryption_iv: encrypted.iv,
           attachment_ids: attIDs.length > 0 ? attIDs : undefined,
+          alias_id: payload.fromAlias || undefined,
         });
       }
 
@@ -5933,6 +5957,9 @@ const App: Component = () => {
             <Show when={activeSettingsTab() === "signatures" && selectedMailbox()}>
               <SignaturesTab mailbox={selectedMailbox()!} currentUser={currentUser()} />
             </Show>
+            <Show when={activeSettingsTab() === "masked-email" && selectedMailbox()}>
+              <MaskedEmailTab mailbox={selectedMailbox()!} currentUser={currentUser()} />
+            </Show>
             <Show when={activeSettingsTab() === "bridge" && selectedMailbox()}>
               <BridgeTab mailbox={selectedMailbox()!} currentUser={currentUser()} />
             </Show>
@@ -6101,6 +6128,11 @@ const App: Component = () => {
                 setSettingsOpen(true);
                 setMobileSidebarOpen(false);
               }}
+              onOpenMaskedEmail={() => {
+                setActiveSettingsTab("masked-email");
+                setSettingsOpen(true);
+                setMobileSidebarOpen(false);
+              }}
               onLogout={handleLogout}
               isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
               storageError={storageErrorBanner()}
@@ -6201,6 +6233,10 @@ const App: Component = () => {
             onOpenImport={() => setImportEmailsModalOpen(true)}
             onOpenSettings={() => {
               setActiveSettingsTab("signatures");
+              setSettingsOpen(true);
+            }}
+            onOpenMaskedEmail={() => {
+              setActiveSettingsTab("masked-email");
               setSettingsOpen(true);
             }}
             onLogout={handleLogout}
@@ -6430,6 +6466,7 @@ const App: Component = () => {
         isUnified={currentFolder() === "unified_inbox"}
         senderAddress={
           (() => {
+            if (composeFromAlias()) return composeFromAlias()!;
             const accId = composeAccountId();
             if (accId) {
               const acc = connectedAccounts().find((a) => a.id === accId);

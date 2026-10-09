@@ -16,6 +16,7 @@ export interface PendingSend {
   scheduledTime: string;
   trackOpens: boolean;
   mailboxId: string;
+  fromAlias?: string;
 }
 
 export function buildPendingSendPayload(params: {
@@ -32,6 +33,7 @@ export function buildPendingSendPayload(params: {
   trackOpens?: boolean;
   id?: string;
   expiresAt?: number;
+  fromAlias?: string;
 }): PendingSend | null {
   const to = params.to.trim();
   const subject = params.subject.trim();
@@ -62,6 +64,7 @@ export function buildPendingSendPayload(params: {
     scheduledTime: params.scheduledTime ?? "",
     trackOpens: params.trackOpens ?? false,
     mailboxId: params.boxId,
+    fromAlias: params.fromAlias,
   };
 }
 
@@ -77,6 +80,7 @@ export function restoreComposeState(
     setTrackOpens: (v: boolean) => void;
     setSignatureApplied: (v: boolean) => void;
     setOpen: (v: boolean) => void;
+    setFromAlias?: (v: string | null) => void;
   }
 ) {
   setters.setTo(payload.recipient);
@@ -87,6 +91,7 @@ export function restoreComposeState(
   setters.setScheduledTime(payload.scheduledTime || "");
   setters.setTrackOpens(payload.trackOpens ?? false);
   setters.setSignatureApplied(true);
+  if (setters.setFromAlias) setters.setFromAlias(payload.fromAlias || null);
   setters.setOpen(true);
 }
 

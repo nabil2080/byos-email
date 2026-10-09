@@ -331,6 +331,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                 {/* Send Button Group */}
                 <button
                   type="submit"
+                  data-testid="compose-send-btn"
                   disabled={Boolean(props.status)}
                   class="px-4 py-2 rounded-xl bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold transition flex items-center gap-2 shadow-xs disabled:opacity-50 cursor-pointer"
                 >

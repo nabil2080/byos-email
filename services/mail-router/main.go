@@ -284,7 +284,9 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 		var preRoute *mailboxRoute
 		norm := normalizeAddress(recipient)
 		if dom, lp, err := splitAddress(norm); err == nil {
-			if r, ok := routesMap[strings.ToLower(lp)+"@"+strings.ToLower(dom)]; ok {
+			if strings.EqualFold(dom, "masked.byos.local") {
+				preRoute = nil
+			} else if r, ok := routesMap[strings.ToLower(lp)+"@"+strings.ToLower(dom)]; ok {
 				preRoute = &r
 			}
 		}
@@ -347,7 +349,52 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 	defer tx.Rollback(ctx)
 
 	var route mailboxRoute
-	if preRoute != nil {
+	var aliasID string
+	var isAlias bool
+
+	if strings.EqualFold(domain, "masked.byos.local") {
+		fullAlias := strings.ToLower(localPart) + "@" + strings.ToLower(domain)
+		var aliasMailboxID string
+		var isEnabled bool
+		err = tx.QueryRow(ctx, `
+			SELECT id::text, mailbox_id::text, is_enabled
+			FROM masked_aliases
+			WHERE lower(alias_address) = lower($1)
+		`, fullAlias).Scan(&aliasID, &aliasMailboxID, &isEnabled)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return StoredMessage{}, fmt.Errorf("550 unknown recipient")
+			}
+			return StoredMessage{}, fmt.Errorf("lookup alias: %w", err)
+		}
+		if !isEnabled {
+			return StoredMessage{}, fmt.Errorf("550 alias disabled")
+		}
+
+		isAlias = true
+		var targetLocalPart, targetDomainName string
+		err = tx.QueryRow(ctx, `
+			SELECT m.id::text, d.id::text, m.mailbox_pk, m.mailbox_sk_version, ms.object_prefix,
+			       m.local_part, d.name
+			FROM mailboxes m
+			JOIN domains d ON d.id = m.domain_id
+			JOIN mailbox_storage ms ON ms.mailbox_id = m.id
+			WHERE m.id = $1
+			  AND m.is_active = true
+			  AND ms.status = 'active'
+			LIMIT 1
+		`, aliasMailboxID).Scan(
+			&route.MailboxID, &route.DomainID, &route.MailboxPK, &route.MailboxSKVersion,
+			&route.ObjectPrefix, &targetLocalPart, &targetDomainName,
+		)
+		if err != nil {
+			return StoredMessage{}, fmt.Errorf("owning mailbox route not found for alias %s: %w", fullAlias, err)
+		}
+		if len(route.MailboxPK) != 32 {
+			return StoredMessage{}, fmt.Errorf("mailbox public key for owning mailbox must be 32 bytes")
+		}
+		recipient = strings.ToLower(targetLocalPart) + "@" + strings.ToLower(targetDomainName)
+	} else if preRoute != nil {
 		route = *preRoute
 	} else {
 		var err error
@@ -486,6 +533,17 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 	).Scan(&messageID)
 	if err != nil {
 		return StoredMessage{}, fmt.Errorf("insert message metadata: %w", err)
+	}
+
+	if isAlias && aliasID != "" {
+		_, aErr := tx.Exec(ctx, `
+			INSERT INTO masked_alias_reply_map (alias_id, message_id, original_sender)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (message_id) DO NOTHING
+		`, aliasID, messageID, normalizeAddress(envelopeFrom))
+		if aErr != nil {
+			return StoredMessage{}, fmt.Errorf("insert alias reply map: %w", aErr)
+		}
 	}
 
 	for _, labelID := range labelIDs {

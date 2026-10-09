@@ -71,6 +71,7 @@ type OutboundSendRequest struct {
 	AADVersion        int      `json:"aad_version"`
 	EncryptionIV      string   `json:"encryption_iv"`
 	AttachmentIDs     []string `json:"attachment_ids,omitempty"`
+	AliasID           string   `json:"alias_id,omitempty"`
 }
 
 type OutboundSendResponse struct {
@@ -418,6 +419,38 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 	if mailboxOrgID != userOrgID || !mailboxActive {
 		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
 		return
+	}
+	if req.AliasID != "" {
+		var isEnabled bool
+		var aliasID string
+		if _, err := uuid.Parse(req.AliasID); err == nil {
+			err = tx.QueryRow(ctx, `
+				SELECT id::text, is_enabled
+				FROM masked_aliases
+				WHERE id = $1 AND mailbox_id = $2
+			`, req.AliasID, req.MailboxID).Scan(&aliasID, &isEnabled)
+		} else {
+			err = tx.QueryRow(ctx, `
+				SELECT id::text, is_enabled
+				FROM masked_aliases
+				WHERE lower(alias_address) = lower($1) AND mailbox_id = $2
+			`, req.AliasID, req.MailboxID).Scan(&aliasID, &isEnabled)
+		}
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			http.Error(w, "invalid_alias", http.StatusBadRequest)
+			return
+		}
+		if !isEnabled {
+			_ = tx.Rollback(ctx)
+			http.Error(w, "alias_disabled", http.StatusBadRequest)
+			return
+		}
+		_, _ = tx.Exec(ctx, `UPDATE masked_aliases SET reply_count = reply_count + 1 WHERE id = $1`, aliasID)
+		var aliasDomainID string
+		if err := tx.QueryRow(ctx, `SELECT id::text FROM domains WHERE name = 'masked.byos.local'`).Scan(&aliasDomainID); err == nil && aliasDomainID != "" {
+			domainID = aliasDomainID
+		}
 	}
 	// Rate check AFTER reservation validation, BEFORE queue INSERT. On
 	// failure the reservation stays reserved (not consumed).

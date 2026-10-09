@@ -1,7 +1,7 @@
 import { Component, JSX, For } from "solid-js";
 import { UserMe, Mailbox } from "../../api";
 
-export type SettingsTabId = "signatures" | "bridge" | "appearance" | "autoreply" | "filters" | "security";
+export type SettingsTabId = "signatures" | "bridge" | "appearance" | "autoreply" | "filters" | "security" | "masked-email";
 
 interface SettingsLayoutProps {
   activeTab: SettingsTabId;
@@ -25,6 +25,17 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
         </svg>
       ),
       description: "Display names, aliases, and rich email signatures",
+    },
+    {
+      id: "masked-email",
+      label: "Masked Email",
+      icon: (
+        <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          <path d="M9 12l2 2 4-4" />
+        </svg>
+      ),
+      description: "Burner aliases that forward securely to your inbox",
     },
     {
       id: "bridge",
@@ -90,6 +101,7 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
         <div class="flex items-center gap-4">
           <button
             onClick={props.onClose}
+            data-testid="settings-back-to-inbox-btn"
             class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] text-xs font-medium text-[#464748] dark:text-[#E2DFD8] hover:bg-[#F0EEE9] dark:hover:bg-[#252830] transition cursor-pointer"
           >
             <span>←</span>

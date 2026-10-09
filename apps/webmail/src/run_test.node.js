@@ -21,6 +21,7 @@ import { runDisplayPartyTests } from "./display_party.test.js";
 import { runNestedLabelsTests } from "./nested_labels.test.js";
 import { runApiErrorTests } from "./api_error.test.js";
 import { runUnifiedInboxTests } from "./unified_inbox.test.js";
+import { runMaskedEmailTests } from "./masked_email.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -162,6 +163,12 @@ async function main() {
   console.log(`UNIFIED INBOX TESTS: ${unifiedInboxRes.passed} passed, ${unifiedInboxRes.failed} failed\n`);
   totalPassed += unifiedInboxRes.passed;
   totalFailed += unifiedInboxRes.failed;
+
+  console.log("Running Masked Email Tests...");
+  const maskedEmailRes = await runMaskedEmailTests();
+  console.log(`MASKED EMAIL TESTS: ${maskedEmailRes.passed} passed, ${maskedEmailRes.failed} failed\n`);
+  totalPassed += maskedEmailRes.passed;
+  totalFailed += maskedEmailRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {
