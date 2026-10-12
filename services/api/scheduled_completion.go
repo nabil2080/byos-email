@@ -115,6 +115,7 @@ func completeScheduledDeliveryTx(ctx context.Context, tx pgx.Tx, deliveryID stri
 			wrappedAlg,
 			row.id,
 			row.senderAttachmentEnvelopes,
+			nil,
 		)
 		if err != nil {
 			return fmt.Errorf("create sent message copy for %s: %w", row.id, err)

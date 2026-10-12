@@ -173,6 +173,22 @@ import {
   getXWingSeedFor,
   unsealAccountKeys,
 } from "./session_isolation";
+import { OfflineBanner } from "./components/OfflineBanner";
+import {
+  initNetworkListeners,
+  onNetworkReconnect,
+  isOffline,
+  registerServiceWorker,
+  clearServiceWorkerCaches,
+} from "./offline";
+import {
+  cacheInboxMessages,
+  getCachedInbox,
+  getCachedMessageBody,
+  saveCachedMessageBody,
+  clearOfflineCache,
+} from "./offline_cache";
+import { enqueueSend, replayQueue } from "./send_queue";
 
 type Folder = "inbox" | "sent" | "scheduled" | "drafts" | "snoozed" | "archive" | "spam" | "trash" | "unified_inbox";
 
@@ -2118,6 +2134,59 @@ const App: Component = () => {
   }
 
   onMount(async () => {
+    initNetworkListeners();
+    registerServiceWorker().catch(() => {});
+    onNetworkReconnect(async () => {
+      try {
+        const res = await replayQueue({
+          sendInternal: (req, token) => sendInternal(req, token),
+          sendOutbound: async (item: any, token) => {
+            const [pubkey, reservation] = await Promise.all([
+              fetchOutboundPubkey(token),
+              prepareOutbound(item.mailbox_id, token),
+            ]);
+            const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+            const mailboxIdHex = item.mailbox_id.replace(/-/g, "");
+            const mime = item.payload?.mime_message || item.mime_message || item.payload?.envelope_json || "";
+            const plaintextB64 = bytesToBase64(new TextEncoder().encode(mime));
+            const encrypted = JSON.parse(
+              wasm.wasm_encrypt_outbound(pubkey, mailboxIdHex, BigInt(reservation.outbox_seq), plaintextB64),
+            ) as { ciphertext: string; send_token_wrapped: string; iv: string };
+            return sendOutbound(
+              {
+                reservation_id: reservation.reservation_id,
+                mailbox_id: item.mailbox_id,
+                recipient: item.recipient,
+                encrypted_message: encrypted.ciphertext,
+                send_token_wrapped: encrypted.send_token_wrapped,
+                outbox_seq: reservation.outbox_seq,
+                encryption_version: reservation.encryption_version,
+                aad_version: reservation.aad_version,
+                encryption_iv: encrypted.iv,
+                alias_id: item.payload?.alias_id || item.alias_id || undefined,
+                client_queue_id: item.client_queue_id,
+              },
+              token,
+            );
+          },
+          getToken: (mId) => {
+            const acc = connectedAccounts().find((a) => a.id === mId);
+            return acc?.sessionToken || sessionStorage.getItem("byos_active_session_token") || undefined;
+          },
+        });
+        showToast("Back online. Pending messages synced.");
+        if (res.sent > 0) {
+          showToast(`Sent ${res.sent} queued message${res.sent > 1 ? "s" : ""}.`);
+        }
+        const currentBox = selectedMailbox();
+        if (currentBox) {
+          await loadMailboxData(currentBox.id);
+        }
+      } catch (err) {
+        console.warn("[offline] Auto-sync on reconnect error:", err);
+      }
+    });
+
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("storage", handleStorageChange);
 
@@ -2849,6 +2918,8 @@ const App: Component = () => {
       setConnectedAccounts([]);
       // Rule 3: comprehensive sweep of all byos_* sensitive keys.
       clearAllSensitiveSessionKeys();
+      clearOfflineCache().catch(() => {});
+      clearServiceWorkerCaches().catch(() => {});
       setIsImpersonating(false);
       try {
         await logout();
@@ -2916,6 +2987,8 @@ const App: Component = () => {
         fetchAttachments(mailboxId),
         fetchThreads(mailboxId),
       ]);
+
+      cacheInboxMessages(mailboxId, messageList).catch(() => {});
 
       function deduplicateByName<T extends { id: string; name: string }>(items: T[]): T[] {
         const seen = new Set<string>();
@@ -3124,6 +3197,7 @@ const App: Component = () => {
               continue;
             try {
               const body = await fetchMessageBody(mailboxId, m.id);
+              saveCachedMessageBody(mailboxId, m.id, body).catch(() => {});
               let plaintext = "";
               const mKeys = getMailboxKeyForMessage(m);
               if (body.xwing_envelope_json && body.xwing_envelope_json.trim()) {
@@ -3262,6 +3336,44 @@ const App: Component = () => {
     } catch (err: any) {
       console.warn("Error loading mailbox data:", err);
       const msg = err instanceof Error ? err.message : String(err);
+      if (isOffline() || msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("offline")) {
+        try {
+          const cached = await getCachedInbox(mailboxId);
+          if (cached && cached.length > 0) {
+            const cachedDisplay: DisplayMessage[] = cached.map((m: MessageMetadata) => {
+              const cachedSubject = sessionStorage.getItem("byos_msg_subject_" + m.id) || m.subject || "";
+              const cachedSnippet = sessionStorage.getItem("byos_msg_snippet_" + m.id) || "";
+              return {
+                id: m.id,
+                messageId: m.id,
+                messageSeq: m.message_seq,
+                folder: (m.folder as Folder) || "inbox",
+                folderId: m.folder_id || null,
+                labelIds: m.label_ids || [],
+                sender: m.sender,
+                recipient: (m.recipients || []).join(", "),
+                recipients: m.recipients || [],
+                subject: cachedSubject,
+                snippet: cachedSnippet,
+                encryptedBody: m.storage_object_id,
+                status: m.status,
+                date: formatMessageDate(m.received_at, timeFormat(), language()),
+                read: m.is_read ?? false,
+                starred: m.is_starred ?? false,
+                isRealApi: true,
+                hasAttachments: m.has_attachments,
+                attachmentCount: m.attachment_count,
+                mailboxId: mailboxId,
+                accountEmail: currentUser()?.email,
+              };
+            });
+            setMessages(cachedDisplay);
+            return;
+          }
+        } catch (cacheErr) {
+          console.warn("[offline] Failed to load cached inbox:", cacheErr);
+        }
+      }
       if (msg.includes("503") || msg.includes("storage_disconnected") || msg.includes("storage disconnected")) {
         setStorageErrorBanner("Mailbox storage is currently disconnected or unreachable. Inbound emails are held safely at the mail transfer agent and will deliver automatically once storage is reconnected.");
       }
@@ -3966,9 +4078,15 @@ const App: Component = () => {
         body = b;
         allAttachments = atts;
         pathAEnvelopes = pAtts;
+        saveCachedMessageBody(targetBoxId, msg.id, body).catch(() => {});
       } catch (fetchErr: unknown) {
-        const errText = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
-        throw new Error(`Failed to decrypt end-to-end message: storage fetch: ${errText}`);
+        const cachedBody = await getCachedMessageBody(msg.id).catch(() => undefined);
+        if (cachedBody) {
+          body = cachedBody;
+        } else {
+          const errText = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+          throw new Error(`Failed to decrypt end-to-end message: storage fetch: ${errText}`);
+        }
       }
 
       if (seq !== currentDecryptSeq) return;
@@ -4741,6 +4859,70 @@ const App: Component = () => {
         from: senderFrom,
         replyTo: senderFrom,
       });
+
+      if (isOffline()) {
+        const clientQueueId = (typeof crypto !== "undefined" && crypto.randomUUID)
+          ? crypto.randomUUID()
+          : "cq-" + Date.now();
+
+        let sealedPathA = false;
+        let envJson = "";
+        let senderEnvJson = "";
+        const singleRec = !to.includes(",") && !to.includes(";");
+        const sSeed = getSigningSeedFor(payload.mailboxId);
+        const sXwing = getXWingSeedFor(payload.mailboxId);
+
+        if (singleRec && sSeed && sXwing) {
+          try {
+            const recRecord = await lookupMailboxKeys(to).catch(() => null);
+            if (recRecord && recRecord.status === "active" && recRecord.xwing_public_key) {
+              const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+              const bytes = base64ToBytes(recRecord.xwing_public_key);
+              const xwingPkHex = bytesToHex(bytes);
+              const plaintextHex = bytesToHex(new TextEncoder().encode(mimeMessage));
+              const signingSeedHex = bytesToHex(sSeed);
+              envJson = wasm.wasm_seal_xwing_envelope_signed(
+                xwingPkHex,
+                recRecord.key_id,
+                recRecord.key_epoch,
+                plaintextHex,
+                signingSeedHex,
+              );
+              const senderXwingPkHex = wasm.wasm_xwing_public_key_from_seed(bytesToHex(sXwing));
+              senderEnvJson = wasm.wasm_seal_xwing_envelope_signed(
+                senderXwingPkHex,
+                box.id,
+                1,
+                plaintextHex,
+                signingSeedHex,
+              );
+              sealedPathA = true;
+            }
+          } catch {}
+        }
+
+        await enqueueSend({
+          client_queue_id: clientQueueId,
+          mailbox_id: box.id,
+          recipient: to,
+          payload: sealedPathA ? {
+            envelope_json: envJson,
+            sender_envelope_json: senderEnvJson,
+            alias_id: payload.fromAlias,
+            sender_email: senderFrom,
+          } : {
+            mime_message: mimeMessage,
+            envelope_json: "",
+            sender_email: senderFrom,
+            alias_id: payload.fromAlias,
+          },
+          is_path_a: sealedPathA,
+        });
+
+        showToast("You are offline. Message queued to send on reconnect.");
+        setComposeStatus(null);
+        return;
+      }
 
       // Path A routing
       const hasAttachments = (payload.attachments || []).length > 0;
@@ -5528,6 +5710,7 @@ const App: Component = () => {
   return (
     <>
       <GlobalErrorBanner />
+      <OfflineBanner />
       <Show when={!isSetupAccount()} fallback={<SetupAccount />}>
       <Show
         when={currentUser() !== null || isLoading()}

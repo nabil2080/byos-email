@@ -72,6 +72,7 @@ type OutboundSendRequest struct {
 	EncryptionIV      string   `json:"encryption_iv"`
 	AttachmentIDs     []string `json:"attachment_ids,omitempty"`
 	AliasID           string   `json:"alias_id,omitempty"`
+	ClientQueueID     *string  `json:"client_queue_id,omitempty"`
 }
 
 type OutboundSendResponse struct {
@@ -389,8 +390,32 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = tx.Commit(ctx)
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Idempotent-Replay", "true")
 		json.NewEncoder(w).Encode(OutboundSendResponse{DeliveryID: deliveryID, Status: "queued"})
 		return
+	}
+	if req.ClientQueueID != nil && strings.TrimSpace(*req.ClientQueueID) != "" {
+		if cqUUID, err := uuid.Parse(strings.TrimSpace(*req.ClientQueueID)); err == nil {
+			var existingID string
+			var existingSeq int64
+			var existingStatus string
+			err = tx.QueryRow(ctx, `
+				SELECT id::text, message_seq, status
+				FROM message_metadata
+				WHERE mailbox_id = $1 AND client_queue_id = $2
+			`, req.MailboxID, cqUUID).Scan(&existingID, &existingSeq, &existingStatus)
+			if err == nil {
+				_ = tx.Commit(ctx)
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Idempotent-Replay", "true")
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(OutboundSendResponse{
+					DeliveryID: existingID,
+					Status:     existingStatus,
+				})
+				return
+			}
+		}
 	}
 	if resStatus == "expired" || time.Now().After(resExpires) {
 		_, _ = tx.Exec(ctx, `UPDATE outbound_reservations SET status='expired' WHERE reservation_id=$1`, req.ReservationID)

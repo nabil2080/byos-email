@@ -2,6 +2,7 @@ import { Component, createSignal, createEffect, For, Show } from "solid-js";
 import { AttachmentItem, ConnectedAccount, MaskedAliasItem } from "../api";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { RichTextEditor } from "./RichTextEditor";
+import { isOffline } from "../offline";
 
 export type DrawerMode = "minimized" | "docked" | "maximized";
 
@@ -199,8 +200,11 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                 >
                   <select
                     ref={fromSelectRef}
+                    disabled={isOffline()}
+                    title={isOffline() ? "Switch accounts online to change sender." : undefined}
                     value={props.fromAlias ? `alias:${props.fromAlias}` : `account:${props.selectedAccountId || props.connectedAccounts?.[0]?.id || ""}`}
                     onChange={(e) => {
+                      if (isOffline()) return;
                       const val = e.currentTarget.value;
                       if (val.startsWith("alias:")) {
                         props.onSelectFromAlias?.(val.slice(6));
@@ -212,7 +216,9 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                         props.onSelectAccount?.(val);
                       }
                     }}
-                    class="font-mono text-xs bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] rounded-lg px-2 py-1 text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-1 focus:ring-[#A27561] cursor-pointer"
+                    class={`font-mono text-xs bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] rounded-lg px-2 py-1 text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-1 focus:ring-[#A27561] ${
+                      isOffline() ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
+                    }`}
                     aria-label="Sender account"
                     data-testid="compose-from-select"
                   >
@@ -246,6 +252,18 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                       </For>
                     </Show>
                   </select>
+                </Show>
+                <Show when={isOffline()}>
+                  <span
+                    class="text-[11px] text-[#A27561] dark:text-[#D4A38F] flex items-center gap-1 font-sans"
+                    title="Switch accounts online to change sender."
+                    data-testid="offline-from-lock"
+                  >
+                    <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                    <span>Switch accounts online to change sender.</span>
+                  </span>
                 </Show>
                 <span class="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-[#F3ECE8] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-bold">
                   Sovereign Outbound

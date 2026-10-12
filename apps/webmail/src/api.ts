@@ -154,6 +154,7 @@ export interface SendPayload {
   encryption_iv: string;
   attachment_ids?: string[];
   alias_id?: string;
+  client_queue_id?: string;
 }
 
 export interface SchedulePayload extends SendPayload {
@@ -803,26 +804,26 @@ export async function importEmail(
   });
 }
 
-export async function prepareOutbound(mailboxId: string): Promise<PrepareResponse> {
+export async function prepareOutbound(mailboxId: string, token?: string): Promise<PrepareResponse> {
   return apiRequest<PrepareResponse>("/v1/outbound/prepare", {
     method: "POST",
     body: JSON.stringify({ mailbox_id: mailboxId }),
-  });
+  }, token);
 }
 
-export async function fetchOutboundPubkey(): Promise<string> {
-  const res = await apiRequest<OutboundPubkeyResponse>("/v1/outbound/pubkey");
+export async function fetchOutboundPubkey(token?: string): Promise<string> {
+  const res = await apiRequest<OutboundPubkeyResponse>("/v1/outbound/pubkey", undefined, token);
   if (!res.outbound_delivery_pk) {
     throw new Error("Outbound delivery key is not configured");
   }
   return res.outbound_delivery_pk;
 }
 
-export async function sendOutbound(payload: SendPayload): Promise<{ delivery_id: string; status: string }> {
+export async function sendOutbound(payload: SendPayload, token?: string): Promise<{ delivery_id: string; status: string }> {
   return apiRequest<{ delivery_id: string; status: string }>("/v1/outbound/send", {
     method: "POST",
     body: JSON.stringify(payload),
-  });
+  }, token);
 }
 
 export async function scheduleOutbound(payload: SchedulePayload): Promise<{ delivery_id: string; scheduled_at: string; status: string }> {
@@ -1495,6 +1496,9 @@ export interface InternalSendRequest {
   sender_mailbox_id: string;
   attachment_envelopes?: AttachmentEnvelope[];
   sender_attachment_envelopes?: AttachmentEnvelope[];
+  alias_id?: string;
+  sender_email?: string;
+  client_queue_id?: string;
 }
 
 export interface InternalSendResponse {

@@ -215,6 +215,7 @@ func deliverPathARow(ctx context.Context, conn *pgx.Conn, tx pgx.Tx, r pathASche
 		senderEmail, recipientEmail,
 		r.envelopeJSON, env,
 		r.attachmentEnvelopes,
+		nil,
 	)
 	if err != nil {
 		return fmt.Errorf("deliver to mailbox: %w", err)

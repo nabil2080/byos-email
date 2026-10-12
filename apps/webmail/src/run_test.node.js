@@ -23,6 +23,7 @@ import { runApiErrorTests } from "./api_error.test.js";
 import { runUnifiedInboxTests } from "./unified_inbox.test.js";
 import { runMaskedEmailTests } from "./masked_email.test.js";
 import { runFocusedInboxTests } from "./focused_inbox.test.js";
+import { runOfflineTests } from "./offline.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -176,6 +177,12 @@ async function main() {
   console.log(`FOCUSED INBOX TESTS: ${focusedInboxRes.passed} passed, ${focusedInboxRes.failed} failed\n`);
   totalPassed += focusedInboxRes.passed;
   totalFailed += focusedInboxRes.failed;
+
+  console.log("Running Offline Support Tests...");
+  const offlineRes = await runOfflineTests();
+  console.log(`OFFLINE SUPPORT TESTS: ${offlineRes.passed} passed, ${offlineRes.failed} failed\n`);
+  totalPassed += offlineRes.passed;
+  totalFailed += offlineRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

@@ -175,3 +175,23 @@ The automated tests check DOM selectors and CSS attributes, but do not validate 
 ### Why it is hard to automate
 Simulating assistive speech synthesis, operating system accessibility APIs (IAccessible2, AT-SPI, NSAccessibility), and user navigation workflows requires manual testing with assistive software rather than DOM-level test runners.
 
+---
+
+## 9. Offline Support: Session-Scoped Keys & Inbox Cache Depth (Directives D1 & D2)
+
+### Deliberate architectural limitations
+1. **Unsealed keys stay in sessionStorage, never IndexedDB (Directive D1):**
+   - Unsealed mailbox private keys (`byos_mailbox_sk_*`), signing seeds (`byos_signing_seed_*`), and post-quantum X-Wing seeds (`byos_xwing_seed_*`) strictly remain in volatile `sessionStorage`. They are never written to disk or IndexedDB.
+   - **Tradeoff & Consequence:** Offline mode is scoped entirely to the current browser session. If the user closes the tab or restarts the browser while offline, offline reading is inaccessible until the user reconnects and completes authentication. Plaintext message bodies and decrypted envelopes are never persisted on disk—only raw server ciphertext envelopes are stored in IndexedDB (`byos-offline`). This deliberate security limitation protects against physical device forensics and cross-session data leaks at the expense of requiring an initial online session.
+
+2. **Cache depth limited to 50 Inbox messages per active mailbox (Directive D2):**
+   - IndexedDB message caching stores up to the 50 most recent Inbox messages per active mailbox. Folders outside the Inbox (Sent, Scheduled, Drafts, Snoozed, Archive, Spam, Trash) and search results are not precached for offline browsing.
+   - Older messages (> 50 in Inbox sequence) are automatically pruned on each inbox sync to respect client storage budgets.
+
+### Manual pre-release verification steps
+1. Log into Webmail online with an account possessing > 50 messages across multiple folders.
+2. Verify in DevTools Application tab (`IndexedDB > byos-offline > messages`) that exactly 50 messages are retained and sorted newest-first.
+3. Disconnect network and attempt to browse Archive or Trash; verify polite offline banner surfaces and indicates cached session availability.
+4. Close all browser tabs while disconnected, reopen browser, and navigate to Webmail; confirm application requires reconnecting online rather than exposing stale unencrypted messages without authentication keys.
+
+

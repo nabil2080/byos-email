@@ -51,6 +51,7 @@ type InternalSendRequest struct {
 	SenderAttachmentEnvelopes []AttachmentEnvelope `json:"sender_attachment_envelopes,omitempty"`
 	AliasID                   string               `json:"alias_id,omitempty"`
 	SenderEmail               string               `json:"sender_email,omitempty"`
+	ClientQueueID             *string              `json:"client_queue_id,omitempty"`
 }
 
 type InternalSendResponse struct {
@@ -151,6 +152,7 @@ func createSentMessageCopy(
 	wrappedKeyAlg string,
 	idempotencyKey string,
 	attachmentEnvelopes []AttachmentEnvelope,
+	clientQueueID *uuid.UUID,
 ) (messageID string, storageObjectID string, err error) {
 	if len(envelopeBytes) == 0 {
 		return "", "", errors.New("envelope bytes empty")
@@ -218,14 +220,14 @@ func createSentMessageCopy(
 			storage_object_id, content_key_hpke_wrapped,
 			mailbox_sk_version, encryption_version, encryption_iv, aad_version,
 			bundle_hash, status, wrapped_key_algorithm, is_read, sent_at,
-			attachment_envelopes, sender_attachment_envelopes
+			attachment_envelopes, sender_attachment_envelopes, client_queue_id
 		) VALUES (
 			$1, $2, $3, 'sent', 'sent', $4,
 			$5, $6, $7, $8,
 			$9, $10,
 			$11, $12, $13, $14,
 			$15, 'sent', $16, true, now(),
-			$17, $17
+			$17, $17, $18
 		) RETURNING id::text
 	`,
 		senderMailboxID, senderDomainID, senderMessageSeq, senderDeliveryIdentity[:],
@@ -234,7 +236,7 @@ func createSentMessageCopy(
 		senderStorageObjectID, []byte{},
 		keyEpoch, version, []byte{}, 1,
 		senderDeliveryIdentity[:],
-		wrappedKeyAlg, attBytes,
+		wrappedKeyAlg, attBytes, clientQueueID,
 	).Scan(&messageID)
 	if err != nil {
 		if reErr := tx.QueryRow(ctx, `
@@ -277,6 +279,7 @@ func deliverEnvelopeToMailbox(
 	envelopeJSON string,
 	env *envelope.CryptoEnvelope,
 	attachmentEnvelopes []AttachmentEnvelope,
+	clientQueueID *uuid.UUID,
 ) (messageID string, messageSeq int64, err error) {
 	// 1. Compute delivery_identity = SHA256(envelope_json)
 	deliveryIdentity := sha256.Sum256([]byte(envelopeJSON))
@@ -334,18 +337,20 @@ func deliverEnvelopeToMailbox(
 			mailbox_id, domain_id, message_seq, direction, delivery_identity, sender, recipients,
 			has_attachments, attachment_count, storage_object_id, content_key_hpke_wrapped,
 			mailbox_sk_version, encryption_version, encryption_iv, aad_version, bundle_hash,
-			status, wrapped_key_algorithm, attachment_envelopes, sender_attachment_envelopes
+			status, wrapped_key_algorithm, attachment_envelopes, sender_attachment_envelopes,
+			client_queue_id
 		) VALUES (
 			$1, $2, $3, 'received', $4, $5, $6,
 			$7, $8, $9, $10,
 			$11, $12, $13, $14, $15,
-			'received', $16, $17, '[]'::jsonb
+			'received', $16, $17, '[]'::jsonb,
+			$18
 		) RETURNING id::text
 	`,
 		recipientMailboxID, recipientDomainID, messageSeq, deliveryIdentity[:], senderEmail, []string{cleanRecipient},
 		hasAttachments, attCount, storageObjectID, []byte{},
 		int(env.KeyEpoch), int(env.V), []byte{}, 1, deliveryIdentity[:],
-		"HPKE-XWing-AES256GCM-v1", attBytes,
+		"HPKE-XWing-AES256GCM-v1", attBytes, clientQueueID,
 	).Scan(&messageID)
 	if err != nil {
 		// Check for unique violation (concurrent insert of same delivery_identity)
@@ -560,6 +565,40 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 		_, _ = conn.Exec(ctx, `UPDATE masked_aliases SET reply_count = reply_count + 1 WHERE id = $1`, aliasID)
 	}
 
+	var clientQueueUUID *uuid.UUID
+	if req.ClientQueueID != nil && strings.TrimSpace(*req.ClientQueueID) != "" {
+		parsed, err := uuid.Parse(strings.TrimSpace(*req.ClientQueueID))
+		if err != nil {
+			writeInternalSendError(w, http.StatusBadRequest, "invalid_client_queue_id")
+			return
+		}
+		clientQueueUUID = &parsed
+
+		var existingID string
+		var existingSeq int64
+		var existingStatus string
+		err = conn.QueryRow(ctx, `
+			SELECT id::text, message_seq, status
+			FROM message_metadata
+			WHERE mailbox_id = $1 AND client_queue_id = $2
+		`, req.SenderMailboxID, *clientQueueUUID).Scan(&existingID, &existingSeq, &existingStatus)
+		if err == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Idempotent-Replay", "true")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(InternalSendResponse{
+				DeliveryID: existingID,
+				MessageID:  existingID,
+				Status:     existingStatus,
+				MessageSeq: existingSeq,
+			})
+			return
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			writeInternalSendError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+	}
+
 	// 6. Parse and validate recipient
 	cleanRecipient := strings.TrimSpace(req.Recipient)
 	parts := strings.Split(cleanRecipient, "@")
@@ -666,12 +705,17 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 
 	// 11–15. Deliver to recipient mailbox
+	var recipientClientQueueID *uuid.UUID
+	if req.SenderEnvelopeJSON == "" {
+		recipientClientQueueID = clientQueueUUID
+	}
 	messageID, messageSeq, err := deliverEnvelopeToMailbox(
 		ctx, conn, tx,
 		recipientMailboxID, recipientDomainID,
 		senderEmail, cleanRecipient,
 		req.EnvelopeJSON, env,
 		req.AttachmentEnvelopes,
+		recipientClientQueueID,
 	)
 	if err != nil {
 		writeInternalSendError(w, http.StatusInternalServerError, "database_insert_failed")
@@ -755,6 +799,7 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 			"HPKE-XWing-AES256GCM-v1",
 			hex.EncodeToString(deliveryIdentity[:]),
 			sentEnvelopes,
+			clientQueueUUID,
 		)
 		if err != nil {
 			writeInternalSendError(w, http.StatusInternalServerError, "sender_insert_failed")
