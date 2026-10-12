@@ -38,9 +38,10 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
   const [matchRecipient, setMatchRecipient] = createSignal("");
   const [matchAttachments, setMatchAttachments] = createSignal<"any" | "yes" | "no">("any");
   const [matchMinSizeKB, setMatchMinSizeKB] = createSignal<string>("");
-  const [actionType, setActionType] = createSignal<"move" | "label" | "mark_read" | "delete">("move");
+  const [actionType, setActionType] = createSignal<"move" | "label" | "mark_read" | "delete" | "category">("move");
   const [actionFolder, setActionFolder] = createSignal("archive");
   const [actionLabelId, setActionLabelId] = createSignal("");
+  const [actionCategory, setActionCategory] = createSignal<"primary" | "notifications" | "newsletters" | "social">("newsletters");
 
   // Test Rule State
   const [testingRule, setTestingRule] = createSignal(false);
@@ -96,6 +97,7 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
     setMatchMinSizeKB("");
     setActionType("move");
     setActionFolder("archive");
+    setActionCategory("newsletters");
     if (labels().length > 0) {
       setActionLabelId(labels()[0].id);
     } else {
@@ -126,6 +128,11 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
     setActionType(rule.action_type);
     setActionFolder(rule.action_folder || "archive");
     setActionLabelId(rule.action_label_id || (labels()[0]?.id || ""));
+    if (rule.action_category) {
+      setActionCategory(rule.action_category as any);
+    } else {
+      setActionCategory("newsletters");
+    }
     setTestResult(null);
     setRuleModalOpen(true);
   }
@@ -212,6 +219,10 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
       setError("Please select a label to apply.");
       return;
     }
+    if (actionType() === "category" && !actionCategory()) {
+      setError("Please select a category.");
+      return;
+    }
 
     setSavingRule(true);
     setError(null);
@@ -233,6 +244,7 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
       action_type: actionType(),
       action_folder: actionType() === "move" ? actionFolder().trim() : (actionType() === "delete" ? "trash" : null),
       action_label_id: actionType() === "label" ? actionLabelId() : null,
+      action_category: actionType() === "category" ? actionCategory() : null,
     };
 
     try {
@@ -323,6 +335,8 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
         return "Mark as read";
       case "delete":
         return "Delete (move to Trash)";
+      case "category":
+        return `Assign category "${rule.action_category || "primary"}"`;
       default:
         return rule.action_type;
     }
@@ -702,7 +716,26 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
                   <option value="label">Apply label</option>
                   <option value="mark_read">Mark as read</option>
                   <option value="delete">Delete (move to Trash)</option>
+                  <option value="category">Assign category</option>
                 </select>
+
+                <Show when={actionType() === "category"}>
+                  <div class="space-y-1">
+                    <label class="block text-[11px] font-medium text-[#6E7075] dark:text-[#A1A1AA]">
+                      Category:
+                    </label>
+                    <select
+                      value={actionCategory()}
+                      onChange={(e) => setActionCategory(e.currentTarget.value as any)}
+                      class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] cursor-pointer"
+                    >
+                      <option value="primary">Primary</option>
+                      <option value="notifications">Notifications</option>
+                      <option value="newsletters">Newsletters</option>
+                      <option value="social">Social</option>
+                    </select>
+                  </div>
+                </Show>
 
                 <Show when={actionType() === "move"}>
                   <div class="space-y-1">

@@ -30,6 +30,7 @@ type MailRule struct {
 	ActionType          string  `json:"action_type"`
 	ActionFolder        *string `json:"action_folder"`
 	ActionLabelID       *string `json:"action_label_id"`
+	ActionCategory      *string `json:"action_category,omitempty"`
 	CreatedAt           string  `json:"created_at"`
 	UpdatedAt           string  `json:"updated_at"`
 }
@@ -45,6 +46,7 @@ type createRuleRequest struct {
 	ActionType          string  `json:"action_type"`
 	ActionFolder        *string `json:"action_folder"`
 	ActionLabelID       *string `json:"action_label_id"`
+	ActionCategory      *string `json:"action_category"`
 }
 
 type updateRuleRequest struct {
@@ -58,6 +60,7 @@ type updateRuleRequest struct {
 	ActionType          *string `json:"action_type"`
 	ActionFolder        *string `json:"action_folder"`
 	ActionLabelID       *string `json:"action_label_id"`
+	ActionCategory      *string `json:"action_category"`
 }
 
 // verifyMailboxAccess verifies user session and authorization for the given mailbox.
@@ -113,7 +116,7 @@ func mailboxRulesHandler(w http.ResponseWriter, r *http.Request) {
 		rows, err := conn.Query(ctx, `
 			SELECT id::text, mailbox_id::text, name, enabled, priority,
 			       match_sender, match_recipient, match_has_attachments, match_min_size_bytes,
-			       action_type, action_folder, action_label_id::text,
+			       action_type, action_folder, action_label_id::text, action_category,
 			       created_at, updated_at
 			FROM mail_rules
 			WHERE mailbox_id = $1
@@ -133,7 +136,7 @@ func mailboxRulesHandler(w http.ResponseWriter, r *http.Request) {
 			if err := rows.Scan(
 				&rule.ID, &rule.MailboxID, &rule.Name, &rule.Enabled, &rule.Priority,
 				&rule.MatchSender, &rule.MatchRecipient, &rule.MatchHasAttachments, &rule.MatchMinSizeBytes,
-				&rule.ActionType, &rule.ActionFolder, &labelID,
+				&rule.ActionType, &rule.ActionFolder, &labelID, &rule.ActionCategory,
 				&createdAt, &updatedAt,
 			); err != nil {
 				http.Error(w, "failed to read rule", http.StatusInternalServerError)
@@ -176,6 +179,7 @@ func mailboxRulesHandler(w http.ResponseWriter, r *http.Request) {
 		actionType := strings.TrimSpace(req.ActionType)
 		var actionFolder *string
 		var actionLabelID *string
+		var actionCategory *string
 
 		switch actionType {
 		case "move":
@@ -201,9 +205,33 @@ func mailboxRulesHandler(w http.ResponseWriter, r *http.Request) {
 		case "delete":
 			folder := "trash"
 			actionFolder = &folder
+		case "category":
+			var cat string
+			if req.ActionCategory != nil && strings.TrimSpace(*req.ActionCategory) != "" {
+				cat = strings.ToLower(strings.TrimSpace(*req.ActionCategory))
+			} else if req.ActionFolder != nil && strings.TrimSpace(*req.ActionFolder) != "" {
+				cat = strings.ToLower(strings.TrimSpace(*req.ActionFolder))
+			} else {
+				http.Error(w, "action_category is required when action_type is category", http.StatusBadRequest)
+				return
+			}
+			validCats := map[string]bool{"primary": true, "notifications": true, "newsletters": true, "social": true}
+			if !validCats[cat] {
+				http.Error(w, "invalid action_category (must be primary, notifications, newsletters, or social)", http.StatusBadRequest)
+				return
+			}
+			actionCategory = &cat
 		default:
-			http.Error(w, "invalid action_type (must be move, label, mark_read, or delete)", http.StatusBadRequest)
+			http.Error(w, "invalid action_type (must be move, label, mark_read, delete, or category)", http.StatusBadRequest)
 			return
+		}
+
+		if actionCategory == nil && req.ActionCategory != nil && strings.TrimSpace(*req.ActionCategory) != "" {
+			cat := strings.ToLower(strings.TrimSpace(*req.ActionCategory))
+			validCats := map[string]bool{"primary": true, "notifications": true, "newsletters": true, "social": true}
+			if validCats[cat] {
+				actionCategory = &cat
+			}
 		}
 
 		var matchSender *string
@@ -225,19 +253,19 @@ func mailboxRulesHandler(w http.ResponseWriter, r *http.Request) {
 			INSERT INTO mail_rules (
 				mailbox_id, name, enabled, priority,
 				match_sender, match_recipient, match_has_attachments, match_min_size_bytes,
-				action_type, action_folder, action_label_id
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+				action_type, action_folder, action_label_id, action_category
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			RETURNING id::text, mailbox_id::text, name, enabled, priority,
 			          match_sender, match_recipient, match_has_attachments, match_min_size_bytes,
-			          action_type, action_folder, action_label_id::text,
+			          action_type, action_folder, action_label_id::text, action_category,
 			          created_at, updated_at
 		`, mailboxID, name, enabled, priority,
 			matchSender, matchRecipient, req.MatchHasAttachments, req.MatchMinSizeBytes,
-			actionType, actionFolder, actionLabelID,
+			actionType, actionFolder, actionLabelID, actionCategory,
 		).Scan(
 			&rule.ID, &rule.MailboxID, &rule.Name, &rule.Enabled, &rule.Priority,
 			&rule.MatchSender, &rule.MatchRecipient, &rule.MatchHasAttachments, &rule.MatchMinSizeBytes,
-			&rule.ActionType, &rule.ActionFolder, &scannedLabelID,
+			&rule.ActionType, &rule.ActionFolder, &scannedLabelID, &rule.ActionCategory,
 			&createdAt, &updatedAt,
 		)
 		if err != nil {
@@ -318,14 +346,14 @@ func mailboxRuleItemHandler(w http.ResponseWriter, r *http.Request) {
 		err = conn.QueryRow(ctx, `
 			SELECT id::text, mailbox_id::text, name, enabled, priority,
 			       match_sender, match_recipient, match_has_attachments, match_min_size_bytes,
-			       action_type, action_folder, action_label_id::text,
+			       action_type, action_folder, action_label_id::text, action_category,
 			       created_at, updated_at
 			FROM mail_rules
 			WHERE id = $1 AND mailbox_id = $2
 		`, ruleID, mailboxID).Scan(
 			&existing.ID, &existing.MailboxID, &existing.Name, &existing.Enabled, &existing.Priority,
 			&existing.MatchSender, &existing.MatchRecipient, &existing.MatchHasAttachments, &existing.MatchMinSizeBytes,
-			&existing.ActionType, &existing.ActionFolder, &existingLabelID,
+			&existing.ActionType, &existing.ActionFolder, &existingLabelID, &existing.ActionCategory,
 			&createdAt, &updatedAt,
 		)
 		if err != nil {
@@ -401,6 +429,30 @@ func mailboxRuleItemHandler(w http.ResponseWriter, r *http.Request) {
 				f := "trash"
 				existing.ActionFolder = &f
 				existing.ActionLabelID = nil
+			case "category":
+				existing.ActionType = "category"
+				if req.ActionCategory != nil && strings.TrimSpace(*req.ActionCategory) != "" {
+					cat := strings.ToLower(strings.TrimSpace(*req.ActionCategory))
+					validCats := map[string]bool{"primary": true, "notifications": true, "newsletters": true, "social": true}
+					if !validCats[cat] {
+						http.Error(w, "invalid action_category", http.StatusBadRequest)
+						return
+					}
+					existing.ActionCategory = &cat
+				} else if req.ActionFolder != nil && strings.TrimSpace(*req.ActionFolder) != "" {
+					cat := strings.ToLower(strings.TrimSpace(*req.ActionFolder))
+					validCats := map[string]bool{"primary": true, "notifications": true, "newsletters": true, "social": true}
+					if !validCats[cat] {
+						http.Error(w, "invalid action_category", http.StatusBadRequest)
+						return
+					}
+					existing.ActionCategory = &cat
+				} else if existing.ActionCategory == nil || *existing.ActionCategory == "" {
+					http.Error(w, "action_category is required when action_type is category", http.StatusBadRequest)
+					return
+				}
+				existing.ActionFolder = nil
+				existing.ActionLabelID = nil
 			default:
 				http.Error(w, "invalid action_type", http.StatusBadRequest)
 				return
@@ -422,6 +474,19 @@ func mailboxRuleItemHandler(w http.ResponseWriter, r *http.Request) {
 					existing.ActionLabelID = nil
 				}
 			}
+			if req.ActionCategory != nil {
+				cat := strings.ToLower(strings.TrimSpace(*req.ActionCategory))
+				if cat != "" {
+					validCats := map[string]bool{"primary": true, "notifications": true, "newsletters": true, "social": true}
+					if !validCats[cat] {
+						http.Error(w, "invalid action_category", http.StatusBadRequest)
+						return
+					}
+					existing.ActionCategory = &cat
+				} else {
+					existing.ActionCategory = nil
+				}
+			}
 		}
 
 		var updatedLabelID *string
@@ -429,21 +494,21 @@ func mailboxRuleItemHandler(w http.ResponseWriter, r *http.Request) {
 			UPDATE mail_rules
 			SET name = $1, enabled = $2, priority = $3,
 			    match_sender = $4, match_recipient = $5, match_has_attachments = $6, match_min_size_bytes = $7,
-			    action_type = $8, action_folder = $9, action_label_id = $10,
+			    action_type = $8, action_folder = $9, action_label_id = $10, action_category = $11,
 			    updated_at = now()
-			WHERE id = $11 AND mailbox_id = $12
+			WHERE id = $12 AND mailbox_id = $13
 			RETURNING id::text, mailbox_id::text, name, enabled, priority,
 			          match_sender, match_recipient, match_has_attachments, match_min_size_bytes,
-			          action_type, action_folder, action_label_id::text,
+			          action_type, action_folder, action_label_id::text, action_category,
 			          created_at, updated_at
 		`, existing.Name, existing.Enabled, existing.Priority,
 			existing.MatchSender, existing.MatchRecipient, existing.MatchHasAttachments, existing.MatchMinSizeBytes,
-			existing.ActionType, existing.ActionFolder, existing.ActionLabelID,
+			existing.ActionType, existing.ActionFolder, existing.ActionLabelID, existing.ActionCategory,
 			ruleID, mailboxID,
 		).Scan(
 			&existing.ID, &existing.MailboxID, &existing.Name, &existing.Enabled, &existing.Priority,
 			&existing.MatchSender, &existing.MatchRecipient, &existing.MatchHasAttachments, &existing.MatchMinSizeBytes,
-			&existing.ActionType, &existing.ActionFolder, &updatedLabelID,
+			&existing.ActionType, &existing.ActionFolder, &updatedLabelID, &existing.ActionCategory,
 			&createdAt, &updatedAt,
 		)
 		if err != nil {

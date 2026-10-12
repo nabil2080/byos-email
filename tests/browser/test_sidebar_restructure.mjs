@@ -2,11 +2,18 @@ import puppeteer from '../../apps/webmail/node_modules/puppeteer-core/lib/puppet
 import path from 'node:path';
 import fs from 'node:fs';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import * as wasm from '../../apps/webmail/src/generated/crypto-core/byos_crypto_core.js';
 import { bytesToHex } from '../../apps/webmail/src/attachment_crypto.ts';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const artifactDir = 'C:\\Users\\PC\\.gemini\\antigravity\\brain\\bc4b087f-089b-4e94-aa80-42c26a5708ee';
+const artifactsDir = path.resolve(__dirname, 'artifacts');
+
+if (!fs.existsSync(artifactsDir)) {
+  fs.mkdirSync(artifactsDir, { recursive: true });
+}
 
 const Alice = {
   userId: "cccccccc-0000-0000-0000-000000000002",
@@ -207,7 +214,7 @@ async function runSidebarVerification() {
     }
 
     // Capture screenshot of open dropdown state
-    const dropdownShotPath = path.join(artifactDir, 'sidebar_dropdown_open.png');
+    const dropdownShotPath = path.join(artifactsDir, 'sidebar_dropdown_open.png');
     const sidebarEl = await page.$('aside');
     if (sidebarEl) {
       await sidebarEl.screenshot({ path: dropdownShotPath });
@@ -258,7 +265,7 @@ async function runSidebarVerification() {
     }
 
     // Capture screenshot of Alice selected state
-    const aliceShotPath = path.join(artifactDir, 'sidebar_alice_selected.png');
+    const aliceShotPath = path.join(artifactsDir, 'sidebar_alice_selected.png');
     if (sidebarEl) {
       await sidebarEl.screenshot({ path: aliceShotPath });
       console.log("Captured sidebar Alice selected screenshot:", aliceShotPath);
@@ -328,7 +335,7 @@ async function runSidebarVerification() {
     }
 
     // Capture screenshot of All Inboxes selected state
-    const allInboxesShotPath = path.join(artifactDir, 'sidebar_all_inboxes_selected.png');
+    const allInboxesShotPath = path.join(artifactsDir, 'sidebar_all_inboxes_selected.png');
     if (sidebarEl) {
       await sidebarEl.screenshot({ path: allInboxesShotPath });
       console.log("Captured sidebar All Inboxes selected screenshot:", allInboxesShotPath);

@@ -228,7 +228,7 @@ func deliverPathARow(ctx context.Context, conn *pgx.Conn, tx pgx.Tx, r pathASche
 	// 6. Evaluate rules on scheduled delivery
 	sizeBytes := int64(len(r.envelopeJSON))
 	hasAttachments := len(r.attachmentEnvelopes) > 0
-	folderOverride, labelIDs, markRead, deleteMessage, ruleErr := EvaluateRules(
+	folderOverride, labelIDs, markRead, deleteMessage, categoryOverride, ruleErr := EvaluateRules(
 		ctx, tx, recipientMailboxID, senderEmail, []string{recipientEmail}, sizeBytes, hasAttachments,
 	)
 	if ruleErr != nil {
@@ -240,12 +240,12 @@ func deliverPathARow(ctx context.Context, conn *pgx.Conn, tx pgx.Tx, r pathASche
 	} else if folderOverride != "" {
 		finalFolder = folderOverride
 	}
-	if finalFolder != "inbox" || markRead {
+	if finalFolder != "inbox" || markRead || categoryOverride != "" {
 		if _, updateErr := tx.Exec(ctx, `
 			UPDATE message_metadata
-			SET folder = $1, is_read = $2
-			WHERE id = $3
-		`, finalFolder, markRead, messageID); updateErr != nil {
+			SET folder = $1, is_read = $2, category_override = NULLIF($3, '')
+			WHERE id = $4
+		`, finalFolder, markRead, categoryOverride, messageID); updateErr != nil {
 			return fmt.Errorf("rule update: %w", updateErr)
 		}
 	}

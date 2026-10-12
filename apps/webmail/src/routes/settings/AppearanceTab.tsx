@@ -5,6 +5,7 @@ import {
   fetchMailboxSettings,
   updateMailboxSettings,
 } from "../../api";
+import { getFocusedInboxEnabled, setFocusedInboxEnabled } from "../../focused_inbox";
 
 interface AppearanceTabProps {
   mailbox: Mailbox;
@@ -46,6 +47,15 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
   const [weekStart, setWeekStart] = createSignal<"sunday" | "monday" | "saturday">(
     props.currentWeekStart || (typeof window !== "undefined" ? (localStorage.getItem("byos_week_start") as any) || "sunday" : "sunday")
   );
+  const [focusedInboxEnabled, setFocusedInboxState] = createSignal<boolean>(getFocusedInboxEnabled());
+
+  function handleToggleFocusedInbox(enabled: boolean) {
+    setFocusedInboxState(enabled);
+    setFocusedInboxEnabled(enabled);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("byos_focused_inbox_changed", { detail: { enabled } }));
+    }
+  }
 
   // Sync with incoming props if they change externally
   createEffect(() => {
@@ -497,6 +507,34 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
             </p>
           </div>
         </div>
+      </div>
+
+      {/* Focused Inbox Section */}
+      <div class="bg-white dark:bg-[#1E2025] rounded-2xl p-6 border border-[#E2DFD8] dark:border-[#2E3138] shadow-xs space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h4 class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6] uppercase tracking-wider font-mono">
+              Focused Inbox
+            </h4>
+            <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA] mt-0.5">
+              Automatically categorize incoming mail into Primary, Notifications, Newsletters, and Social tabs.
+            </p>
+          </div>
+          <label data-testid="focused-inbox-toggle-label" class="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              id="focused-inbox-toggle"
+              data-testid="focused-inbox-toggle"
+              checked={focusedInboxEnabled()}
+              onChange={(e) => handleToggleFocusedInbox(e.currentTarget.checked)}
+              class="sr-only peer"
+            />
+            <div class="w-11 h-6 bg-[#E2DFD8] peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-[#A27561]/50 dark:bg-[#2E3138] rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#A27561]"></div>
+          </label>
+        </div>
+        <p class="text-[11px] text-[#6E7075] dark:text-[#A1A1AA]">
+          When disabled, all inbox messages are shown in a single unified list.
+        </p>
       </div>
 
       {/* Save Action Bar */}

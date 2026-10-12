@@ -42,13 +42,18 @@ $tests = @(
     "tests/browser/test_masked_email.mjs",
     "tests/browser/test_alias_custom.mjs",
     "tests/browser/test_compose_default_account.mjs",
-    "tests/browser/test_wire_integrity.mjs"
+    "tests/browser/test_wire_integrity.mjs",
+    "tests/browser/test_focused_inbox.mjs"
 )
 
 $results = @{}
 $failedTests = @()
 
 foreach ($t in $tests) {
+    if (-not $SkipClean) {
+        $env:BYOS_LOCAL_DEV = "1"
+        & powershell -NoProfile -ExecutionPolicy Bypass -File "$scriptDir\clean-test-data.ps1" | Out-Null
+    }
     $testPath = Join-Path $scriptDir $t
     $testName = [System.IO.Path]::GetFileName($t)
     Write-Host "`n>>> RUNNING: $t" -ForegroundColor Cyan

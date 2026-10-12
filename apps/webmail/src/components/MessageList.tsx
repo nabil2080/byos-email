@@ -4,6 +4,7 @@ import { InboxToolbar, SelectionFilter, SortOrder } from "./InboxToolbar";
 import { MessageRow } from "./MessageRow";
 import { ThreadRow } from "./ThreadRow";
 import { MailboxFolder, MailboxLabel, ThreadSummary } from "../api";
+import { FocusedCategory } from "../focused_inbox";
 
 export interface DisplayMessage {
   id: string;
@@ -42,6 +43,8 @@ export interface DisplayMessage {
   accountColor?: string;
   replyViaAlias?: string;
   aliasLabel?: string;
+  category?: FocusedCategory;
+  categoryOverride?: string | null;
 }
 
 interface MessageListProps {
@@ -94,6 +97,11 @@ interface MessageListProps {
   onOpenMobileMenu?: () => void;
   onToggleViewMode?: () => void;
   onToggleThreadCheck?: (threadId: string, checked: boolean) => void;
+  focusedCategory?: FocusedCategory;
+  onSelectCategory?: (category: FocusedCategory) => void;
+  categoryCounts?: Record<FocusedCategory, { total: number; unread: number }>;
+  focusedInboxEnabled?: boolean;
+  onMoveToCategory?: (msg: DisplayMessage, category: FocusedCategory) => void;
 }
 
 export const MessageList: Component<MessageListProps> = (props) => {
@@ -178,6 +186,100 @@ export const MessageList: Component<MessageListProps> = (props) => {
         onToggleViewMode={props.onToggleViewMode}
       />
 
+      {/* Focused Inbox Tabs (Inbox view only, when enabled) */}
+      <Show when={props.currentFolder === "inbox" && props.focusedInboxEnabled !== false && props.onSelectCategory}>
+        <div
+          class="flex items-center border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#1E2025] px-2 overflow-x-auto no-scrollbar flex-shrink-0"
+          role="tablist"
+          aria-label="Focused Inbox Categories"
+          data-testid="focused-inbox-tabs"
+        >
+          <For
+            each={[
+              {
+                id: "primary" as FocusedCategory,
+                label: "Primary",
+                icon: (
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                    <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+                    <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+                  </svg>
+                ),
+              },
+              {
+                id: "notifications" as FocusedCategory,
+                label: "Notifications",
+                icon: (
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                  </svg>
+                ),
+              },
+              {
+                id: "newsletters" as FocusedCategory,
+                label: "Newsletters",
+                icon: (
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+                    <polyline points="22,6 12,13 2,6" />
+                  </svg>
+                ),
+              },
+              {
+                id: "social" as FocusedCategory,
+                label: "Social",
+                icon: (
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                  </svg>
+                ),
+              },
+            ]}
+          >
+            {(cat) => {
+              const isActive = () => (props.focusedCategory || "primary") === cat.id;
+              const unreadCount = () => props.categoryCounts?.[cat.id]?.unread || 0;
+              return (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive()}
+                  data-category={cat.id}
+                  data-testid={`category-tab-${cat.id}`}
+                  onClick={() => props.onSelectCategory?.(cat.id)}
+                  class={`flex items-center gap-2 px-3 py-2.5 text-xs font-medium border-b-2 transition-all cursor-pointer whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
+                    isActive()
+                      ? "border-[#9E725F] text-[#3C3D3E] dark:text-[#F3F4F6] font-semibold bg-[#F0EEE9]/40 dark:bg-[#252830]/50"
+                      : "border-transparent text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#3C3D3E] dark:hover:text-[#F3F4F6] hover:bg-stone-50 dark:hover:bg-[#252830]/20"
+                  }`}
+                >
+                  <span class={`flex-shrink-0 ${isActive() ? "text-[#9E725F]" : "text-[#6F7173] dark:text-[#A1A1AA]"}`}>
+                    {cat.icon}
+                  </span>
+                  <span>{cat.label}</span>
+                  <Show when={unreadCount() > 0}>
+                    <span
+                      data-testid={`category-badge-${cat.id}`}
+                      class={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                        isActive()
+                          ? "bg-[#9E725F] text-white"
+                          : "bg-stone-200 dark:bg-stone-700 text-[#3C3D3E] dark:text-[#F3F4F6]"
+                      }`}
+                    >
+                      {unreadCount()}
+                    </span>
+                  </Show>
+                </button>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
+
       {/* 30-Day Auto-Delete Bin Notice Banner */}
       <Show when={props.currentFolder === "trash"}>
         <div class="px-4 py-2 bg-[#F3ECE8] dark:bg-[#2D2522] border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between gap-3 text-xs text-[#464748] dark:text-[#E2DFD8] flex-shrink-0">
@@ -230,6 +332,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
                   onTrash={props.onTrash}
                   onDeleteForever={props.onDeleteForever}
                   labels={props.labels}
+                  onMoveToCategory={props.onMoveToCategory}
                 />
               )}
             </For>

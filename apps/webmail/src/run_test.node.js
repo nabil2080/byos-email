@@ -22,6 +22,7 @@ import { runNestedLabelsTests } from "./nested_labels.test.js";
 import { runApiErrorTests } from "./api_error.test.js";
 import { runUnifiedInboxTests } from "./unified_inbox.test.js";
 import { runMaskedEmailTests } from "./masked_email.test.js";
+import { runFocusedInboxTests } from "./focused_inbox.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -169,6 +170,12 @@ async function main() {
   console.log(`MASKED EMAIL TESTS: ${maskedEmailRes.passed} passed, ${maskedEmailRes.failed} failed\n`);
   totalPassed += maskedEmailRes.passed;
   totalFailed += maskedEmailRes.failed;
+
+  console.log("Running Focused Inbox Tests...");
+  const focusedInboxRes = runFocusedInboxTests();
+  console.log(`FOCUSED INBOX TESTS: ${focusedInboxRes.passed} passed, ${focusedInboxRes.failed} failed\n`);
+  totalPassed += focusedInboxRes.passed;
+  totalFailed += focusedInboxRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

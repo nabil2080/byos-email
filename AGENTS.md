@@ -132,6 +132,11 @@ Never write reports or verification artifacts to the agent brain
 directory. Those files are invisible to the user and to future agents
 and will not be committed.
 
+Browser tests and scripts must never write to any path outside the
+repository. Absolute paths to a specific user's home directory are
+forbidden. All file output must be relative to the repository root,
+and screenshots must go to tests/browser/artifacts/.
+
 ### Section: Manual verification requirements
 
 Every task that changes UI behavior must include a browser

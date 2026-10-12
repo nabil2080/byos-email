@@ -152,7 +152,7 @@ func TestRuleEvaluatesSenderMatch(t *testing.T) {
 	defer tx.Rollback(ctx)
 
 	// Matching sender
-	folder, _, _, _, err := EvaluateRules(ctx, tx, mailboxID, "bot@alerts.domain.com", []string{"user@test.local"}, 500, false)
+	folder, _, _, _, _, err := EvaluateRules(ctx, tx, mailboxID, "bot@alerts.domain.com", []string{"user@test.local"}, 500, false)
 	if err != nil {
 		t.Fatalf("EvaluateRules: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestRuleEvaluatesSenderMatch(t *testing.T) {
 	}
 
 	// Non-matching sender
-	folder, _, _, _, err = EvaluateRules(ctx, tx, mailboxID, "other@domain.com", []string{"user@test.local"}, 500, false)
+	folder, _, _, _, _, err = EvaluateRules(ctx, tx, mailboxID, "other@domain.com", []string{"user@test.local"}, 500, false)
 	if err != nil {
 		t.Fatalf("EvaluateRules: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestRuleEvaluatesRecipientMatch(t *testing.T) {
 	defer tx.Rollback(ctx)
 
 	// Matching recipient
-	_, _, markRead, _, err := EvaluateRules(ctx, tx, mailboxID, "vendor@test.com", []string{"billing@company.com"}, 500, false)
+	_, _, markRead, _, _, err := EvaluateRules(ctx, tx, mailboxID, "vendor@test.com", []string{"billing@company.com"}, 500, false)
 	if err != nil {
 		t.Fatalf("EvaluateRules: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestRuleEvaluatesRecipientMatch(t *testing.T) {
 	}
 
 	// Non-matching recipient
-	_, _, markRead, _, err = EvaluateRules(ctx, tx, mailboxID, "vendor@test.com", []string{"support@company.com"}, 500, false)
+	_, _, markRead, _, _, err = EvaluateRules(ctx, tx, mailboxID, "vendor@test.com", []string{"support@company.com"}, 500, false)
 	if err != nil {
 		t.Fatalf("EvaluateRules: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestRuleEvaluatesAttachments(t *testing.T) {
 	defer tx.Rollback(ctx)
 
 	// Has attachments
-	folder, _, _, _, err := EvaluateRules(ctx, tx, mailboxID, "s@test.com", []string{"r@test.com"}, 500, true)
+	folder, _, _, _, _, err := EvaluateRules(ctx, tx, mailboxID, "s@test.com", []string{"r@test.com"}, 500, true)
 	if err != nil {
 		t.Fatalf("EvaluateRules: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestRuleEvaluatesAttachments(t *testing.T) {
 	}
 
 	// No attachments
-	folder, _, _, _, err = EvaluateRules(ctx, tx, mailboxID, "s@test.com", []string{"r@test.com"}, 500, false)
+	folder, _, _, _, _, err = EvaluateRules(ctx, tx, mailboxID, "s@test.com", []string{"r@test.com"}, 500, false)
 	if err != nil {
 		t.Fatalf("EvaluateRules: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestRuleEvaluatesMinSize(t *testing.T) {
 	defer tx.Rollback(ctx)
 
 	// Size >= 102400
-	folder, _, _, _, err := EvaluateRules(ctx, tx, mailboxID, "s@test.com", []string{"r@test.com"}, 150000, false)
+	folder, _, _, _, _, err := EvaluateRules(ctx, tx, mailboxID, "s@test.com", []string{"r@test.com"}, 150000, false)
 	if err != nil {
 		t.Fatalf("EvaluateRules: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestRuleEvaluatesMinSize(t *testing.T) {
 	}
 
 	// Size < 102400
-	folder, _, _, _, err = EvaluateRules(ctx, tx, mailboxID, "s@test.com", []string{"r@test.com"}, 50000, false)
+	folder, _, _, _, _, err = EvaluateRules(ctx, tx, mailboxID, "s@test.com", []string{"r@test.com"}, 50000, false)
 	if err != nil {
 		t.Fatalf("EvaluateRules: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestRuleFirstMatchWins(t *testing.T) {
 	}
 	defer tx.Rollback(ctx)
 
-	folder, _, _, _, err := EvaluateRules(ctx, tx, mailboxID, "promo@newsletter.com", []string{"r@test.com"}, 500, false)
+	folder, _, _, _, _, err := EvaluateRules(ctx, tx, mailboxID, "promo@newsletter.com", []string{"r@test.com"}, 500, false)
 	if err != nil {
 		t.Fatalf("EvaluateRules: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestRuleDisabledSkipped(t *testing.T) {
 	}
 	defer tx.Rollback(ctx)
 
-	folder, _, _, deleteMsg, err := EvaluateRules(ctx, tx, mailboxID, "hacker@badguy.com", []string{"r@test.com"}, 500, false)
+	folder, _, _, deleteMsg, _, err := EvaluateRules(ctx, tx, mailboxID, "hacker@badguy.com", []string{"r@test.com"}, 500, false)
 	if err != nil {
 		t.Fatalf("EvaluateRules: %v", err)
 	}
@@ -403,6 +403,114 @@ func TestRuleDisabledSkipped(t *testing.T) {
 	}
 	if folder != "" {
 		t.Fatalf("expected empty folder for disabled rule, got %q", folder)
+	}
+}
+
+// 9. TestMessageMetadataCategoryOverridePersists
+func TestMessageMetadataCategoryOverridePersists(t *testing.T) {
+	conn := getTestDB(t)
+	defer conn.Close(context.Background())
+	ctx := context.Background()
+
+	_, userID, domainID, mailboxID := createRulesTestMailbox(t, conn)
+	token := createTestSessionWithConn(t, conn, userID)
+
+	msgID := uuid.New().String()
+	deliveryID := uuid.New().String()
+	_, err := conn.Exec(ctx, `
+		INSERT INTO message_metadata (
+			id, mailbox_id, domain_id, direction, delivery_identity, sender, recipients,
+			storage_object_id, content_key_hpke_wrapped, mailbox_sk_version,
+			encryption_version, encryption_iv, aad_version, bundle_hash,
+			status, folder, is_read, category_override, sent_at, received_at
+		) VALUES (
+			$1, $2, $3, 'received', $4, 'newsletter@example.com', ARRAY['alice@byos.local'],
+			'storage/obj', decode('AA==', 'base64'), 1,
+			1, decode('AA==', 'base64'), 1, decode('AA==', 'base64'),
+			'received', 'inbox', false, 'newsletters', now(), now()
+		)
+	`, msgID, mailboxID, domainID, []byte(deliveryID))
+	if err != nil {
+		t.Fatalf("insert message: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailboxID+"/messages", nil)
+	req.SetPathValue("mailbox_id", mailboxID)
+	req.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+
+	w := httptest.NewRecorder()
+	messagesHandler(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Messages []MessageMetadataResponse `json:"messages"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(resp.Messages))
+	}
+	if resp.Messages[0].CategoryOverride == nil || *resp.Messages[0].CategoryOverride != "newsletters" {
+		t.Fatalf("expected category_override 'newsletters', got %+v", resp.Messages[0].CategoryOverride)
+	}
+}
+
+// 10. TestRuleAssignsCategory
+func TestRuleAssignsCategory(t *testing.T) {
+	conn := getTestDB(t)
+	defer conn.Close(context.Background())
+	ctx := context.Background()
+
+	_, userID, _, mailboxID := createRulesTestMailbox(t, conn)
+	token := createTestSessionWithConn(t, conn, userID)
+
+	sender := "digest@daily.com"
+	category := "newsletters"
+	createPayload := createRuleRequest{
+		Name:           "Daily Digest Newsletter",
+		MatchSender:    &sender,
+		ActionType:     "category",
+		ActionCategory: &category,
+	}
+	body, _ := json.Marshal(createPayload)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/rules", bytes.NewReader(body))
+	req.SetPathValue("mailbox_id", mailboxID)
+	req.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+	w := httptest.NewRecorder()
+
+	mailboxRulesHandler(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var created MailRule
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal rule: %v", err)
+	}
+	if created.ActionType != "category" || created.ActionCategory == nil || *created.ActionCategory != "newsletters" {
+		t.Fatalf("expected action_category newsletters, got %+v", created)
+	}
+
+	// Test EvaluateRules with matching sender
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	folder, labels, markRead, deleteMsg, catOverride, err := EvaluateRules(ctx, tx, mailboxID, "digest@daily.com", []string{"user@test.local"}, 500, false)
+	if err != nil {
+		t.Fatalf("EvaluateRules: %v", err)
+	}
+	if catOverride != "newsletters" {
+		t.Fatalf("expected category override 'newsletters', got %q", catOverride)
+	}
+	if folder != "" || len(labels) != 0 || markRead || deleteMsg {
+		t.Fatalf("expected only category action, got folder=%q markRead=%v deleteMsg=%v", folder, markRead, deleteMsg)
 	}
 }
 

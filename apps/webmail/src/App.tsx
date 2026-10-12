@@ -143,6 +143,14 @@ import { getSubtreeLabelIds } from "./utils/nested_labels";
 import { GlobalErrorBanner } from "./components/GlobalErrorBanner";
 import { setGlobalError } from "./errors";
 import {
+  FocusedCategory,
+  getFocusedInboxEnabled,
+  resolveMessageCategory,
+  setMessageCategoryOverride,
+  parseRawHeaders,
+  extractSenderEmail,
+} from "./focused_inbox";
+import {
   mergeUnifiedMessages,
   filterUnifiedMessages,
   getReplyFromAddress,
@@ -206,6 +214,8 @@ interface DisplayMessage {
   accountColor?: string;
   replyViaAlias?: string;
   aliasLabel?: string;
+  category?: FocusedCategory;
+  categoryOverride?: string | null;
 }
 
 export function buildMimeString(params: {
@@ -471,6 +481,24 @@ const App: Component = () => {
       localStorage.setItem("byos_view_mode", viewMode());
       sessionStorage.setItem("byos_view_mode", viewMode());
     }
+  });
+  const [focusedCategory, setFocusedCategory] = createSignal<FocusedCategory>("primary");
+  const [focusedInboxEnabled, setFocusedInboxEnabledState] = createSignal<boolean>(getFocusedInboxEnabled());
+  onMount(() => {
+    if (typeof window === "undefined") return;
+    const handleFocusedInboxChange = (e: any) => {
+      if (e?.detail && typeof e.detail.enabled === "boolean") {
+        setFocusedInboxEnabledState(e.detail.enabled);
+      } else {
+        setFocusedInboxEnabledState(getFocusedInboxEnabled());
+      }
+    };
+    window.addEventListener("byos_focused_inbox_changed", handleFocusedInboxChange);
+    window.addEventListener("storage", handleFocusedInboxChange);
+    onCleanup(() => {
+      window.removeEventListener("byos_focused_inbox_changed", handleFocusedInboxChange);
+      window.removeEventListener("storage", handleFocusedInboxChange);
+    });
   });
   const [searchQuery, setSearchQuery] = createSignal("");
   const [composeOpen, setComposeOpen] = createSignal(false);
@@ -3001,6 +3029,22 @@ const App: Component = () => {
           if (!snippet) snippet = `Encrypted payload • ${m.storage_object_id}`;
         }
 
+        const initialCategory = resolveMessageCategory(
+          m.id,
+          m.category_override,
+          subject && subject !== "(Encrypted message)" && subject !== "(Scheduled message)"
+            ? {
+                senderEmail: m.sender,
+                subject,
+                headers: {},
+              }
+            : {
+                senderEmail: m.sender,
+                subject: "",
+                headers: {},
+              }
+        );
+
         return {
           id: m.id,
           messageId: m.id, // For attachment filtering
@@ -3029,6 +3073,8 @@ const App: Component = () => {
           accountEmail: currentUser()?.email,
           replyViaAlias: m.reply_via_alias,
           aliasLabel: m.alias_label,
+          category: initialCategory,
+          categoryOverride: m.category_override,
         };
       });
       const draftMessages: DisplayMessage[] = draftsList.map((d: DraftMessage) => {
@@ -3071,7 +3117,11 @@ const App: Component = () => {
         (async () => {
           for (const m of realMessages) {
             if (m.folder === "scheduled") continue;
-            if (sessionStorage.getItem("byos_msg_subject_" + m.id)) continue;
+            if (
+              sessionStorage.getItem("byos_msg_subject_" + m.id) &&
+              sessionStorage.getItem("byos_msg_category_" + m.id)
+            )
+              continue;
             try {
               const body = await fetchMessageBody(mailboxId, m.id);
               let plaintext = "";
@@ -3107,19 +3157,34 @@ const App: Component = () => {
                 const subMatch = plaintext.match(/^Subject:\s*(.*)$/im);
                 if (subMatch && subMatch[1]) sub = subMatch[1].trim();
                 const bodyParts = plaintext.split(/\r?\n\r?\n/);
+                const rawHeaders = bodyParts.length > 0 ? bodyParts[0] : "";
+                const parsedHeaders = parseRawHeaders(rawHeaders);
                 const bodyText = bodyParts.length > 1 ? bodyParts.slice(1).join("\n\n") : plaintext;
                 const snip = bodyText.trim().slice(0, 100).replace(/\s+/g, " ");
 
+                const cat = resolveMessageCategory(
+                  m.id,
+                  m.categoryOverride,
+                  {
+                    senderEmail: extractSenderEmail(parsedHeaders["from"], m.sender),
+                    subject: sub,
+                    headers: parsedHeaders,
+                  }
+                );
+
                 sessionStorage.setItem("byos_msg_subject_" + m.id, sub);
                 sessionStorage.setItem("byos_msg_snippet_" + m.id, snip);
+                sessionStorage.setItem("byos_msg_category_" + m.id, cat);
 
                 setMessages((prev) =>
                   prev.map((msg) =>
-                    msg.id === m.id ? { ...msg, subject: sub, snippet: snip } : msg
+                    msg.id === m.id ? { ...msg, subject: sub, snippet: snip, category: cat } : msg
                   )
                 );
               }
-            } catch {}
+            } catch (err) {
+              console.error("Preview decrypt error for msg " + m.id + ":", err);
+            }
           }
         })();
       }
@@ -3283,7 +3348,11 @@ const App: Component = () => {
       if (wasm) {
         (async () => {
           for (const m of visible) {
-            if (sessionStorage.getItem("byos_msg_subject_" + m.id)) continue;
+            if (
+              sessionStorage.getItem("byos_msg_subject_" + m.id) &&
+              sessionStorage.getItem("byos_msg_category_" + m.id)
+            )
+              continue;
             const accId = m.mailboxId;
             if (!accId) continue;
             const acc = accounts.find((a) => a.id === accId);
@@ -3333,15 +3402,28 @@ const App: Component = () => {
                 const subMatch = plaintext.match(/^Subject:\s*(.*)$/im);
                 if (subMatch && subMatch[1]) sub = subMatch[1].trim();
                 const bodyParts = plaintext.split(/\r?\n\r?\n/);
+                const rawHeaders = bodyParts.length > 0 ? bodyParts[0] : "";
+                const parsedHeaders = parseRawHeaders(rawHeaders);
                 const bodyText = bodyParts.length > 1 ? bodyParts.slice(1).join("\n\n") : plaintext;
                 const snip = bodyText.trim().slice(0, 100).replace(/\s+/g, " ");
 
+                const cat = resolveMessageCategory(
+                  m.id,
+                  m.categoryOverride,
+                  {
+                    senderEmail: extractSenderEmail(parsedHeaders["from"], m.sender),
+                    subject: sub,
+                    headers: parsedHeaders,
+                  }
+                );
+
                 sessionStorage.setItem("byos_msg_subject_" + m.id, sub);
                 sessionStorage.setItem("byos_msg_snippet_" + m.id, snip);
+                sessionStorage.setItem("byos_msg_category_" + m.id, cat);
 
                 setMessages((prev) =>
                   prev.map((msg) =>
-                    msg.id === m.id ? { ...msg, subject: sub, snippet: snip } : msg
+                    msg.id === m.id ? { ...msg, subject: sub, snippet: snip, category: cat } : msg
                   )
                 );
               }
@@ -3419,7 +3501,16 @@ const App: Component = () => {
         const subtreeIds = activeLabelSubtreeIds();
         matchFolder = Boolean(m.labelIds?.some((lid) => subtreeIds.has(lid))) && m.folder !== "trash";
       } else {
-        if (cur === "inbox" || cur === "unified_inbox") {
+        if (cur === "inbox") {
+          const isInbox = (!m.folderId || m.folderId === "") && (!m.folder || m.folder === "inbox");
+          if (!isInbox) {
+            matchFolder = false;
+          } else if (focusedInboxEnabled()) {
+            matchFolder = (m.category || "primary") === focusedCategory();
+          } else {
+            matchFolder = true;
+          }
+        } else if (cur === "unified_inbox") {
           matchFolder = (!m.folderId || m.folderId === "") && (!m.folder || m.folder === "inbox");
         } else {
           matchFolder = m.folder === cur;
@@ -3499,6 +3590,12 @@ const App: Component = () => {
       } else if (cur !== "snoozed") {
         const hasFolderMsg = (t.folder || "inbox") === cur || allMsgs.some((m) => t.message_ids?.includes(m.id) && m.folder === cur);
         if (!hasFolderMsg) return false;
+        if (cur === "inbox" && focusedInboxEnabled()) {
+          const threadMsgs = allMsgs.filter((m) => t.message_ids?.includes(m.id));
+          const latestMsg = threadMsgs[threadMsgs.length - 1];
+          const cat = latestMsg?.category || "primary";
+          if (cat !== focusedCategory()) return false;
+        }
       }
 
       if (!q) return true;
@@ -3510,6 +3607,40 @@ const App: Component = () => {
       );
       return matchParticipant || matchMsg;
     });
+  };
+
+  const categoryCounts = () => {
+    const allMsgs = messages();
+    const now = Date.now();
+    const counts: Record<FocusedCategory, { total: number; unread: number }> = {
+      primary: { total: 0, unread: 0 },
+      notifications: { total: 0, unread: 0 },
+      newsletters: { total: 0, unread: 0 },
+      social: { total: 0, unread: 0 },
+    };
+    for (const m of allMsgs) {
+      const isSnoozed = Boolean(m.snoozedUntil && new Date(m.snoozedUntil).getTime() > now);
+      if (isSnoozed) continue;
+      const isInbox = (!m.folderId || m.folderId === "") && (!m.folder || m.folder === "inbox");
+      if (!isInbox) continue;
+      const cat = (m.category || "primary") as FocusedCategory;
+      if (counts[cat]) {
+        counts[cat].total++;
+        if (!m.read) counts[cat].unread++;
+      }
+    }
+    return counts;
+  };
+
+  const handleMoveToCategory = (msg: DisplayMessage, category: FocusedCategory) => {
+    setMessageCategoryOverride(msg.id, category);
+    if (typeof window !== "undefined" && window.sessionStorage) {
+      window.sessionStorage.setItem("byos_msg_category_" + msg.id, category);
+    }
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msg.id ? { ...m, category } : m))
+    );
+    showToast(`Moved to ${category.charAt(0).toUpperCase() + category.slice(1)}`);
   };
 
   const effectiveViewMode = () =>
@@ -5968,7 +6099,10 @@ const App: Component = () => {
           <SettingsLayout
             activeTab={activeSettingsTab()}
             onTabChange={setActiveSettingsTab}
-            onClose={() => setSettingsOpen(false)}
+            onClose={() => {
+              setFocusedInboxEnabledState(getFocusedInboxEnabled());
+              setSettingsOpen(false);
+            }}
             currentUser={currentUser()}
             selectedMailbox={selectedMailbox()}
           >
@@ -6375,6 +6509,11 @@ const App: Component = () => {
               onOpenMobileMenu={() => setMobileSidebarOpen(true)}
               onToggleViewMode={() => setViewMode((prev) => (prev === "threads" ? "flat" : "threads"))}
               onToggleThreadCheck={handleToggleThreadCheck}
+              focusedCategory={focusedCategory()}
+              onSelectCategory={setFocusedCategory}
+              categoryCounts={categoryCounts()}
+              focusedInboxEnabled={focusedInboxEnabled()}
+              onMoveToCategory={handleMoveToCategory}
             />
             </div>
           </div>

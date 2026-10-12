@@ -494,7 +494,7 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 	folder := "inbox"
 	isRead := false
 
-	folderOverride, labelIDs, markRead, deleteMessage, ruleErr := EvaluateRules(
+	folderOverride, labelIDs, markRead, deleteMessage, categoryOverride, ruleErr := EvaluateRules(
 		ctx, tx, route.MailboxID, normalizeAddress(envelopeFrom), []string{recipient}, sizeBytes, hasAttachments,
 	)
 	if ruleErr != nil {
@@ -517,19 +517,22 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 			storage_object_id, content_key_hpke_wrapped, wrapped_key_algorithm, mailbox_sk_version, encryption_version,
 			encryption_iv, aad_version, bundle_hash, status,
 			message_id, in_reply_to, thread_id,
-			folder, is_read, size_bytes, has_attachments, attachment_count
+			folder, is_read, size_bytes, has_attachments, attachment_count,
+			category_override
 		) VALUES (
 			$1, $2, $3, 'received', $4, $5, $6,
 			$7, $8, $9, $10, $11,
 			$12, $13, $14, 'received',
 			NULLIF($15, ''), NULLIF($16, ''), COALESCE(NULLIF($17, '')::uuid, gen_random_uuid()),
-			$18, $19, $20, $21, $22
+			$18, $19, $20, $21, $22,
+			NULLIF($23, '')
 		)
 		RETURNING id`,
 		route.MailboxID, route.DomainID, messageSeq, deliveryIdentity[:], normalizeAddress(envelopeFrom), normalizedRecipients,
 		storageObjectID, wrappedKey, wrappedKeyAlg, route.MailboxSKVersion, cryptoResp.EncryptionVersion, iv, cryptoResp.AADVersion, bundleHash,
 		msgID, inReplyTo, threadID,
 		folder, isRead, sizeBytes, hasAttachments, attachmentCount,
+		categoryOverride,
 	).Scan(&messageID)
 	if err != nil {
 		return StoredMessage{}, fmt.Errorf("insert message metadata: %w", err)

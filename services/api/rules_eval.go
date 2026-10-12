@@ -29,16 +29,16 @@ func EvaluateRules(
 	recipients []string,
 	sizeBytes int64,
 	hasAttachments bool,
-) (folderOverride string, labelIDs []string, markRead bool, deleteMessage bool, err error) {
+) (folderOverride string, labelIDs []string, markRead bool, deleteMessage bool, categoryOverride string, err error) {
 	rows, err := tx.Query(ctx, `
-		SELECT action_type, action_folder, action_label_id::text,
+		SELECT action_type, action_folder, action_label_id::text, action_category,
 		       match_sender, match_recipient, match_has_attachments, match_min_size_bytes
 		FROM mail_rules
 		WHERE mailbox_id = $1 AND enabled = true
 		ORDER BY priority ASC, created_at ASC
 	`, mailboxID)
 	if err != nil {
-		return "", nil, false, false, err
+		return "", nil, false, false, "", err
 	}
 	defer rows.Close()
 
@@ -46,6 +46,7 @@ func EvaluateRules(
 		actionType          string
 		actionFolder        *string
 		actionLabelID       *string
+		actionCategory      *string
 		matchSender         *string
 		matchRecipient      *string
 		matchHasAttachments *bool
@@ -56,15 +57,15 @@ func EvaluateRules(
 	for rows.Next() {
 		var r evalRule
 		if err := rows.Scan(
-			&r.actionType, &r.actionFolder, &r.actionLabelID,
+			&r.actionType, &r.actionFolder, &r.actionLabelID, &r.actionCategory,
 			&r.matchSender, &r.matchRecipient, &r.matchHasAttachments, &r.matchMinSizeBytes,
 		); err != nil {
-			return "", nil, false, false, err
+			return "", nil, false, false, "", err
 		}
 		rules = append(rules, r)
 	}
 	if err := rows.Err(); err != nil {
-		return "", nil, false, false, err
+		return "", nil, false, false, "", err
 	}
 
 	lowerSender := strings.ToLower(sender)
@@ -121,10 +122,20 @@ func EvaluateRules(
 		case "delete":
 			deleteMessage = true
 			folderOverride = "trash"
+		case "category":
+			if rule.actionCategory != nil && *rule.actionCategory != "" {
+				categoryOverride = *rule.actionCategory
+			} else if rule.actionFolder != nil && *rule.actionFolder != "" {
+				categoryOverride = *rule.actionFolder
+			}
 		}
 
-		return folderOverride, labelIDs, markRead, deleteMessage, nil
+		if rule.actionCategory != nil && *rule.actionCategory != "" && categoryOverride == "" {
+			categoryOverride = *rule.actionCategory
+		}
+
+		return folderOverride, labelIDs, markRead, deleteMessage, categoryOverride, nil
 	}
 
-	return "", nil, false, false, nil
+	return "", nil, false, false, "", nil
 }

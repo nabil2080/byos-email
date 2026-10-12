@@ -1,5 +1,6 @@
 import { ConnectedAccount, MessageMetadata, AttachmentItem, getAccountColor } from "./api";
 import { formatMessageDate } from "./utils/dateTime";
+import { FocusedCategory } from "./focused_inbox";
 
 export interface DisplayMessage {
   id: string;
@@ -39,6 +40,8 @@ export interface DisplayMessage {
   accountColor?: string;
   replyViaAlias?: string;
   aliasLabel?: string;
+  category?: FocusedCategory;
+  categoryOverride?: string | null;
 }
 
 function getAttachmentExt(filename: string): string {
@@ -126,6 +129,8 @@ export function mergeUnifiedMessages(
         accountColor: color,
         replyViaAlias: m.reply_via_alias,
         aliasLabel: m.alias_label,
+        category: (m.category_override as FocusedCategory) || "primary",
+        categoryOverride: m.category_override,
       });
     }
   }

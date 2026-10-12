@@ -92,6 +92,7 @@ export interface MessageMetadata {
   scheduled_at?: string;
   reply_via_alias?: string;
   alias_label?: string;
+  category_override?: string | null;
 }
 
 export interface ThreadSummary {
@@ -1123,9 +1124,10 @@ export interface MailRule {
   match_recipient?: string | null;
   match_has_attachments?: boolean | null;
   match_min_size_bytes?: number | null;
-  action_type: "move" | "label" | "mark_read" | "delete";
+  action_type: "move" | "label" | "mark_read" | "delete" | "category";
   action_folder?: string | null;
   action_label_id?: string | null;
+  action_category?: string | null;
   created_at: string;
   updated_at: string;
 }

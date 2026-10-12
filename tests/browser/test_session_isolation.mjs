@@ -2,10 +2,17 @@ import puppeteer from '../../apps/webmail/node_modules/puppeteer-core/lib/puppet
 import path from 'node:path';
 import fs from 'node:fs';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import * as wasm from '../../apps/webmail/src/generated/crypto-core/byos_crypto_core.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const artifactDir = 'C:\\Users\\PC\\.gemini\\antigravity\\brain\\bc4b087f-089b-4e94-aa80-42c26a5708ee';
+const artifactsDir = path.resolve(__dirname, 'artifacts');
+
+if (!fs.existsSync(artifactsDir)) {
+  fs.mkdirSync(artifactsDir, { recursive: true });
+}
 
 const Alice = {
   userId: "cccccccc-0000-0000-0000-000000000002",
@@ -243,7 +250,7 @@ async function runSessionIsolationBrowserTests() {
 
     // Step 9: Take a screenshot of the sidebar as visual evidence
     console.log("\n--- [STEP 9] Take screenshot of sidebar ---");
-    const screenshotPath = path.join(artifactDir, 'session_isolation_sidebar.png');
+    const screenshotPath = path.join(artifactsDir, 'session_isolation_sidebar.png');
     await page.screenshot({ path: screenshotPath });
     console.log(`  Saved visual proof screenshot to: ${screenshotPath}`);
 

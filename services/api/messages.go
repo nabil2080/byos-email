@@ -51,6 +51,7 @@ type MessageMetadataResponse struct {
 	SendAt                *string  `json:"send_at,omitempty"`
 	ReplyViaAlias         *string  `json:"reply_via_alias,omitempty"`
 	AliasLabel            *string  `json:"alias_label,omitempty"`
+	CategoryOverride      *string  `json:"category_override,omitempty"`
 }
 
 type ThreadSummary struct {
@@ -141,6 +142,7 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 			  NULL::timestamptz,
 			  0::bigint,
 			  NULL::text,
+			  NULL::text,
 			  NULL::text
 			FROM scheduled_messages sm
 			WHERE sm.mailbox_id = $1
@@ -160,7 +162,8 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 			       m.snoozed_until,
 			       COALESCE(m.size_bytes, 0),
 			       MAX(ma.alias_address)::text as reply_via_alias,
-			       MAX(ma.label)::text as alias_label
+			       MAX(ma.label)::text as alias_label,
+			       m.category_override
 			FROM message_metadata m
 			LEFT JOIN message_labels ml ON ml.message_id = m.id
 			LEFT JOIN masked_alias_reply_map marm ON marm.message_id = m.id
@@ -184,7 +187,8 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 			       m.snoozed_until,
 			       COALESCE(m.size_bytes, 0),
 			       MAX(ma.alias_address)::text as reply_via_alias,
-			       MAX(ma.label)::text as alias_label
+			       MAX(ma.label)::text as alias_label,
+			       m.category_override
 			FROM message_metadata m
 			LEFT JOIN message_labels ml ON ml.message_id = m.id
 			LEFT JOIN masked_alias_reply_map marm ON marm.message_id = m.id
@@ -212,7 +216,8 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 			       m.snoozed_until,
 			       COALESCE(m.size_bytes, 0),
 			       MAX(ma.alias_address)::text as reply_via_alias,
-			       MAX(ma.label)::text as alias_label
+			       MAX(ma.label)::text as alias_label,
+			       m.category_override
 			FROM message_metadata m
 			LEFT JOIN message_labels ml ON ml.message_id = m.id
 			LEFT JOIN masked_alias_reply_map marm ON marm.message_id = m.id
@@ -247,7 +252,7 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 			&wrapped, &m.EncryptionVersion, &iv, &m.AADVersion, &hash,
 			&receivedAt, &sentAt, &m.Status, &m.HasAttachments, &m.AttachmentCount,
 			&folder, &folderIDStr, &labelIDs, &m.IsRead, &m.IsStarred, &snoozedUntil, &m.SizeBytes,
-			&replyViaAlias, &aliasLabel); err != nil {
+			&replyViaAlias, &aliasLabel, &m.CategoryOverride); err != nil {
 			http.Error(w, "failed to read message metadata", http.StatusInternalServerError)
 			return
 		}
@@ -492,7 +497,8 @@ func threadDetailHandler(w http.ResponseWriter, r *http.Request) {
 		       m.snoozed_until,
 		       COALESCE(m.size_bytes, 0),
 		       MAX(ma.alias_address)::text as reply_via_alias,
-		       MAX(ma.label)::text as alias_label
+		       MAX(ma.label)::text as alias_label,
+		       m.category_override
 		FROM message_metadata m
 		LEFT JOIN message_labels ml ON ml.message_id = m.id
 		LEFT JOIN masked_alias_reply_map marm ON marm.message_id = m.id
@@ -520,7 +526,7 @@ func threadDetailHandler(w http.ResponseWriter, r *http.Request) {
 			&wrapped, &m.EncryptionVersion, &iv, &m.AADVersion, &hash,
 			&receivedAt, &sentAt, &m.Status, &m.HasAttachments, &m.AttachmentCount,
 			&folder, &folderIDStr, &labelIDs, &m.IsRead, &m.IsStarred, &snoozedUntil, &m.SizeBytes,
-			&replyViaAlias, &aliasLabel); err != nil {
+			&replyViaAlias, &aliasLabel, &m.CategoryOverride); err != nil {
 			http.Error(w, "failed to read message metadata", http.StatusInternalServerError)
 			return
 		}
@@ -1420,7 +1426,7 @@ func messageImportHandler(w http.ResponseWriter, r *http.Request) {
 		threadID = ""
 	}
 
-	folderOverride, labelIDs, ruleMarkRead, deleteMessage, ruleErr := EvaluateRules(
+	folderOverride, labelIDs, ruleMarkRead, deleteMessage, categoryOverride, ruleErr := EvaluateRules(
 		ctx, tx, mailboxID, sender, recipients, sizeBytes, hasAttachments,
 	)
 	if ruleErr != nil {
@@ -1444,21 +1450,21 @@ func messageImportHandler(w http.ResponseWriter, r *http.Request) {
 			mailbox_sk_version, encryption_version, encryption_iv, aad_version, bundle_hash,
 			received_at, status, folder, is_read,
 			message_id, in_reply_to, thread_id,
-			size_bytes
+			size_bytes, category_override
 		) VALUES (
 			$1, $2, $3, 'received', $4, $5, $6,
 			$7, $8, $9, $10,
 			$11, $12, $13, $14, $15,
 			$16, 'received', $17, $18,
 			NULLIF($19, ''), NULLIF($20, ''), COALESCE(NULLIF($21, '')::uuid, gen_random_uuid()),
-			$22
+			$22, NULLIF($23, '')
 		) RETURNING id::text`,
 		mailboxID, domainID, messageSeq, deliveryID[:], strings.ToLower(strings.TrimSpace(sender)), recipients,
 		hasAttachments, attachmentCount, storageObjectID, wrappedKeyBytes,
 		mailboxSKVersion, cryptoResult.EncryptionVersion, ivBytes, cryptoResult.AADVersion, bundleHashBytes,
 		receivedAt, folder, isRead,
 		msgID, inReplyTo, threadID,
-		sizeBytes,
+		sizeBytes, categoryOverride,
 	).Scan(&messageID)
 	if err != nil {
 		http.Error(w, "failed to insert message metadata: "+err.Error(), http.StatusInternalServerError)

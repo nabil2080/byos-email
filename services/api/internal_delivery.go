@@ -706,7 +706,7 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 	if messageID != "" {
 		sizeBytes := int64(len(req.EnvelopeJSON))
 		hasAttachments := len(req.AttachmentEnvelopes) > 0
-		folderOverride, labelIDs, markRead, deleteMessage, ruleErr := EvaluateRules(
+		folderOverride, labelIDs, markRead, deleteMessage, categoryOverride, ruleErr := EvaluateRules(
 			ctx, tx, recipientMailboxID, senderEmail, []string{cleanRecipient}, sizeBytes, hasAttachments,
 		)
 		if ruleErr != nil {
@@ -721,12 +721,12 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 		if markRead {
 			finalIsRead = true
 		}
-		if finalFolder != "inbox" || finalIsRead {
+		if finalFolder != "inbox" || finalIsRead || categoryOverride != "" {
 			if _, updateErr := tx.Exec(ctx, `
 				UPDATE message_metadata
-				SET folder = $1, is_read = $2
-				WHERE id = $3
-			`, finalFolder, finalIsRead, messageID); updateErr != nil {
+				SET folder = $1, is_read = $2, category_override = NULLIF($3, '')
+				WHERE id = $4
+			`, finalFolder, finalIsRead, categoryOverride, messageID); updateErr != nil {
 				writeInternalSendError(w, http.StatusInternalServerError, "rule_update_failed")
 				return
 			}

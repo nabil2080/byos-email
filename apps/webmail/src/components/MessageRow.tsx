@@ -1,8 +1,9 @@
-import { Component, Show, For } from "solid-js";
+import { Component, Show, For, createSignal } from "solid-js";
 import { DisplayMessage } from "./MessageList";
 import { MailboxLabel } from "../api";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { AttachmentBadge } from "./AttachmentBadge";
+import { FocusedCategory } from "../focused_inbox";
 
 import { Folder } from "./Sidebar";
 
@@ -22,6 +23,7 @@ interface MessageRowProps {
   onTrash: (msg: DisplayMessage) => void;
   onDeleteForever?: (msg: DisplayMessage) => void;
   labels?: MailboxLabel[];
+  onMoveToCategory?: (msg: DisplayMessage, category: FocusedCategory) => void;
 }
 
 export function formatAddress(raw: string): string {
@@ -172,11 +174,26 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
     }, 0);
   };
 
+  const [contextMenuPos, setContextMenuPos] = createSignal<{ x: number; y: number } | null>(null);
+
+  const handleContextMenu = (e: MouseEvent) => {
+    if (props.onMoveToCategory && (props.currentFolder === "inbox" || props.message.folder === "inbox")) {
+      e.preventDefault();
+      e.stopPropagation();
+      setContextMenuPos({ x: e.clientX, y: e.clientY });
+    }
+  };
+
+  const closeContextMenu = () => {
+    setContextMenuPos(null);
+  };
+
   return (
     <div
       draggable={true}
       onDragStart={handleDragStart}
       onClick={() => props.onSelect(props.message)}
+      onContextMenu={handleContextMenu}
       data-testid="message-row"
       data-message-id={props.message.id}
       class={`group relative cursor-pointer border-b border-[#E2DFD8]/60 dark:border-[#2A2D35] transition-all select-none min-w-0 overflow-hidden ${densityPadding()} ${
@@ -638,6 +655,86 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
             {props.message.snippet || "Empty message body"}
           </div>
         </div>
+      </Show>
+
+      {/* Right-click Move to Category Menu */}
+      <Show when={contextMenuPos()}>
+        <div
+          class="fixed z-50 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-lg py-1 w-44 text-xs font-medium text-[#1A1B1E] dark:text-[#F3F4F6]"
+          style={{
+            left: `${Math.min(contextMenuPos()!.x, typeof window !== "undefined" ? window.innerWidth - 180 : 200)}px`,
+            top: `${Math.min(contextMenuPos()!.y, typeof window !== "undefined" ? window.innerHeight - 170 : 200)}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div class="px-3 py-1.5 text-[10px] uppercase font-bold text-[#878A8E] dark:text-[#6E7075] border-b border-[#E2DFD8]/60 dark:border-[#2E3138]">
+            Move to category
+          </div>
+          <button
+            type="button"
+            data-testid="move-to-primary"
+            onClick={(e) => {
+              e.stopPropagation();
+              closeContextMenu();
+              props.onMoveToCategory?.(props.message, "primary");
+            }}
+            class="w-full text-left px-3 py-2 hover:bg-[#F3ECE8] dark:hover:bg-[#2D2522] hover:text-[#A27561] flex items-center gap-2 cursor-pointer transition"
+          >
+            <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+            Primary
+          </button>
+          <button
+            type="button"
+            data-testid="move-to-notifications"
+            onClick={(e) => {
+              e.stopPropagation();
+              closeContextMenu();
+              props.onMoveToCategory?.(props.message, "notifications");
+            }}
+            class="w-full text-left px-3 py-2 hover:bg-[#F3ECE8] dark:hover:bg-[#2D2522] hover:text-[#A27561] flex items-center gap-2 cursor-pointer transition"
+          >
+            <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+            Notifications
+          </button>
+          <button
+            type="button"
+            data-testid="move-to-newsletters"
+            onClick={(e) => {
+              e.stopPropagation();
+              closeContextMenu();
+              props.onMoveToCategory?.(props.message, "newsletters");
+            }}
+            class="w-full text-left px-3 py-2 hover:bg-[#F3ECE8] dark:hover:bg-[#2D2522] hover:text-[#A27561] flex items-center gap-2 cursor-pointer transition"
+          >
+            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+            Newsletters
+          </button>
+          <button
+            type="button"
+            data-testid="move-to-social"
+            onClick={(e) => {
+              e.stopPropagation();
+              closeContextMenu();
+              props.onMoveToCategory?.(props.message, "social");
+            }}
+            class="w-full text-left px-3 py-2 hover:bg-[#F3ECE8] dark:hover:bg-[#2D2522] hover:text-[#A27561] flex items-center gap-2 cursor-pointer transition"
+          >
+            <span class="w-2 h-2 rounded-full bg-purple-500"></span>
+            Social
+          </button>
+        </div>
+        <div
+          class="fixed inset-0 z-40"
+          onClick={(e) => {
+            e.stopPropagation();
+            closeContextMenu();
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closeContextMenu();
+          }}
+        />
       </Show>
     </div>
   );
