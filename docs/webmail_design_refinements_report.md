@@ -16,13 +16,13 @@ Implemented four design and operational refinements to the BYOS Webmail platform
 | `apps/webmail/src/routes/settings/AccountTab.tsx` | Added profile photo upload, client-side encryption, and deletion UI. |
 | `apps/webmail/src/routes/settings/SettingsLayout.tsx` | Included Account tab in settings navigation pane. |
 | `apps/webmail/src/unified_inbox.ts` | Updated shouldShowAllInboxes and resetSelectionOnAccountRemoval helpers. |
-| `apps/webmail/src/persistent_session.ts` | Implemented 30-day persistent session sealing using non-extractable device key, 30-day expiry enforcement, and JSON token metadata. |
+| `apps/webmail/src/persistent_session.ts` | Implemented 30-day persistent session sealing using non-extractable device key, 30-day expiry enforcement, JSON token metadata, and server token validation on restore. |
 | `apps/webmail/src/api.ts` | Added profile photo and connected account interface types and API endpoints; conditionally fetches photo only when ref exists. |
 | `apps/webmail/src/App.tsx` | Integrated persistent session restoration, required active/restored session before bootstrap, updated login disclosure wording, and photo state. |
 | `apps/webmail/src/sidebar_borderless.test.ts` | Added unit tests for borderless sidebar styling and canvas background unification. |
 | `apps/webmail/src/unified_inbox.test.ts` | Added unit tests for conditional All Inboxes and account removal reset. |
 | `apps/webmail/src/profile_photo.test.ts` | Added unit tests for profile avatar fallback and crypto roundtrip. |
-| `apps/webmail/src/persistent_session.test.ts` | Added unit tests for non-extractable device key sealing, tamper checks, and expired token rejection. |
+| `apps/webmail/src/persistent_session.test.ts` | Added unit tests for non-extractable device key sealing, tamper checks, expired token rejection, and server revocation rejection. |
 | `apps/webmail/src/run_test.node.js` | Registered new test suites in the Node runner. |
 | `docs/smoke_gaps.md` | Added Section 11 documenting persistent session token storage in localStorage and XSS tradeoffs. |
 | `infra/postgres/init/053_profile_photos.sql` | Migration adding profile_photo_ref and profile_photo_updated_at columns. |
@@ -32,7 +32,7 @@ Implemented four design and operational refinements to the BYOS Webmail platform
 | `services/api/profile_photo_test.go` | Added Go unit tests for profile photo endpoints and storage-worker interaction. |
 | `tests/browser/test_sidebar_restructure.mjs` | Added Check 7 asserting All Inboxes disappears when only one account remains. |
 | `tests/browser/test_profile_photo.mjs` | Added end-to-end browser test for profile photo upload, rendering, and removal. |
-| `tests/browser/test_persistent_session.mjs` | Added end-to-end browser test for persistent sessions, restore, key wipe, and Step 5 expired prompt. |
+| `tests/browser/test_persistent_session.mjs` | Added end-to-end browser test for persistent sessions, restore, key wipe, Step 5 expired prompt, and Step 6 server revocation. |
 | `tools/webmail_design_refinements_verify.sql` | Created SQL verification query for migration 053 column additions. |
 
 ## Raw evidence
@@ -234,6 +234,20 @@ Expired token check result: {
 }
 ✓ STEP 5 PASSED: Expired token displays password prompt & purges IndexedDB device keys. Screenshot: F:\Codex\byos-email\tests\browser\artifacts\persistent_session_expired_prompt.png
 
+--- [STEP 6] Test Server-Side Revoked Token Shows Password Prompt ---
+Manually revoking session in PostgreSQL...
+Revoked token check result: {
+  "hasLoginInput": true,
+  "hasChip": false,
+  "persistentUserId": null,
+  "persistentToken": null,
+  "idbData": {
+    "hasDeviceKey": false,
+    "hasSealedKeys": false
+  }
+}
+✓ STEP 6 PASSED: Server-revoked token displays password prompt & purges IndexedDB device keys. Screenshot: F:\Codex\byos-email\tests\browser\artifacts\persistent_session_revoked_prompt.png
+
 ================================================================================
        ALL PERSISTENT SESSION BROWSER VERIFICATION CHECKS PASSED!               
 ================================================================================
@@ -244,6 +258,7 @@ Screenshots:
 - `tests/browser/artifacts/persistent_session_auto_restored.png`
 - `tests/browser/artifacts/persistent_session_logged_out.png`
 - `tests/browser/artifacts/persistent_session_expired_prompt.png`
+- `tests/browser/artifacts/persistent_session_revoked_prompt.png`
 
 ### Change 2: Conditional All Inboxes
 Command: `node --experimental-wasm-modules tests/browser/test_sidebar_restructure.mjs`
@@ -524,9 +539,11 @@ Running Persistent Session Tests...
   ✓ 4. Full lifecycle: savePersistentSession, restorePersistentSession, clearPersistentSession
 [persistent-session] Token has expired. Purging persistent session.
   ✓ 5. Expired token rejects restoration and purges storage
-PERSISTENT SESSION TESTS: 5 passed, 0 failed
+[persistent-session] Token rejected by server (HTTP 401). Purging persistent session.
+  ✓ 6. Server rejection (401 revoked) rejects restoration and purges storage
+PERSISTENT SESSION TESTS: 6 passed, 0 failed
 
-OVERALL: 273 passed, 0 failed
+OVERALL: 274 passed, 0 failed
 ```
 
 ### Full Smoke Suite (`smoke.ps1`)

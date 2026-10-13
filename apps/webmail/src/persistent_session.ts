@@ -5,6 +5,8 @@
  * Persistent session token stored in localStorage under byos_persistent_token_<userId>
  */
 
+import { apiBase } from "./api";
+
 export const DEVICE_KEYSTORE_DB = "byos_device_keystore";
 export const DEVICE_KEYSTORE_VERSION = 1;
 export const DEVICE_STORE_NAME = "device_keys";
@@ -241,6 +243,32 @@ export async function restorePersistentSession(): Promise<UnsealedSessionPayload
     const unsealed = await unsealKeysWithDeviceKey(deviceKey, sealed);
     // Ensure token matches
     unsealed.sessionToken = token;
+
+    // Validate session token with server (detects admin revocation, password rotation, etc.)
+    if (typeof window !== "undefined" && typeof fetch !== "undefined") {
+      try {
+        const base = apiBase();
+        const origin = window.location?.origin && window.location.origin !== "null" ? window.location.origin : "";
+        const validateUrl = base ? `${base}/v1/auth/me` : (origin ? `${origin}/v1/auth/me` : "/v1/auth/me");
+        if (base || origin || (typeof window.location?.href === "string" && window.location.href.startsWith("http"))) {
+          const validateRes = await fetch(validateUrl, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "X-BYOS-Client": "webmail",
+            },
+            credentials: "include",
+          });
+          if (!validateRes.ok) {
+            console.warn(`[persistent-session] Token rejected by server (HTTP ${validateRes.status}). Purging persistent session.`);
+            await clearPersistentSession(userId);
+            return null;
+          }
+        }
+      } catch (netErr: any) {
+        // Network offline / unreachable: allow offline session restoration
+        console.warn("[persistent-session] Network offline during server session validation:", netErr?.message || netErr);
+      }
+    }
 
     if (typeof sessionStorage !== "undefined") {
       sessionStorage.setItem("byos_active_session_token", token);

@@ -301,6 +301,52 @@ export async function runPersistentSessionTests() {
     }
   });
 
+  // Test 6: Server rejection (e.g. 401 revoked) rejects restoration and purges storage
+  await test("6. Server rejection (401 revoked) rejects restoration and purges storage", async () => {
+    const prevIDB = (globalThis as any).indexedDB;
+    const prevStorage = (globalThis as any).localStorage;
+    const prevFetch = (globalThis as any).fetch;
+    const prevWindow = (globalThis as any).window;
+
+    const mockIDB = new MockIDBFactory();
+    const mockStorage = new MockLocalStorage();
+    (globalThis as any).indexedDB = mockIDB;
+    (globalThis as any).localStorage = mockStorage;
+    (globalThis as any).window = {
+      location: { origin: "http://127.0.0.1:3001", href: "http://127.0.0.1:3001/" },
+    };
+    (globalThis as any).fetch = async () => ({
+      ok: false,
+      status: 401,
+      statusText: "Unauthorized",
+    });
+
+    try {
+      const payload: UnsealedSessionPayload = {
+        userId: "user-revoked-22",
+        mailboxId: "mailbox-revoked-22",
+        mailboxSkHex: "1122334455667788deadbeefcafebabe",
+        sessionToken: "server-revoked-token",
+        email: "revoked@byos.local",
+      };
+
+      await savePersistentSession(payload);
+
+      // Attempt restore with server returning 401
+      const restored = await restorePersistentSession();
+      assert(restored === null, "Server-rejected persistent session must return null");
+
+      // Verify automatic cleanup
+      assert(mockStorage.getItem("byos_persistent_user_id") === null, "User ID must be purged on server rejection");
+      assert(mockStorage.getItem(`byos_persistent_token_${payload.userId}`) === null, "Token must be purged on server rejection");
+    } finally {
+      (globalThis as any).indexedDB = prevIDB;
+      (globalThis as any).localStorage = prevStorage;
+      (globalThis as any).fetch = prevFetch;
+      (globalThis as any).window = prevWindow;
+    }
+  });
+
   console.log(`PERSISTENT SESSION TESTS: ${passed} passed, ${failed} failed\n`);
   return { passed, failed };
 }

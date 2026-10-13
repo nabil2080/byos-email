@@ -432,6 +432,110 @@ async function runPersistentSessionVerification() {
     await page.screenshot({ path: shot5 });
     console.log("✓ STEP 5 PASSED: Expired token displays password prompt & purges IndexedDB device keys. Screenshot:", shot5);
 
+    // Step 6: Test Server-Side Revoked Token Shows Password Prompt (test_server_revoked_token_shows_password_prompt)
+    console.log("\n--- [STEP 6] Test Server-Side Revoked Token Shows Password Prompt ---");
+    // Log in again as Alice with Remember Device checked
+    await page.type('input[autocomplete="username"]', Alice.email);
+    await page.type('input[autocomplete="current-password"]', Alice.password);
+    await page.click('[data-testid="remember-device-checkbox"]');
+    await new Promise((r) => setTimeout(r, 300));
+    await page.click('button[type="submit"]');
+
+    await page.waitForSelector('[data-testid="account-chip-selector"]', { timeout: 15000 });
+    await new Promise((r) => setTimeout(r, 1000));
+
+    // In Postgres, manually delete Alice's session row to simulate server-side revocation:
+    console.log("Manually revoking session in PostgreSQL...");
+    execSql(`DELETE FROM sessions WHERE user_id = '${Alice.userId}';`);
+
+    // Simulate tab close: clear volatile sessionStorage (leaving persistent tokens in IDB & localStorage)
+    await page.evaluate(() => {
+      sessionStorage.clear();
+    });
+
+    // Reload page
+    await page.reload({ waitUntil: 'networkidle2' });
+    await new Promise((r) => setTimeout(r, 1500));
+
+    // Assert login form is displayed (not the inbox) and IDB/localStorage are purged
+    const revokedCheck = await page.evaluate(async (uid) => {
+      const hasLoginInput = !!document.querySelector('input[autocomplete="username"]');
+      const hasChip = !!document.querySelector('[data-testid="account-chip-selector"]');
+      const persistentUserId = localStorage.getItem("byos_persistent_user_id");
+      const persistentToken = localStorage.getItem(`byos_persistent_token_${uid}`);
+
+      const openReq = indexedDB.open("byos_device_keystore", 1);
+      const idbData = await new Promise((resolve) => {
+        openReq.onsuccess = () => {
+          try {
+            const db = openReq.result;
+            if (!db.objectStoreNames.contains("device_keys")) {
+              resolve({ hasDeviceKey: false, hasSealedKeys: false });
+              return;
+            }
+            const tx = db.transaction("device_keys", "readonly");
+            const store = tx.objectStore("device_keys");
+            const keyReq = store.get(`byos_device_key_${uid}`);
+            const sealedReq = store.get(`byos_sealed_keys_${uid}`);
+            let keyDone = false;
+            let sealedDone = false;
+            let keyRes = null;
+            let sealedRes = null;
+            keyReq.onsuccess = () => {
+              keyRes = keyReq.result;
+              keyDone = true;
+              if (sealedDone) finish();
+            };
+            keyReq.onerror = () => {
+              keyDone = true;
+              if (sealedDone) finish();
+            };
+            sealedReq.onsuccess = () => {
+              sealedRes = sealedReq.result;
+              sealedDone = true;
+              if (keyDone) finish();
+            };
+            sealedReq.onerror = () => {
+              sealedDone = true;
+              if (keyDone) finish();
+            };
+            function finish() {
+              resolve({
+                hasDeviceKey: Boolean(keyRes),
+                hasSealedKeys: Boolean(sealedRes),
+              });
+            }
+          } catch (e) {
+            resolve({ error: String(e) });
+          }
+        };
+        openReq.onerror = () => resolve({ error: "Failed to open IDB" });
+      });
+
+      return {
+        hasLoginInput,
+        hasChip,
+        persistentUserId,
+        persistentToken,
+        idbData,
+      };
+    }, Alice.userId);
+
+    console.log("Revoked token check result:", JSON.stringify(revokedCheck, null, 2));
+    if (!revokedCheck.hasLoginInput || revokedCheck.hasChip) {
+      throw new Error("Server-revoked token failed to show password prompt login form!");
+    }
+    if (revokedCheck.persistentUserId !== null || revokedCheck.persistentToken !== null) {
+      throw new Error("Server-revoked token failed to purge localStorage entries!");
+    }
+    if (revokedCheck.idbData?.hasDeviceKey || revokedCheck.idbData?.hasSealedKeys) {
+      throw new Error("Server-revoked token failed to purge IndexedDB device keys!");
+    }
+
+    const shot6 = path.join(artifactsDir, "persistent_session_revoked_prompt.png");
+    await page.screenshot({ path: shot6 });
+    console.log("✓ STEP 6 PASSED: Server-revoked token displays password prompt & purges IndexedDB device keys. Screenshot:", shot6);
+
     console.log("\n================================================================================");
     console.log("       ALL PERSISTENT SESSION BROWSER VERIFICATION CHECKS PASSED!               ");
     console.log("================================================================================\n");
