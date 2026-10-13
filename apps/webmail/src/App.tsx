@@ -3530,13 +3530,16 @@ const App: Component = () => {
         const email = acc?.email || currentUser()?.email || "your account";
         setGlobalError(formatSessionExpiredError(email), true);
 
-        // Remove that account from the sidebar if multi-account
+        // Remove that account from the sidebar if multi-account, or purge persistent session
         if (connectedAccounts().length > 1 && acc) {
           const remaining = removeStaleAccount(mailboxId, connectedAccounts());
           setConnectedAccounts(remaining);
+          clearPersistentSession(mailboxId).catch(() => {});
           if ((selectedMailbox()?.id === mailboxId || (currentFolder() === "unified_inbox" && remaining.length <= 1)) && remaining.length > 0) {
             handleSwitchAccount(remaining[0]);
           }
+        } else {
+          clearPersistentSession().catch(() => {});
         }
       } else {
         setGlobalError(`Failed to load mailbox data: ${msg}`, isAuth);

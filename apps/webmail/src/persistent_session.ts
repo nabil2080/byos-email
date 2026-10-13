@@ -245,24 +245,21 @@ export async function restorePersistentSession(): Promise<UnsealedSessionPayload
     unsealed.sessionToken = token;
 
     // Validate session token with server (detects admin revocation, password rotation, etc.)
-    if (typeof window !== "undefined" && typeof fetch !== "undefined") {
+    if (typeof window !== "undefined" && typeof fetch !== "undefined" && window.location?.origin && window.location.origin !== "null") {
       try {
         const base = apiBase();
-        const origin = window.location?.origin && window.location.origin !== "null" ? window.location.origin : "";
-        const validateUrl = base ? `${base}/v1/auth/me` : (origin ? `${origin}/v1/auth/me` : "/v1/auth/me");
-        if (base || origin || (typeof window.location?.href === "string" && window.location.href.startsWith("http"))) {
-          const validateRes = await fetch(validateUrl, {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "X-BYOS-Client": "webmail",
-            },
-            credentials: "include",
-          });
-          if (!validateRes.ok) {
-            console.warn(`[persistent-session] Token rejected by server (HTTP ${validateRes.status}). Purging persistent session.`);
-            await clearPersistentSession(userId);
-            return null;
-          }
+        const validateUrl = base ? `${base}/v1/auth/me` : `${window.location.origin}/v1/auth/me`;
+        const validateRes = await fetch(validateUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "X-BYOS-Client": "webmail",
+          },
+          credentials: "include",
+        });
+        if (!validateRes.ok) {
+          console.warn(`[persistent-session] Token rejected by server (HTTP ${validateRes.status}). Purging persistent session.`);
+          await clearPersistentSession(userId);
+          return null;
         }
       } catch (netErr: any) {
         // Network offline / unreachable: allow offline session restoration
