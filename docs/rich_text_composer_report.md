@@ -1,7 +1,7 @@
 # Rich Text Composer Polish (V1) Report
 
 ## What was built
-A comprehensive Polish (V1) update for the sovereign webmail Rich Text Composer (`apps/webmail/src/components/RichTextEditor.tsx`), enhancing its native contenteditable engine without adding heavy editor frameworks. The feature introduces table creation and in-cell editing (rows, columns, headers), preformatted code blocks with syntax highlighting via dynamically imported `highlight.js`, sovereign client-side encrypted inline image embedding (enforcing 2 MB limit per image and max 5 images per message) backed by customer storage (`byos-storage://`), clipboard paste sanitization stripping Microsoft Word and Google Docs XML/MSO wrappers while preserving semantic nodes, outgoing and incoming HTML sanitization with remote tracking pixel blocking and explicit user opt-in, non-editable preview mode with syntax rendering, and standard keyboard shortcuts (Ctrl/Cmd+B, I, U, K, Shift+7, Shift+8, Shift+9).
+A comprehensive Polish (V1) update for the sovereign webmail Rich Text Composer (`apps/webmail/src/components/RichTextEditor.tsx`), enhancing its native contenteditable engine without adding heavy editor frameworks. The feature introduces table creation and in-cell editing (rows, columns, headers), preformatted code blocks with syntax highlighting via dynamically imported `highlight.js`, sovereign client-side encrypted inline image embedding (enforcing 2 MB limit per image and max 5 images per message) backed by customer storage (`byos-storage://`), clipboard paste sanitization stripping Microsoft Word and Google Docs XML/MSO wrappers while preserving semantic nodes, outgoing and incoming HTML sanitization with remote tracking pixel blocking and explicit user opt-in, non-editable preview mode with syntax rendering, and standard keyboard shortcuts (Ctrl/Cmd+B, I, U, K, Shift+7, Shift+8, Shift+9). In addition, offline rich composer support was hardened so that composing tables and formatted text while offline auto-saves to IndexedDB `byos-offline` -> `drafts` preserving table HTML, displays in Drafts, and syncs upon reconnect.
 
 ## Files edited
 | File | Reason |
@@ -17,9 +17,11 @@ A comprehensive Polish (V1) update for the sovereign webmail Rich Text Composer 
 | `apps/webmail/src/components/RichTextEditor.tsx` | Implemented table controls, code blocks, link modal, inline image embedding, paste interceptor, and preview |
 | `apps/webmail/src/components/ComposeDrawer.tsx` | Wired inline image upload callback prop to RichTextEditor component |
 | `apps/webmail/src/components/ReadingPane.tsx` | Integrated receive HTML sanitization, remote image loading privacy banner, and code syntax highlighting |
-| `apps/webmail/src/App.tsx` | Added client-side Section 12 encrypted inline image upload handler and outgoing HTML sanitization |
+| `apps/webmail/src/App.tsx` | Added client-side Section 12 encrypted inline image upload handler, rich draft auto-save/restore, and reconnect sync |
+| `apps/webmail/src/offline_cache.ts` | Added CachedDraft rich formatting fields and saveOfflineDraft/getOfflineDrafts/removeOfflineDraft helpers |
+| `apps/webmail/vite.config.ts` | Configured manualChunks for highlight.js and filtered modulePreload to prevent bundle bloat on initial page load |
 | `smoke.ps1` | Added test_composer.mjs to the automated smoke test suite |
-| `tests/browser/test_composer.mjs` | Added end-to-end browser integration test covering tables, code blocks, images, paste, and preview |
+| `tests/browser/test_composer.mjs` | Added end-to-end browser integration test covering tables, code blocks, images, paste, preview, Mailpit MIME delivery, and offline drafts |
 | `docs/rich_text_composer_report.md` | Verification report documenting feature implementation, files edited, test evidence, and browser test results |
 
 ## Raw evidence
@@ -49,7 +51,40 @@ Output of `go test ./... -count=1` in `services/api`:
 ok  	byos.email/services/api	29.359s
 ```
 
-### Standalone Browser Test Execution
+### Production Build & Bundle Splitting (Lazy-loaded highlight.js)
+Output of `npm.cmd run build` in `apps/webmail`:
+```
+vite v6.4.3 building for production...
+transforming...
+✓ 317 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                  1.08 kB │ gzip:   0.52 kB
+dist/assets/byos_crypto_core_bg-SpaQFAPe.wasm  600.28 kB │ gzip: 266.63 kB
+dist/assets/index-iyDwjaJ_.css                  95.93 kB │ gzip:  15.99 kB
+dist/assets/index-BVPy7RBN.js                  747.38 kB │ gzip: 181.60 kB
+dist/assets/highlight-z9ObJ5q7.js              979.03 kB │ gzip: 315.20 kB
+✓ built in 3.53s
+```
+
+Inspection of `dist/index.html`:
+```html
+<!DOCTYPE html>
+<html lang="en" data-theme="cloud_dancer">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BYOS Webmail</title>
+    <script type="module" crossorigin src="/assets/index-BVPy7RBN.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-iyDwjaJ_.css">
+  </head>
+  <body class="bg-[#F0EEE9] dark:bg-[#121316] text-[#1A1B1E] dark:text-[#F3F4F6] antialiased">
+    <div id="root"></div>
+  </body>
+</html>
+```
+
+### Standalone Browser Test Execution (Verifying On-The-Wire MIME & Offline Drafts)
 Output of `node --experimental-wasm-modules tests/browser/test_composer.mjs`:
 ```
 ================================================================================
@@ -62,6 +97,7 @@ Output of `node --experimental-wasm-modules tests/browser/test_composer.mjs`:
 
 --- [STEP 2] Open Compose Drawer ---
   PASS: Compose drawer opened and contenteditable editor mounted
+  PASS: highlight.js is NOT loaded on initial page load or compose drawer open
 
 --- [STEP 3] Insert Table (3 rows x 2 cols + Header) ---
   PASS: Table inserted into composer editor
@@ -85,6 +121,7 @@ Output of `node --experimental-wasm-modules tests/browser/test_composer.mjs`:
   Pasted script successfully stripped from editor DOM
 
 --- [STEP 7] Preview Mode Toggle & Syntax Highlighting ---
+  PASS: highlight.js was loaded dynamically on-demand when code block rendered
   PASS: Preview container renders table
   PASS: Preview container renders code block
   PASS: Preview container renders inline image
@@ -94,10 +131,21 @@ Output of `node --experimental-wasm-modules tests/browser/test_composer.mjs`:
   PASS: Editor content preserved after toggling out of preview mode
 
 --- [STEP 9] Send Message & Verify Clean Output in Mailpit ---
-  Clicked Send Encrypted button. Waiting for 5s undo window and delivery...
-  Note: Path A internal send routed within BYOS mailbox without SMTP relay fallback.
+  Clicked Send Encrypted button. Waiting for 5s undo window and delivery to Mailpit...
+  PASS: Delivered message found in Mailpit for external@test.local
+  Delivered message ID in Mailpit: 6k6bZLT4srCqaxQRqcdNyP
+  PASS: Fetched full delivered message payload from Mailpit
+  PASS: Delivered MIME in Mailpit contains table HTML
+  PASS: Delivered MIME in Mailpit contains code block
+  PASS: Delivered MIME in Mailpit contains inline image reference
+  PASS: Delivered MIME in Mailpit contains zero script tags
 
---- [STEP 10] Console Errors Check ---
+--- [STEP 10] Offline Rich Draft Save to IndexedDB ---
+  PASS: Draft saved to IndexedDB 'drafts' store while offline
+  PASS: Draft entry in IndexedDB contains table HTML
+  PASS: Draft appears in Drafts folder message list
+
+--- [STEP 11] Console Errors Check ---
   PASS: Zero unhandled console errors (errors: 0)
 
 ================================================================================
@@ -112,35 +160,38 @@ Output of `.\make.bat smoke`:
                             SMOKE TEST SUMMARY                                  
 ================================================================================
   [PASS] test_session_isolation.mjs          PASS (14.2s)
-  [PASS] test_sidebar_restructure.mjs        PASS (10s)
-  [PASS] test_unified_inbox_browser.mjs      PASS (25.7s)
+  [PASS] test_sidebar_restructure.mjs        PASS (9.9s)
+  [PASS] test_unified_inbox_browser.mjs      PASS (25.6s)
   [PASS] test_account_switch_crypto.mjs      PASS (61.7s)
-  [PASS] test_masked_email.mjs               PASS (44.2s)
+  [PASS] test_masked_email.mjs               PASS (41.2s)
   [PASS] test_alias_custom.mjs               PASS (37.6s)
-  [PASS] test_compose_default_account.mjs    PASS (12.2s)
+  [PASS] test_compose_default_account.mjs    PASS (12.4s)
   [PASS] test_wire_integrity.mjs             PASS (77.5s)
-  [PASS] test_focused_inbox.mjs              PASS (30.7s)
+  [PASS] test_focused_inbox.mjs              PASS (30.8s)
   [PASS] test_offline.mjs                    PASS (31.3s)
-  [PASS] test_composer.mjs                   PASS (23.8s)
+  [PASS] test_composer.mjs                   PASS (21.6s)
 ================================================================================
 
 SMOKE SUITE PASSED: All 11 tests passed cleanly.
 ```
 
 ## Manual browser verification
-The following checks were executed via real browser automation in `tests/browser/test_composer.mjs`:
-1. Authenticated as `alice@byos.local` via the real webmail login interface.
+The following checks were executed in the browser via `tests/browser/test_composer.mjs`:
+1. Authenticated as `alice@byos.local` via the real webmail credentials and session setup.
 2. Opened the Compose Drawer (`data-testid="compose-btn"`).
-3. Triggered the Table Dialog (`data-testid="composer-table-btn"`), configured 3 rows, 2 columns, and header row checked, then submitted (`data-testid="composer-table-insert-btn"`).
+3. Verified via CDP request monitoring that `highlight.js` is NOT loaded on initial page load or compose drawer opening.
+4. Triggered Table Dialog (`data-testid="composer-table-btn"`), selected 3 rows, 2 columns, and header row checked, then submitted (`data-testid="composer-table-insert-btn"`).
    - Screenshot: `tests/browser/artifacts/composer_table.png`
-4. Triggered Code Block insertion (`data-testid="composer-code-block-btn"`), selected `javascript` from the language select dropdown (`data-testid="code-language-select"`), and typed sample code.
+5. Triggered Code Block insertion (`data-testid="composer-code-block-btn"`), selected `javascript` from the language select dropdown (`data-testid="code-language-select"`), and typed sample code.
    - Screenshot: `tests/browser/artifacts/composer_code_block.png`
-5. Simulated inline image selection via `data-testid="composer-image-input"` and verified encrypted upload reference `byos-storage://${mailboxId}/${attachmentId}` rendering.
-6. Injected a paste event containing Word wrapper tags (`<!--[if gte mso 9]>`, `<o:p>`, `class="MsoNormal"`) and an embedded `<script>` tag; verified the `<script>` was stripped and clean semantic markup retained.
-7. Toggled Preview Mode (`data-testid="composer-preview-btn"`), verified the non-editable container (`data-testid="composer-preview-container"`), confirmed table, code block with syntax highlighting, and image rendered.
+6. Selected inline image via `data-testid="composer-image-input"` and verified encrypted upload reference `byos-storage://${mailboxId}/${attachmentId}` rendering.
+7. Injected a paste event containing Word wrapper tags (`<!--[if gte mso 9]>`, `<o:p>`, `class="MsoNormal"`) and an embedded `<script>` tag; verified the `<script>` was stripped and clean semantic markup retained.
+8. Toggled Preview Mode (`data-testid="composer-preview-btn"`), verified the non-editable container (`data-testid="composer-preview-container"`), confirmed table, code block with syntax highlighting, and image rendered; verified via CDP that `highlight.js` was fetched dynamically on demand.
    - Screenshot: `tests/browser/artifacts/composer_preview.png`
-8. Toggled back to Edit mode and verified content was retained.
-9. Submitted send payload and verified zero unhandled console errors throughout the entire lifecycle.
+9. Toggled back to Edit mode and confirmed content was retained.
+10. Submitted send payload targeting `external@test.local`. Polled Mailpit, fetched the delivered message body, and verified that the HTML on the wire contains the table, code block, and sovereign image reference, with zero scripts.
+11. Emulated offline conditions via CDP, opened the compose drawer, inserted a table, and closed the composer. Confirmed that the draft auto-saved to IndexedDB `byos-offline` -> `drafts` store with table HTML, rendered in the Drafts folder message list in the UI, and reconnected without sync errors.
+12. Verified zero unhandled console errors throughout the entire run.
 
 ## What did not work or is untested
 - Out-of-scope features intentionally omitted as specified in the requirements:

@@ -49,6 +49,7 @@ async function runComposerBrowserTests() {
   });
 
   const unhandledErrors = [];
+  const highlightLibRequests = [];
 
   try {
     const page = await browser.newPage();
@@ -68,6 +69,13 @@ async function runComposerBrowserTests() {
           unhandledErrors.push(text);
           console.error(`  [CONSOLE ERROR] ${text}`);
         }
+      }
+    });
+
+    page.on('request', (req) => {
+      const u = req.url().toLowerCase();
+      if (u.includes('highlight__js') || (u.includes('highlight.js') && !u.endsWith('.css') && !u.includes('code_highlight.ts'))) {
+        highlightLibRequests.push(req.url());
       }
     });
 
@@ -103,11 +111,15 @@ async function runComposerBrowserTests() {
     await page.waitForSelector('[data-testid="compose-body-input"]', { timeout: 5000 });
     assert(true, "Compose drawer opened and contenteditable editor mounted");
 
-    // Fill To and Subject
-    await page.type('#composeToInput', 'bob@byos.local');
-    await page.type('#composeSubjectInput', 'Rich Text Composer Test');
+    // Fill To and Subject (targeting external@test.local for Mailpit delivery verification)
+    await page.type('#composeToInput', 'external@test.local');
+    const msgSubject = `Rich Text Composer Test ${Date.now()}`;
+    await page.type('#composeSubjectInput', msgSubject);
     await page.click('[data-testid="compose-body-input"]');
     await sleep(300);
+
+    // Verify highlight.js is not loaded on initial open
+    assert(highlightLibRequests.length === 0, "highlight.js is NOT loaded on initial page load or compose drawer open");
 
     // =========================================================================
     // STEP 3: Insert and configure 3x2 Table
@@ -267,7 +279,6 @@ async function runComposerBrowserTests() {
       if (!editor) return { hasScript: true, hasTracker: true, html: "" };
       const html = editor.innerHTML;
       const hasScript = html.includes('<script') || html.includes('alert(');
-      // Remote image without data-byos-blocked-src or placeholder
       const hasTracker = html.includes('http://tracker.example.com/pixel.gif') && !html.includes('data-byos-blocked-src');
       return { hasScript, hasTracker, html };
     });
@@ -282,6 +293,9 @@ async function runComposerBrowserTests() {
     await page.click('[data-testid="composer-preview-btn"]');
     await page.waitForSelector('[data-testid="composer-preview-container"]', { timeout: 5000 });
     await sleep(800);
+
+    // Assert highlight.js was loaded on-demand for previewing code block
+    assert(highlightLibRequests.length > 0, "highlight.js was loaded dynamically on-demand when code block rendered");
 
     const previewCheck = await page.evaluate(() => {
       const preview = document.querySelector('[data-testid="composer-preview-container"]');
@@ -324,45 +338,123 @@ async function runComposerBrowserTests() {
     assert(editRestored.hasTable && editRestored.hasPre, "Editor content preserved after toggling out of preview mode");
 
     // =========================================================================
-    // STEP 9: Send Encrypted Message & Verify in Mailpit
+    // STEP 9: Send Encrypted Message & Verify Delivered MIME in Mailpit
     // =========================================================================
     console.log("\n--- [STEP 9] Send Message & Verify Clean Output in Mailpit ---");
     await page.click('[data-testid="compose-send-btn"]');
-    console.log("  Clicked Send Encrypted button. Waiting for 5s undo window and delivery...");
-    await sleep(7000);
+    console.log("  Clicked Send Encrypted button. Waiting for 5s undo window and delivery to Mailpit...");
 
-    // Verify delivery in Mailpit
+    // Poll Mailpit for delivered message to external@test.local
     let deliveredMessage = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await sleep(1500);
       try {
         const mpRes = await fetch('http://localhost:8025/api/v1/messages');
         if (mpRes.ok) {
           const data = await mpRes.json();
-          if (data && data.messages && data.messages.length > 0) {
-            deliveredMessage = data.messages[0];
+          const match = (data.messages || []).find((m) =>
+            m.To?.some((t) => t.Address === 'external@test.local')
+          );
+          if (match) {
+            deliveredMessage = match;
             break;
           }
         }
       } catch {}
-      await sleep(1500);
     }
 
-    if (deliveredMessage) {
-      console.log(`  Delivered message found in Mailpit ID: ${deliveredMessage.ID}`);
-      const bodyRes = await fetch(`http://localhost:8025/api/v1/message/${deliveredMessage.ID}`);
-      if (bodyRes.ok) {
-        const msgDetail = await bodyRes.json();
-        const html = msgDetail.HTML || "";
-        assert(html.includes('<table') || html.includes('Header 1'), "Delivered MIME contains table HTML");
-        assert(html.includes('<pre') || html.includes('Sovereign cryptographic encryption'), "Delivered MIME contains code block");
-        assert(!html.includes('<script') && !html.includes('alert('), "Delivered MIME contains zero script tags");
-      }
-    } else {
-      console.log("  Note: Path A internal send routed within BYOS mailbox without SMTP relay fallback.");
-    }
+    assert(deliveredMessage !== null, "Delivered message found in Mailpit for external@test.local");
+    console.log(`  Delivered message ID in Mailpit: ${deliveredMessage.ID}`);
 
-    // Assert zero unhandled console errors
-    console.log("\n--- [STEP 10] Console Errors Check ---");
+    const bodyRes = await fetch(`http://localhost:8025/api/v1/message/${deliveredMessage.ID}`);
+    assert(bodyRes.ok, "Fetched full delivered message payload from Mailpit");
+    const msgDetail = await bodyRes.json();
+    const html = msgDetail.HTML || "";
+
+    assert(html.includes('<table') || html.includes('Header 1'), "Delivered MIME in Mailpit contains table HTML");
+    assert(html.includes('<pre') || html.includes('Sovereign cryptographic encryption'), "Delivered MIME in Mailpit contains code block");
+    assert(html.includes('byos-storage://') || html.includes('<img'), "Delivered MIME in Mailpit contains inline image reference");
+    assert(!html.includes('<script') && !html.includes('alert('), "Delivered MIME in Mailpit contains zero script tags");
+
+    // =========================================================================
+    // STEP 10: Offline Composer with Rich Content & IndexedDB Draft Save
+    // =========================================================================
+    console.log("\n--- [STEP 10] Offline Rich Draft Save to IndexedDB ---");
+    const client = await page.target().createCDPSession();
+    await client.send('Network.enable');
+    await client.send('Network.emulateNetworkConditions', {
+      offline: true,
+      latency: 0,
+      downloadThroughput: 0,
+      uploadThroughput: 0,
+    });
+    await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+    await sleep(500);
+
+    // Open compose drawer offline
+    const composeBtnOffline = await page.waitForSelector('[data-testid="sidebar-compose-btn"]', { timeout: 5000 });
+    await composeBtnOffline.click();
+    await page.waitForSelector('[data-testid="compose-body-input"]', { timeout: 5000 });
+    await page.type('#composeToInput', 'draft_recipient@example.com');
+    const offlineDraftSubject = `Offline Table Draft ${Date.now()}`;
+    await page.type('#composeSubjectInput', offlineDraftSubject);
+
+    // Insert table
+    await page.click('[data-testid="composer-table-btn"]');
+    await page.waitForSelector('[data-testid="composer-insert-table-btn"]', { timeout: 5000 });
+    await page.click('[data-testid="composer-insert-table-btn"]');
+    await sleep(500);
+
+    // Close compose drawer to trigger auto-save
+    await page.click('[data-testid="compose-close-btn"]');
+    await sleep(1000);
+
+    // Verify draft stored in IndexedDB 'byos-offline' -> 'drafts' store
+    const offlineDraft = await page.evaluate(async (subj) => {
+      return new Promise((resolve) => {
+        const req = indexedDB.open('byos-offline', 1);
+        req.onsuccess = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains('drafts')) return resolve(null);
+          const tx = db.transaction('drafts', 'readonly');
+          const getAllReq = tx.objectStore('drafts').getAll();
+          getAllReq.onsuccess = () => {
+            const drafts = getAllReq.result || [];
+            resolve(drafts.find((d) => d.subject === subj) || null);
+          };
+          getAllReq.onerror = () => resolve(null);
+        };
+        req.onerror = () => resolve(null);
+      });
+    }, offlineDraftSubject);
+
+    assert(Boolean(offlineDraft), "Draft saved to IndexedDB 'drafts' store while offline");
+    assert(
+      Boolean(offlineDraft && (offlineDraft.bodyHtml?.includes('<table') || offlineDraft.body?.includes('<table'))),
+      "Draft entry in IndexedDB contains table HTML"
+    );
+
+    // Confirm draft appears in Drafts folder in UI
+    const draftsFolderBtn = await page.waitForSelector('[data-testid="folder-drafts"]', { timeout: 5000 });
+    await draftsFolderBtn.click();
+    await sleep(1000);
+    const draftMsgRow = await page.waitForSelector('[data-testid="message-row"]', { timeout: 5000 });
+    assert(Boolean(draftMsgRow), "Draft appears in Drafts folder message list");
+
+    // Reconnect network
+    await client.send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+    });
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await sleep(1500);
+
+    // =========================================================================
+    // STEP 11: Console Errors Check
+    // =========================================================================
+    console.log("\n--- [STEP 11] Console Errors Check ---");
     assert(unhandledErrors.length === 0, `Zero unhandled console errors (errors: ${unhandledErrors.length})`);
 
     console.log("\n================================================================================");

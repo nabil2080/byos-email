@@ -14,6 +14,18 @@ export default defineConfig({
     },
   },
   build: {
-    target: "esnext"
+    target: "esnext",
+    modulePreload: {
+      resolveDependencies: (filename, deps) => {
+        return deps.filter((dep) => !dep.includes("highlight"));
+      },
+    },
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          highlight: ["highlight.js"],
+        },
+      },
+    },
   }
 });

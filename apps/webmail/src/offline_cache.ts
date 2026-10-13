@@ -46,6 +46,8 @@ export interface CachedDraft {
   recipient: string;
   subject: string;
   body: string;
+  bodyHtml?: string;
+  encrypted_envelope?: string;
   updated_at: number;
 }
 
@@ -275,6 +277,48 @@ export async function pruneOldCache(mailboxId: string, maxMessages = 50): Promis
         delReq.onerror = () => reject(delReq.error);
       }
     };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * Saves a draft to IndexedDB drafts store when offline.
+ */
+export async function saveOfflineDraft(draft: CachedDraft): Promise<void> {
+  const db = await openOfflineDB();
+  const tx = db.transaction("drafts", "readwrite");
+  const store = tx.objectStore("drafts");
+  return new Promise((resolve, reject) => {
+    const req = store.put(draft);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * Retrieves cached offline drafts.
+ */
+export async function getOfflineDrafts(mailboxId?: string): Promise<CachedDraft[]> {
+  const db = await openOfflineDB();
+  const tx = db.transaction("drafts", "readonly");
+  const store = tx.objectStore("drafts");
+  return new Promise((resolve, reject) => {
+    const req = mailboxId ? store.index("mailbox_id").getAll(mailboxId) : store.getAll();
+    req.onsuccess = () => resolve((req.result as CachedDraft[]) || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * Removes a draft from IndexedDB drafts store.
+ */
+export async function removeOfflineDraft(draftId: string): Promise<void> {
+  const db = await openOfflineDB();
+  const tx = db.transaction("drafts", "readwrite");
+  const store = tx.objectStore("drafts");
+  return new Promise((resolve, reject) => {
+    const req = store.delete(draftId);
+    req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
   });
 }

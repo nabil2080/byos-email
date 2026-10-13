@@ -188,6 +188,9 @@ import {
   getCachedMessageBody,
   saveCachedMessageBody,
   clearOfflineCache,
+  saveOfflineDraft,
+  getOfflineDrafts,
+  removeOfflineDraft,
 } from "./offline_cache";
 import { enqueueSend, replayQueue } from "./send_queue";
 
@@ -233,6 +236,8 @@ interface DisplayMessage {
   aliasLabel?: string;
   category?: FocusedCategory;
   categoryOverride?: string | null;
+  bodyPlaintext?: string;
+  bodyHtml?: string;
 }
 
 export function buildMimeString(params: {
@@ -2179,6 +2184,27 @@ const App: Component = () => {
         if (res.sent > 0) {
           showToast(`Sent ${res.sent} queued message${res.sent > 1 ? "s" : ""}.`);
         }
+        try {
+          const offlineDrafts = await getOfflineDrafts();
+          for (const d of offlineDrafts) {
+            try {
+              const dKey = getMailboxKeyFor(d.mailbox_id);
+              if (!dKey) continue;
+              const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+              const richContent = d.bodyHtml || d.body;
+              const env = d.encrypted_envelope || encryptDraftEnvelope(wasm, dKey, d.mailbox_id, richContent);
+              await createDraft(d.mailbox_id, {
+                recipient: d.recipient,
+                subject: d.subject || "Untitled Draft",
+                encrypted_envelope: env,
+              });
+              await removeOfflineDraft(d.id);
+            } catch (dErr) {
+              console.warn("[offline] Draft sync error:", dErr);
+            }
+          }
+        } catch {}
+
         const currentBox = selectedMailbox();
         if (currentBox) {
           await loadMailboxData(currentBox.id);
@@ -3339,40 +3365,59 @@ const App: Component = () => {
       const msg = err instanceof Error ? err.message : String(err);
       if (isOffline() || msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("offline")) {
         try {
-          const cached = await getCachedInbox(mailboxId);
-          if (cached && cached.length > 0) {
-            const cachedDisplay: DisplayMessage[] = cached.map((m: MessageMetadata) => {
-              const cachedSubject = sessionStorage.getItem("byos_msg_subject_" + m.id) || m.subject || "";
-              const cachedSnippet = sessionStorage.getItem("byos_msg_snippet_" + m.id) || "";
-              return {
-                id: m.id,
-                messageId: m.id,
-                messageSeq: m.message_seq,
-                folder: (m.folder as Folder) || "inbox",
-                folderId: m.folder_id || null,
-                labelIds: m.label_ids || [],
-                sender: m.sender,
-                recipient: (m.recipients || []).join(", "),
-                recipients: m.recipients || [],
-                subject: cachedSubject,
-                snippet: cachedSnippet,
-                encryptedBody: m.storage_object_id,
-                status: m.status,
-                date: formatMessageDate(m.received_at, timeFormat(), language()),
-                read: m.is_read ?? false,
-                starred: m.is_starred ?? false,
-                isRealApi: true,
-                hasAttachments: m.has_attachments,
-                attachmentCount: m.attachment_count,
-                mailboxId: mailboxId,
-                accountEmail: currentUser()?.email,
-              };
-            });
-            setMessages(cachedDisplay);
-            return;
-          }
+          const [cached, offlineDrafts] = await Promise.all([
+            getCachedInbox(mailboxId).catch(() => []),
+            getOfflineDrafts(mailboxId).catch(() => []),
+          ]);
+          const draftDisplayMsgs: DisplayMessage[] = (offlineDrafts || []).map((d) => ({
+            id: d.id,
+            version: 1,
+            folder: "drafts",
+            sender: currentUser()?.email || "me@byos.local",
+            recipient: d.recipient || "(no recipient)",
+            recipients: d.recipient ? d.recipient.split(",").map((s) => s.trim()).filter(Boolean) : [],
+            subject: d.subject || "Untitled Draft",
+            snippet: (d.bodyHtml || d.body).replace(/<[^>]+>/g, "").slice(0, 80) + "…",
+            bodyPlaintext: d.body || d.bodyHtml,
+            bodyHtml: d.bodyHtml || d.body,
+            encryptedBody: d.encrypted_envelope || "",
+            date: "Just now",
+            read: true,
+            starred: false,
+            isRealApi: true,
+            mailboxId: mailboxId,
+          }));
+          const cachedDisplay: DisplayMessage[] = (cached || []).map((m: MessageMetadata) => {
+            const cachedSubject = sessionStorage.getItem("byos_msg_subject_" + m.id) || m.subject || "";
+            const cachedSnippet = sessionStorage.getItem("byos_msg_snippet_" + m.id) || "";
+            return {
+              id: m.id,
+              messageId: m.id,
+              messageSeq: m.message_seq,
+              folder: (m.folder as Folder) || "inbox",
+              folderId: m.folder_id || null,
+              labelIds: m.label_ids || [],
+              sender: m.sender,
+              recipient: (m.recipients || []).join(", "),
+              recipients: m.recipients || [],
+              subject: cachedSubject,
+              snippet: cachedSnippet,
+              encryptedBody: m.storage_object_id,
+              status: m.status,
+              date: formatMessageDate(m.received_at, timeFormat(), language()),
+              read: m.is_read ?? false,
+              starred: m.is_starred ?? false,
+              isRealApi: true,
+              hasAttachments: m.has_attachments,
+              attachmentCount: m.attachment_count,
+              mailboxId: mailboxId,
+              accountEmail: currentUser()?.email,
+            };
+          });
+          setMessages([...draftDisplayMsgs, ...cachedDisplay]);
+          return;
         } catch (cacheErr) {
-          console.warn("[offline] Failed to load cached inbox:", cacheErr);
+          console.warn("[offline] Failed to load cached inbox or drafts:", cacheErr);
         }
       }
       if (msg.includes("503") || msg.includes("storage_disconnected") || msg.includes("storage disconnected")) {
@@ -4609,6 +4654,11 @@ const App: Component = () => {
     setComposeTo(msg.recipient === "(no recipient)" ? "" : msg.recipient);
     setComposeSubject(msg.subject === "(no subject)" ? "" : msg.subject);
     setComposeBody(plaintext);
+    if (msg.bodyHtml) {
+      setComposeBodyHtml(msg.bodyHtml);
+    } else if (plaintext.includes("<") && plaintext.includes(">")) {
+      setComposeBodyHtml(plaintext);
+    }
     setScheduledTime("");
     setComposeAttachments([]);
     setEditingDraft({ id: msg.id, version: msg.version ?? 1 });
@@ -5306,9 +5356,59 @@ const App: Component = () => {
     const to = composeTo().trim();
     const subject = composeSubject().trim();
     const body = composeBody();
+    const bodyHtml = composeBodyHtml();
+    const richContent = bodyHtml || body;
     const boxId = composeAccountId() || selectedMailbox()?.id;
     const box = boxId ? (mailboxes().find((b) => b.id === boxId) || selectedMailbox()) : selectedMailbox();
     if (!box) return;
+
+    // Handle offline draft saving to IndexedDB
+    if (isOffline()) {
+      const draftId = editingDraft()?.id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : "draft-" + Date.now());
+      let envelope = "";
+      const key = getMailboxKeyFor(box.id);
+      if (key) {
+        try {
+          const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+          envelope = encryptDraftEnvelope(wasm, key, box.id, richContent);
+        } catch {}
+      }
+
+      await saveOfflineDraft({
+        id: draftId,
+        mailbox_id: box.id,
+        recipient: to,
+        subject: subject || "Untitled Draft",
+        body: body || richContent,
+        bodyHtml: richContent,
+        encrypted_envelope: envelope,
+        updated_at: Date.now(),
+      });
+
+      const draftDisplay: DisplayMessage = {
+        id: draftId,
+        version: 1,
+        folder: "drafts",
+        sender: currentUser()?.email || "me@byos.local",
+        recipient: to || "(no recipient)",
+        recipients: to ? to.split(",").map((s) => s.trim()).filter(Boolean) : [],
+        subject: subject || "Untitled Draft",
+        snippet: richContent.replace(/<[^>]+>/g, "").slice(0, 80) + (richContent.length > 80 ? "…" : ""),
+        bodyPlaintext: body || richContent,
+        bodyHtml: richContent,
+        encryptedBody: envelope,
+        date: "Just now",
+        read: true,
+        starred: false,
+        isRealApi: true,
+      };
+
+      setMessages((prev) => [draftDisplay, ...prev.filter((m) => m.id !== draftId)]);
+      setComposeOpen(false);
+      clearComposeForm();
+      setComposeStatus(null);
+      return;
+    }
 
     // Draft bodies are ciphertext-only server-side. Refuse to submit anything
     // the client has not actually encrypted: no plaintext envelope may reach
@@ -5323,7 +5423,7 @@ const App: Component = () => {
     setComposeStatus("Saving draft to mailbox storage…");
     try {
       const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-      const envelope = encryptDraftEnvelope(wasm, key, box.id, body);
+      const envelope = encryptDraftEnvelope(wasm, key, box.id, richContent);
       const editing = editingDraft();
       if (editing) {
         try {
@@ -5341,7 +5441,9 @@ const App: Component = () => {
                     recipient: to || "(no recipient)",
                     recipients: to ? to.split(",").map((s) => s.trim()).filter(Boolean) : [],
                     subject: subject || "(no subject)",
-                    snippet: body.slice(0, 80) + (body.length > 80 ? "…" : ""),
+                    snippet: richContent.replace(/<[^>]+>/g, "").slice(0, 80) + (richContent.length > 80 ? "…" : ""),
+                    bodyPlaintext: body || richContent,
+                    bodyHtml: richContent,
                     encryptedBody: envelope,
                     version: updated.version,
                     date: "Just now",
@@ -5380,7 +5482,9 @@ const App: Component = () => {
         recipient: to || "(no recipient)",
         recipients: to ? to.split(",").map((s) => s.trim()).filter(Boolean) : [],
         subject: subject || "Untitled Draft",
-        snippet: body.slice(0, 80) + (body.length > 80 ? "…" : ""),
+        snippet: richContent.replace(/<[^>]+>/g, "").slice(0, 80) + (richContent.length > 80 ? "…" : ""),
+        bodyPlaintext: body || richContent,
+        bodyHtml: richContent,
         encryptedBody: envelope,
         date: "Just now",
         read: true,
@@ -6434,7 +6538,7 @@ const App: Component = () => {
                 setCurrentPage(1);
                 if (f === "unified_inbox") {
                   loadUnifiedInboxMessages();
-                } else {
+                } else if (!isOffline()) {
                   const box = selectedMailbox();
                   if (box) loadMailboxData(box.id);
                 }
@@ -6547,7 +6651,7 @@ const App: Component = () => {
               setCurrentPage(1);
               if (f === "unified_inbox") {
                 loadUnifiedInboxMessages();
-              } else {
+              } else if (!isOffline()) {
                 const box = selectedMailbox();
                 if (box) loadMailboxData(box.id);
               }
@@ -6759,9 +6863,13 @@ const App: Component = () => {
       <ComposeDrawer
         isOpen={composeOpen()}
         onClose={() => {
-          setComposeOpen(false);
-          clearComposeForm();
-          setComposeStatus(null);
+          if (composeBody().trim() || composeBodyHtml().trim() || composeSubject().trim()) {
+            handleSaveDraft();
+          } else {
+            setComposeOpen(false);
+            clearComposeForm();
+            setComposeStatus(null);
+          }
         }}
         to={composeTo()}
         onToChange={setComposeTo}
