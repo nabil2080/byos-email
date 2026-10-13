@@ -198,19 +198,19 @@ Simulating assistive speech synthesis, operating system accessibility APIs (IAcc
 
 ## 10. Inline Images in External Messages (`byos-storage://` Protocol)
 
-### Deliberate architectural choice: Option A (Internal Sovereign Only)
+### Current behavior & deliberate architectural limitation
 When an author embeds an inline image within the rich text composer, the image binary is uploaded to sovereign customer object storage and referenced via internal sovereign URI scheme `byos-storage://<storage_object_id>`.
 
-For external recipients (Gmail, Outlook, Apple Mail, etc.), third-party mail user agents cannot resolve the proprietary `byos-storage://` protocol and will display a broken image link if rendered verbatim.
+For external recipients (Gmail, Outlook, Apple Mail, etc.), third-party mail user agents cannot resolve the proprietary `byos-storage://` protocol. The composer sanitizer on send allows `byos-storage://` URLs, and the MIME builder passes them through on the wire. External recipients currently see a broken image reference (`<img src="byos-storage://...">`). The transformation to clean text placeholders (`[inline image: filename.png]`) or MIME `cid:` attachments is planned for the SMTP egress pipeline but is not yet implemented.
 
-We deliberately choose **Option A (Internal Sovereign Only)** rather than Option B (publishing images to a public web server/bucket):
-- **Option B Tradeoff (Rejected):** Publishing inline images to a public cloud URL would cause user image attachments to egress the zero-knowledge sovereign encryption boundary, exposing user image data to public scraping and unauthenticated third-party CDN access.
-- **Option A Rationale (Selected):** BYOS is a privacy-first, zero-knowledge sovereign communication platform. Image binaries must remain strictly encrypted within the organization's customer-controlled storage backend. For external recipients, future iterations will convert `byos-storage://` references into standard MIME `multipart/related` inline attachments (`cid:`) or clean text placeholders (`[inline image: filename.png]`) during SMTP egress, ensuring data is never exfiltrated to public unauthenticated web hosting.
+We deliberately reject publishing images to a public web server/bucket:
+- **Public URL Tradeoff (Rejected):** Publishing inline images to a public cloud URL would cause user image attachments to egress the zero-knowledge sovereign encryption boundary, exposing user image data to public scraping and unauthenticated third-party CDN access.
+- **Sovereign Rationale (Selected):** BYOS is a privacy-first, zero-knowledge sovereign communication platform. Image binaries must remain strictly encrypted within the organization's customer-controlled storage backend. In a planned follow-up task, the SMTP egress pipeline (`services/mail-router` or `services/outbound-worker`) will replace `byos-storage://` references with a clean fallback placeholder (`[inline image: filename.png]`) or MIME `cid:` attachments before transmission on the wire.
 
 ### Manual pre-release verification steps
 1. In Webmail, compose an email containing an inline embedded image and send to an external recipient address (e.g. `external@test.local` or a test Gmail/Outlook inbox).
 2. Fetch the delivered MIME from the external receiving mail server (Mailpit or external webmail).
-3. Confirm the outbound MIME payload contains the sanitized image reference.
+3. Confirm the outbound MIME payload contains `<img src="byos-storage://...">` and that external mail clients render a broken image icon rather than leaking image plaintext to public URLs.
 4. Verify that no unauthenticated public URL leaks occurred on public storage endpoints.
 
 
