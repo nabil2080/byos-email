@@ -26,6 +26,7 @@ import { runFocusedInboxTests } from "./focused_inbox.test.js";
 import { runOfflineTests } from "./offline.test.js";
 import { runComposerSanitizerTests } from "./composer_sanitizer.test.js";
 import { runContactsTests } from "./contacts.test.js";
+import { runSidebarBorderlessTests } from "./sidebar_borderless.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -197,6 +198,12 @@ async function main() {
   console.log(`CONTACTS MANAGEMENT TESTS: ${contactsRes.passed} passed, ${contactsRes.failed} failed\n`);
   totalPassed += contactsRes.passed;
   totalFailed += contactsRes.failed;
+
+  console.log("Running Sidebar Borderless Tests...");
+  const sidebarBorderlessRes = await runSidebarBorderlessTests();
+  console.log(`SIDEBAR BORDERLESS TESTS: ${sidebarBorderlessRes.passed} passed, ${sidebarBorderlessRes.failed} failed\n`);
+  totalPassed += sidebarBorderlessRes.passed;
+  totalFailed += sidebarBorderlessRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

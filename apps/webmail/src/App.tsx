@@ -6506,7 +6506,7 @@ const App: Component = () => {
           </div>
         </Show>
 
-        <div class="flex flex-1 overflow-hidden gap-3">
+        <main class="flex flex-1 overflow-hidden gap-3 bg-[#F0EEE9] dark:bg-[#18191D]" data-testid="main-content">
           {/* ── Left Navigation Sidebar (Unified with Canvas #F0EEE9) ── */}
           <Sidebar
             class="hidden md:flex"
@@ -6738,7 +6738,7 @@ const App: Component = () => {
               />
             </div>
           </Show>
-        </div>
+        </main>
 
       {/* ── Docking Compose Drawer ── */}
       <ComposeDrawer

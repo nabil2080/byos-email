@@ -224,7 +224,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
   };
 
   return (
-    <aside class={`w-full md:w-64 flex-shrink-0 bg-[#F0EEE9] dark:bg-[#18191D] border-r border-[#E2DFD8]/80 dark:border-[#2E3138] flex flex-col justify-between select-none h-full relative ${props.class || ""}`}>
+    <aside class={`w-full md:w-64 flex-shrink-0 bg-[#F0EEE9] dark:bg-[#18191D] flex flex-col justify-between select-none h-full relative ${props.class || ""}`}>
       {/* FIXED TOP: Brand Header & Mode Toggle, Account Switcher, Compose, Quick Actions */}
       <div class="p-2 pb-2 relative z-50 overflow-visible space-y-2 flex-shrink-0">
         {/* Top-Left App Brand Header */}
