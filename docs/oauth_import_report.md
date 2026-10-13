@@ -217,24 +217,31 @@ Warning banner text: Import is in progress. Please keep this tab open until the 
 ✓ Step 5 verified: Summary card indicates Import Completed. Screenshot: F:\Codex\byos-email\tests\browser\artifacts\import_step5_summary.png
 
 --- [STEP 6] Return to Inbox and verify imported emails ---
-Found 4 messages in inbox: [
+Found 4 messages in Primary tab: [
   {
-    "id": "46b596c3-bab5-44e2-92ec-6ce87fadf447",
+    "id": "e104552d-bb4e-49f4-8072-0f0fbbdb974c",
     "text": "Eevents@community-forum.netSecurity Key Summit InvitationJan 20, 01"
   },
   {
-    "id": "47736021-03d9-4ea8-b077-62a2a498d453",
+    "id": "b0b25cc4-1994-4ce2-9669-6e996d62db74",
     "text": "Ddr.smith@medical-clinic.orgAppointment Confirmation - Jan 22Jan 18, 01"
   },
   {
-    "id": "e1ff32d4-60a5-482c-bf52-e9ffd8a577e9",
+    "id": "bdd05b09-8b84-4034-afd0-703d18bbdd37",
     "text": "Nnotifications@github.comPull Request #412 merged into mainJan 16, 01"
   },
   {
-    "id": "dfb811f6-1fc3-4fa7-958c-456ae4de5a81",
+    "id": "f2f1ba19-7c71-403f-89e5-a24500672fd6",
     "text": "Aalex@external-partner.comQuarterly Strategy Plan 2026Jan 15, 01"
   }
 ]
+Found 1 message(s) in Notifications tab: [
+  {
+    "id": "9b1f6908-fbbb-4819-9ae8-91e1a0ed1d1c",
+    "text": "Bbilling@cloudprovider.comInvoice INV-2026-003 AvailableJan 17, 01"
+  }
+]
+✓ Asserted across tabs: Primary has 4, Notifications has 1, total = 5.
 ✓ Found imported email from 'alex@external-partner.com' in message list.
 ✓ Reading pane opened and decrypted imported email. Screenshot: F:\Codex\byos-email\tests\browser\artifacts\import_inbox_messages.png
 

@@ -310,20 +310,56 @@ async function runImportVerification() {
     await page.click('[data-testid="return-inbox-btn"]');
     await new Promise((r) => setTimeout(r, 1500));
 
-    // Wait for message list
+    // Wait for message list on Primary tab
     await page.waitForSelector('[data-testid="message-row"]', { timeout: 10000 });
 
-    const inboxList = await page.evaluate(() => {
+    const primaryList = await page.evaluate(() => {
       const rows = Array.from(document.querySelectorAll('[data-testid="message-row"]'));
       return rows.map((r) => ({
         id: r.getAttribute("data-message-id"),
         text: r.textContent || "",
       }));
     });
-    console.log(`Found ${inboxList.length} messages in inbox:`, JSON.stringify(inboxList, null, 2));
-    const foundImported = inboxList.some((t) => t.text.includes("alex@external-partner.com") || t.text.includes("Quarterly Strategy Plan 2026"));
+    console.log(`Found ${primaryList.length} messages in Primary tab:`, JSON.stringify(primaryList, null, 2));
+    if (primaryList.length !== 4) {
+      throw new Error(`Expected exactly 4 messages in Primary tab, got ${primaryList.length}`);
+    }
+
+    // Switch to Notifications tab to assert the 5th message (billing@cloudprovider.com)
+    await page.click('[data-testid="category-tab-notifications"]');
+    await new Promise((r) => setTimeout(r, 600));
+    await page.waitForSelector('[data-testid="message-row"]', { timeout: 5000 });
+
+    const notificationsList = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll('[data-testid="message-row"]'));
+      return rows.map((r) => ({
+        id: r.getAttribute("data-message-id"),
+        text: r.textContent || "",
+      }));
+    });
+    console.log(`Found ${notificationsList.length} message(s) in Notifications tab:`, JSON.stringify(notificationsList, null, 2));
+    if (notificationsList.length !== 1) {
+      throw new Error(`Expected exactly 1 message in Notifications tab, got ${notificationsList.length}`);
+    }
+    const hasBilling = notificationsList.some((t) => t.text.includes("billing@cloudprovider.com") || t.text.includes("Invoice"));
+    if (!hasBilling) {
+      throw new Error("Missing billing notification message in Notifications tab");
+    }
+
+    const totalAcrossTabs = primaryList.length + notificationsList.length;
+    console.log(`✓ Asserted across tabs: Primary has ${primaryList.length}, Notifications has ${notificationsList.length}, total = ${totalAcrossTabs}.`);
+    if (totalAcrossTabs !== 5) {
+      throw new Error(`Expected total across tabs to be 5, got ${totalAcrossTabs}`);
+    }
+
+    // Switch back to Primary tab to click the strategy plan email for reading pane check
+    await page.click('[data-testid="category-tab-primary"]');
+    await new Promise((r) => setTimeout(r, 600));
+    await page.waitForSelector('[data-testid="message-row"]', { timeout: 5000 });
+
+    const foundImported = primaryList.some((t) => t.text.includes("alex@external-partner.com") || t.text.includes("Quarterly Strategy Plan 2026"));
     if (!foundImported) {
-      throw new Error("Imported message from 'alex@external-partner.com' not found in inbox list");
+      throw new Error("Imported message from 'alex@external-partner.com' not found in Primary inbox list");
     }
     console.log("✓ Found imported email from 'alex@external-partner.com' in message list.");
 

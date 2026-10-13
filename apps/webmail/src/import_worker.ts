@@ -323,10 +323,14 @@ export async function runImport(options: ImportOptions): Promise<ImportSummary> 
   let gmailBaseUrl = "https://gmail.googleapis.com/gmail/v1";
   let outlookBaseUrl = "https://graph.microsoft.com/v1.0";
 
+  const isDevOrTest =
+    Boolean((import.meta as any).env?.DEV) ||
+    (typeof process !== "undefined" && process.env?.NODE_ENV !== "production");
+
   const mockUrl =
     options.mockProviderBaseUrl ||
-    (typeof window !== "undefined" && (window as any).__BYOS_MOCK_IMPORT_URL__) ||
-    (typeof localStorage !== "undefined" ? localStorage.getItem("byos_mock_import_url") : null);
+    (isDevOrTest && typeof window !== "undefined" && (window as any).__BYOS_MOCK_IMPORT_URL__) ||
+    (isDevOrTest && typeof localStorage !== "undefined" ? localStorage.getItem("byos_mock_import_url") : null);
 
   if (mockUrl) {
     gmailBaseUrl = `${mockUrl}/gmail/v1`;
