@@ -133,6 +133,11 @@ import { StorageStatusPill } from "./components/StorageStatusPill";
 import { Sidebar } from "./components/Sidebar";
 import { MessageList } from "./components/MessageList";
 import { ReadingPane } from "./components/ReadingPane";
+import {
+  savePersistentSession,
+  restorePersistentSession,
+  clearPersistentSession,
+} from "./persistent_session";
 import { SelectionFilter, SortOrder } from "./components/InboxToolbar";
 import { AddMailboxModal } from "./components/AddMailboxModal";
 import { CreateLabelModal } from "./components/modals/CreateLabelModal";
@@ -1312,6 +1317,7 @@ const App: Component = () => {
   const [loginError, setLoginError] = createSignal<string | null>(null);
   const [useRecoveryPhrase, setUseRecoveryPhrase] = createSignal(false);
   const [recoveryPhraseInput, setRecoveryPhraseInput] = createSignal("");
+  const [rememberDevice, setRememberDevice] = createSignal(false);
 
   // 2FA Challenge at Login
   const [twoFactorChallenge, setTwoFactorChallenge] = createSignal<{
@@ -1708,6 +1714,25 @@ const App: Component = () => {
 
           if (unwrapped.signingSeed && unwrapped.xwingSeed) {
             publishKeysOnce(targetBox.id, unwrapped.signingSeed, unwrapped.xwingSeed);
+          }
+
+          if (rememberDevice() && (user.id || (user as any).user_id)) {
+            savePersistentSession({
+              userId: user.id || (user as any).user_id || "",
+              mailboxId: targetBox.id,
+              mailboxSkHex: currentSkHex,
+              searchKeyHex: currentSKey,
+              signingSeedHex: unwrapped.signingSeed
+                ? Array.from(unwrapped.signingSeed, (b) => b.toString(16).padStart(2, "0")).join("")
+                : undefined,
+              xwingSeedHex: unwrapped.xwingSeed
+                ? Array.from(unwrapped.xwingSeed, (b) => b.toString(16).padStart(2, "0")).join("")
+                : undefined,
+              sessionToken: sessionToken || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") || "" : ""),
+              email: user.email || "",
+            }).catch((err) => console.warn("[persistent-session] Failed saving device keys:", err));
+          } else if (user.id || (user as any).user_id) {
+            clearPersistentSession(user.id || (user as any).user_id).catch(() => {});
           }
         } catch (err) {
           console.warn("Auto-unwrap of mailbox key failed:", err);
@@ -2344,14 +2369,31 @@ const App: Component = () => {
 
     setIsLoading(true);
     try {
+      const activeToken = typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null;
+      if (!activeToken) {
+        try {
+          const restored = await restorePersistentSession();
+          if (restored) {
+            console.info("[persistent-session] Restored 30-day session for user:", restored.userId);
+          }
+        } catch (err) {
+          console.warn("[persistent-session] Could not restore persistent session:", err);
+        }
+      }
+
       const user = await fetchCurrentUser();
       if (user) {
         await bootstrapSession(user);
+      } else {
+        await clearPersistentSession();
       }
     } catch (err) {
       console.warn("Failed loading user/mailbox data on mount:", err);
       const msg = err instanceof Error ? err.message : String(err);
       const isAuth = msg.includes("401") || msg.includes("Unauthorized") || msg.includes("unauthorized");
+      if (isAuth) {
+        await clearPersistentSession();
+      }
       setGlobalError(`Failed to load user session: ${msg}`, isAuth);
     } finally {
       setIsLoading(false);
@@ -2975,6 +3017,7 @@ const App: Component = () => {
       setConnectedAccounts([]);
       // Rule 3: comprehensive sweep of all byos_* sensitive keys.
       clearAllSensitiveSessionKeys();
+      clearPersistentSession().catch(() => {});
       clearOfflineCache().catch(() => {});
       clearServiceWorkerCaches().catch(() => {});
       setIsImpersonating(false);
@@ -3007,6 +3050,7 @@ const App: Component = () => {
     // 1. Rule 3: Remove ALL target account keys from sessionStorage using the
     // comprehensive helper (handles all byos_* prefixes for this account ID).
     clearAccountKeys(targetId);
+    clearPersistentSession(targetId).catch(() => {});
 
     // 2. Best-effort server session revocation for target account
     if (targetAccount?.sessionToken) {
@@ -5799,6 +5843,29 @@ const App: Component = () => {
                                   Forgot password?
                                 </button>
                               </div>
+                            </div>
+                            <div class="space-y-1.5 pt-1">
+                              <label class="flex items-center gap-2 text-xs text-[#2B2C2D] dark:text-[#F3F4F6] cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  data-testid="remember-device-checkbox"
+                                  checked={rememberDevice()}
+                                  onChange={(e) => setRememberDevice(e.currentTarget.checked)}
+                                  disabled={loginBusy()}
+                                  class="rounded border-[#E2DFD8] dark:border-[#2E3138] text-[#A27561] focus:ring-[#A27561]/20 cursor-pointer"
+                                />
+                                <span>Remember this device for 30 days</span>
+                              </label>
+                              <p
+                                data-testid="remember-device-disclosure"
+                                class={`text-[10px] leading-relaxed transition-opacity ${
+                                  rememberDevice()
+                                    ? "text-[#6E7075] dark:text-[#878A8E] opacity-100"
+                                    : "text-[#878A8E]/60 dark:text-[#6E7075]/60 opacity-75"
+                                }`}
+                              >
+                                Keys will be stored encrypted on this device. Anyone with access to this device and browser profile can read your email without entering a password.
+                              </p>
                             </div>
                             <button
                               type="submit"
