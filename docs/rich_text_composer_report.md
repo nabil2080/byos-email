@@ -13,7 +13,8 @@ A comprehensive Polish (V1) update for the sovereign webmail Rich Text Composer 
 | `apps/webmail/src/run_test.node.js` | Configured Node DOMPurify test environment and added composer sanitizer test runner |
 | `apps/webmail/src/composer_sanitizer.ts` | Implemented send/receive HTML sanitizers, remote image blocker hook, and Word paste cleaner |
 | `apps/webmail/src/composer_sanitizer.test.ts` | Added unit tests verifying script stripping, table preservation, and Word paste cleanup |
-| `apps/webmail/src/utils/code_highlight.ts` | Created lazy-loader utility to load highlight.js dynamically only when code blocks exist |
+| `apps/webmail/src/utils/code_highlight.ts` | Created lazy-loader utility to load custom highlight bundle dynamically only when code blocks exist |
+| `apps/webmail/src/utils/hljs_custom.ts` | Registered curated core programming languages to reduce highlight chunk from 315 kB to 23.5 kB gzipped |
 | `apps/webmail/src/components/RichTextEditor.tsx` | Implemented table controls, code blocks, link modal, inline image embedding, paste interceptor, and preview |
 | `apps/webmail/src/components/ComposeDrawer.tsx` | Wired inline image upload callback prop to RichTextEditor component |
 | `apps/webmail/src/components/ReadingPane.tsx` | Integrated receive HTML sanitization, remote image loading privacy banner, and code syntax highlighting |
@@ -23,6 +24,7 @@ A comprehensive Polish (V1) update for the sovereign webmail Rich Text Composer 
 | `smoke.ps1` | Added test_composer.mjs to the automated smoke test suite |
 | `tests/browser/test_composer.mjs` | Added end-to-end browser integration test covering tables, code blocks, images, paste, preview, Mailpit MIME delivery, and offline drafts |
 | `docs/rich_text_composer_report.md` | Verification report documenting feature implementation, files edited, test evidence, and browser test results |
+| `docs/smoke_gaps.md` | Documented deliberate Option A sovereign choice for inline images in external messages |
 
 ## Raw evidence
 
@@ -56,15 +58,16 @@ Output of `npm.cmd run build` in `apps/webmail`:
 ```
 vite v6.4.3 building for production...
 transforming...
-✓ 317 modules transformed.
+✓ 136 modules transformed.
 rendering chunks...
 computing gzip size...
-dist/index.html                                  1.08 kB │ gzip:   0.52 kB
+dist/index.html                                  1.15 kB │ gzip:   0.54 kB
 dist/assets/byos_crypto_core_bg-SpaQFAPe.wasm  600.28 kB │ gzip: 266.63 kB
-dist/assets/index-iyDwjaJ_.css                  95.93 kB │ gzip:  15.99 kB
-dist/assets/index-BVPy7RBN.js                  747.38 kB │ gzip: 181.60 kB
-dist/assets/highlight-z9ObJ5q7.js              979.03 kB │ gzip: 315.20 kB
-✓ built in 3.53s
+dist/assets/highlight-BfC0goYb.css               1.31 kB │ gzip:   0.61 kB
+dist/assets/index-BwrcXeuB.css                  94.62 kB │ gzip:  15.44 kB
+dist/assets/highlight-CFsI1eMM.js               73.46 kB │ gzip:  23.49 kB
+dist/assets/index-SIULq5vq.js                  748.14 kB │ gzip: 181.91 kB
+✓ built in 3.31s
 ```
 
 Inspection of `dist/index.html`:

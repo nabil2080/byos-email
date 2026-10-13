@@ -22,8 +22,10 @@ export default defineConfig({
     },
     rollupOptions: {
       output: {
-        manualChunks: {
-          highlight: ["highlight.js"],
+        manualChunks: (id) => {
+          if (id.includes("highlight.js") || id.includes("hljs_custom")) {
+            return "highlight";
+          }
         },
       },
     },

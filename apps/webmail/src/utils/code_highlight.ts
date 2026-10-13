@@ -6,10 +6,8 @@ export async function highlightCodeBlocks(container: HTMLElement | null | undefi
   if (!container) return;
   const codeBlocks = container.querySelectorAll("pre code");
   if (codeBlocks.length === 0) return;
-
   try {
-    const hljsModule = await import("highlight.js");
-    const hljs = hljsModule.default || hljsModule;
+    const { default: hljs } = await import("./hljs_custom");
     codeBlocks.forEach((block) => {
       if (block.getAttribute("data-highlighted")) return;
       hljs.highlightElement(block as HTMLElement);
