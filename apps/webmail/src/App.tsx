@@ -128,6 +128,8 @@ import { AutoReplyTab } from "./routes/settings/AutoReplyTab";
 import { SecurityTab } from "./routes/settings/SecurityTab";
 import { FiltersTab } from "./routes/settings/FiltersTab";
 import { MaskedEmailTab } from "./routes/settings/MaskedEmailTab";
+import { ImportTab } from "./routes/settings/ImportTab";
+import { OAuthCallback } from "./routes/import/OAuthCallback";
 import { ComposeDrawer } from "./components/ComposeDrawer";
 import { StorageStatusPill } from "./components/StorageStatusPill";
 import { Sidebar } from "./components/Sidebar";
@@ -2282,6 +2284,11 @@ const App: Component = () => {
       setIsSetupAccount(true);
       setIsLoading(false);
       return;
+    }
+
+    if (window.location.pathname === "/import") {
+      setActiveSettingsTab("import");
+      setSettingsOpen(true);
     }
 
     if (urlParams.get("impersonate") === "1") {
@@ -5804,6 +5811,10 @@ const App: Component = () => {
     return counts;
   };
 
+  if (typeof window !== "undefined" && window.location.pathname === "/import/callback") {
+    return <OAuthCallback />;
+  }
+
   return (
     <>
       <GlobalErrorBanner />
@@ -6498,6 +6509,19 @@ const App: Component = () => {
                 }
               }} />
             </Show>
+            <Show when={activeSettingsTab() === "import" && selectedMailbox()}>
+              <ImportTab
+                mailbox={selectedMailbox()!}
+                mailboxKey={mailboxKey()}
+                onFinish={() => {
+                  const box = selectedMailbox();
+                  if (box) {
+                    loadMailboxData(box.id);
+                  }
+                  setSettingsOpen(false);
+                }}
+              />
+            </Show>
           </SettingsLayout>
         }
       >
@@ -6603,7 +6627,8 @@ const App: Component = () => {
                 setMobileSidebarOpen(false);
               }}
               onOpenImport={() => {
-                setImportEmailsModalOpen(true);
+                setActiveSettingsTab("import");
+                setSettingsOpen(true);
                 setMobileSidebarOpen(false);
               }}
               onOpenSettings={() => {
@@ -6709,7 +6734,10 @@ const App: Component = () => {
             labelCounts={labelCounts()}
             onCompose={startNewCompose}
             onOpenContacts={openContacts}
-            onOpenImport={() => setImportEmailsModalOpen(true)}
+            onOpenImport={() => {
+              setActiveSettingsTab("import");
+              setSettingsOpen(true);
+            }}
             onOpenSettings={() => {
               setActiveSettingsTab("account");
               setSettingsOpen(true);

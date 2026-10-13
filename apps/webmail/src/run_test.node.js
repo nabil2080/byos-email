@@ -29,6 +29,7 @@ import { runContactsTests } from "./contacts.test.js";
 import { runSidebarBorderlessTests } from "./sidebar_borderless.test.js";
 import { runProfilePhotoTests } from "./profile_photo.test.js";
 import { runPersistentSessionTests } from "./persistent_session.test.js";
+import { runOAuthImportTests } from "./oauth_import.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -217,6 +218,12 @@ async function main() {
   const persistentSessionRes = await runPersistentSessionTests();
   totalPassed += persistentSessionRes.passed;
   totalFailed += persistentSessionRes.failed;
+
+  console.log("Running OAuth Import Tests...");
+  const oauthImportRes = await runOAuthImportTests();
+  console.log(`OAUTH IMPORT TESTS: ${oauthImportRes.passed} passed, ${oauthImportRes.failed} failed\n`);
+  totalPassed += oauthImportRes.passed;
+  totalFailed += oauthImportRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

@@ -612,7 +612,7 @@ func loadEncryptedMessageBody(ctx context.Context, conn *pgx.Conn, mailboxID, me
 		return nil, &messageBodyLoadError{status: http.StatusNotFound, msg: "message not found", err: err}
 	}
 
-	if wrappedKeyAlg != "HPKE-XWing-AES256GCM-v1" && wrappedKeyAlg != "HPKE-X25519-AES256GCM-v1" && wrappedKeyAlg != "byos-draft-v1" {
+	if wrappedKeyAlg != "HPKE-XWing-AES256GCM-v1" && wrappedKeyAlg != "HPKE-X25519-AES256GCM-v1" && wrappedKeyAlg != "byos-draft-v1" && wrappedKeyAlg != "byos-imported-v1" {
 		return nil, &messageBodyLoadError{status: http.StatusInternalServerError, msg: `{"error":"unknown_wrapped_key_algorithm"}`, err: fmt.Errorf("unknown wrapped_key_algorithm: %s", wrappedKeyAlg)}
 	}
 

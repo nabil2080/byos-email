@@ -174,6 +174,11 @@ WITH del_ct AS (
 )
 INSERT INTO cleanup_counts (table_name, deleted_count) VALUES ('contacts', (SELECT count(*) FROM del_ct));
 
+WITH del_ij AS (
+    DELETE FROM import_jobs RETURNING 1
+)
+INSERT INTO cleanup_counts (table_name, deleted_count) VALUES ('import_jobs', (SELECT count(*) FROM del_ij));
+
 WITH del_ms2 AS (
     DELETE FROM mailbox_settings WHERE mailbox_id IN (SELECT id FROM target_test_mailboxes) RETURNING 1
 )

@@ -417,6 +417,20 @@ func main() {
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/attachments", withSecurityHeaders(withCORS(messageAttachmentsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/attachments/{attachment_id}/chunks/{index}", withSecurityHeaders(withCORS(messageAttachmentChunkHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/import", withSecurityHeaders(withCORS(messageImportHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/import-message", withSecurityHeaders(withCORS(importMessageHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/storage/store", withSecurityHeaders(withCORS(mailboxStorageStoreHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/storage/retrieve", withSecurityHeaders(withCORS(mailboxStorageRetrieveHandler)))
+	http.HandleFunc("/v1/import/begin", withSecurityHeaders(withCORS(importBeginHandler)))
+	http.HandleFunc("/v1/import/oauth/callback", withSecurityHeaders(importOAuthCallbackHandler))
+	http.HandleFunc("/v1/import/refresh", withSecurityHeaders(withCORS(importTokenRefreshHandler)))
+	http.HandleFunc("/v1/import/jobs", withSecurityHeaders(withCORS(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			importJobCreateHandler(w, r)
+		} else {
+			importJobListHandler(w, r)
+		}
+	})))
+	http.HandleFunc("/v1/import/complete", withSecurityHeaders(withCORS(importJobCompleteHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/threads", withSecurityHeaders(withCORS(threadsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/threads/{thread_id}", withSecurityHeaders(withCORS(threadDetailHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/aliases", withSecurityHeaders(withCORS(organizationAliasesHandler)))

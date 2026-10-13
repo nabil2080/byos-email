@@ -324,6 +324,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 props.onOpenImport?.();
                 props.onCloseMobile?.();
               }}
+              data-testid="sidebar-import-btn"
               class="flex items-center justify-center gap-1 py-2 px-1.5 min-h-[36px] rounded-lg text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] transition-colors cursor-pointer"
               title="Import Emails (.eml / .mbox)"
             >
