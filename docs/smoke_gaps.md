@@ -211,7 +211,35 @@ We deliberately reject publishing images to a public web server/bucket:
 1. In Webmail, compose an email containing an inline embedded image and send to an external recipient address (e.g. `external@test.local` or a test Gmail/Outlook inbox).
 2. Fetch the delivered MIME from the external receiving mail server (Mailpit or external webmail).
 3. Confirm the outbound MIME payload contains `<img src="byos-storage://...">` and that external mail clients render a broken image icon rather than leaking image plaintext to public URLs.
-4. Verify that no unauthenticated public URL leaks occurred on public storage endpoints.
 
+---
 
+## 11. Persistent Session Token Storage in `localStorage` & XSS Tradeoffs
 
+### Architecture & Implementation
+When a user opts into "Remember this device" on login, the client persists:
+1. A non-extractable AES-256-GCM CryptoKey in IndexedDB (`byos_device_key_<userId>`).
+2. An encrypted snapshot of the unsealed session keys (`byos_sealed_keys_<userId>`) in IndexedDB, sealed under the device key, with an explicit `expiresAt` timestamp set to 30 days.
+3. A persistent session token record in `localStorage` (`byos_persistent_token_<userId>`) stored as JSON:
+   ```json
+   {
+     "token": "<session_token>",
+     "expiresAt": 1747800000000
+   }
+   ```
+
+### Security Analysis & Risk Tradeoff
+- **The Risk (XSS Vector):** Data in `localStorage` is accessible to JavaScript executing in the origin context, whereas `HttpOnly` session cookies cannot be read via `document.cookie` or script APIs. If an XSS vulnerability were introduced into the webmail frontend, malicious script could read `byos_persistent_token_<userId>` and obtain the bearer session token.
+- **Zero-Knowledge Decoupling Mitigations:**
+  - **Non-extractable Device Key:** The AES-256-GCM device key stored in IndexedDB is marked `extractable: false`. Even with arbitrary JavaScript execution, the raw master key material cannot be exported via `crypto.subtle.exportKey()`.
+  - **Crypto Boundary Isolation:** An attacker possessing solely the server session token can interact with server APIs (e.g. list encrypted message envelopes), but **cannot decrypt email message contents, attachments, or cryptographic payloads**. The zero-knowledge architecture ensures decryption requires unsealing the private mailbox keys, which requires either physical device access to decrypt the IndexedDB sealed payload or knowledge of the user's password.
+  - **Content Security Policy (CSP) & Subresource Integrity (SRI):** Strict CSP headers (`script-src 'self' 'wasm-unsafe-eval'`) prevent inline script injection and external third-party script execution, minimizing the surface for XSS exploits.
+- **Architectural Rationale for localStorage:**
+  - The BYOS API client operates as a decoupled single-page application communicating via REST and SSE using `Authorization: Bearer <token>` headers.
+  - Moving to `HttpOnly`, `SameSite=Strict` cookie-based authentication requires architectural changes across `services/api`, reverse proxy routing, multi-domain CORS policies, and SSE connection handshakes, which is outside the scope of frontend persistent session ergonomics.
+  - Enforcing dual expiration (`localStorage` JSON expiration and IndexedDB `SealedKeysData.expiresAt` expiration) guarantees that stale tokens are purged after 30 days regardless of storage layer.
+
+### Manual pre-release verification steps
+1. Inspect `localStorage.getItem("byos_persistent_token_" + userId)` in DevTools and confirm the value is a JSON object containing both `token` and `expiresAt` (30 days in the future).
+2. Inspect IndexedDB `byos-persistent-store > byos_sealed_keys_<userId>` and confirm `expiresAt` matches the `localStorage` value.
+3. Test expiry purge by modifying `expiresAt` in `localStorage` to a timestamp in the past (`Date.now() - 1000`) and reloading the page; confirm user is redirected to password login and all IndexedDB / `localStorage` persistent records are deleted.

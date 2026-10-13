@@ -67,7 +67,7 @@ async function runPersistentSessionVerification() {
     if (!uiCheck.hasCheckbox) {
       throw new Error("Missing remember-device-checkbox on login form");
     }
-    const expectedDisclosure = "Keys will be stored encrypted on this device. Anyone with access to this device and browser profile can read your email without entering a password.";
+    const expectedDisclosure = "Storing your key on this device means anyone with access to this browser profile can read your mail without your password. Do not enable on a shared computer.";
     if (!uiCheck.disclosureText?.includes(expectedDisclosure)) {
       throw new Error(`Disclosure text mismatch. Got: "${uiCheck.disclosureText}"`);
     }
@@ -321,6 +321,116 @@ async function runPersistentSessionVerification() {
     const shot4 = path.join(artifactsDir, "persistent_session_logged_out.png");
     await page.screenshot({ path: shot4 });
     console.log("✓ STEP 4 PASSED: Explicit logout completely purged device key, sealed keys, and tokens. Screenshot:", shot4);
+
+    // Step 5: Test Expired Token Shows Password Prompt & Purges IDB (test_expired_token_shows_password_prompt)
+    console.log("\n--- [STEP 5] Test Expired Token Shows Password Prompt (test_expired_token_shows_password_prompt) ---");
+    // Log in again with Remember Device checked
+    await page.type('input[autocomplete="username"]', Alice.email);
+    await page.type('input[autocomplete="current-password"]', Alice.password);
+    await page.click('[data-testid="remember-device-checkbox"]');
+    await new Promise((r) => setTimeout(r, 300));
+    await page.click('button[type="submit"]');
+
+    await page.waitForSelector('[data-testid="account-chip-selector"]', { timeout: 15000 });
+    await new Promise((r) => setTimeout(r, 1000));
+
+    // Clear volatile sessionStorage and set expired timestamp in localStorage
+    await page.evaluate((uid) => {
+      sessionStorage.clear();
+      const raw = localStorage.getItem(`byos_persistent_token_${uid}`);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          parsed.expiresAt = Date.now() - 10000; // 10s in the past
+          localStorage.setItem(`byos_persistent_token_${uid}`, JSON.stringify(parsed));
+        } catch {
+          localStorage.setItem(`byos_persistent_token_${uid}`, JSON.stringify({ token: raw, expiresAt: Date.now() - 10000 }));
+        }
+      }
+    }, Alice.userId);
+
+    // Reload page
+    await page.reload({ waitUntil: 'networkidle2' });
+    await new Promise((r) => setTimeout(r, 1200));
+
+    // Assert login form is displayed (not the inbox)
+    const expiredCheck = await page.evaluate(async (uid) => {
+      const hasLoginInput = !!document.querySelector('input[autocomplete="username"]');
+      const hasChip = !!document.querySelector('[data-testid="account-chip-selector"]');
+      const persistentUserId = localStorage.getItem("byos_persistent_user_id");
+      const persistentToken = localStorage.getItem(`byos_persistent_token_${uid}`);
+
+      const openReq = indexedDB.open("byos_device_keystore", 1);
+      const idbData = await new Promise((resolve) => {
+        openReq.onsuccess = () => {
+          try {
+            const db = openReq.result;
+            if (!db.objectStoreNames.contains("device_keys")) {
+              resolve({ hasDeviceKey: false, hasSealedKeys: false });
+              return;
+            }
+            const tx = db.transaction("device_keys", "readonly");
+            const store = tx.objectStore("device_keys");
+            const keyReq = store.get(`byos_device_key_${uid}`);
+            const sealedReq = store.get(`byos_sealed_keys_${uid}`);
+            let keyDone = false;
+            let sealedDone = false;
+            let keyRes = null;
+            let sealedRes = null;
+            keyReq.onsuccess = () => {
+              keyRes = keyReq.result;
+              keyDone = true;
+              if (sealedDone) finish();
+            };
+            keyReq.onerror = () => {
+              keyDone = true;
+              if (sealedDone) finish();
+            };
+            sealedReq.onsuccess = () => {
+              sealedRes = sealedReq.result;
+              sealedDone = true;
+              if (keyDone) finish();
+            };
+            sealedReq.onerror = () => {
+              sealedDone = true;
+              if (keyDone) finish();
+            };
+            function finish() {
+              resolve({
+                hasDeviceKey: Boolean(keyRes),
+                hasSealedKeys: Boolean(sealedRes),
+              });
+            }
+          } catch (e) {
+            resolve({ error: String(e) });
+          }
+        };
+        openReq.onerror = () => resolve({ error: "Failed to open IDB" });
+      });
+
+      return {
+        hasLoginInput,
+        hasChip,
+        persistentUserId,
+        persistentToken,
+        idbData,
+      };
+    }, Alice.userId);
+
+    console.log("Expired token check result:", JSON.stringify(expiredCheck, null, 2));
+    if (!expiredCheck.hasLoginInput || expiredCheck.hasChip) {
+      throw new Error("Expired token failed to show password prompt login form!");
+    }
+    if (expiredCheck.persistentUserId !== null || expiredCheck.persistentToken !== null) {
+      throw new Error("Expired token failed to purge localStorage entries!");
+    }
+    if (expiredCheck.idbData?.hasDeviceKey || expiredCheck.idbData?.hasSealedKeys) {
+      throw new Error("Expired token failed to purge IndexedDB device keys!");
+    }
+
+    const shot5 = path.join(artifactsDir, "persistent_session_expired_prompt.png");
+    await page.screenshot({ path: shot5 });
+    console.log("✓ STEP 5 PASSED: Expired token displays password prompt & purges IndexedDB device keys. Screenshot:", shot5);
 
     console.log("\n================================================================================");
     console.log("       ALL PERSISTENT SESSION BROWSER VERIFICATION CHECKS PASSED!               ");

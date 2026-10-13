@@ -2377,23 +2377,31 @@ const App: Component = () => {
 
     setIsLoading(true);
     try {
-      const activeToken = typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null;
-      if (!activeToken) {
+      let hasSession = !!(typeof window !== "undefined" && sessionStorage.getItem("byos_active_session_token"));
+      if (!hasSession) {
         try {
           const restored = await restorePersistentSession();
           if (restored) {
             console.info("[persistent-session] Restored 30-day session for user:", restored.userId);
+            hasSession = true;
           }
         } catch (err) {
           console.warn("[persistent-session] Could not restore persistent session:", err);
         }
       }
 
-      const user = await fetchCurrentUser();
-      if (user) {
-        await bootstrapSession(user);
+      if (hasSession) {
+        const user = await fetchCurrentUser();
+        if (user) {
+          await bootstrapSession(user);
+        } else {
+          await clearPersistentSession();
+        }
       } else {
         await clearPersistentSession();
+        try {
+          await logout();
+        } catch {}
       }
     } catch (err) {
       console.warn("Failed loading user/mailbox data on mount:", err);
@@ -5872,7 +5880,7 @@ const App: Component = () => {
                                     : "text-[#878A8E]/60 dark:text-[#6E7075]/60 opacity-75"
                                 }`}
                               >
-                                Keys will be stored encrypted on this device. Anyone with access to this device and browser profile can read your email without entering a password.
+                                Storing your key on this device means anyone with access to this browser profile can read your mail without your password. Do not enable on a shared computer.
                               </p>
                             </div>
                             <button

@@ -9,10 +9,18 @@ export const DEVICE_KEYSTORE_DB = "byos_device_keystore";
 export const DEVICE_KEYSTORE_VERSION = 1;
 export const DEVICE_STORE_NAME = "device_keys";
 
+export const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
 export interface SealedKeysData {
   ivHex: string;
   ciphertextHex: string;
   createdAt: number;
+  expiresAt: number;
+}
+
+export interface PersistentTokenStorage {
+  token: string;
+  expiresAt: number;
 }
 
 export interface UnsealedSessionPayload {
@@ -24,7 +32,6 @@ export interface UnsealedSessionPayload {
   xwingSeedHex?: string;
   sessionToken: string;
   email: string;
-  connectedAccounts?: any[];
 }
 
 export function getIDB(): IDBFactory | undefined {
@@ -107,7 +114,8 @@ export async function generateDeviceKey(): Promise<CryptoKey> {
  */
 export async function sealKeysWithDeviceKey(
   deviceKey: CryptoKey,
-  payload: UnsealedSessionPayload
+  payload: UnsealedSessionPayload,
+  expiresAt?: number
 ): Promise<SealedKeysData> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const plaintext = new TextEncoder().encode(JSON.stringify(payload));
@@ -123,10 +131,12 @@ export async function sealKeysWithDeviceKey(
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 
+  const now = Date.now();
   return {
     ivHex,
     ciphertextHex,
-    createdAt: Date.now(),
+    createdAt: now,
+    expiresAt: expiresAt ?? (now + THIRTY_DAYS_MS),
   };
 }
 
@@ -150,44 +160,83 @@ export async function unsealKeysWithDeviceKey(
 
 /**
  * Save persistent session for a user:
- * 1. Generate non-extractable device key
- * 2. Seal keys with device key
- * 3. Store device key under `byos_device_key_<userId>` in IndexedDB
- * 4. Store sealed keys under `byos_sealed_keys_<userId>` in IndexedDB
- * 5. Store 30-day token under `byos_persistent_token_<userId>` in localStorage
- * 6. Store `byos_persistent_user_id` in localStorage
+ * 1. Compute 30-day expiration from current timestamp (resets on each password login)
+ * 2. Generate non-extractable device key
+ * 3. Seal keys with device key including expiresAt
+ * 4. Store device key under `byos_device_key_<userId>` in IndexedDB
+ * 5. Store sealed keys under `byos_sealed_keys_<userId>` in IndexedDB
+ * 6. Store JSON with token and expiresAt under `byos_persistent_token_<userId>` in localStorage
+ * 7. Store `byos_persistent_user_id` in localStorage
  */
 export async function savePersistentSession(payload: UnsealedSessionPayload): Promise<void> {
+  const expiresAt = Date.now() + THIRTY_DAYS_MS;
   const deviceKey = await generateDeviceKey();
-  const sealed = await sealKeysWithDeviceKey(deviceKey, payload);
+  const sealed = await sealKeysWithDeviceKey(deviceKey, payload, expiresAt);
 
   await storeInIDB(`byos_device_key_${payload.userId}`, deviceKey);
   await storeInIDB(`byos_sealed_keys_${payload.userId}`, sealed);
 
   if (typeof localStorage !== "undefined") {
-    localStorage.setItem(`byos_persistent_token_${payload.userId}`, payload.sessionToken);
+    const tokenRecord: PersistentTokenStorage = {
+      token: payload.sessionToken,
+      expiresAt,
+    };
+    localStorage.setItem(`byos_persistent_token_${payload.userId}`, JSON.stringify(tokenRecord));
     localStorage.setItem("byos_persistent_user_id", payload.userId);
   }
 }
 
 /**
  * Restore persistent session:
- * Reads localStorage persistent user ID and token, unseals keys via IndexedDB device key.
+ * Reads localStorage persistent user ID and token, enforces 30-day expiry,
+ * unseals keys via IndexedDB device key.
  */
 export async function restorePersistentSession(): Promise<UnsealedSessionPayload | null> {
   if (typeof localStorage === "undefined") return null;
   const userId = localStorage.getItem("byos_persistent_user_id");
   if (!userId) return null;
 
-  const token = localStorage.getItem(`byos_persistent_token_${userId}`);
-  if (!token) return null;
+  const rawToken = localStorage.getItem(`byos_persistent_token_${userId}`);
+  if (!rawToken) return null;
+
+  let token = rawToken;
+  let tokenExpiresAt: number | undefined;
 
   try {
-    const deviceKey = await getFromIDB<CryptoKey>(`byos_device_key_${userId}`);
-    if (!deviceKey) return null;
+    const parsed = JSON.parse(rawToken);
+    if (parsed && typeof parsed === "object") {
+      token = parsed.token || "";
+      tokenExpiresAt = parsed.expiresAt;
+    }
+  } catch {
+    // Legacy bare token fallback
+  }
 
+  if (!token) {
+    await clearPersistentSession(userId);
+    return null;
+  }
+
+  // Enforce localStorage token expiry
+  if (tokenExpiresAt !== undefined && tokenExpiresAt < Date.now()) {
+    console.info("[persistent-session] Token has expired. Purging persistent session.");
+    await clearPersistentSession(userId);
+    return null;
+  }
+
+  try {
     const sealed = await getFromIDB<SealedKeysData>(`byos_sealed_keys_${userId}`);
     if (!sealed) return null;
+
+    // Enforce sealed keys expiry
+    if (sealed.expiresAt && sealed.expiresAt < Date.now()) {
+      console.info("[persistent-session] Sealed keys have expired. Purging persistent session.");
+      await clearPersistentSession(userId);
+      return null;
+    }
+
+    const deviceKey = await getFromIDB<CryptoKey>(`byos_device_key_${userId}`);
+    if (!deviceKey) return null;
 
     const unsealed = await unsealKeysWithDeviceKey(deviceKey, sealed);
     // Ensure token matches

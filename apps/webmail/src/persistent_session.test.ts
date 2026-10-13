@@ -232,7 +232,11 @@ export async function runPersistentSessionTests() {
 
       // Verify localStorage entries
       assert(mockStorage.getItem("byos_persistent_user_id") === payload.userId, "byos_persistent_user_id must be stored");
-      assert(mockStorage.getItem(`byos_persistent_token_${payload.userId}`) === payload.sessionToken, "Persistent token must be stored");
+      const rawStored = mockStorage.getItem(`byos_persistent_token_${payload.userId}`);
+      assert(rawStored !== null, "Persistent token must be stored");
+      const parsedStored = JSON.parse(rawStored!);
+      assert(parsedStored.token === payload.sessionToken, "Persistent token must match payload");
+      assert(typeof parsedStored.expiresAt === "number" && parsedStored.expiresAt > Date.now(), "Token must have future expiresAt");
 
       // Restore
       const restored = await restorePersistentSession();
@@ -251,6 +255,46 @@ export async function runPersistentSessionTests() {
 
       const restoredAfterClear = await restorePersistentSession();
       assert(restoredAfterClear === null, "Restoration after clear must return null");
+    } finally {
+      (globalThis as any).indexedDB = prevIDB;
+      (globalThis as any).localStorage = prevStorage;
+    }
+  });
+
+  // Test 5: Expired persistent token rejects restoration and cleans up storage
+  await test("5. Expired token rejects restoration and purges storage", async () => {
+    const prevIDB = (globalThis as any).indexedDB;
+    const prevStorage = (globalThis as any).localStorage;
+
+    const mockIDB = new MockIDBFactory();
+    const mockStorage = new MockLocalStorage();
+    (globalThis as any).indexedDB = mockIDB;
+    (globalThis as any).localStorage = mockStorage;
+
+    try {
+      const payload: UnsealedSessionPayload = {
+        userId: "user-expired-11",
+        mailboxId: "mailbox-expired-11",
+        mailboxSkHex: "deadbeefcafebabe1122334455667788",
+        sessionToken: "expired-test-token",
+        email: "expired@byos.local",
+      };
+
+      await savePersistentSession(payload);
+
+      // Overwrite token with expired timestamp
+      mockStorage.setItem(
+        `byos_persistent_token_${payload.userId}`,
+        JSON.stringify({ token: payload.sessionToken, expiresAt: Date.now() - 5000 })
+      );
+
+      // Attempt restore
+      const restored = await restorePersistentSession();
+      assert(restored === null, "Expired persistent token must reject restoration");
+
+      // Verify automatic cleanup
+      assert(mockStorage.getItem("byos_persistent_user_id") === null, "User ID must be purged on expired restore");
+      assert(mockStorage.getItem(`byos_persistent_token_${payload.userId}`) === null, "Token must be purged on expired restore");
     } finally {
       (globalThis as any).indexedDB = prevIDB;
       (globalThis as any).localStorage = prevStorage;
