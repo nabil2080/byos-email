@@ -181,7 +181,7 @@ Output:
 UI Elements Check: {
   "hasCheckbox": true,
   "checkboxChecked": false,
-  "disclosureText": "Keys will be stored encrypted on this device. Anyone with access to this device and browser profile can read your email without entering a password."
+  "disclosureText": "Storing your key on this device means anyone with access to this browser profile can read your mail without your password. Do not enable on a shared computer."
 }
 ✓ STEP 1 PASSED: Checkbox and required disclosure warning verified. Screenshot: F:\Codex\byos-email\tests\browser\artifacts\persistent_session_login_disclosure.png
 
