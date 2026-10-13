@@ -1,7 +1,8 @@
 import { Component, createSignal, createEffect, For, Show } from "solid-js";
-import { AttachmentItem, ConnectedAccount, MaskedAliasItem } from "../api";
+import { AttachmentItem, ConnectedAccount, MaskedAliasItem, ContactItem } from "../api";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { RichTextEditor } from "./RichTextEditor";
+import { RecipientInput } from "./RecipientInput";
 import { isOffline } from "../offline";
 
 export type DrawerMode = "minimized" | "docked" | "maximized";
@@ -38,11 +39,18 @@ interface ComposeDrawerProps {
   fromAlias?: string | null;
   onSelectFromAlias?: (aliasAddress: string | null) => void;
   onUploadInlineImage?: (file: File) => Promise<{ storageRef: string; alt?: string; localUrl?: string }>;
+  contacts?: ContactItem[];
+  mailboxId?: string;
+  cc?: string;
+  onCcChange?: (val: string) => void;
+  bcc?: string;
+  onBccChange?: (val: string) => void;
 }
 
 export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
   const [drawerMode, setDrawerMode] = createSignal<DrawerMode>("docked");
   const [showScheduleInput, setShowScheduleInput] = createSignal(false);
+  const [showCcBcc, setShowCcBcc] = createSignal(false);
 
   // Input refs
   let toInputRef: HTMLInputElement | undefined;
@@ -271,22 +279,53 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                 </span>
               </div>
 
-              {/* To Row */}
-              <div class="flex items-center gap-2 text-xs">
-                <label for="composeToInput" class="w-16 text-[#55575B] dark:text-[#A1A1AA] font-medium">
-                  To:
-                </label>
-                <input
-                  id="composeToInput"
-                  ref={toInputRef}
-                  type="email"
-                  placeholder="recipient@example.com"
-                  value={props.to}
-                  onInput={(e) => props.onToChange(e.currentTarget.value)}
-                  required
-                  class="flex-1 bg-transparent text-xs text-[#1A1B1E] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] focus:outline-none py-1"
-                />
+              {/* To Row with Autocomplete & Chips */}
+              <div class="flex items-start justify-between gap-2">
+                <div class="flex-1 min-w-0">
+                  <RecipientInput
+                    id="composeToInput"
+                    label="To"
+                    placeholder="recipient@example.com"
+                    value={props.to}
+                    onChange={props.onToChange}
+                    contacts={props.contacts}
+                    mailboxId={props.mailboxId}
+                    required
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCcBcc(!showCcBcc())}
+                  class="text-[11px] font-medium text-[#A27561] hover:underline pt-1.5 select-none cursor-pointer flex-shrink-0"
+                  data-testid="toggle-cc-bcc-btn"
+                >
+                  {showCcBcc() ? "Hide Cc/Bcc" : "Cc/Bcc"}
+                </button>
               </div>
+
+              {/* Optional Cc / Bcc Rows */}
+              <Show when={showCcBcc()}>
+                <div class="border-t border-[#E2DFD8]/60 dark:border-[#2E3138] pt-2">
+                  <RecipientInput
+                    label="Cc"
+                    placeholder="cc@example.com"
+                    value={props.cc || ""}
+                    onChange={props.onCcChange || (() => {})}
+                    contacts={props.contacts}
+                    mailboxId={props.mailboxId}
+                  />
+                </div>
+                <div class="border-t border-[#E2DFD8]/60 dark:border-[#2E3138] pt-2">
+                  <RecipientInput
+                    label="Bcc"
+                    placeholder="bcc@example.com"
+                    value={props.bcc || ""}
+                    onChange={props.onBccChange || (() => {})}
+                    contacts={props.contacts}
+                    mailboxId={props.mailboxId}
+                  />
+                </div>
+              </Show>
 
               {/* Subject Row */}
               <div class="flex items-center gap-2 text-xs border-t border-[#E2DFD8]/60 dark:border-[#2E3138] pt-2">

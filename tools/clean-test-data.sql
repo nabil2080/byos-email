@@ -170,7 +170,7 @@ WITH del_al AS (
 INSERT INTO cleanup_counts (table_name, deleted_count) VALUES ('aliases', (SELECT count(*) FROM del_al));
 
 WITH del_ct AS (
-    DELETE FROM contacts WHERE mailbox_id IN (SELECT id FROM target_test_mailboxes) RETURNING 1
+    DELETE FROM contacts RETURNING 1
 )
 INSERT INTO cleanup_counts (table_name, deleted_count) VALUES ('contacts', (SELECT count(*) FROM del_ct));
 

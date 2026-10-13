@@ -135,6 +135,7 @@ import { CreateLabelModal } from "./components/modals/CreateLabelModal";
 import { ChangeParentModal } from "./components/modals/ChangeParentModal";
 import { CreateFolderModal } from "./components/modals/CreateFolderModal";
 import { ImportEmailsModal } from "./components/modals/ImportEmailsModal";
+import { ContactsModal } from "./components/modals/ContactsModal";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { ShortcutHandler, isTextInputElement, matchShortcut } from "./keyboard_shortcuts";
 import { formatMessageDate } from "./utils/dateTime";
@@ -1317,20 +1318,9 @@ const App: Component = () => {
   const [forgotRecoveryPhrase, setForgotRecoveryPhrase] = createSignal("");
   const [showPhraseInput, setShowPhraseInput] = createSignal(false);
 
-  // Contacts manager state. Plaintext contacts live only in memory while the
-  // mailbox is unlocked; the server stores opaque envelopes exclusively.
-  interface DisplayContact extends ContactPlaintext {
-    id: string;
-    version: number;
-  }
+  // Contacts manager state.
   const [contactsOpen, setContactsOpen] = createSignal(false);
-  const [contacts, setContacts] = createSignal<DisplayContact[]>([]);
-  const [contactsLoading, setContactsLoading] = createSignal(false);
-  const [contactsError, setContactsError] = createSignal<string | null>(null);
-  const [editingContact, setEditingContact] = createSignal<DisplayContact | null>(null);
-  const [contactName, setContactName] = createSignal("");
-  const [contactEmail, setContactEmail] = createSignal("");
-  const [contactNotes, setContactNotes] = createSignal("");
+  const [contacts, setContacts] = createSignal<ContactItem[]>([]);
 
   // Multi-Mailbox state & toast notifications
   const [connectedAccounts, setConnectedAccounts] = createSignal<ConnectedAccount[]>([]);
@@ -3016,6 +3006,7 @@ const App: Component = () => {
       ]);
 
       cacheInboxMessages(mailboxId, messageList).catch(() => {});
+      fetchContacts(mailboxId).then(setContacts).catch(() => {});
 
       function deduplicateByName<T extends { id: string; name: string }>(items: T[]): T[] {
         const seen = new Set<string>();
@@ -3612,11 +3603,6 @@ const App: Component = () => {
     setEditingDraft(null);
     setContacts([]);
     setContactsOpen(false);
-    setEditingContact(null);
-    setContactName("");
-    setContactEmail("");
-    setContactNotes("");
-    setContactsError(null);
     setCustomFolders([]);
     setLabels([]);
     setActiveCustomFolder(null);
@@ -4498,113 +4484,8 @@ const App: Component = () => {
     setComposeAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
-  async function openContacts() {
-    const box = selectedMailbox();
-    const key = mailboxKey();
-    if (!box || !key || unlockedBoxId() !== box.id) {
-      setContactsError("Please sign in with your password to view contacts.");
-      setContacts([]);
-      setContactsOpen(true);
-      return;
-    }
+  function openContacts() {
     setContactsOpen(true);
-    setContactsLoading(true);
-    setContactsError(null);
-    try {
-      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-      const items = await fetchContacts(box.id);
-      const shown: DisplayContact[] = [];
-      for (const c of items) {
-        try {
-          const pt = decryptContactEnvelope(wasm, key, box.id, c.encrypted_envelope);
-          shown.push({ id: c.id, version: c.version, ...pt });
-        } catch {
-          // Skip unreadable or corrupted envelopes to keep contact list clean
-        }
-      }
-      setContacts(shown);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "unknown error";
-      setContactsError(`Failed to load contacts: ${msg}`);
-      setGlobalError(`Failed to load contacts: ${msg}`);
-      setContacts([]);
-    } finally {
-      setContactsLoading(false);
-    }
-  }
-
-  function startEditContact(c: DisplayContact | null) {
-    setEditingContact(c);
-    setContactName(c?.name ?? "");
-    setContactEmail(c?.email ?? "");
-    setContactNotes(c?.notes ?? "");
-    setContactsError(null);
-  }
-
-  async function handleSaveContact() {
-    const box = selectedMailbox();
-    const key = mailboxKey();
-    if (!box || !key || unlockedBoxId() !== box.id) {
-      setContactsError("Please sign in with your password to view contacts.");
-      return;
-    }
-    const name = contactName().trim();
-    const email = contactEmail().trim();
-    const notes = contactNotes().trim();
-    if (!name) {
-      setContactsError("Contact name is required.");
-      return;
-    }
-    if (!email.includes("@")) {
-      setContactsError("Contact email must contain @.");
-      return;
-    }
-    setContactsError(null);
-    try {
-      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-      const envelope = encryptContactEnvelope(wasm, key, box.id, { name, email, notes });
-      const editing = editingContact();
-      if (editing) {
-        try {
-          const updated = await updateContact(box.id, editing.id, {
-            encrypted_envelope: envelope,
-            version: editing.version,
-          });
-          setContacts((prev) =>
-            prev.map((c) =>
-              c.id === editing.id ? { ...c, name, email, notes, version: updated.version } : c
-            )
-          );
-        } catch (err: any) {
-          if (err?.status === 409) {
-            setContactsError("This contact changed elsewhere. Reload to get the latest version.");
-            await openContacts();
-          } else {
-            throw err;
-          }
-          return;
-        }
-      } else {
-        const created = await createContact(box.id, { encrypted_envelope: envelope });
-        setContacts((prev) => [{ id: created.id, version: created.version, name, email, notes }, ...prev]);
-      }
-      startEditContact(null);
-    } catch (err) {
-      setContactsError(`Failed to save contact: ${err instanceof Error ? err.message : "unknown error"}`);
-    }
-  }
-
-  async function handleDeleteContact(id: string) {
-    const box = selectedMailbox();
-    if (!box) return;
-    if (!window.confirm("Delete this contact? This cannot be undone.")) return;
-    try {
-      await deleteContact(box.id, id);
-      setContacts((prev) => prev.filter((c) => c.id !== id));
-      if (editingContact()?.id === id) startEditContact(null);
-    } catch (err) {
-      setContactsError(`Failed to delete contact: ${err instanceof Error ? err.message : "unknown error"}`);
-    }
   }
 
   function clearComposeForm() {
@@ -6891,6 +6772,8 @@ const App: Component = () => {
         status={composeStatus()}
         errorMessage={errorMessage()}
         isEditingDraft={Boolean(editingDraft())}
+        contacts={contacts()}
+        mailboxId={selectedMailbox()?.id}
         connectedAccounts={connectedAccounts()}
         selectedAccountId={composeAccountId() || selectedMailbox()?.id}
         aliases={maskedAliases().filter((a) => a.is_enabled)}
@@ -6965,108 +6848,17 @@ const App: Component = () => {
       </Show>
 
       {/* ── Contacts Modal ── */}
-      <Show when={contactsOpen()}>
-        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-          <div class="w-full max-w-xl rounded-2xl bg-white dark:bg-[#1E2025] shadow-2xl overflow-hidden flex flex-col border border-[#E2DFD8] dark:border-[#2E3138] max-h-[85vh] font-sans">
-            <div class="px-6 py-4 bg-white dark:bg-[#1E2025] border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between">
-              <h3 class="font-medium text-base text-[#2B2C2D] dark:text-[#F3F4F6]">
-                Contacts
-              </h3>
-              <button
-                onClick={() => { setContactsOpen(false); startEditContact(null); setContactsError(null); }}
-                class="text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] p-1 rounded-lg hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] transition cursor-pointer"
-                aria-label="Close contacts"
-              >
-                <svg class="w-4 h-4 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-            </div>
-            <div class="p-6 space-y-4 overflow-y-auto">
-              <Show when={contactsError()}>
-                <div class="rounded-xl bg-red-50 dark:bg-rose-950/40 p-3 text-xs text-red-700 dark:text-rose-400 border border-red-200 dark:border-rose-900/50">{contactsError()}</div>
-              </Show>
-              <Show when={contactsLoading()}>
-                <div class="text-xs text-[#6F7173] dark:text-[#878A8E] animate-pulse font-mono">Loading contacts…</div>
-              </Show>
-              <Show when={!contactsLoading() && contacts().length === 0 && !contactsError()}>
-                <div class="text-sm text-[#6F7173] dark:text-[#878A8E]">No contacts yet.</div>
-              </Show>
-              <For each={contacts()}>
-                {(c) => (
-                  <div class="flex items-center justify-between p-3.5 bg-[#F8F7F4] dark:bg-[#26282E] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138]">
-                    <div class="min-w-0">
-                      <div class="text-sm font-medium text-[#2B2C2D] dark:text-[#F3F4F6] truncate">{c.name}</div>
-                      <div class="text-xs text-[#6F7173] dark:text-[#A1A1AA] truncate">{c.email}</div>
-                      <Show when={c.notes}>
-                        <div class="text-xs text-[#878A8E] dark:text-[#71717A] truncate mt-0.5">{c.notes}</div>
-                      </Show>
-                    </div>
-                    <div class="flex gap-2 flex-shrink-0 ml-3">
-                      <button
-                        onClick={() => startEditContact(c)}
-                        class="rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] px-2.5 py-1 text-xs text-[#3C3D3E] dark:text-[#E2DFD8] hover:bg-white dark:hover:bg-[#1E2025] transition cursor-pointer"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleDeleteContact(c.id)}
-                        class="rounded-lg border border-rose-200 dark:border-rose-900/50 px-2.5 py-1 text-xs text-rose-700 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </For>
-              <div class="pt-4 border-t border-[#E2DFD8] dark:border-[#2E3138]">
-                <h4 class="text-xs font-semibold text-[#6F7173] dark:text-[#878A8E] uppercase tracking-wider mb-2 font-mono">
-                  {editingContact() ? "Edit contact" : "New contact"}
-                </h4>
-                <div class="space-y-3">
-                  <input
-                    type="text"
-                    placeholder="Name"
-                    value={contactName()}
-                    onInput={(e) => setContactName(e.currentTarget.value)}
-                    class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] bg-[#FAF9F6] dark:bg-[#18191D] focus:outline-none focus:ring-1 focus:ring-[#A27561] focus:border-[#A27561] transition"
-                  />
-                  <input
-                    type="email"
-                    placeholder="email@example.com"
-                    value={contactEmail()}
-                    onInput={(e) => setContactEmail(e.currentTarget.value)}
-                    class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] bg-[#FAF9F6] dark:bg-[#18191D] focus:outline-none focus:ring-1 focus:ring-[#A27561] focus:border-[#A27561] transition"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Notes (optional)"
-                    value={contactNotes()}
-                    onInput={(e) => setContactNotes(e.currentTarget.value)}
-                    class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] bg-[#FAF9F6] dark:bg-[#18191D] focus:outline-none focus:ring-1 focus:ring-[#A27561] focus:border-[#A27561] transition"
-                  />
-                  <div class="flex gap-2 pt-1">
-                    <button
-                      onClick={handleSaveContact}
-                      class="bg-[#A27561] hover:bg-[#8F6452] text-white font-medium px-4 py-2 rounded-xl transition-all text-xs cursor-pointer shadow-xs"
-                    >
-                      {editingContact() ? "Update contact" : "Add contact"}
-                    </button>
-                    <Show when={editingContact()}>
-                      <button
-                        onClick={() => startEditContact(null)}
-                        class="rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-4 py-2 text-xs font-medium text-[#3C3D3E] dark:text-[#E2DFD8] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] transition cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                    </Show>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+      <Show when={contactsOpen() && selectedMailbox()}>
+        <ContactsModal
+          mailboxId={selectedMailbox()!.id}
+          onClose={() => setContactsOpen(false)}
+          onContactsUpdated={setContacts}
+          onComposeTo={(email) => {
+            clearComposeForm();
+            setComposeTo(email);
+            setComposeOpen(true);
+          }}
+        />
       </Show>
 
       {/* ── Add Mailbox Modal ── */}

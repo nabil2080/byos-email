@@ -423,6 +423,8 @@ func main() {
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/drafts", withSecurityHeaders(withCORS(draftsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/drafts/{draft_id}", withSecurityHeaders(withCORS(draftsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/contacts", withSecurityHeaders(withCORS(contactsHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/contacts/import", withSecurityHeaders(withCORS(contactsImportHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/contacts/export", withSecurityHeaders(withCORS(contactsExportHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/contacts/{contact_id}", withSecurityHeaders(withCORS(contactsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/folders", withSecurityHeaders(withCORS(mailboxFoldersHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/folders/{folder_id}", withSecurityHeaders(withCORS(mailboxFoldersHandler)))

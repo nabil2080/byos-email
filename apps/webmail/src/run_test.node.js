@@ -25,6 +25,7 @@ import { runMaskedEmailTests } from "./masked_email.test.js";
 import { runFocusedInboxTests } from "./focused_inbox.test.js";
 import { runOfflineTests } from "./offline.test.js";
 import { runComposerSanitizerTests } from "./composer_sanitizer.test.js";
+import { runContactsTests } from "./contacts.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -190,6 +191,12 @@ async function main() {
   console.log(`COMPOSER SANITIZER TESTS: ${sanitizerRes.passed} passed, ${sanitizerRes.failed} failed\n`);
   totalPassed += sanitizerRes.passed;
   totalFailed += sanitizerRes.failed;
+
+  console.log("Running Contacts Management Tests...");
+  const contactsRes = await runContactsTests();
+  console.log(`CONTACTS MANAGEMENT TESTS: ${contactsRes.passed} passed, ${contactsRes.failed} failed\n`);
+  totalPassed += contactsRes.passed;
+  totalFailed += contactsRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

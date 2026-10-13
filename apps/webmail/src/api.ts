@@ -422,20 +422,39 @@ export async function updateDraft(
 export interface ContactItem {
   id: string;
   mailbox_id: string;
-  encrypted_envelope: string;
+  name?: string;
+  email?: string;
+  notes?: string;
+  group_name?: string;
+  encrypted_envelope?: string;
   version: number;
   created_at: string;
   updated_at: string;
 }
 
-export async function fetchContacts(mailboxId: string): Promise<ContactItem[]> {
-  const res = await apiRequest<{ contacts: ContactItem[] }>(`/v1/mailboxes/${mailboxId}/contacts`);
+export async function fetchContacts(
+  mailboxId: string,
+  search?: string,
+  group?: string
+): Promise<ContactItem[]> {
+  const params = new URLSearchParams();
+  if (search) params.append("search", search);
+  if (group) params.append("group", group);
+  const qs = params.toString();
+  const url = `/v1/mailboxes/${mailboxId}/contacts${qs ? `?${qs}` : ""}`;
+  const res = await apiRequest<{ contacts: ContactItem[] }>(url);
   return res.contacts || [];
 }
 
 export async function createContact(
   mailboxId: string,
-  payload: { encrypted_envelope: string }
+  payload: {
+    name?: string;
+    email?: string;
+    notes?: string;
+    group_name?: string;
+    encrypted_envelope?: string;
+  }
 ): Promise<ContactItem> {
   return apiRequest<ContactItem>(`/v1/mailboxes/${mailboxId}/contacts`, {
     method: "POST",
@@ -446,10 +465,17 @@ export async function createContact(
 export async function updateContact(
   mailboxId: string,
   contactId: string,
-  payload: { encrypted_envelope: string; version: number }
+  payload: {
+    name?: string;
+    email?: string;
+    notes?: string;
+    group_name?: string;
+    encrypted_envelope?: string;
+    version?: number;
+  }
 ): Promise<ContactItem> {
   return apiRequest<ContactItem>(`/v1/mailboxes/${mailboxId}/contacts/${contactId}`, {
-    method: "PUT",
+    method: "PATCH",
     body: JSON.stringify(payload),
   });
 }
@@ -458,6 +484,23 @@ export async function deleteContact(mailboxId: string, contactId: string): Promi
   return apiRequest<void>(`/v1/mailboxes/${mailboxId}/contacts/${contactId}`, {
     method: "DELETE",
   });
+}
+
+export async function importContacts(
+  mailboxId: string,
+  payload: { format: "csv" | "vcard"; data: string }
+): Promise<{ imported: number; skipped: number; errors: string[] }> {
+  return apiRequest<{ imported: number; skipped: number; errors: string[] }>(
+    `/v1/mailboxes/${mailboxId}/contacts/import`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function getExportContactsUrl(mailboxId: string, format: "csv" | "vcard"): string {
+  return `/v1/mailboxes/${mailboxId}/contacts/export?format=${format}`;
 }
 
 export interface MailboxFolder {
