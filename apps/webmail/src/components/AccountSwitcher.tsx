@@ -65,7 +65,8 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
     document.removeEventListener("mousedown", handleClickOutside);
   });
 
-  const totalOptionsCount = () => 1 + (props.connectedAccounts?.length || 0) + 1; // All Inboxes + accounts + Add Mailbox
+  const showAllInboxes = () => (props.connectedAccounts?.length || 0) > 1;
+  const totalOptionsCount = () => (showAllInboxes() ? 1 : 0) + (props.connectedAccounts?.length || 0) + 1; // (All Inboxes if 2+) + accounts + Add Mailbox
 
   function handleTriggerKeyDown(e: KeyboardEvent) {
     if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
@@ -93,23 +94,39 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       const idx = focusedIndex();
-      if (idx === 0) {
-        // All Inboxes
-        setIsOpen(false);
-        props.onSelectAllInboxes?.();
-        triggerRef?.focus();
-      } else if (idx <= (props.connectedAccounts?.length || 0)) {
-        // Account index
-        const acc = props.connectedAccounts[idx - 1];
-        if (acc) {
+      if (showAllInboxes()) {
+        if (idx === 0) {
+          // All Inboxes
           setIsOpen(false);
-          props.onSelectAccount(acc);
+          props.onSelectAllInboxes?.();
           triggerRef?.focus();
+        } else if (idx <= (props.connectedAccounts?.length || 0)) {
+          // Account index
+          const acc = props.connectedAccounts[idx - 1];
+          if (acc) {
+            setIsOpen(false);
+            props.onSelectAccount(acc);
+            triggerRef?.focus();
+          }
+        } else {
+          // Add Mailbox
+          setIsOpen(false);
+          props.onOpenAddMailbox();
         }
       } else {
-        // Add Mailbox
-        setIsOpen(false);
-        props.onOpenAddMailbox();
+        if (idx < (props.connectedAccounts?.length || 0)) {
+          // Account index
+          const acc = props.connectedAccounts[idx];
+          if (acc) {
+            setIsOpen(false);
+            props.onSelectAccount(acc);
+            triggerRef?.focus();
+          }
+        } else {
+          // Add Mailbox
+          setIsOpen(false);
+          props.onOpenAddMailbox();
+        }
       }
     }
   }
@@ -199,57 +216,59 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
           </div>
 
           <div class="max-h-64 overflow-y-auto space-y-0.5 custom-scrollbar">
-            {/* Option 1: All Inboxes */}
-            <div
-              role="option"
-              aria-selected={isAll()}
-              data-testid="account-dropdown-all"
-              onClick={() => {
-                setIsOpen(false);
-                props.onSelectAllInboxes?.();
-                triggerRef?.focus();
-              }}
-              class={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs transition cursor-pointer text-left group ${
-                isAll()
-                  ? "bg-[#F3ECE8] dark:bg-[#342722] text-[#A27561] dark:text-[#D5A795] font-semibold"
-                  : focusedIndex() === 0
-                  ? "bg-[#F0EEE9] dark:bg-[#2A2A2E] text-[#3C3D3E] dark:text-[#ECEBE8]"
-                  : "hover:bg-[#F0EEE9] dark:hover:bg-[#2A2A2E] text-[#3C3D3E] dark:text-[#ECEBE8]"
-              }`}
-            >
-              <div class="flex items-center gap-2 min-w-0 flex-1">
-                <span
-                  class="w-2.5 h-2.5 rounded-full flex-shrink-0 bg-[#A27561] ring-1 ring-black/10 dark:ring-white/20"
-                  data-testid="account-dot-all"
-                />
-                <div class="min-w-0 flex flex-col">
-                  <span class="truncate font-medium text-[#2B2C2D] dark:text-[#ECEBE8]">All Inboxes</span>
-                  <span class="text-[10px] text-[#878A8E]">Aggregated view across mailboxes</span>
+            {/* Option 1: All Inboxes (Only shown when 2+ accounts connected) */}
+            <Show when={showAllInboxes()}>
+              <div
+                role="option"
+                aria-selected={isAll()}
+                data-testid="account-dropdown-all"
+                onClick={() => {
+                  setIsOpen(false);
+                  props.onSelectAllInboxes?.();
+                  triggerRef?.focus();
+                }}
+                class={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs transition cursor-pointer text-left group ${
+                  isAll()
+                    ? "bg-[#F3ECE8] dark:bg-[#342722] text-[#A27561] dark:text-[#D5A795] font-semibold"
+                    : focusedIndex() === 0
+                    ? "bg-[#F0EEE9] dark:bg-[#2A2A2E] text-[#3C3D3E] dark:text-[#ECEBE8]"
+                    : "hover:bg-[#F0EEE9] dark:hover:bg-[#2A2A2E] text-[#3C3D3E] dark:text-[#ECEBE8]"
+                }`}
+              >
+                <div class="flex items-center gap-2 min-w-0 flex-1">
+                  <span
+                    class="w-2.5 h-2.5 rounded-full flex-shrink-0 bg-[#A27561] ring-1 ring-black/10 dark:ring-white/20"
+                    data-testid="account-dot-all"
+                  />
+                  <div class="min-w-0 flex flex-col">
+                    <span class="truncate font-medium text-[#2B2C2D] dark:text-[#ECEBE8]">All Inboxes</span>
+                    <span class="text-[10px] text-[#878A8E]">Aggregated view across mailboxes</span>
+                  </div>
+                </div>
+
+                <div class="flex items-center gap-1.5">
+                  <Show when={(props.totalUnifiedUnread || 0) > 0}>
+                    <span
+                      class="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-[#A27561] text-white font-medium"
+                      data-testid="account-unread-all"
+                    >
+                      {props.totalUnifiedUnread}
+                    </span>
+                  </Show>
+                  <Show when={isAll()}>
+                    <svg class="w-3.5 h-3.5 text-[#A27561] dark:text-[#D5A795] stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </Show>
                 </div>
               </div>
-
-              <div class="flex items-center gap-1.5">
-                <Show when={(props.totalUnifiedUnread || 0) > 0}>
-                  <span
-                    class="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-[#A27561] text-white font-medium"
-                    data-testid="account-unread-all"
-                  >
-                    {props.totalUnifiedUnread}
-                  </span>
-                </Show>
-                <Show when={isAll()}>
-                  <svg class="w-3.5 h-3.5 text-[#A27561] dark:text-[#D5A795] stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                </Show>
-              </div>
-            </div>
+            </Show>
 
             {/* Option 2..N: Individual Connected Accounts */}
             <For each={props.connectedAccounts}>
               {(acc, i) => {
                 const isActive = () => !isAll() && (acc.id === props.activeAccountId || acc.email === props.currentEmail);
-                const isFocused = () => focusedIndex() === i() + 1;
+                const isFocused = () => focusedIndex() === (showAllInboxes() ? i() + 1 : i());
                 const unread = () => (props.unreadCounts ? props.unreadCounts[acc.id] || 0 : 0);
 
                 return (

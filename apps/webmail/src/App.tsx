@@ -1902,7 +1902,9 @@ const App: Component = () => {
       return updated;
     });
     setAddMailboxModalOpen(false);
-    handleSwitchAccount(account);
+    if (!selectedMailbox()) {
+      handleSwitchAccount(account);
+    }
     showToast(`Connected ${account.email} successfully`);
   }
 
@@ -2983,10 +2985,14 @@ const App: Component = () => {
     // Rule 4: localStorage stores ONLY stripped metadata (no tokens, no keys).
     persistAccountListForDisplay(remaining);
 
-    // 4. If target was active account, smoothly switch to the first remaining account
-    if (targetId === currentBoxId && remaining.length > 0) {
+    // 4. Selection reset: if target was active account OR user was viewing All Inboxes with <= 1 account remaining,
+    // smoothly switch to the first remaining account
+    if ((targetId === currentBoxId || (currentFolder() === "unified_inbox" && remaining.length <= 1)) && remaining.length > 0) {
       await handleSwitchAccount(remaining[0]);
       showToast(`Signed out of ${targetEmail}. Switched to ${remaining[0].email}.`);
+    } else if (currentFolder() === "unified_inbox" && remaining.length > 1) {
+      loadUnifiedInboxMessages();
+      showToast(`Signed out of ${targetEmail}.`);
     } else {
       showToast(`Signed out of ${targetEmail}.`);
     }
@@ -3426,7 +3432,7 @@ const App: Component = () => {
         if (connectedAccounts().length > 1 && acc) {
           const remaining = removeStaleAccount(mailboxId, connectedAccounts());
           setConnectedAccounts(remaining);
-          if (selectedMailbox()?.id === mailboxId && remaining.length > 0) {
+          if ((selectedMailbox()?.id === mailboxId || (currentFolder() === "unified_inbox" && remaining.length <= 1)) && remaining.length > 0) {
             handleSwitchAccount(remaining[0]);
           }
         }

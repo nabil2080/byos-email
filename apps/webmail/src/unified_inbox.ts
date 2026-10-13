@@ -304,15 +304,18 @@ export function getAccountDropdownOptions(
   activeAccountId: string
 ): Array<{ id: string; email: string; label: string; isAll: boolean; isSelected: boolean; color: string }> {
   const isAll = activeAccountId === "__all__";
-  const options = [
-    {
+  const options: Array<{ id: string; email: string; label: string; isAll: boolean; isSelected: boolean; color: string }> = [];
+  if (connectedAccounts.length > 1) {
+    options.push({
       id: "__all__",
       email: "",
       label: "All Inboxes",
       isAll: true,
       isSelected: isAll,
       color: "#A27561",
-    },
+    });
+  }
+  options.push(
     ...connectedAccounts.map((acc) => ({
       id: acc.id,
       email: acc.email,
@@ -320,8 +323,8 @@ export function getAccountDropdownOptions(
       isAll: false,
       isSelected: !isAll && acc.id === activeAccountId,
       color: getAccountColor(acc.id),
-    })),
-  ];
+    }))
+  );
   return options;
 }
 

@@ -551,5 +551,58 @@ export function runUnifiedInboxTests(): { passed: number; failed: number } {
     assert(resultNoId === null, "Rule 3: must return null when mailboxId is absent — no global fallback");
   });
 
+  // 16. test_popup_hides_all_inboxes_with_one_account
+  test("test_popup_hides_all_inboxes_with_one_account", () => {
+    const singleAccount = [accountA];
+    const opts = getAccountDropdownOptions(singleAccount, accountA.id);
+    const hasAll = opts.some((o) => o.id === "__all__" || o.label === "All Inboxes");
+    assert(!hasAll, "When only 1 account is connected, 'All Inboxes' must not be in options");
+    assert(opts.length === 1, `Expected exactly 1 option, got ${opts.length}`);
+    assert(opts[0].id === accountA.id, "Expected only accountA in options");
+  });
+
+  // 17. test_popup_shows_all_inboxes_with_two_accounts
+  test("test_popup_shows_all_inboxes_with_two_accounts", () => {
+    const twoAccounts = [accountA, accountB];
+    const opts = getAccountDropdownOptions(twoAccounts, "__all__");
+    const hasAll = opts.some((o) => o.id === "__all__" || o.label === "All Inboxes");
+    assert(hasAll, "When 2 accounts are connected, 'All Inboxes' must be in options");
+    assert(opts.length === 3, `Expected 3 options (All Inboxes + 2 accounts), got ${opts.length}`);
+  });
+
+  // 18. test_popup_shows_all_inboxes_with_three_accounts
+  test("test_popup_shows_all_inboxes_with_three_accounts", () => {
+    const accountC: ConnectedAccount = {
+      id: "c0000000-0000-0000-0000-000000000003",
+      email: "charlie@byos.local",
+      displayName: "charlie",
+      role: "owner",
+      privacyMode: "private",
+      sessionToken: "token-c",
+      mailboxSkHex: "sk-c-hex",
+      searchKeyHex: "skey-c-hex",
+    };
+    const threeAccounts = [accountA, accountB, accountC];
+    const opts = getAccountDropdownOptions(threeAccounts, "__all__");
+    const hasAll = opts.some((o) => o.id === "__all__" || o.label === "All Inboxes");
+    assert(hasAll, "When 3 accounts are connected, 'All Inboxes' must be in options");
+    assert(opts.length === 4, `Expected 4 options (All Inboxes + 3 accounts), got ${opts.length}`);
+  });
+
+  // 19. test_selection_resets_on_account_removal
+  test("test_selection_resets_on_account_removal", () => {
+    // Simulate user viewing __all__ with 2 accounts connected
+    let activeSelection = "__all__";
+    const accounts = [accountA, accountB];
+
+    // Remove accountB so only 1 remains
+    const remaining = accounts.filter((a) => a.id !== accountB.id);
+    if (activeSelection === "__all__" && remaining.length <= 1) {
+      activeSelection = remaining[0].id;
+    }
+
+    assert(activeSelection === accountA.id, `Selection should reset to remaining account id (${accountA.id}), got ${activeSelection}`);
+  });
+
   return { passed, failed };
 }

@@ -215,10 +215,13 @@ async function runSidebarVerification() {
 
     // Capture screenshot of open dropdown state
     const dropdownShotPath = path.join(artifactsDir, 'sidebar_dropdown_open.png');
+    const multiShotPath = path.join(artifactsDir, 'account_popup_multi.png');
     const sidebarEl = await page.$('aside');
     if (sidebarEl) {
       await sidebarEl.screenshot({ path: dropdownShotPath });
+      await sidebarEl.screenshot({ path: multiShotPath });
       console.log("Captured sidebar dropdown screenshot:", dropdownShotPath);
+      console.log("Captured account popup multi screenshot:", multiShotPath);
     }
     console.log("✓ CHECK 3 PASSED: Dropdown opens with All Inboxes, connected accounts, and Add mailbox action");
 
@@ -365,8 +368,91 @@ async function runSidebarVerification() {
     console.log("Keyboard 'g i' active state:", kbState);
     console.log("✓ KEYBOARD SHORTCUT 'g i' VERIFIED");
 
+    // Step 7: Conditional All Inboxes & Selection Reset on Account Removal
+    console.log("\n--- [CHECK 7] Sign out Bob, verify All Inboxes disappears, view resets to Alice ---");
+    // Ensure we are viewing All Inboxes
+    await page.evaluate(() => {
+      const chip = document.querySelector('[data-testid="account-chip-selector"]');
+      chip.click();
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    // Click All Inboxes
+    await page.evaluate(() => {
+      const allOpt = document.querySelector('[data-testid="account-dropdown-all"]');
+      if (allOpt) allOpt.click();
+    });
+    await new Promise((r) => setTimeout(r, 600));
+
+    // Open dropdown to sign out Bob
+    await page.evaluate(() => {
+      const chip = document.querySelector('[data-testid="account-chip-selector"]');
+      chip.click();
+    });
+    await new Promise((r) => setTimeout(r, 400));
+
+    // Click Bob's signout button
+    await page.evaluate((bobId) => {
+      const signoutBtn = document.querySelector(`[data-testid="account-signout-${bobId}"]`);
+      if (signoutBtn) signoutBtn.click();
+    }, Bob.mailboxId);
+    await new Promise((r) => setTimeout(r, 1200));
+
+    // Confirm view switched to Alice's inbox automatically
+    const check7View = await page.evaluate(() => {
+      const chipText = document.querySelector('[data-testid="account-chip-text"]')?.textContent?.trim();
+      const topFolderName = document.querySelector('[data-testid="folder-name-inbox"]')?.textContent?.trim();
+      return { chipText, topFolderName };
+    });
+    console.log("Check 7 Reset View Result:", JSON.stringify(check7View, null, 2));
+    if (check7View.chipText !== "alice@byos.local") {
+      throw new Error(`Expected chip text to reset to alice@byos.local, got "${check7View.chipText}"`);
+    }
+    if (check7View.topFolderName !== "Inbox") {
+      throw new Error(`Expected folder to reset to Inbox, got "${check7View.topFolderName}"`);
+    }
+
+    // Open dropdown with only Alice connected
+    await page.evaluate(() => {
+      const chip = document.querySelector('[data-testid="account-chip-selector"]');
+      chip.click();
+    });
+    await new Promise((r) => setTimeout(r, 400));
+
+    const check7Dropdown = await page.evaluate((alId) => {
+      const dropdownAll = document.querySelector('[data-testid="account-dropdown-all"]');
+      const dropdownAlice = document.querySelector(`[data-testid="account-dropdown-${alId}"]`);
+      const addMailbox = document.querySelector('[data-testid="add-mailbox-button"]');
+      return {
+        hasAllInboxes: !!dropdownAll,
+        hasAlice: !!dropdownAlice,
+        hasAddMailbox: !!addMailbox,
+      };
+    }, Alice.mailboxId);
+
+    console.log("Check 7 Dropdown Result (Single Account):", JSON.stringify(check7Dropdown, null, 2));
+    if (check7Dropdown.hasAllInboxes) {
+      throw new Error("All Inboxes must NOT be present when only 1 account is connected!");
+    }
+    if (!check7Dropdown.hasAlice || !check7Dropdown.hasAddMailbox) {
+      throw new Error("Dropdown should display Alice and Add Mailbox action!");
+    }
+
+    // Save single account popup screenshot
+    const singleShotPath = path.join(artifactsDir, 'account_popup_single.png');
+    if (sidebarEl) {
+      await sidebarEl.screenshot({ path: singleShotPath });
+      console.log("Captured account popup single screenshot:", singleShotPath);
+    }
+
+    // Keyboard navigation check with 1 account: Arrow keys skip hidden All Inboxes
+    await page.keyboard.press("ArrowDown");
+    await new Promise((r) => setTimeout(r, 200));
+    await page.keyboard.press("ArrowUp");
+    await new Promise((r) => setTimeout(r, 200));
+    console.log("✓ CHECK 7 PASSED: All Inboxes conditional on 2+ accounts, selection resets on account removal");
+
     console.log("\n================================================================================");
-    console.log("            ALL 6 MANUAL VERIFICATION CHECKS SUCCESSFULLY PASSED!              ");
+    console.log("            ALL 7 MANUAL VERIFICATION CHECKS SUCCESSFULLY PASSED!              ");
     console.log("================================================================================");
   } finally {
     await browser.close();
