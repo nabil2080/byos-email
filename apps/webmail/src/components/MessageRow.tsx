@@ -290,6 +290,9 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     : "font-normal text-[#878A8E] dark:text-[#8A8E94]"
                 }`}
               >
+                <Show when={isSent()}>
+                  <span class="text-[#878A8E] dark:text-[#8A8E94] font-normal mr-0.5">To: </span>
+                </Show>
                 {partyLabel()}
               </span>
             </div>
@@ -526,6 +529,9 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                       : "font-normal text-[#878A8E] dark:text-[#8A8E94]"
                   }`}
                 >
+                  <Show when={isSent()}>
+                    <span class="text-[#878A8E] dark:text-[#8A8E94] font-normal mr-0.5">To: </span>
+                  </Show>
                   {partyLabel()}
                 </span>
               </div>

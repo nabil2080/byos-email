@@ -204,6 +204,9 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
               <span
                 class={`truncate font-sans text-sm ${isUnread() ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]" : "font-normal text-[#6F7173] dark:text-[#8A8E94]"}`}
               >
+                <Show when={isSent()}>
+                  <span class="text-[#6F7173] dark:text-[#8A8E94] font-normal mr-0.5">To: </span>
+                </Show>
                 {displayParty()}
               </span>
               <Show when={props.thread.message_count > 1}>
@@ -409,6 +412,9 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
               <span
                 class={`truncate font-sans text-sm ${isUnread() ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]" : "font-normal text-[#6F7173] dark:text-[#8A8E94]"}`}
               >
+                <Show when={isSent()}>
+                  <span class="text-[#6F7173] dark:text-[#8A8E94] font-normal mr-0.5">To: </span>
+                </Show>
                 {displayParty()}
               </span>
               <Show when={props.thread.message_count > 1}>

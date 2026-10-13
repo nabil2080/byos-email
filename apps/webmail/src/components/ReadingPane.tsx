@@ -9,6 +9,7 @@ import { formatScheduledBanner } from "../utils/dateTime";
 import { sanitizeOnReceive } from "../composer_sanitizer";
 import { highlightCodeBlocks } from "../utils/code_highlight";
 import { getMailboxKeyFor } from "../session_isolation";
+import { formatAddress } from "./MessageRow";
 
 export interface ReadingPaneProps {
   message: DisplayMessage;
@@ -249,6 +250,45 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
   const senderDisplayName = () => {
     const match = props.message.sender.match(/^([^<]+)/);
     return match ? match[1].trim() : props.message.sender;
+  };
+
+  const recipientSummary = () => {
+    if (props.message.recipients && props.message.recipients.length > 0) {
+      const valid = props.message.recipients
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0 && r.toLowerCase() !== "(no recipient)" && r.toLowerCase() !== "no recipient");
+      if (valid.length > 0) {
+        return valid.map(formatAddress).join(", ");
+      }
+    }
+    if (props.message.recipient && props.message.recipient.trim()) {
+      const parts = props.message.recipient
+        .split(",")
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0 && r.toLowerCase() !== "(no recipient)" && r.toLowerCase() !== "no recipient");
+      if (parts.length > 0) {
+        return parts.map(formatAddress).join(", ");
+      }
+    }
+    return props.message.folder === "sent" ? "No recipient" : (props.message.accountEmail || "me");
+  };
+
+  const recipientFull = () => {
+    if (props.message.recipients && props.message.recipients.length > 0) {
+      const valid = props.message.recipients
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0 && r.toLowerCase() !== "(no recipient)" && r.toLowerCase() !== "no recipient");
+      if (valid.length > 0) {
+        return valid.join(", ");
+      }
+    }
+    if (props.message.recipient && props.message.recipient.trim()) {
+      const r = props.message.recipient.trim();
+      if (r.toLowerCase() !== "(no recipient)" && r.toLowerCase() !== "no recipient") {
+        return r;
+      }
+    }
+    return props.message.folder === "sent" ? "(no recipient)" : (props.message.accountEmail || "me");
   };
 
   const canReply = () =>
@@ -799,6 +839,9 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               {/* Sender & Recipient details */}
               <div class="flex flex-col min-w-0 text-xs">
                 <div class="flex items-center gap-1.5 flex-wrap">
+                  <Show when={props.message.folder === "sent"}>
+                    <span class="text-[#878A8E] dark:text-[#8A8E94] font-normal mr-0.5">from</span>
+                  </Show>
                   <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] truncate">
                     {senderDisplayName()}
                   </span>
@@ -848,7 +891,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                         data-testid="reading-pane-account-dot"
                       />
                     </Show>
-                    <span>to {props.message.accountEmail || props.message.recipient}</span>
+                    <span>to {recipientSummary()}</span>
                     <svg class="w-2.5 h-2.5 text-[#6E7075] dark:text-[#878A8E]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
                     </svg>
@@ -862,7 +905,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                       </div>
                       <div class="grid grid-cols-[50px_1fr] gap-1">
                         <span class="text-[#6E7075] dark:text-[#878A8E] font-medium">to:</span>
-                        <span class="text-[#1A1B1E] dark:text-[#F3F4F6] break-all">{props.message.accountEmail || props.message.recipient}</span>
+                        <span class="text-[#1A1B1E] dark:text-[#F3F4F6] break-all">{recipientFull()}</span>
                       </div>
                       <div class="grid grid-cols-[50px_1fr] gap-1">
                         <span class="text-[#6E7075] dark:text-[#878A8E] font-medium">date:</span>
