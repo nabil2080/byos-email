@@ -24,6 +24,7 @@ import { runUnifiedInboxTests } from "./unified_inbox.test.js";
 import { runMaskedEmailTests } from "./masked_email.test.js";
 import { runFocusedInboxTests } from "./focused_inbox.test.js";
 import { runOfflineTests } from "./offline.test.js";
+import { runComposerSanitizerTests } from "./composer_sanitizer.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -183,6 +184,12 @@ async function main() {
   console.log(`OFFLINE SUPPORT TESTS: ${offlineRes.passed} passed, ${offlineRes.failed} failed\n`);
   totalPassed += offlineRes.passed;
   totalFailed += offlineRes.failed;
+
+  console.log("Running Composer Sanitizer Tests...");
+  const sanitizerRes = await runComposerSanitizerTests();
+  console.log(`COMPOSER SANITIZER TESTS: ${sanitizerRes.passed} passed, ${sanitizerRes.failed} failed\n`);
+  totalPassed += sanitizerRes.passed;
+  totalFailed += sanitizerRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

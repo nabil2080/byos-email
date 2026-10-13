@@ -37,6 +37,7 @@ interface ComposeDrawerProps {
   aliases?: MaskedAliasItem[];
   fromAlias?: string | null;
   onSelectFromAlias?: (aliasAddress: string | null) => void;
+  onUploadInlineImage?: (file: File) => Promise<{ storageRef: string; alt?: string; localUrl?: string }>;
 }
 
 export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
@@ -379,6 +380,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                   props.onBodyChange(text);
                   props.onBodyHtmlChange?.(html);
                 }}
+                onUploadInlineImage={props.onUploadInlineImage}
                 class="flex-1 border-0 rounded-none bg-white dark:bg-[#1E2025]"
                 contentClass="p-4"
                 minHeight="220px"

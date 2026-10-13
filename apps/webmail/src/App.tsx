@@ -174,6 +174,7 @@ import {
   unsealAccountKeys,
 } from "./session_isolation";
 import { OfflineBanner } from "./components/OfflineBanner";
+import { sanitizeOnSend } from "./composer_sanitizer";
 import {
   initNetworkListeners,
   onNetworkReconnect,
@@ -4739,7 +4740,7 @@ const App: Component = () => {
       to: composeTo(),
       subject: composeSubject(),
       body: composeBody(),
-      bodyHtml: composeBodyHtml(),
+      bodyHtml: sanitizeOnSend(composeBodyHtml()),
       boxId: boxId,
       signatureApplied: composeSignatureApplied(),
       sigPlain: loadSignature(boxId),
@@ -4833,7 +4834,7 @@ const App: Component = () => {
       const to = payload.recipient;
       const subject = payload.subject;
       const signedBody = payload.bodyPlaintext;
-      const htmlBody = payload.bodyHtml;
+      const htmlBody = sanitizeOnSend(payload.bodyHtml);
 
       let trackingToken: string | undefined;
       if (payload.trackOpens) {
@@ -6708,6 +6709,7 @@ const App: Component = () => {
                 message={selectedMsg()!}
                 isDecrypting={isDecrypting()}
                 decryptedContent={decryptedContent()}
+                mailboxKey={mailboxKey()}
                 senderVerification={senderVerification()}
                 lockedAccount={lockedReadingAccount()}
                 onUnlockAccount={(acc) => {
@@ -6812,6 +6814,33 @@ const App: Component = () => {
               : currentUser()?.email || "";
           })()
         }
+        onUploadInlineImage={async (file: File) => {
+          const boxId = composeAccountId() || selectedMailbox()?.id;
+          const key = boxId ? getMailboxKeyFor(boxId) : null;
+          const localUrl = URL.createObjectURL(file);
+          if (boxId && key && !isOffline()) {
+            try {
+              const att = await uploadEncryptedAttachment(boxId, file, key);
+              return {
+                storageRef: `byos-storage://${boxId}/${att.id}`,
+                alt: file.name,
+                localUrl,
+              };
+            } catch (err) {
+              console.warn("Upload inline image failed, falling back to data URL:", err);
+            }
+          }
+          const dataUrl = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.readAsDataURL(file);
+          });
+          return {
+            storageRef: dataUrl,
+            alt: file.name,
+            localUrl,
+          };
+        }}
       />
 
       {/* Floating Optimistic Undo Toast */}

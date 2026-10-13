@@ -1,16 +1,20 @@
-import { Component, createSignal, Show, For, onMount, onCleanup } from "solid-js";
+import { Component, createSignal, createEffect, Show, For, onMount, onCleanup } from "solid-js";
 import DOMPurify from "dompurify";
 import { DisplayMessage } from "./MessageList";
-import { AttachmentItem, MailboxFolder, MailboxLabel } from "../api";
+import { AttachmentItem, MailboxFolder, MailboxLabel, downloadAndDecryptAttachment } from "../api";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { SnoozeMenu } from "./SnoozeMenu";
 import { formatScheduledBanner } from "../utils/dateTime";
+import { sanitizeOnReceive } from "../composer_sanitizer";
+import { highlightCodeBlocks } from "../utils/code_highlight";
+import { getMailboxKeyFor } from "../session_isolation";
 
 export interface ReadingPaneProps {
   message: DisplayMessage;
   isDecrypting: boolean;
   decryptedContent: string | null;
+  mailboxKey?: Uint8Array | null;
   lockedAccount?: { email: string; mailboxId: string } | null;
   onUnlockAccount?: (account: { email: string; mailboxId: string }) => void;
   senderVerification?: { verified: boolean; error?: string } | null;
@@ -165,32 +169,46 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
   const [allowRemoteImages, setAllowRemoteImages] = createSignal(false);
   const [showTrackerDetails, setShowTrackerDetails] = createSignal(false);
 
-  // Email Tracker Blocker detection and neutralization
-  const trackerInfo = () => {
-    const text = props.decryptedContent || "";
-    if (!text) return { count: 0, urls: [] as string[], sanitized: "" };
+  let readingContentRef: HTMLDivElement | undefined;
+  let createdObjectUrls: string[] = [];
 
-    const urls: string[] = [];
-    let count = 0;
-    const imgRegex = /<img\s+[^>]*?src=["']?(https?:\/\/[^"'\s>]+)["']?[^>]*?>/gi;
+  const sanitizeResult = () => {
+    const raw = props.decryptedContent || "";
+    if (!raw) return { sanitized: "", hasBlockedImages: false, blockedCount: 0 };
+    return sanitizeOnReceive(raw, { allowRemoteImages: allowRemoteImages() });
+  };
 
-    const sanitized = text.replace(imgRegex, (match, src) => {
-      const isTiny = /width=["']?(0|1)["']?/i.test(match) && /height=["']?(0|1)["']?/i.test(match);
-      const isHidden = /display:\s*none/i.test(match) || /visibility:\s*hidden/i.test(match) || /width:\s*(0|1)px/i.test(match);
-      const isTrackerUrl = /(track|pixel|open|beacon|wf\/open|mandrillapp|mailfoogae|sidekick|hubspot|sendgrid|convertkit|\/v1\/track)/i.test(src);
+  createEffect(() => {
+    const raw = props.decryptedContent;
+    const allow = allowRemoteImages();
+    if (!readingContentRef || !raw) return;
 
-      if (isTiny || isHidden || isTrackerUrl) {
-        count++;
-        if (!urls.includes(src)) urls.push(src);
-        if (!allowRemoteImages()) {
-          return `<!-- [BYOS Shield: Blocked Tracker: ${src}] -->`;
+    // Highlight code blocks
+    highlightCodeBlocks(readingContentRef);
+
+    // Resolve byos-storage:// images
+    const imgs = readingContentRef.querySelectorAll("img");
+    imgs.forEach(async (img) => {
+      const src = img.getAttribute("src") || "";
+      if (src.startsWith("byos-storage://")) {
+        const match = src.match(/^byos-storage:\/\/([^/]+)\/(.+)$/);
+        if (match) {
+          const [, boxId, attId] = match;
+          const key = props.mailboxKey || getMailboxKeyFor(boxId);
+          if (key) {
+            try {
+              const blob = await downloadAndDecryptAttachment(boxId, attId, key);
+              const objUrl = URL.createObjectURL(blob);
+              createdObjectUrls.push(objUrl);
+              img.src = objUrl;
+            } catch (err) {
+              console.warn("Failed to decrypt inline image:", err);
+            }
+          }
         }
       }
-      return match;
     });
-
-    return { count, urls, sanitized };
-  };
+  });
 
   let paneToolbarRef: HTMLDivElement | undefined;
 
@@ -216,6 +234,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
   onCleanup(() => {
     document.removeEventListener("mousedown", handleClickOutside);
     document.removeEventListener("keydown", handleKeyDown);
+    createdObjectUrls.forEach((url) => URL.revokeObjectURL(url));
   });
 
   const initials = () => getSenderInitials(props.message.sender);
@@ -889,8 +908,8 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
 
         {/* Decrypted Message Body */}
         <div class="p-6 flex-1 text-sm text-[#1A1B1E] dark:text-[#F3F4F6] leading-relaxed whitespace-pre-wrap font-sans select-text">
-          {/* Tracker Blocker Privacy Banner */}
-          <Show when={trackerInfo().count > 0}>
+          {/* Tracker Blocker / Remote Image Privacy Banner */}
+          <Show when={sanitizeResult().hasBlockedImages}>
             <div class="mb-5 p-3.5 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 text-xs flex flex-col gap-2">
               <div class="flex items-center justify-between gap-3">
                 <div class="flex items-center gap-2">
@@ -900,7 +919,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                     </svg>
                   </span>
                   <span class="font-bold text-amber-900 dark:text-amber-200">
-                    {trackerInfo().count} email tracker{trackerInfo().count > 1 ? "s" : ""} blocked
+                    {sanitizeResult().blockedCount} remote image{sanitizeResult().blockedCount > 1 ? "s" : ""} blocked
                   </span>
                   <span class="text-amber-800/80 dark:text-amber-300/80 hidden sm:inline">
                     — Protected your reading activity and location from the sender.
@@ -908,16 +927,10 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                 </div>
 
                 <div class="flex items-center gap-2 flex-shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => setShowTrackerDetails(!showTrackerDetails())}
-                    class="text-[11px] text-[#A27561] hover:underline font-semibold cursor-pointer"
-                  >
-                    {showTrackerDetails() ? "Hide Details" : "View Details"}
-                  </button>
                   <Show when={!allowRemoteImages()}>
                     <button
                       type="button"
+                      data-testid="load-remote-images-btn"
                       onClick={() => setAllowRemoteImages(true)}
                       class="px-2.5 py-1 text-[11px] font-medium border border-amber-300 dark:border-amber-800 rounded-lg hover:bg-white dark:hover:bg-[#1E2025] transition cursor-pointer"
                     >
@@ -926,19 +939,6 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                   </Show>
                 </div>
               </div>
-
-              <Show when={showTrackerDetails()}>
-                <div class="pt-2 border-t border-amber-200/80 dark:border-amber-900/50 space-y-1">
-                  <span class="text-[10px] font-mono uppercase text-amber-800 dark:text-amber-300">Blocked Tracker URLs:</span>
-                  <For each={trackerInfo().urls}>
-                    {(url) => (
-                      <div class="text-[11px] font-mono text-[#464748] dark:text-[#E2DFD8] truncate bg-white/70 dark:bg-[#1E2025] px-2 py-1 rounded border border-amber-200/70 dark:border-amber-900/40">
-                        {url}
-                      </div>
-                    )}
-                  </For>
-                </div>
-              </Show>
             </div>
           </Show>
 
@@ -1015,11 +1015,9 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               fallback={props.decryptedContent}
             >
               <div
+                ref={readingContentRef}
                 class="reading-pane-content"
-                innerHTML={DOMPurify.sanitize(trackerInfo().sanitized, { 
-                  ADD_TAGS: ['style', 'head', 'meta'], 
-                  FORCE_BODY: true 
-                })} 
+                innerHTML={sanitizeResult().sanitized}
               />
             </Show>
           </Show>
