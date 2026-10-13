@@ -1,7 +1,7 @@
 import { Component, JSX, For } from "solid-js";
 import { UserMe, Mailbox } from "../../api";
 
-export type SettingsTabId = "signatures" | "bridge" | "appearance" | "autoreply" | "filters" | "security" | "masked-email";
+export type SettingsTabId = "account" | "signatures" | "bridge" | "appearance" | "autoreply" | "filters" | "security" | "masked-email";
 
 interface SettingsLayoutProps {
   activeTab: SettingsTabId;
@@ -14,6 +14,17 @@ interface SettingsLayoutProps {
 
 export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
   const tabs: { id: SettingsTabId; label: string; icon: JSX.Element; description: string }[] = [
+    {
+      id: "account",
+      label: "Account",
+      icon: (
+        <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+          <circle cx="12" cy="7" r="4" />
+        </svg>
+      ),
+      description: "Profile photo and account preferences",
+    },
     {
       id: "signatures",
       label: "Signatures & Identities",

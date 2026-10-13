@@ -56,6 +56,8 @@ interface SidebarProps {
   accountUnreadCounts?: Record<string, number>;
   excludedAccountIds?: Set<string> | string[];
   onToggleAccountInclusion?: (accountId: string, included?: boolean) => void;
+  profilePhotoUrl?: string | null;
+  photoUrls?: Record<string, string>;
 }
 
 export const Sidebar: Component<SidebarProps> = (props) => {
@@ -276,6 +278,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           onSignOut={props.onLogout}
           unreadCounts={props.accountUnreadCounts}
           totalUnifiedUnread={props.unifiedUnreadCount}
+          profilePhotoUrl={props.profilePhotoUrl}
+          photoUrls={props.photoUrls}
         />
 
         {/* Compose Pill & Quick Actions */}

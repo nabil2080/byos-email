@@ -86,11 +86,14 @@ import {
   toggleMessageStar,
   fetchMaskedAliases,
   MaskedAliasItem,
+  getProfilePhoto,
+  deleteProfilePhoto,
 } from "./api";
 import {
   preparePathAAttachment,
   decryptPathAAttachment,
   MAX_ATTACHMENT_SIZE,
+  decryptChunk,
 } from "./attachment_crypto";
 import {
   unlockMailboxKey,
@@ -117,6 +120,7 @@ import { PendingSend, buildPendingSendPayload, restoreComposeState } from "./und
 import { parseMime, getHeader } from "./mime";
 import { SetupAccount } from "./routes/setup-account";
 import { SettingsLayout, SettingsTabId } from "./routes/settings/SettingsLayout";
+import { AccountTab } from "./routes/settings/AccountTab";
 import { SignaturesTab } from "./routes/settings/SignaturesTab";
 import { BridgeTab } from "./routes/settings/BridgeTab";
 import { AppearanceTab } from "./routes/settings/AppearanceTab";
@@ -647,7 +651,29 @@ const App: Component = () => {
 
   // Settings suite & Layout preferences
   const [settingsOpen, setSettingsOpen] = createSignal(false);
-  const [activeSettingsTab, setActiveSettingsTab] = createSignal<SettingsTabId>("signatures");
+  const [activeSettingsTab, setActiveSettingsTab] = createSignal<SettingsTabId>("account");
+  const [profilePhotoUrl, setProfilePhotoUrl] = createSignal<string | null>(null);
+
+  async function loadDecryptedProfilePhoto(
+    key?: Uint8Array | null,
+    sessionToken?: string
+  ) {
+    const k = key || mailboxKey();
+    if (!k) return;
+    try {
+      const ciphertext = await getProfilePhoto(sessionToken);
+      const decrypted = await decryptChunk(ciphertext, k);
+      const blob = new Blob([decrypted as unknown as BlobPart], { type: "image/jpeg" });
+      const objectUrl = URL.createObjectURL(blob);
+      if (profilePhotoUrl() && profilePhotoUrl() !== objectUrl) {
+        URL.revokeObjectURL(profilePhotoUrl()!);
+      }
+      setProfilePhotoUrl(objectUrl);
+    } catch {
+      // Photo not found (404) or decrypt error: no photo set
+    }
+  }
+
   const [density, setDensity] = createSignal<"compact" | "cozy" | "comfortable">(
     (typeof window !== "undefined" && (localStorage.getItem("byos_density") as any)) || "cozy"
   );
@@ -1774,6 +1800,9 @@ const App: Component = () => {
       setConnectedAccounts(list);
 
       await loadMailboxData(targetBox.id);
+      if (user.profile_photo_ref || targetBox.profile_photo_ref) {
+        loadDecryptedProfilePhoto(mailboxKey(), tokenToSave);
+      }
     } else {
       setMailboxes([]);
       setSelectedMailbox(null);
@@ -1798,6 +1827,11 @@ const App: Component = () => {
       setUnlockAccountPassword("");
       setUnlockAccountError(null);
       return;
+    }
+
+    if (profilePhotoUrl()) {
+      URL.revokeObjectURL(profilePhotoUrl()!);
+      setProfilePhotoUrl(null);
     }
 
     setIsLoading(true);
@@ -1878,6 +1912,7 @@ const App: Component = () => {
       // 6. Reload messages, drafts, folders
       await loadMailboxData(account.id);
       refreshSignature(account.id);
+      loadDecryptedProfilePhoto(targetKey, account.sessionToken);
     } catch (err) {
       console.error("Failed to switch account:", err);
     } finally {
@@ -2343,6 +2378,9 @@ const App: Component = () => {
   });
 
   onCleanup(() => {
+    if (profilePhotoUrl()) {
+      URL.revokeObjectURL(profilePhotoUrl()!);
+    }
     window.removeEventListener("keydown", handleKeyDown);
     window.removeEventListener("storage", handleStorageChange);
   });
@@ -2946,6 +2984,10 @@ const App: Component = () => {
         console.warn("Server logout failed, clearing local session anyway:", err);
       }
       lockMailbox();
+      if (profilePhotoUrl()) {
+        URL.revokeObjectURL(profilePhotoUrl()!);
+        setProfilePhotoUrl(null);
+      }
       setComposeOpen(false);
       clearComposeForm();
       setCurrentUser(null);
@@ -6281,6 +6323,31 @@ const App: Component = () => {
             currentUser={currentUser()}
             selectedMailbox={selectedMailbox()}
           >
+            <Show when={activeSettingsTab() === "account" && selectedMailbox()}>
+              <AccountTab
+                mailbox={selectedMailbox()!}
+                currentUser={currentUser()}
+                mailboxKey={mailboxKey()}
+                profilePhotoUrl={profilePhotoUrl()}
+                onPhotoUpdated={(newUrl, newRef) => {
+                  if (profilePhotoUrl() && profilePhotoUrl() !== newUrl) {
+                    URL.revokeObjectURL(profilePhotoUrl()!);
+                  }
+                  setProfilePhotoUrl(newUrl);
+                  const box = selectedMailbox();
+                  if (box) {
+                    const updatedBox = { ...box, profile_photo_ref: newRef };
+                    setSelectedMailbox(updatedBox);
+                    setMailboxes(mailboxes().map((m) => (m.id === box.id ? updatedBox : m)));
+                  }
+                  const usr = currentUser();
+                  if (usr) {
+                    setCurrentUser({ ...usr, profile_photo_ref: newRef });
+                  }
+                }}
+                showToast={showToast}
+              />
+            </Show>
             <Show when={activeSettingsTab() === "signatures" && selectedMailbox()}>
               <SignaturesTab mailbox={selectedMailbox()!} currentUser={currentUser()} />
             </Show>
@@ -6451,11 +6518,12 @@ const App: Component = () => {
                 setMobileSidebarOpen(false);
               }}
               onOpenSettings={() => {
-                setActiveSettingsTab("signatures");
+                setActiveSettingsTab("account");
                 setSettingsOpen(true);
                 setMobileSidebarOpen(false);
               }}
               onLogout={handleLogout}
+              profilePhotoUrl={profilePhotoUrl()}
               isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
               storageError={storageErrorBanner()}
               connectedAccounts={connectedAccounts()}
@@ -6554,10 +6622,11 @@ const App: Component = () => {
             onOpenContacts={openContacts}
             onOpenImport={() => setImportEmailsModalOpen(true)}
             onOpenSettings={() => {
-              setActiveSettingsTab("signatures");
+              setActiveSettingsTab("account");
               setSettingsOpen(true);
             }}
             onLogout={handleLogout}
+            profilePhotoUrl={profilePhotoUrl()}
             isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
             storageError={storageErrorBanner()}
             connectedAccounts={connectedAccounts()}
@@ -6689,6 +6758,8 @@ const App: Component = () => {
               categoryCounts={categoryCounts()}
               focusedInboxEnabled={focusedInboxEnabled()}
               onMoveToCategory={handleMoveToCategory}
+              currentUserEmail={currentUser()?.email}
+              currentUserPhotoUrl={profilePhotoUrl()}
             />
             </div>
           </div>
@@ -6741,6 +6812,8 @@ const App: Component = () => {
                 onDeleteDraft={handleDeleteMessage}
                 onCancelScheduled={(msg) => handleCancelScheduled(msg)}
                 onEditScheduled={(msg) => handleEditScheduled(msg)}
+                currentUserEmail={currentUser()?.email}
+                currentUserPhotoUrl={profilePhotoUrl()}
               />
             </div>
           </Show>

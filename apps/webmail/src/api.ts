@@ -22,6 +22,7 @@ export interface UserMe {
   mailbox_mode?: string;
   wrapped_sk_user?: string;
   previous_wrapped_sk_user?: string;
+  profile_photo_ref?: string | null;
 }
 
 export interface Mailbox {
@@ -32,6 +33,8 @@ export interface Mailbox {
   public_key?: string;
   wrapped_sk_user?: string;
   previous_wrapped_sk_user?: string;
+  profile_photo_ref?: string | null;
+  profile_photo_updated_at?: string;
 }
 
 export interface DraftMessage {
@@ -282,6 +285,97 @@ export interface UserMailboxSummary {
 export async function fetchUserMailboxes(token?: string): Promise<UserMailboxSummary[]> {
   const res = await apiRequest<{ mailboxes: UserMailboxSummary[] }>("/v1/users/me/mailboxes", undefined, token);
   return res.mailboxes || [];
+}
+
+export async function uploadProfilePhoto(
+  encryptedBytes: Uint8Array,
+  token?: string
+): Promise<{ photo_ref: string; updated_at: string }> {
+  const impersonationToken =
+    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
+  const activeToken =
+    token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
+  const authHeaders: Record<string, string> = {};
+  if (activeToken) {
+    authHeaders["Authorization"] = `Bearer ${activeToken}`;
+  } else if (impersonationToken) {
+    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  }
+
+  const response = await fetch(`${apiBase()}/v1/users/me/profile-photo`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-BYOS-Client": "webmail",
+      ...authHeaders,
+    },
+    body: encryptedBytes as unknown as BodyInit,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || "Failed to upload profile photo");
+  }
+
+  return response.json();
+}
+
+export async function getProfilePhoto(token?: string): Promise<Uint8Array> {
+  const impersonationToken =
+    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
+  const activeToken =
+    token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
+  const authHeaders: Record<string, string> = {};
+  if (activeToken) {
+    authHeaders["Authorization"] = `Bearer ${activeToken}`;
+  } else if (impersonationToken) {
+    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  }
+
+  const response = await fetch(`${apiBase()}/v1/users/me/profile-photo`, {
+    method: "GET",
+    credentials: "include",
+    headers: {
+      "X-BYOS-Client": "webmail",
+      ...authHeaders,
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || "Failed to get profile photo");
+  }
+
+  const buffer = await response.arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
+export async function deleteProfilePhoto(token?: string): Promise<void> {
+  const impersonationToken =
+    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
+  const activeToken =
+    token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
+  const authHeaders: Record<string, string> = {};
+  if (activeToken) {
+    authHeaders["Authorization"] = `Bearer ${activeToken}`;
+  } else if (impersonationToken) {
+    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  }
+
+  const response = await fetch(`${apiBase()}/v1/users/me/profile-photo`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: {
+      "X-BYOS-Client": "webmail",
+      ...authHeaders,
+    },
+  });
+
+  if (!response.ok && response.status !== 204) {
+    const errorText = await response.text();
+    throw new Error(errorText || "Failed to delete profile photo");
+  }
 }
 
 export function getAccountColor(id: string): string {

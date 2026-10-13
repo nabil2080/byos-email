@@ -1,5 +1,6 @@
 import { Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { ConnectedAccount, getAccountColor } from "../api";
+import { ProfileAvatar } from "./ProfileAvatar";
 
 export interface AccountSwitcherProps {
   currentEmail: string;
@@ -12,6 +13,8 @@ export interface AccountSwitcherProps {
   onSignOut: (accountId?: string, logOutAll?: boolean) => void;
   unreadCounts?: Record<string, number>;
   totalUnifiedUnread?: number;
+  profilePhotoUrl?: string | null;
+  photoUrls?: Record<string, string>;
 }
 
 export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
@@ -147,12 +150,16 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
         class="w-full flex items-center justify-between px-2.5 py-2 rounded-xl bg-[#FAF9F7] dark:bg-[#1E2025] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#2A2A2E] border border-[#E2DFD8] dark:border-[#333336] transition-all text-left group cursor-pointer shadow-2xs focus:outline-none focus:ring-2 focus:ring-[#A27561]/50"
       >
         <div class="flex items-center gap-2 min-w-0">
-          {/* Dot matching selection */}
-          <span
-            class="w-2.5 h-2.5 rounded-full flex-shrink-0 ring-1 ring-black/10 dark:ring-white/20 transition-colors"
-            style={{ "background-color": currentSelectionColor() }}
-            data-testid="account-chip-dot"
-            title={currentSelectionLabel()}
+          {/* Avatar replacing colored dot (24x24px chip size) */}
+          <ProfileAvatar
+            size="chip"
+            mailboxId={isAll() ? "__all__" : (props.activeAccountId || props.connectedAccounts?.[0]?.id)}
+            email={isAll() ? "All Inboxes" : props.currentEmail}
+            displayName={isAll() ? "All Inboxes" : props.connectedAccounts?.find((a) => a.id === props.activeAccountId)?.displayName}
+            isAll={isAll()}
+            photoUrl={props.profilePhotoUrl}
+            testId="account-chip-dot"
+            class="ring-1 ring-black/10 dark:ring-white/20"
           />
 
           {/* Email or 'All Inboxes' label */}
@@ -236,9 +243,13 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                 }`}
               >
                 <div class="flex items-center gap-2 min-w-0 flex-1">
-                  <span
-                    class="w-2.5 h-2.5 rounded-full flex-shrink-0 bg-[#A27561] ring-1 ring-black/10 dark:ring-white/20"
-                    data-testid="account-dot-all"
+                  <ProfileAvatar
+                    size="dropdown"
+                    mailboxId="__all__"
+                    email="All Inboxes"
+                    isAll={true}
+                    testId="account-dot-all"
+                    class="ring-1 ring-black/10 dark:ring-white/20"
                   />
                   <div class="min-w-0 flex flex-col">
                     <span class="truncate font-medium text-[#2B2C2D] dark:text-[#ECEBE8]">All Inboxes</span>
@@ -290,11 +301,14 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                     }`}
                   >
                     <div class="flex items-center gap-2 min-w-0 flex-1">
-                      <span
-                        class="w-2.5 h-2.5 rounded-full flex-shrink-0 ring-1 ring-black/10 dark:ring-white/20"
-                        style={{ "background-color": getAccountColor(acc.id) }}
-                        title={acc.email}
-                        data-testid={`sidebar-dot-${acc.id}`}
+                      <ProfileAvatar
+                        size="dropdown"
+                        mailboxId={acc.id}
+                        email={acc.email}
+                        displayName={acc.displayName}
+                        photoUrl={props.photoUrls?.[acc.id] || (acc.id === props.activeAccountId ? props.profilePhotoUrl : undefined)}
+                        testId={`sidebar-dot-${acc.id}`}
+                        class="ring-1 ring-black/10 dark:ring-white/20"
                       />
                       <div class="min-w-0 flex flex-col">
                         <span class="truncate font-medium text-[#2B2C2D] dark:text-[#ECEBE8]">{acc.email}</span>

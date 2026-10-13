@@ -24,6 +24,8 @@ interface MessageRowProps {
   onDeleteForever?: (msg: DisplayMessage) => void;
   labels?: MailboxLabel[];
   onMoveToCategory?: (msg: DisplayMessage, category: FocusedCategory) => void;
+  currentUserEmail?: string;
+  currentUserPhotoUrl?: string | null;
 }
 
 export function formatAddress(raw: string): string {
@@ -273,7 +275,14 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                   data-testid="account-chip"
                 />
               </Show>
-              <ProfileAvatar email={partyEmail()} size="xs" />
+              <ProfileAvatar
+                email={partyEmail()}
+                displayName={partyLabel()}
+                mailboxId={props.message.mailboxId}
+                size="row"
+                photoUrl={props.currentUserEmail === partyEmail() ? props.currentUserPhotoUrl : undefined}
+                testId="message-row-avatar"
+              />
               <span
                 class={`truncate font-sans text-sm ${
                   isUnread()
@@ -502,7 +511,14 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     data-testid="account-chip"
                   />
                 </Show>
-                <ProfileAvatar email={partyEmail()} size="xs" />
+                <ProfileAvatar
+                  email={partyEmail()}
+                  displayName={partyLabel()}
+                  mailboxId={props.message.mailboxId}
+                  size="row"
+                  photoUrl={props.currentUserEmail === partyEmail() ? props.currentUserPhotoUrl : undefined}
+                  testId="message-row-avatar"
+                />
                 <span
                   class={`truncate min-w-0 font-sans text-sm ${
                     isUnread()

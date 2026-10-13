@@ -102,6 +102,8 @@ interface MessageListProps {
   categoryCounts?: Record<FocusedCategory, { total: number; unread: number }>;
   focusedInboxEnabled?: boolean;
   onMoveToCategory?: (msg: DisplayMessage, category: FocusedCategory) => void;
+  currentUserEmail?: string;
+  currentUserPhotoUrl?: string | null;
 }
 
 export const MessageList: Component<MessageListProps> = (props) => {
@@ -333,6 +335,8 @@ export const MessageList: Component<MessageListProps> = (props) => {
                   onDeleteForever={props.onDeleteForever}
                   labels={props.labels}
                   onMoveToCategory={props.onMoveToCategory}
+                  currentUserEmail={props.currentUserEmail}
+                  currentUserPhotoUrl={props.currentUserPhotoUrl}
                 />
               )}
             </For>

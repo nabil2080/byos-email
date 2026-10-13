@@ -352,6 +352,8 @@ func main() {
 	http.HandleFunc("/v1/users/me/aliases/", withSecurityHeaders(withCORS(aliasDetailHandler)))
 	http.HandleFunc("/api/v1/users/me/aliases", withSecurityHeaders(withCORS(aliasesHandler)))
 	http.HandleFunc("/api/v1/users/me/aliases/", withSecurityHeaders(withCORS(aliasDetailHandler)))
+	http.HandleFunc("/v1/users/me/profile-photo", withSecurityHeaders(withCORS(profilePhotoHandler)))
+	http.HandleFunc("/api/v1/users/me/profile-photo", withSecurityHeaders(withCORS(profilePhotoHandler)))
 	http.HandleFunc("/v1/auth/logout", withSecurityHeaders(withCORS(logoutHandler)))
 	http.HandleFunc("/v1/auth/invitations/verify", withSecurityHeaders(withCORS(invitationVerifyHandler)))
 	http.HandleFunc("/v1/auth/invitations/claim", withSecurityHeaders(withCORS(invitationClaimHandler)))

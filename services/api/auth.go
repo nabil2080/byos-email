@@ -685,13 +685,13 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var mailboxID, mailboxLocalPart, mailboxMode string
-	var wrappedSkUser, previousWrappedSkUser *string
+	var wrappedSkUser, previousWrappedSkUser, profilePhotoRef *string
 	_ = conn.QueryRow(ctx, `
-		SELECT id::text, local_part, mode, wrapped_sk_user, previous_wrapped_sk_user
+		SELECT id::text, local_part, mode, wrapped_sk_user, previous_wrapped_sk_user, profile_photo_ref
 		FROM mailboxes
 		WHERE user_id=$1 AND is_active=true AND status='active'
 		ORDER BY created_at DESC
-		LIMIT 1`, userID).Scan(&mailboxID, &mailboxLocalPart, &mailboxMode, &wrappedSkUser, &previousWrappedSkUser)
+		LIMIT 1`, userID).Scan(&mailboxID, &mailboxLocalPart, &mailboxMode, &wrappedSkUser, &previousWrappedSkUser, &profilePhotoRef)
 
 	wrappedSkUserStr := ""
 	if wrappedSkUser != nil {
@@ -700,6 +700,10 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 	previousWrappedSkUserStr := ""
 	if previousWrappedSkUser != nil {
 		previousWrappedSkUserStr = *previousWrappedSkUser
+	}
+	var profilePhotoRefVal interface{}
+	if profilePhotoRef != nil {
+		profilePhotoRefVal = *profilePhotoRef
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -716,6 +720,7 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 		"mailbox_mode":             mailboxMode,
 		"wrapped_sk_user":          wrappedSkUserStr,
 		"previous_wrapped_sk_user": previousWrappedSkUserStr,
+		"profile_photo_ref":        profilePhotoRefVal,
 	})
 }
 

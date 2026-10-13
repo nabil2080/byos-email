@@ -43,6 +43,8 @@ export interface ReadingPaneProps {
   customFolders?: MailboxFolder[];
   labels?: MailboxLabel[];
   onToggleLabel?: (msg: DisplayMessage, labelId: string) => void;
+  currentUserEmail?: string;
+  currentUserPhotoUrl?: string | null;
 }
 
 function getSenderInitials(sender: string): string {
@@ -784,11 +786,14 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
           {/* Sender & Recipient Bar */}
           <div class="mt-4 flex items-start justify-between gap-3">
             <div class="flex items-start gap-3 min-w-0">
-              {/* Sender Avatar */}
+              {/* Sender Avatar (36x36px header size) */}
               <ProfileAvatar
                 email={senderEmail()}
                 displayName={senderDisplayName()}
-                size="md"
+                mailboxId={props.message.mailboxId}
+                size="header"
+                photoUrl={props.currentUserEmail === senderEmail() ? props.currentUserPhotoUrl : undefined}
+                testId="reading-pane-avatar"
               />
 
               {/* Sender & Recipient details */}

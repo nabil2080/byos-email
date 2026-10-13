@@ -27,6 +27,7 @@ import { runOfflineTests } from "./offline.test.js";
 import { runComposerSanitizerTests } from "./composer_sanitizer.test.js";
 import { runContactsTests } from "./contacts.test.js";
 import { runSidebarBorderlessTests } from "./sidebar_borderless.test.js";
+import { runProfilePhotoTests } from "./profile_photo.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -204,6 +205,12 @@ async function main() {
   console.log(`SIDEBAR BORDERLESS TESTS: ${sidebarBorderlessRes.passed} passed, ${sidebarBorderlessRes.failed} failed\n`);
   totalPassed += sidebarBorderlessRes.passed;
   totalFailed += sidebarBorderlessRes.failed;
+
+  console.log("Running Profile Photo Tests...");
+  const profilePhotoRes = await runProfilePhotoTests();
+  console.log(`PROFILE PHOTO TESTS: ${profilePhotoRes.passed} passed, ${profilePhotoRes.failed} failed\n`);
+  totalPassed += profilePhotoRes.passed;
+  totalFailed += profilePhotoRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {
