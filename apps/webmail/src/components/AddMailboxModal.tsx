@@ -124,6 +124,7 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
       searchKeyHex: searchKeyHex,
       signingSeedHex,
       xwingSeedHex,
+      profile_photo_ref: res.profile_photo_ref || undefined,
     };
 
     // Persist to byos_connected_accounts in sessionStorage (with in-memory keys)
@@ -166,7 +167,7 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
     if (mailboxId && signingSeedHex) {
       sessionStorage.setItem("byos_signing_seed_" + mailboxId, signingSeedHex);
     }
-    if (newAccount.sessionToken) {
+    if (newAccount.sessionToken && !sessionStorage.getItem("byos_active_session_token")) {
       sessionStorage.setItem("byos_active_session_token", newAccount.sessionToken);
     }
 

@@ -1797,6 +1797,7 @@ const App: Component = () => {
         sessionToken: tokenToSave,
         mailboxSkHex: currentSkHex,
         searchKeyHex: currentSKey,
+        profile_photo_ref: user.profile_photo_ref || targetBox.profile_photo_ref || undefined,
       };
 
       // Rule 1+4: After session rotation, sessionStorage is clean.
@@ -1937,7 +1938,14 @@ const App: Component = () => {
       // 6. Reload messages, drafts, folders
       await loadMailboxData(account.id);
       refreshSignature(account.id);
-      loadDecryptedProfilePhoto(targetKey, account.sessionToken);
+      if (account.profile_photo_ref) {
+        loadDecryptedProfilePhoto(targetKey, account.sessionToken);
+      } else {
+        if (profilePhotoUrl()) {
+          URL.revokeObjectURL(profilePhotoUrl()!);
+          setProfilePhotoUrl(null);
+        }
+      }
     } catch (err) {
       console.error("Failed to switch account:", err);
     } finally {
@@ -6411,6 +6419,9 @@ const App: Component = () => {
                   if (usr) {
                     setCurrentUser({ ...usr, profile_photo_ref: newRef });
                   }
+                  setConnectedAccounts((prev) =>
+                    prev.map((a) => (a.id === box?.id ? { ...a, profile_photo_ref: newRef || undefined } : a))
+                  );
                 }}
                 showToast={showToast}
               />

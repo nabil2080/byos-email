@@ -272,6 +272,7 @@ export interface ConnectedAccount {
   signingSeedHex?: string;
   xwingSeedHex?: string;
   isLocked?: boolean;
+  profile_photo_ref?: string;
 }
 
 export interface UserMailboxSummary {
@@ -459,6 +460,7 @@ export interface LoginResponse {
   preferred_method?: string;
   destination_masked?: string;
   debug_code?: string;
+  profile_photo_ref?: string | null;
 }
 
 /** Password login. The session travels in an HttpOnly cookie set by the
