@@ -18,9 +18,11 @@ Fixed the "x to x" recipient display bug in the Sent folder reading pane and pre
 | `apps/webmail/src/components/MessageRow.tsx` | Prepend "To: " label before recipient party name in Sent folder rows across full-width and split list views without changing avatar initials. |
 | `apps/webmail/src/components/ThreadRow.tsx` | Prepend "To: " label before recipient party name in Sent folder thread rows across full-width and split list views. |
 | `apps/webmail/src/components/ReadingPane.tsx` | Add "from" prefix in Sent folder header; resolve recipient via `recipientSummary()` and `recipientFull()` to fix "x to x" bug and display actual recipient in header and details dropdown. |
-| `apps/webmail/src/display_party.test.ts` | Add unit tests for Sent folder "To: " row prefix and reading pane recipient resolution to prevent regressions. |
 | `tests/browser/test_sent_folder_display.mjs` | End-to-end browser verification script testing Alice-to-Bob composition, sent list "To: " row rendering, and reading pane recipient headers. |
 | `smoke.ps1` | Register `tests/browser/test_sent_folder_display.mjs` in the smoke test suite (making it 14 tests) to ensure continuous regression testing. |
+
+> [!NOTE]
+> Per engineering discipline rules against fake unit tests that duplicate production logic locally in the test file, candidate tests 10 and 11 in `apps/webmail/src/display_party.test.ts` were removed. Genuine verification is provided by the real DOM browser test `test_sent_folder_display.mjs` running in `smoke.ps1`.
 
 ## Raw evidence
 
@@ -38,114 +40,9 @@ Running Display Party & Sent Folder Tests...
   ✓ 7. Scheduled folder renders recipient(s) and first +N
   ✓ 8. Threaded Sent row renders the recipient of the latest message
   ✓ 9. Sent folder rows are never treated as unread
-  ✓ 10. Sent folder row prepends 'To: ' to recipient display
-  ✓ 11. Reading pane displays from <sender> to <recipient> without x to x bug
-DISPLAY PARTY TESTS: 11 passed, 0 failed
+DISPLAY PARTY TESTS: 9 passed, 0 failed
 
-OVERALL: 282 passed, 0 failed
-```
-
-### Test File Changes (`display_party.test.ts`)
-The changes to `apps/webmail/src/display_party.test.ts` are purely additive (Tests 10 and 11 added, zero existing tests or assertions modified or removed):
-```diff
-diff --git a/apps/webmail/src/display_party.test.ts b/apps/webmail/src/display_party.test.ts
-index 4fad41f..b0b94b1 100644
---- a/apps/webmail/src/display_party.test.ts
-+++ b/apps/webmail/src/display_party.test.ts
-@@ -380,5 +380,93 @@ export function runDisplayPartyTests(): { passed: number; failed: number } {
-     );
-   });
- 
-+  // 10. Sent folder row prepends 'To: ' to party label
-+  test("10. Sent folder row prepends 'To: ' to recipient display", () => {
-+    const msg: DisplayMessage = {
-+      id: "msg-sent-prefix",
-+      folder: "sent",
-+      sender: "alice@byos.local",
-+      recipient: "bob@example.com",
-+      recipients: ["bob@example.com"],
-+      subject: "Hello Bob",
-+      snippet: "Test",
-+      encryptedBody: "enc",
-+      date: "Now",
-+      read: true,
-+      starred: false,
-+    };
-+
-+    const isSent = (folder?: Folder) => (folder || msg.folder) === "sent";
-+    const formatRowDisplay = (m: DisplayMessage, folder?: Folder) => {
-+      const label = getDisplayParty(m, folder);
-+      return isSent(folder) ? `To: ${label}` : label;
-+    };
-+
-+    assertEquals(
-+      formatRowDisplay(msg, "sent"),
-+      "To: bob@example.com",
-+      "Sent row displays 'To: bob@example.com', not just 'bob@example.com'"
-+    );
-+
-+    const inboxMsg: DisplayMessage = {
-+      ...msg,
-+      folder: "inbox",
-+    };
-+    assertEquals(
-+      formatRowDisplay(inboxMsg, "inbox"),
-+      "alice@byos.local",
-+      "Inbox row displays sender without 'To: ' prefix"
-+    );
-+  });
-+
-+  // 11. Reading pane recipient summary resolves recipient, never sender accountEmail
-+  test("11. Reading pane displays from <sender> to <recipient> without x to x bug", () => {
-+    const sentMsg: DisplayMessage = {
-+      id: "msg-reading-sent",
-+      folder: "sent",
-+      sender: "alice@byos.local",
-+      recipient: "bob@example.com",
-+      recipients: ["bob@example.com"],
-+      accountEmail: "alice@byos.local", // Owning mailbox is Alice
-+      subject: "Proposal",
-+      snippet: "Details",
-+      encryptedBody: "enc",
-+      date: "Today",
-+      read: true,
-+      starred: false,
-+    };
-+
-+    const recipientSummary = (m: DisplayMessage) => {
-+      if (m.recipients && m.recipients.length > 0) {
-+        const valid = m.recipients
-+          .map((r) => r.trim())
-+          .filter((r) => r.length > 0 && r.toLowerCase() !== "(no recipient)" && r.toLowerCase() !== "no recipient");
-+        if (valid.length > 0) {
-+          return valid.map(formatAddress).join(", ");
-+        }
-+      }
-+      if (m.recipient && m.recipient.trim()) {
-+        const parts = m.recipient
-+          .split(",")
-+          .map((r) => r.trim())
-+          .filter((r) => r.length > 0 && r.toLowerCase() !== "(no recipient)" && r.toLowerCase() !== "no recipient");
-+        if (parts.length > 0) {
-+          return parts.map(formatAddress).join(", ");
-+        }
-+      }
-+      return m.folder === "sent" ? "No recipient" : (m.accountEmail || "me");
-+    };
-+
-+    assertEquals(
-+      recipientSummary(sentMsg),
-+      "bob@example.com",
-+      "Sent message recipient summary must resolve to 'bob@example.com', NOT accountEmail 'alice@byos.local'"
-+    );
-+    assert(
-+      recipientSummary(sentMsg) !== sentMsg.accountEmail,
-+      "Recipient summary must not equal sender accountEmail (avoiding 'x to x' bug)"
-+    );
-+  });
-+
-   return { passed, failed };
- }
+OVERALL: 280 passed, 0 failed
 ```
 
 ### Production Vite Build
@@ -188,11 +85,10 @@ Terminal output from browser verification:
 --- [STEP 3] Navigate to Sent folder ---
   PASS: Found message rows in Sent folder
 Sent folder rows: [
-  "BTo: bob@byos.localSent Display Verification 179192169780802:01 AM",
-  "BTo: bob@byos.localAFILE01:42 AM"
+  "BTo: bob@byos.localSent Display Verification 179195544313311:24 AM"
 ]
   PASS: Found sent message row for target subject
-  PASS: Message row includes 'To: ' prefix (got text: "BTo: bob@byos.localSent Display Verification 179192169780802:01 AM")
+  PASS: Message row includes 'To: ' prefix (got text: "BTo: bob@byos.localSent Display Verification 179195544313311:24 AM")
   Screenshot saved: F:\Codex\byos-email\tests\browser\artifacts\sent_folder_list.png
 
 --- [STEP 4] Open Sent message in ReadingPane ---
@@ -218,7 +114,7 @@ Screenshots saved:
 - `tests/browser/artifacts/sent_reading_pane.png`
 
 ## What did not work or is untested
-- None: All acceptance criteria tested and verified across unit tests, production build, and headless browser run.
+- None: All acceptance criteria tested and verified across unit tests, production build, and live browser integration test.
 
 ## Test suite output
 
@@ -260,7 +156,7 @@ WIRE INTEGRITY TESTS: 4 passed, 0 failed
 
 Running Scheduled Folder Tests...
 Running Scheduled Folder Tests...
-  ✓ 1. System folder type union includes 'scheduled'
+  ✓ 1. Folder type union includes 'scheduled'
   ✓ 2. Sidebar folder list order places 'scheduled' between 'sent' and 'drafts'
   ✓ 3. MessageRow formatSmartDate formats scheduled dates correctly
   ✓ 4. DisplayMessage folder supports 'scheduled'
@@ -288,9 +184,7 @@ Running Display Party & Sent Folder Tests...
   ✓ 7. Scheduled folder renders recipient(s) and first +N
   ✓ 8. Threaded Sent row renders the recipient of the latest message
   ✓ 9. Sent folder rows are never treated as unread
-  ✓ 10. Sent folder row prepends 'To: ' to recipient display
-  ✓ 11. Reading pane displays from <sender> to <recipient> without x to x bug
-DISPLAY PARTY TESTS: 11 passed, 0 failed
+DISPLAY PARTY TESTS: 9 passed, 0 failed
 
 Running Nested Labels Tests...
   PASS: test_sidebar_renders_tree
@@ -431,7 +325,7 @@ Running OAuth Import Tests...
   ✓ fetchWithBackoff aborts immediately when signal triggered
 OAUTH IMPORT TESTS: 6 passed, 0 failed
 
-OVERALL: 282 passed, 0 failed
+OVERALL: 280 passed, 0 failed
 ```
 
 ### `go test -count=1 ./...` (full paste)
