@@ -252,7 +252,12 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                     class="ring-1 ring-black/10 dark:ring-white/20"
                   />
                   <div class="min-w-0 flex flex-col">
-                    <span class="truncate font-medium text-[#2B2C2D] dark:text-[#ECEBE8]">All Inboxes</span>
+                    <span
+                      class="truncate font-medium text-[#2B2C2D] dark:text-[#ECEBE8]"
+                      data-testid="account-dropdown-all-label"
+                    >
+                      All Inboxes
+                    </span>
                     <span class="text-[10px] text-[#878A8E]">Aggregated view across mailboxes</span>
                   </div>
                 </div>
@@ -311,7 +316,12 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                         class="ring-1 ring-black/10 dark:ring-white/20"
                       />
                       <div class="min-w-0 flex flex-col">
-                        <span class="truncate font-medium text-[#2B2C2D] dark:text-[#ECEBE8]">{acc.email}</span>
+                        <span
+                          class="truncate font-medium text-[#2B2C2D] dark:text-[#ECEBE8]"
+                          data-testid={`account-dropdown-label-${acc.id}`}
+                        >
+                          {acc.email}
+                        </span>
                         <span class="text-[10px] text-[#878A8E] capitalize">
                           {acc.privacyMode === "private" ? "Private Mailbox" : "Org-Managed"}
                         </span>

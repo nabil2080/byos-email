@@ -7,8 +7,8 @@ Removed the per-folder colored dot (`data-testid="folder-selection-dot"`) from t
 | File | Reason |
 |------|--------|
 | `apps/webmail/src/components/Sidebar.tsx` | Delete `folder-selection-dot` `<span>` elements from top Inbox row and folder loop, and remove unused `currentSelectionColor` helper. |
-| `tests/browser/test_sidebar_restructure.mjs` | Update Check 4 and Check 5 assertions to verify that zero `folder-selection-dot` elements exist in the sidebar. |
-| `tests/browser/verify_no_folder_dots.mjs` | Verification script automating the 5 manual verification checks across active account, second account switch, and theme toggle. |
+| `apps/webmail/src/components/AccountSwitcher.tsx` | Add explicit `data-testid` attributes to dropdown row labels (`account-dropdown-all-label` and `account-dropdown-label-${acc.id}`). |
+| `tests/browser/test_sidebar_restructure.mjs` | Update Check 4 and Check 5 assertions to verify zero folder dots; fix Check 3 and Check 7 selectors and add explicit string assertions for `allText`, `aliceText`, and `bobText`. |
 
 ## Raw evidence
 
@@ -186,9 +186,9 @@ Check 3 Result: {
   "hasAlice": true,
   "hasBob": true,
   "hasAddMailbox": true,
-  "allText": "A",
-  "aliceText": "A",
-  "bobText": "B"
+  "allText": "All Inboxes",
+  "aliceText": "alice@byos.local",
+  "bobText": "bob@byos.local"
 }
 Captured sidebar dropdown screenshot: F:\Codex\byos-email\tests\browser\artifacts\sidebar_dropdown_open.png
 Captured account popup multi screenshot: F:\Codex\byos-email\tests\browser\artifacts\account_popup_multi.png
@@ -239,7 +239,8 @@ Check 7 Reset View Result: {
 Check 7 Dropdown Result (Single Account): {
   "hasAllInboxes": false,
   "hasAlice": true,
-  "hasAddMailbox": true
+  "hasAddMailbox": true,
+  "aliceText": "alice@byos.local"
 }
 Captured account popup single screenshot: F:\Codex\byos-email\tests\browser\artifacts\account_popup_single.png
 ✓ CHECK 7 PASSED: All Inboxes conditional on 2+ accounts, selection resets on account removal

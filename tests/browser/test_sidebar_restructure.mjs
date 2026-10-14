@@ -197,20 +197,33 @@ async function runSidebarVerification() {
       const dropdownBob = document.querySelector(`[data-testid="account-dropdown-${boId}"]`);
       const addMailbox = document.querySelector('[data-testid="add-mailbox-button"]');
 
+      const allLabel = dropdownAll?.querySelector('[data-testid="account-dropdown-all-label"]') || dropdownAll?.querySelector('.truncate');
+      const aliceLabel = dropdownAlice?.querySelector(`[data-testid="account-dropdown-label-${alId}"]`) || dropdownAlice?.querySelector('.truncate');
+      const bobLabel = dropdownBob?.querySelector(`[data-testid="account-dropdown-label-${boId}"]`) || dropdownBob?.querySelector('.truncate');
+
       return {
         hasAllInboxes: !!dropdownAll,
         hasAlice: !!dropdownAlice,
         hasBob: !!dropdownBob,
         hasAddMailbox: !!addMailbox,
-        allText: dropdownAll ? dropdownAll.innerText.split("\n")[0] : null,
-        aliceText: dropdownAlice ? dropdownAlice.innerText.split("\n")[0] : null,
-        bobText: dropdownBob ? dropdownBob.innerText.split("\n")[0] : null,
+        allText: allLabel?.textContent?.trim() || null,
+        aliceText: aliceLabel?.textContent?.trim() || null,
+        bobText: bobLabel?.textContent?.trim() || null,
       };
     }, Alice.mailboxId, Bob.mailboxId);
 
     console.log("Check 3 Result:", JSON.stringify(check3, null, 2));
     if (!check3.hasAllInboxes || !check3.hasAlice || !check3.hasBob || !check3.hasAddMailbox) {
       throw new Error(`Dropdown missing options: All=${check3.hasAllInboxes}, Alice=${check3.hasAlice}, Bob=${check3.hasBob}, Add=${check3.hasAddMailbox}`);
+    }
+    if (check3.allText !== "All Inboxes") {
+      throw new Error(`Expected All Inboxes row to have label "All Inboxes", got "${check3.allText}"`);
+    }
+    if (check3.aliceText !== "alice@byos.local") {
+      throw new Error(`Expected Alice row to have email "alice@byos.local", got "${check3.aliceText}"`);
+    }
+    if (check3.bobText !== "bob@byos.local") {
+      throw new Error(`Expected Bob row to have email "bob@byos.local", got "${check3.bobText}"`);
     }
 
     // Capture screenshot of open dropdown state
@@ -422,10 +435,12 @@ async function runSidebarVerification() {
       const dropdownAll = document.querySelector('[data-testid="account-dropdown-all"]');
       const dropdownAlice = document.querySelector(`[data-testid="account-dropdown-${alId}"]`);
       const addMailbox = document.querySelector('[data-testid="add-mailbox-button"]');
+      const aliceLabel = dropdownAlice?.querySelector(`[data-testid="account-dropdown-label-${alId}"]`) || dropdownAlice?.querySelector('.truncate');
       return {
         hasAllInboxes: !!dropdownAll,
         hasAlice: !!dropdownAlice,
         hasAddMailbox: !!addMailbox,
+        aliceText: aliceLabel?.textContent?.trim() || null,
       };
     }, Alice.mailboxId);
 
@@ -435,6 +450,9 @@ async function runSidebarVerification() {
     }
     if (!check7Dropdown.hasAlice || !check7Dropdown.hasAddMailbox) {
       throw new Error("Dropdown should display Alice and Add Mailbox action!");
+    }
+    if (check7Dropdown.aliceText !== "alice@byos.local") {
+      throw new Error(`Expected Alice row label to be "alice@byos.local", got "${check7Dropdown.aliceText}"`);
     }
 
     // Save single account popup screenshot
