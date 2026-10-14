@@ -240,16 +240,14 @@ async function runSidebarVerification() {
 
       const topFolderBtn = document.querySelector('[data-testid="folder-inbox"]');
       const topFolderName = document.querySelector('[data-testid="folder-name-inbox"]')?.textContent?.trim();
-      const folderDots = Array.from(document.querySelectorAll('[data-testid="folder-selection-dot"]'))
-        .map((el) => window.getComputedStyle(el).backgroundColor);
+      const folderDotCount = document.querySelectorAll('[data-testid="folder-selection-dot"]').length;
 
       return {
         chipText,
         dotColor,
         hasInboxFolder: !!topFolderBtn,
         topFolderName,
-        folderCount: folderDots.length,
-        folderDotColors: [...new Set(folderDots)],
+        folderDotCount,
       };
     });
 
@@ -263,8 +261,8 @@ async function runSidebarVerification() {
     if (check4.topFolderName !== "Inbox") {
       throw new Error(`Expected top folder "Inbox" for Alice, got "${check4.topFolderName}"`);
     }
-    if (!check4.folderDotColors.includes("rgb(128, 34, 195)")) {
-      throw new Error(`Folder selection dots should match Alice's violet color, got: ${check4.folderDotColors}`);
+    if (check4.folderDotCount !== 0) {
+      throw new Error(`Expected no folder-selection-dot elements in sidebar, got: ${check4.folderDotCount}`);
     }
 
     // Capture screenshot of Alice selected state
@@ -305,8 +303,7 @@ async function runSidebarVerification() {
       const topFolderName = document.querySelector('[data-testid="folder-name-inbox"]')?.textContent?.trim();
       const topFolderUnread = document.querySelector('[data-testid="folder-unread-inbox"]')?.textContent?.trim();
 
-      const folderDots = Array.from(document.querySelectorAll('[data-testid="folder-selection-dot"]'))
-        .map((el) => window.getComputedStyle(el).backgroundColor);
+      const folderDotCount = document.querySelectorAll('[data-testid="folder-selection-dot"]').length;
 
       const rows = Array.from(document.querySelectorAll('[data-testid="message-row"]'));
       const text = document.body.innerText;
@@ -319,7 +316,7 @@ async function runSidebarVerification() {
         hasUnifiedFolder: !!topFolderBtn,
         topFolderName,
         topFolderUnread,
-        folderDotColors: [...new Set(folderDots)],
+        folderDotCount,
         rowCount: rows.length,
         hasAlpha,
         hasBeta,
@@ -332,6 +329,9 @@ async function runSidebarVerification() {
     }
     if (check5.topFolderName !== "All Inboxes") {
       throw new Error(`Expected top folder "All Inboxes", got "${check5.topFolderName}"`);
+    }
+    if (check5.folderDotCount !== 0) {
+      throw new Error(`Expected no folder-selection-dot elements in All Inboxes sidebar, got: ${check5.folderDotCount}`);
     }
     if (!check5.hasAlpha || !check5.hasBeta) {
       throw new Error(`Unified Inbox messages from both accounts not found! Alpha=${check5.hasAlpha}, Beta=${check5.hasBeta}`);

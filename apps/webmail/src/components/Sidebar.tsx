@@ -217,14 +217,6 @@ export const Sidebar: Component<SidebarProps> = (props) => {
   const isAllInboxes = () =>
     props.activeAccountId === "__all__" || props.currentFolder === "unified_inbox";
 
-  const currentSelectionColor = () => {
-    if (isAllInboxes()) {
-      return "#A27561";
-    }
-    const targetId = props.activeAccountId || props.selectedMailbox?.id || props.connectedAccounts?.[0]?.id || "";
-    return getAccountColor(targetId);
-  };
-
   return (
     <aside class={`w-full md:w-64 flex-shrink-0 bg-[#F0EEE9] dark:bg-[#18191D] flex flex-col justify-between select-none h-full relative ${props.class || ""}`}>
       {/* FIXED TOP: Brand Header & Mode Toggle, Account Switcher, Compose, Quick Actions */}
@@ -394,11 +386,6 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               data-testid={isAllInboxes() ? "unified-inbox-button" : "folder-inbox"}
             >
               <div class="flex items-center gap-2.5">
-                <span
-                  class="w-2 h-2 rounded-full flex-shrink-0 transition-colors"
-                  style={{ "background-color": currentSelectionColor() }}
-                  data-testid="folder-selection-dot"
-                />
                 <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5] flex-shrink-0" viewBox="0 0 24 24">
                   <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
                   <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
@@ -519,11 +506,6 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 data-testid={`folder-${f}`}
               >
                 <div class="flex items-center gap-2.5">
-                  <span
-                    class="w-2 h-2 rounded-full flex-shrink-0 transition-colors"
-                    style={{ "background-color": currentSelectionColor() }}
-                    data-testid="folder-selection-dot"
-                  />
                   {renderFolderIcon(f)}
                   <span>{folderLabels[f]}</span>
                 </div>
