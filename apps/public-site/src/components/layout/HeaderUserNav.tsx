@@ -23,7 +23,7 @@ export const HeaderUserNav: Component = () => {
 
   const cpBase = () => {
     const envUrl = (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_CP_URL;
-    return envUrl || "http://127.0.0.1:3000";
+    return envUrl || "http://localhost:3000";
   };
 
   const checkAuth = async () => {
@@ -195,7 +195,7 @@ export const HeaderUserNav: Component = () => {
               Sign In
             </a>
             <a
-              href={`${cpBase()}/register`}
+              href={`${cpBase()}/signup`}
               class="rounded-xl bg-[#9E725F] px-4 py-2 text-xs sm:text-sm font-semibold text-white shadow-sm hover:bg-[#865E4D] transition-all"
             >
               Start Free Trial

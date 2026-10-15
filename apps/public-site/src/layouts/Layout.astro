@@ -39,11 +39,13 @@ const canonical = Astro.url?.pathname ?? "/";
     <meta property="og:title" content={fullTitle} />
     <meta property="og:description" content={description} />
     <meta property="og:locale" content="en_US" />
+    <meta property="og:image" content={new URL("/og-image.png", Astro.url).toString()} />
 
     {/* Twitter */}
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={fullTitle} />
     <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={new URL("/og-image.png", Astro.url).toString()} />
 
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 

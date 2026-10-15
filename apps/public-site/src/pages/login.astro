@@ -1,18 +1,20 @@
 ---
 // Redirect public site login directly to Control Panel login
+const cpUrl = import.meta.env.PUBLIC_CP_URL || "http://localhost:3000";
 const rawUrl = Astro.request?.url || "";
 const search = rawUrl.includes("?") ? rawUrl.slice(rawUrl.indexOf("?")) : (Astro.url.search || "");
-return Astro.redirect(`http://127.0.0.1:3000/login${search}`, 302);
+return Astro.redirect(`${cpUrl}/login${search}`, 302);
 ---
 
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta http-equiv="refresh" content={`0; url=${cpUrl}/login`} />
     <title>Redirecting to Control Panel Login...</title>
-    <script is:inline>
+    <script is:inline define:vars={{ cpUrl }}>
       const search = window.location.search || "";
-      window.location.replace(`http://127.0.0.1:3000/login${search}`);
+      window.location.replace(`${cpUrl}/login${search}`);
     </script>
   </head>
   <body class="bg-[#F0EEE9] text-[#3C3D3E] flex items-center justify-center min-h-screen">

@@ -3,7 +3,7 @@ import { onMount } from "solid-js";
 export function AnimatedHero() {
   const cpUrl = () => {
     const envUrl = (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_CP_URL;
-    return envUrl || "http://127.0.0.1:3000";
+    return envUrl || "http://localhost:3000";
   };
 
   let stackRef: HTMLDivElement | undefined;
@@ -73,7 +73,7 @@ export function AnimatedHero() {
               class="mt-10 flex flex-wrap items-center gap-x-8 gap-y-4"
             >
               <a
-                href={`${cpUrl()}/register`}
+                href={`${cpUrl()}/signup`}
                 class="px-7 py-3.5 btn-primary text-base font-semibold"
               >
                 Get Started

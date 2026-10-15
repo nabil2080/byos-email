@@ -6,7 +6,7 @@ export function MobileMenu() {
 
   const cpUrl = () => {
     const envUrl = (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_CP_URL;
-    return envUrl || "http://127.0.0.1:3000";
+    return envUrl || "http://localhost:3000";
   };
 
   const toggleMenu = () => setIsOpen(!isOpen());
@@ -22,6 +22,7 @@ export function MobileMenu() {
 
   const links = [
     { label: "Features", href: "/#features" },
+    { label: "About", href: "/#features" },
     { label: "Pricing", href: "/pricing" },
     { label: "Security", href: "/security" },
     { label: "Docs", href: "/docs" },
@@ -75,7 +76,7 @@ export function MobileMenu() {
               Sign In
             </a>
             <a
-              href={`${cpUrl()}/register`}
+              href={`${cpUrl()}/signup`}
               class="w-full text-center py-2.5 rounded-xl bg-[#9E725F] text-white text-xs font-bold hover:bg-[#865E4D] transition-colors shadow-xs"
             >
               Get Started

@@ -2,6 +2,15 @@
 import Layout from "../layouts/Layout.astro";
 import PageHeader from "../components/layout/PageHeader.astro";
 import DynamicPricingCalculator from "../components/DynamicPricingCalculator";
+import { calculateGraduatedPricing } from "../lib/pricing_math";
+
+const comparisonSeats = 20;
+const pricingMonthly = calculateGraduatedPricing(comparisonSeats, "monthly");
+const pricingAnnual = calculateGraduatedPricing(comparisonSeats, "annual");
+const byosMonthlyCost = pricingMonthly.baseMonthlyTotal;
+const byosAnnualCost = pricingAnnual.annualTotal;
+const googleAnnual = 1728;
+const savingsAnnual = googleAnnual - byosAnnualCost;
 ---
 
 <Layout title="Simple & Honest Pricing | Zero Storage Markup">
@@ -53,11 +62,11 @@ import DynamicPricingCalculator from "../components/DynamicPricingCalculator";
 
         {/* BYOS Sovereign Email */}
         <div class="p-6 rounded-2xl bg-[#F3ECE8]/50 border-2 border-[#9E725F] relative overflow-hidden shadow-xs">
-          <div class="text-xs font-bold text-[#9E725F]">BYOS Business Email (20 Seats)</div>
-          <div class="mt-3 text-3xl font-extrabold text-emerald-800">$41<span class="text-xs font-normal text-[#6F7173]">/mo</span></div>
-          <div class="text-xs text-[#6F7173] mt-1">$39 BYOS Capacity + ~$2 Direct S3 / R2 Storage</div>
+          <div class="text-xs font-bold text-[#9E725F]">BYOS Business Email ({comparisonSeats} Seats)</div>
+          <div class="mt-3 text-3xl font-extrabold text-emerald-800">${byosMonthlyCost.toFixed(2)}<span class="text-xs font-normal text-[#6F7173]">/mo</span></div>
+          <div class="text-xs text-[#6F7173] mt-1">${byosMonthlyCost.toFixed(2)} BYOS Capacity (10 &times; $3.00 + 10 &times; $2.85)</div>
           <div class="mt-4 pt-4 border-t border-[#9E725F]/30 text-xs text-emerald-800 font-bold">
-            Total Annual: $492 / year &bull; <span class="underline">Save up to $1,236 / year</span>
+            Total Annual: ${byosAnnualCost} / year &bull; <span class="underline">Save up to ${savingsAnnual} / year</span>
           </div>
         </div>
       </div>

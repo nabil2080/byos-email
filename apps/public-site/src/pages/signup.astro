@@ -1,21 +1,23 @@
 ---
-// Redirect public site signup directly to Control Panel register
+// Redirect public site signup directly to Control Panel signup
+const cpUrl = import.meta.env.PUBLIC_CP_URL || "http://localhost:3000";
 const rawUrl = Astro.request?.url || "";
 const search = rawUrl.includes("?") ? rawUrl.slice(rawUrl.indexOf("?")) : (Astro.url.search || "");
-return Astro.redirect(`http://127.0.0.1:3000/register${search}`, 302);
+return Astro.redirect(`${cpUrl}/signup${search}`, 302);
 ---
 
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Redirecting to Control Panel Register...</title>
-    <script is:inline>
+    <meta http-equiv="refresh" content={`0; url=${cpUrl}/signup`} />
+    <title>Redirecting to Control Panel Signup...</title>
+    <script is:inline define:vars={{ cpUrl }}>
       const search = window.location.search || "";
-      window.location.replace(`http://127.0.0.1:3000/register${search}`);
+      window.location.replace(`${cpUrl}/signup${search}`);
     </script>
   </head>
   <body class="bg-[#F0EEE9] text-[#3C3D3E] flex items-center justify-center min-h-screen">
-    <p class="text-sm">Redirecting to Control Panel Register...</p>
+    <p class="text-sm">Redirecting to Control Panel Signup...</p>
   </body>
 </html>

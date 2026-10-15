@@ -48,7 +48,8 @@ $tests = @(
     "tests/browser/test_composer.mjs",
     "tests/browser/test_contacts.mjs",
     "tests/browser/test_import.mjs",
-    "tests/browser/test_sent_folder_display.mjs"
+    "tests/browser/test_sent_folder_display.mjs",
+    "tests/browser/test_public_site.mjs"
 )
 
 $results = @{}

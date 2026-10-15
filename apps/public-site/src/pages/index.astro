@@ -3,7 +3,7 @@ import Layout from "../layouts/Layout.astro";
 import { AnimatedHero } from "../components/hero/AnimatedHero";
 import { BigIdeaSeparation } from "../components/interactive/BigIdeaSeparation";
 
-const cpUrl = "http://127.0.0.1:3000";
+const cpUrl = import.meta.env.PUBLIC_CP_URL || "http://localhost:3000";
 
 const stack = [
   { label: "Your domain", value: "company.com" },
@@ -234,7 +234,7 @@ const statusTone: Record<string, string> = {
         experience. Set up in four steps — domain, storage, mailboxes, done.
       </p>
       <div class="mt-10 flex flex-wrap items-center justify-center gap-4" data-reveal style="--reveal-delay: 160ms">
-        <a href={`${cpUrl}/register`} class="px-8 py-3.5 btn-primary text-base font-semibold">Get Started</a>
+        <a href={`${cpUrl}/signup`} class="px-8 py-3.5 btn-primary text-base font-semibold">Get Started</a>
         <a href="/security" class="px-7 py-3.5 rounded-[10px] border border-white/20 bg-white/5 text-base font-semibold text-[#F0EEE9] transition-all hover:bg-white/10">Explore Security</a>
       </div>
     </div>

@@ -1,7 +1,7 @@
 export function Footer() {
   const cpUrl = () => {
     const envUrl = (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_CP_URL;
-    return envUrl || "http://127.0.0.1:3000";
+    return envUrl || "http://localhost:3000";
   };
 
   const groups = [
@@ -33,7 +33,7 @@ export function Footer() {
       title: "Account",
       links: [
         { label: "Sign In", href: `${cpUrl()}/login` },
-        { label: "Get Started", href: `${cpUrl()}/register` },
+        { label: "Get Started", href: `${cpUrl()}/signup` },
       ],
     },
   ];

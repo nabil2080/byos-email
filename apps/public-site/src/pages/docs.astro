@@ -1,6 +1,8 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import PageHeader from "../components/layout/PageHeader.astro";
+
+const cpUrl = import.meta.env.PUBLIC_CP_URL || "http://localhost:3000";
 ---
 
 <Layout title="Documentation & Setup Guides">
@@ -24,7 +26,7 @@ import PageHeader from "../components/layout/PageHeader.astro";
         </div>
         <div class="mt-6 pt-4 border-t border-[#E2DFD8] flex items-center justify-between">
           <span class="text-[11px] font-mono text-[#6F7173]">3 min read</span>
-          <a href="http://127.0.0.1:3000/dashboard/storage" class="text-xs font-bold text-[#9E725F] hover:text-[#865E4D]">Storage Settings &rarr;</a>
+          <a href={`${cpUrl}/dashboard/storage`} class="text-xs font-bold text-[#9E725F] hover:text-[#865E4D]">Storage Settings &rarr;</a>
         </div>
       </div>
 
@@ -39,7 +41,7 @@ import PageHeader from "../components/layout/PageHeader.astro";
         </div>
         <div class="mt-6 pt-4 border-t border-[#E2DFD8] flex items-center justify-between">
           <span class="text-[11px] font-mono text-[#6F7173]">3 min read</span>
-          <a href="http://127.0.0.1:3000/dashboard/storage" class="text-xs font-bold text-[#9E725F] hover:text-[#865E4D]">Connect Drive &rarr;</a>
+          <a href={`${cpUrl}/dashboard/storage`} class="text-xs font-bold text-[#9E725F] hover:text-[#865E4D]">Connect Drive &rarr;</a>
         </div>
       </div>
 
@@ -54,7 +56,7 @@ import PageHeader from "../components/layout/PageHeader.astro";
         </div>
         <div class="mt-6 pt-4 border-t border-[#E2DFD8] flex items-center justify-between">
           <span class="text-[11px] font-mono text-[#6F7173]">4 min read</span>
-          <a href="http://127.0.0.1:3000/dashboard/domains" class="text-xs font-bold text-[#9E725F] hover:text-[#865E4D]">Add Domain &rarr;</a>
+          <a href={`${cpUrl}/dashboard/domains`} class="text-xs font-bold text-[#9E725F] hover:text-[#865E4D]">Add Domain &rarr;</a>
         </div>
       </div>
 
@@ -69,7 +71,7 @@ import PageHeader from "../components/layout/PageHeader.astro";
         </div>
         <div class="mt-6 pt-4 border-t border-[#E2DFD8] flex items-center justify-between">
           <span class="text-[11px] font-mono text-[#6F7173]">App Guide</span>
-          <a href="http://127.0.0.1:3000/dashboard/settings" class="text-xs font-bold text-[#9E725F] hover:text-[#865E4D]">Client Setup &rarr;</a>
+          <a href={`${cpUrl}/dashboard/settings`} class="text-xs font-bold text-[#9E725F] hover:text-[#865E4D]">Client Setup &rarr;</a>
         </div>
       </div>
 
@@ -99,7 +101,7 @@ import PageHeader from "../components/layout/PageHeader.astro";
         </div>
         <div class="mt-6 pt-4 border-t border-[#E2DFD8] flex items-center justify-between">
           <span class="text-[11px] font-mono text-[#6F7173]">Team Ops</span>
-          <a href="http://127.0.0.1:3000/dashboard/members" class="text-xs font-bold text-[#9E725F] hover:text-[#865E4D]">Team Settings &rarr;</a>
+          <a href={`${cpUrl}/dashboard/members`} class="text-xs font-bold text-[#9E725F] hover:text-[#865E4D]">Team Settings &rarr;</a>
         </div>
       </div>
     </div>

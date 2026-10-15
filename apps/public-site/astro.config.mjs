@@ -3,6 +3,9 @@ import tailwindcss from "@tailwindcss/vite";
 import solid from "@astrojs/solid-js";
 
 export default defineConfig({
+  redirects: {
+    "/register": "/signup",
+  },
   integrations: [solid()],
   vite: {
     plugins: [tailwindcss()],

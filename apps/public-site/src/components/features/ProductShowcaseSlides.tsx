@@ -10,6 +10,11 @@ interface SlideData {
 }
 
 export const ProductShowcaseSlides: Component = () => {
+  const cpUrl = () => {
+    const envUrl = (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_CP_URL;
+    return envUrl || "http://localhost:3000";
+  };
+
   const [currentSlide, setCurrentSlide] = createSignal(0);
   const [isPlaying, setIsPlaying] = createSignal(true);
   const [storageSelected, setStorageSelected] = createSignal<"r2" | "s3" | "drive">("r2");
@@ -23,7 +28,7 @@ export const ProductShowcaseSlides: Component = () => {
       title: "A clean, fast inbox your team will love.",
       description: "Search instantly, read threads without clutter, and organize mailboxes with labels and folders. Everything works smoothly in your browser on desktop and mobile.",
       ctaText: "Explore Webmail",
-      ctaLink: "http://127.0.0.1:3000/login",
+      ctaLink: `${cpUrl()}/login`,
     },
     {
       id: 1,
@@ -31,7 +36,7 @@ export const ProductShowcaseSlides: Component = () => {
       title: "Store emails in Cloudflare R2, AWS S3, or Google Drive.",
       description: "Pick your favorite cloud provider. Pay pennies for storage directly to AWS or Cloudflare with zero markup from us. You keep your files forever.",
       ctaText: "Connect Your Storage",
-      ctaLink: "http://127.0.0.1:3000/login",
+      ctaLink: `${cpUrl()}/login`,
     },
     {
       id: 2,
@@ -47,7 +52,7 @@ export const ProductShowcaseSlides: Component = () => {
       title: "Your company domain. Straight to the inbox.",
       description: "Add your domain in under 3 minutes with automated DNS checks. Built-in digital signatures ensure your messages land in the primary inbox, not spam.",
       ctaText: "Set Up Custom Domain",
-      ctaLink: "http://127.0.0.1:3000/login",
+      ctaLink: `${cpUrl()}/login`,
     },
     {
       id: 4,

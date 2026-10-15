@@ -225,6 +225,12 @@ Stop and ask the user before continuing if any of the following is true:
 Killing your own tasks and retrying blindly wastes turns. Stopping and
 asking wastes zero.
 
+### Section: Audit interpretation and unused code
+
+When a component or route appears unused, do not assume it is
+incomplete. Report the finding without recommending deletion or
+wiring. Ask the user to confirm intent before proposing a fix.
+
 ## Frozen
 
 Treat Section 12 and Section 15 specifications as immutable unless explicitly authorized.

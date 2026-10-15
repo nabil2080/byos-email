@@ -125,7 +125,7 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
 
     const envCpUrl =
       (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_CP_URL ||
-      "http://127.0.0.1:3000";
+      "http://localhost:3000";
     const envApiUrl =
       (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_API_URL || "";
 

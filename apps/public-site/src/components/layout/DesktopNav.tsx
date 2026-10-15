@@ -1,11 +1,12 @@
 export function DesktopNav() {
   const cpUrl = () => {
     const envUrl = (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_CP_URL;
-    return envUrl || "http://127.0.0.1:3000";
+    return envUrl || "http://localhost:3000";
   };
 
   const navLinks = [
     { label: "Features", href: "/#features" },
+    { label: "About", href: "/#features" },
     { label: "Pricing", href: "/pricing" },
     { label: "Security", href: "/security" },
     { label: "Docs", href: "/docs" },
@@ -53,7 +54,7 @@ export function DesktopNav() {
               Sign In
             </a>
             <a
-              href={`${cpUrl()}/register`}
+              href={`${cpUrl()}/signup`}
               class="px-5 py-2 text-xs font-semibold btn-primary shadow-xs"
             >
               Get Started

@@ -27,7 +27,7 @@ export const CostCalculator: Component = () => {
 
   const cpBase = () => {
     const envUrl = (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_CP_URL;
-    return envUrl || "http://127.0.0.1:3000";
+    return envUrl || "http://localhost:3000";
   };
   const apiBase = () => {
     const envUrl = (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_API_URL;

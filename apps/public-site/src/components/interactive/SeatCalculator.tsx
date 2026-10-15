@@ -13,7 +13,7 @@ const presets = [10, 25, 50, 100];
 export function SeatCalculator() {
   const cpUrl = () => {
     const envUrl = (import.meta as unknown as { env: Record<string, string> }).env?.PUBLIC_CP_URL;
-    return envUrl || "http://127.0.0.1:3000";
+    return envUrl || "http://localhost:3000";
   };
 
   const [seats, setSeats] = createSignal(25);
@@ -174,7 +174,7 @@ export function SeatCalculator() {
         </div>
 
         <a
-          href={`${cpUrl()}/register`}
+          href={`${cpUrl()}/signup`}
           class="mt-6 inline-flex items-center justify-center rounded-[10px] bg-[#9E725F] px-6 py-3.5 text-sm font-semibold text-white transition-all hover:bg-[#865E4D]"
         >
           Get Started with {seats()} seats

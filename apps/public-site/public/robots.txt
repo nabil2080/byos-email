@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /login
+Disallow: /signup
+
+Sitemap: https://byos.example/sitemap-index.xml

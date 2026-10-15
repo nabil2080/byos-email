@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#242526"/>
+      <stop offset="100%" stop-color="#18191A"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="300" cy="150" r="600" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#9E725F" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#9E725F" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  
+  <!-- Outer border -->
+  <rect x="24" y="24" width="1152" height="582" rx="28" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2"/>
+  
+  <!-- Brand pill -->
+  <g transform="translate(100, 110)">
+    <rect width="100" height="42" rx="12" fill="#9E725F"/>
+    <text x="50" y="27" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="800" font-size="19" fill="#FFFFFF" text-anchor="middle" letter-spacing="2">BYOS</text>
+    <text x="120" y="28" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="600" font-size="18" fill="#F0EEE9" letter-spacing="1">SOVEREIGN INFRASTRUCTURE</text>
+  </g>
+  
+  <!-- Headline -->
+  <text x="100" y="240" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="800" font-size="58" fill="#F0EEE9" letter-spacing="-1">
+    Business Email.
+  </text>
+  <text x="100" y="315" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="800" font-size="58" fill="#9E725F" letter-spacing="-1">
+    Under Your Total Control.
+  </text>
+  
+  <!-- Description -->
+  <text x="100" y="390" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="400" font-size="24" fill="#B4B5B8">
+    Zero-knowledge architecture. Connect your own AWS S3, Cloudflare R2,
+  </text>
+  <text x="100" y="425" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="400" font-size="24" fill="#B4B5B8">
+    or Google Drive storage with transparent graduated pricing.
+  </text>
+  
+  <!-- Feature Badges -->
+  <g transform="translate(100, 480)">
+    <rect x="0" y="0" width="230" height="44" rx="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+    <circle cx="24" cy="22" r="5" fill="#9E725F"/>
+    <text x="38" y="28" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="600" font-size="14" fill="#E2DFD8">Zero Plaintext Escrow</text>
+    
+    <rect x="250" y="0" width="240" height="44" rx="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+    <circle cx="274" cy="22" r="5" fill="#9E725F"/>
+    <text x="288" y="28" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="600" font-size="14" fill="#E2DFD8">Customer-Owned Storage</text>
+    
+    <rect x="510" y="0" width="230" height="44" rx="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+    <circle cx="534" cy="22" r="5" fill="#9E725F"/>
+    <text x="548" y="28" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="600" font-size="14" fill="#E2DFD8">Graduated Seat Pricing</text>
+  </g>
+</svg>
