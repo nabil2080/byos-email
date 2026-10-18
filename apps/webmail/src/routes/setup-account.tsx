@@ -112,26 +112,12 @@ export const SetupAccount: Component = () => {
       setMnemonic(phrase);
       const rootHex = wasm.wasm_recover_root_secret(phrase);
 
-      let mailboxSkHex = "";
-      if (data.privacy_mode === "private") {
-        // Zero-Knowledge Private Mailbox:
-        // Keypair generated strictly on invitee's browser!
-        const kpJson = wasm.wasm_generate_keypair();
-        const kp = JSON.parse(kpJson) as { secret_key: string; public_key: string };
-        mailboxSkHex = kp.secret_key;
-        setDerivedMailboxPk(kp.public_key);
-      } else {
-        // Organization-Managed Mailbox:
-        // Decrypt provisional secret key from temp_wrapped_sk using activation token
-        if (!data.temp_wrapped_sk) {
-          throw new Error("Missing provisional wrapped key from invitation");
-        }
-        mailboxSkHex = wasm.wasm_aes_gcm_decrypt(rawToken(), data.temp_wrapped_sk, "");
-        if (!mailboxSkHex || mailboxSkHex.length !== 64) {
-          throw new Error("Failed to decrypt provisional mailbox key with activation token");
-        }
-        setDerivedMailboxPk(data.mailbox_pk || "");
-      }
+      // Zero-Knowledge Private Mailbox:
+      // Keypair generated strictly on invitee's device!
+      const kpJson = wasm.wasm_generate_keypair();
+      const kp = JSON.parse(kpJson) as { secret_key: string; public_key: string };
+      const mailboxSkHex = kp.secret_key;
+      setDerivedMailboxPk(kp.public_key);
 
       // 1. Wrap under user root secret derived from recovery phrase
       const rootWrappedHex = wasm.wasm_wrap_mailbox_key(rootHex, mailboxSkHex, boxIdHex);
@@ -505,14 +491,10 @@ export const SetupAccount: Component = () => {
                       Privacy Mode
                     </span>
                     <span
-                      class={`inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded text-[11px] ${
-                        data().privacy_mode === "private"
-                          ? "bg-purple-100 text-purple-800"
-                          : "bg-emerald-100 text-emerald-800"
-                      }`}
+                      class="inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded text-[11px] bg-purple-100 text-purple-800"
                     >
-                      <span class={`w-1.5 h-1.5 rounded-full ${data().privacy_mode === "private" ? "bg-purple-600" : "bg-emerald-600"}`}></span>
-                      {data().privacy_mode === "private" ? "Private (Zero-Knowledge)" : "Organization-Managed"}
+                      <span class="w-1.5 h-1.5 rounded-full bg-purple-600"></span>
+                      Private (Zero-Knowledge)
                     </span>
                   </div>
                 </div>
@@ -672,34 +654,22 @@ export const SetupAccount: Component = () => {
                   <div class="space-y-5">
                     <div>
                       <h3 class="text-sm font-semibold text-[#3C3D3E]">
-                        {data().privacy_mode === "private"
-                          ? "Your 24-Word Recovery Phrase (Private Mailbox)"
-                          : "Mailbox Recovery Phrase"}
+                        Your 24-Word Recovery Phrase (Private Mailbox)
                       </h3>
                       <p class="text-xs text-[#6F7173] mt-1 leading-relaxed">
-                        {data().privacy_mode === "private"
-                          ? "This 24-word BIP-39 recovery phrase derives your root encryption secret. Because this is a Private mailbox, organization administrators have zero access to your keys."
-                          : "Save this recovery phrase in a secure password manager or offline vault. It allows you to unlock and decrypt your mailbox."}
+                        This 24-word BIP-39 recovery phrase derives your root encryption secret. Because this is a Private mailbox, organization administrators have zero access to your keys.
                       </p>
                     </div>
 
                     {/* Security Alert Banner */}
                     <div
-                      class={`p-3.5 rounded-lg border text-xs leading-relaxed ${
-                        data().privacy_mode === "private"
-                          ? "bg-purple-50 border-purple-200 text-purple-900"
-                          : "bg-amber-50 border-amber-200 text-amber-900"
-                      }`}
+                      class="p-3.5 rounded-lg border text-xs leading-relaxed bg-purple-50 border-purple-200 text-purple-900"
                     >
                       <p class="font-semibold mb-0.5">
-                        {data().privacy_mode === "private"
-                          ? "Zero-Knowledge Guarantee"
-                          : "Important Key Custody Notice"}
+                        Zero-Knowledge Guarantee
                       </p>
                       <p class="text-[11px]">
-                        {data().privacy_mode === "private"
-                          ? "The server and organization administrators do NOT possess your recovery phrase or private key. If you lose this phrase, your messages cannot be decrypted."
-                          : "Do not share this phrase. Keep it in a safe place to preserve end-to-end access to your message archive."}
+                        The server and organization administrators do NOT possess your recovery phrase or private key. If you lose this phrase, your messages cannot be decrypted.
                       </p>
                     </div>
 

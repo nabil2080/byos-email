@@ -287,7 +287,7 @@ File: `services/api/aliases_test.go` (lines 121-167):
 func TestCreateAliasRateLimit(t *testing.T) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+		dsn = "postgres://${DB_USER}:${DB_PASSWORD}@localhost:5432/byos?sslmode=disable"
 	}
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)

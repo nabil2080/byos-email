@@ -24,7 +24,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -335,11 +334,9 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "password must be 8-128 characters", http.StatusBadRequest)
 		return
 	}
-	recPk, err := hex.DecodeString(strings.TrimSpace(req.OrgRecoveryPK))
-	if err != nil || len(recPk) != 32 {
-		http.Error(w, "org_recovery_pk must be a 32-byte hex public key", http.StatusBadRequest)
-		return
-	}
+	// Deprecated recovery fields in req (org_recovery_pk, wrapped_org_recovery_sk, recovery_salt)
+	// are intentionally ignored and never treated as active cryptographic material.
+	// In post-migration 058 architecture, all organizations store org_recovery_pk = NULL.
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
@@ -375,7 +372,9 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	if orgName == "" {
 		orgName = strings.Split(email, "@")[0] + "'s organization"
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO organizations (id, name, org_recovery_pk) VALUES ($1, $2, $3) RETURNING id::text`, orgID, orgName, recPk).Scan(&orgID)
+	// Migration 058 is frozen and applied: org_recovery_pk is nullable and always stored as NULL.
+	// No caller-supplied recovery material is accepted or persisted as active cryptographic material.
+	err = tx.QueryRow(ctx, `INSERT INTO organizations (id, name, org_recovery_pk) VALUES ($1, $2, NULL) RETURNING id::text`, orgID, orgName).Scan(&orgID)
 	if err != nil {
 		http.Error(w, "failed to create organization", http.StatusInternalServerError)
 		return
@@ -389,25 +388,6 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "failed to create user", http.StatusInternalServerError)
 		return
-	}
-
-	// Persist wrapped organization recovery secret key if provided
-	if strings.TrimSpace(req.WrappedOrgRecoverySK) != "" {
-		wrappedBytes, err := hex.DecodeString(strings.TrimSpace(req.WrappedOrgRecoverySK))
-		var saltBytes []byte
-		if strings.TrimSpace(req.RecoverySalt) != "" {
-			saltBytes, _ = hex.DecodeString(strings.TrimSpace(req.RecoverySalt))
-		}
-		if len(saltBytes) != recoveryKDFSaltBytes {
-			saltBytes = make([]byte, recoveryKDFSaltBytes)
-		}
-		if err == nil && len(wrappedBytes) > 0 {
-			_, _ = tx.Exec(ctx, `
-				INSERT INTO org_recovery_principals 
-				(user_id, org_id, principal_name, kdf_algorithm, kdf_version, kdf_salt, kdf_memory, kdf_iterations, kdf_parallelism, org_recovery_sk_encrypted, org_recovery_pk) 
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-			`, userID, orgID, displayName, recoveryKDFAlgorithm, recoveryKDFVersion, saltBytes, recoveryKDFMemoryKiB, recoveryKDFIterations, recoveryKDFParallelism, wrappedBytes, recPk)
-		}
 	}
 	token, tokenHash := generateSessionToken()
 	expires := time.Now().Add(30 * 24 * time.Hour)
@@ -426,7 +406,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	setSessionCookie(w, r, token, expires)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{"id": userID, "email": email, "org_id": orgID, "org_name": orgName})
+	json.NewEncoder(w).Encode(map[string]interface{}{"id": userID, "email": email, "org_id": orgID, "org_name": orgName, "token": token})
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
@@ -609,12 +589,13 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	auditLog(ctx, conn, orgID, userID, "login", "user", userID, map[string]interface{}{"email": email})
-	var role, plan string
+	var role, subscriptionStatus string
+	var seatCount int
 	_ = conn.QueryRow(ctx, `
-		SELECT COALESCE(u.role, 'member'), COALESCE(o.plan, 'solo')
+		SELECT COALESCE(u.role, 'member'), COALESCE(o.seat_count, 1), COALESCE(o.subscription_status, 'active')
 		FROM users u
 		LEFT JOIN organizations o ON o.id = u.org_id
-		WHERE u.id=$1`, userID).Scan(&role, &plan)
+		WHERE u.id=$1`, userID).Scan(&role, &seatCount, &subscriptionStatus)
 
 	var mailboxID, mailboxLocalPart, mailboxMode string
 	var wrappedSkUser, previousWrappedSkUser *string
@@ -642,7 +623,8 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		"org_id":                   orgID,
 		"organization_id":          orgID,
 		"role":                     role,
-		"plan":                     plan,
+		"seat_count":               seatCount,
+		"subscription_status":      subscriptionStatus,
 		"token":                    token,
 		"mailbox_id":               mailboxID,
 		"mailbox_local_part":       mailboxLocalPart,
@@ -673,13 +655,19 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
-	var id, email, orgID, displayName, role, plan string
+	var id, email, orgID, displayName, role, subscriptionStatus string
+	var seatCount int
 	var isActive bool
+	var onboardingCompletedAt *time.Time
+	var onboardingCurrentStep int = 1
+	var onboardingSkipped bool = false
 	err = conn.QueryRow(ctx, `
-		SELECT u.id::text, u.email, u.org_id::text, COALESCE(u.display_name,''), COALESCE(u.role, 'member'), u.is_active, COALESCE(o.plan, 'solo')
+		SELECT u.id::text, u.email, u.org_id::text, COALESCE(u.display_name,''), COALESCE(u.role, 'member'), u.is_active,
+		       COALESCE(o.seat_count, 1), COALESCE(o.subscription_status, 'active'),
+		       o.onboarding_completed_at, COALESCE(o.onboarding_current_step, 1), COALESCE(o.onboarding_skipped, false)
 		FROM users u
 		LEFT JOIN organizations o ON o.id = u.org_id
-		WHERE u.id=$1`, userID).Scan(&id, &email, &orgID, &displayName, &role, &isActive, &plan)
+		WHERE u.id=$1`, userID).Scan(&id, &email, &orgID, &displayName, &role, &isActive, &seatCount, &subscriptionStatus, &onboardingCompletedAt, &onboardingCurrentStep, &onboardingSkipped)
 	if err != nil || !isActive {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -714,7 +702,12 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 		"organization_id":          orgID,
 		"display_name":             displayName,
 		"role":                     role,
-		"plan":                     plan,
+		"seat_count":               seatCount,
+		"subscription_status":      subscriptionStatus,
+		"onboarding_completed":    onboardingCompletedAt != nil,
+		"onboarding_completed_at": onboardingCompletedAt,
+		"onboarding_current_step": onboardingCurrentStep,
+		"onboarding_skipped":      onboardingSkipped,
 		"mailbox_id":               mailboxID,
 		"mailbox_local_part":       mailboxLocalPart,
 		"mailbox_mode":             mailboxMode,

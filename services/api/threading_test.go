@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -17,10 +16,7 @@ import (
 
 func getTestDB(t *testing.T) *pgx.Conn {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -55,11 +51,11 @@ func createThreadingTestMailbox(t *testing.T, conn *pgx.Conn) (orgID, userID, do
 
 	_, err = conn.Exec(ctx, `INSERT INTO mailboxes (
 		id, org_id, user_id, domain_id, local_part, mode,
-		mailbox_sk_wrapped, mailbox_pk,
+		mailbox_sk_wrapped, mailbox_pk, wrapped_sk_user,
 		key_epoch, signing_key_epoch, key_status, is_active
 	) VALUES (
-		$1, $2, $3, $4, 'inbox', 'org_managed',
-		decode('AA==', 'base64'), decode('AA==', 'base64'),
+		$1, $2, $3, $4, 'inbox', 'private',
+		decode('AA==', 'base64'), decode('AA==', 'base64'), 'test_wrapped_sk_user',
 		1, 1, 'active', true
 	)`, mailboxID, orgID, userID, domainID)
 	if err != nil {
@@ -67,12 +63,54 @@ func createThreadingTestMailbox(t *testing.T, conn *pgx.Conn) (orgID, userID, do
 	}
 
 	t.Cleanup(func() {
-		_, _ = conn.Exec(context.Background(), "DELETE FROM message_metadata WHERE mailbox_id = $1", mailboxID)
-		_, _ = conn.Exec(context.Background(), "DELETE FROM mailboxes WHERE id = $1", mailboxID)
-		_, _ = conn.Exec(context.Background(), "DELETE FROM sessions WHERE user_id = $1", userID)
-		_, _ = conn.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
-		_, _ = conn.Exec(context.Background(), "DELETE FROM domains WHERE id = $1", domainID)
-		_, _ = conn.Exec(context.Background(), "DELETE FROM organizations WHERE id = $1", orgID)
+		ctx := context.Background()
+		dsn := getValidatedTestDSN(t)
+		cleanupConn, err := pgx.Connect(ctx, dsn)
+		if err != nil {
+			t.Errorf("cleanup connect failed: %v", err)
+			return
+		}
+		defer cleanupConn.Close(ctx)
+
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM outbound_queue WHERE mailbox_id = $1", mailboxID); err != nil {
+			t.Errorf("cleanup outbound_queue failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM scheduled_messages WHERE mailbox_id = $1", mailboxID); err != nil {
+			t.Errorf("cleanup scheduled_messages failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM outbound_reservations WHERE mailbox_id = $1 OR user_id = $2", mailboxID, userID); err != nil {
+			t.Errorf("cleanup outbound_reservations failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM message_metadata WHERE mailbox_id = $1", mailboxID); err != nil {
+			t.Errorf("cleanup message_metadata failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM mail_rules WHERE mailbox_id = $1", mailboxID); err != nil {
+			t.Errorf("cleanup mail_rules failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM mailbox_labels WHERE mailbox_id = $1", mailboxID); err != nil {
+			t.Errorf("cleanup mailbox_labels failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM device_mailbox_access WHERE mailbox_id = $1", mailboxID); err != nil {
+			t.Errorf("cleanup device_mailbox_access failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM mailboxes WHERE id = $1", mailboxID); err != nil {
+			t.Errorf("cleanup mailboxes failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM sessions WHERE user_id = $1", userID); err != nil {
+			t.Errorf("cleanup sessions failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM audit_log WHERE user_id = $1", userID); err != nil {
+			t.Errorf("cleanup audit_log failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM users WHERE id = $1", userID); err != nil {
+			t.Errorf("cleanup users failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM domains WHERE id = $1", domainID); err != nil {
+			t.Errorf("cleanup domains failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM organizations WHERE id = $1", orgID); err != nil {
+			t.Errorf("cleanup organizations failed: %v", err)
+		}
 	})
 
 	return orgID, userID, domainID, mailboxID

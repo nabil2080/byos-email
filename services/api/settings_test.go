@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -14,10 +13,7 @@ import (
 )
 
 func TestMailboxSettingsRoundtrip(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -30,7 +26,7 @@ func TestMailboxSettingsRoundtrip(t *testing.T) {
 	mailboxID := uuid.New().String()
 	domainID := uuid.New().String()
 
-	_, err = conn.Exec(ctx, `INSERT INTO organizations (id, name, plan, org_recovery_pk) VALUES ($1, $2, 'business', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))`, orgID, "Settings Org")
+	_, err = conn.Exec(ctx, `INSERT INTO organizations (id, name, seat_count, org_recovery_pk) VALUES ($1, $2, 10, decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))`, orgID, "Settings Org")
 	if err != nil {
 		t.Fatalf("failed to insert org: %v", err)
 	}

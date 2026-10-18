@@ -21,6 +21,13 @@ const AuthGuardContent: Component<AuthGuardProps> = (props) => {
         // Role is member -> redirect to webmail
         const webmailBase = (import.meta as unknown as { env: Record<string, string> }).env?.VITE_WEBMAIL_URL || "http://127.0.0.1:3001";
         window.location.replace(webmailBase);
+      } else if (!org.onboardingCompleted && !org.onboardingSkipped) {
+        // Onboarding incomplete and not skipped -> redirect to persisted step
+        const currentPath = window.location.pathname;
+        if (!currentPath.startsWith("/onboarding")) {
+          const step = org.onboardingCurrentStep || 1;
+          window.location.replace(`/onboarding/${step}`);
+        }
       }
     }
   });

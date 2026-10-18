@@ -83,18 +83,19 @@ func organizationGetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not authorized for this organization", http.StatusForbidden)
 		return
 	}
-	var id, name string
-	var recPk []byte
-	err = conn.QueryRow(ctx, `SELECT id::text, name, org_recovery_pk FROM organizations WHERE id=$1`, orgID).Scan(&id, &name, &recPk)
+	var id, name, subscriptionStatus string
+	var seatCount int
+	err = conn.QueryRow(ctx, `SELECT id::text, name, COALESCE(seat_count, 1), COALESCE(subscription_status, 'active') FROM organizations WHERE id=$1`, orgID).Scan(&id, &name, &seatCount, &subscriptionStatus)
 	if err != nil {
 		http.Error(w, "organization not found", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id":              id,
-		"name":            name,
-		"org_recovery_pk": base64.StdEncoding.EncodeToString(recPk),
+		"id":                  id,
+		"name":                name,
+		"seat_count":          seatCount,
+		"subscription_status": subscriptionStatus,
 	})
 }
 
@@ -137,7 +138,7 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		rows, err := conn.Query(ctx, `
 			SELECT m.id::text, m.local_part, m.domain_id::text, m.mode, COALESCE(m.status, 'active'),
-			       COALESCE(d.name, ''), COALESCE(m.wrapped_sk_org, ''), COALESCE(m.wrapped_sk_user, '')
+			       COALESCE(d.name, '')
 			FROM mailboxes m
 			LEFT JOIN domains d ON d.id = m.domain_id
 			WHERE m.org_id=$1 AND m.is_active=true
@@ -150,8 +151,8 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		mailboxes := []map[string]interface{}{}
 		for rows.Next() {
-			var id, localPart, domainID, mode, status, domainName, wrappedSkOrg, wrappedSkUser string
-			if err := rows.Scan(&id, &localPart, &domainID, &mode, &status, &domainName, &wrappedSkOrg, &wrappedSkUser); err != nil {
+			var id, localPart, domainID, mode, status, domainName string
+			if err := rows.Scan(&id, &localPart, &domainID, &mode, &status, &domainName); err != nil {
 				continue
 			}
 			email := localPart
@@ -159,15 +160,13 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 				email = localPart + "@" + domainName
 			}
 			mailboxes = append(mailboxes, map[string]interface{}{
-				"id":              id,
-				"local_part":      localPart,
-				"domain_id":       domainID,
-				"domain_name":     domainName,
-				"email":           email,
-				"mode":            mode,
-				"status":          status,
-				"wrapped_sk_org":  wrappedSkOrg,
-				"wrapped_sk_user": wrappedSkUser,
+				"id":          id,
+				"local_part":  localPart,
+				"domain_id":   domainID,
+				"domain_name": domainName,
+				"email":       email,
+				"mode":        mode,
+				"status":      status,
 			})
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -222,11 +221,15 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid local_part", http.StatusBadRequest)
 			return
 		}
+		if mode == "org_managed" {
+			http.Error(w, "org_managed mode is deprecated; all mailboxes must be private", http.StatusBadRequest)
+			return
+		}
 		if mode == "" {
 			mode = "private"
 		}
-		if mode != "org_managed" && mode != "private" {
-			http.Error(w, "unsupported mode; only org_managed and private are supported", http.StatusBadRequest)
+		if mode != "private" {
+			http.Error(w, "unsupported mode; only private is supported", http.StatusBadRequest)
 			return
 		}
 		idStr := strings.TrimSpace(req.ID)
@@ -242,23 +245,13 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "domain_id must be UUID", http.StatusBadRequest)
 			return
 		}
-		// Validate canonical hex lengths: root wrap 162, sk wrap 122, pk 64.
-		var rootWrapped []byte
-		if mode == "org_managed" {
-			if req.RootSecretWrapped == "" {
-				http.Error(w, "root_secret_wrapped required for org_managed mailbox", http.StatusBadRequest)
-				return
-			}
-			var err error
-			rootWrapped, err = hexDecodeString(strings.TrimSpace(req.RootSecretWrapped))
-			if err != nil || len(rootWrapped) != 81 {
-				http.Error(w, "invalid root_secret_wrapped", http.StatusBadRequest)
-				return
-			}
-		} else if req.RootSecretWrapped != "" {
+		// Validate canonical hex lengths: sk wrap 122, pk 64.
+		// For private mailboxes, root_secret_wrapped must be omitted.
+		if req.RootSecretWrapped != "" {
 			http.Error(w, "root_secret_wrapped must be omitted for private mailbox", http.StatusBadRequest)
 			return
 		}
+		var rootWrapped []byte
 		if req.MailboxSkWrapped == "" || req.MailboxPk == "" {
 			http.Error(w, "mailbox_sk_wrapped and mailbox_pk required", http.StatusBadRequest)
 			return
@@ -284,15 +277,6 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "domain not verified", http.StatusBadRequest)
 			return
 		}
-		// Org-managed mailboxes require a 32-byte org recovery key for HPKE.
-		if mode == "org_managed" {
-			var recPk []byte
-			err = conn.QueryRow(ctx, `SELECT org_recovery_pk FROM organizations WHERE id=$1`, orgID).Scan(&recPk)
-			if err != nil || len(recPk) != 32 {
-				http.Error(w, "organization recovery key not available", http.StatusBadRequest)
-				return
-			}
-		}
 		tx, err := conn.Begin(ctx)
 		if err != nil {
 			http.Error(w, "Failed to begin transaction", http.StatusInternalServerError)
@@ -307,25 +291,21 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "organization not found", http.StatusNotFound)
 			return
 		}
-		// Quota check: enforce plan mailbox limits
+		// Quota check: enforce seat mailbox limits (1 mailbox per seat)
 		var usedMailboxes int
 		_ = tx.QueryRow(ctx, `SELECT count(*) FROM mailboxes WHERE org_id=$1 AND is_active=true`, orgID).Scan(&usedMailboxes)
-		var currentPlan string
-		err = tx.QueryRow(ctx, `SELECT plan FROM organizations WHERE id=$1`, orgID).Scan(&currentPlan)
-		if err != nil || currentPlan == "" {
-			currentPlan = "solo"
+		var seatCount int
+		err = tx.QueryRow(ctx, `SELECT COALESCE(seat_count, 1) FROM organizations WHERE id=$1`, orgID).Scan(&seatCount)
+		if err != nil || seatCount < 1 {
+			seatCount = 1
 		}
-		spec, ok := PLAN_SPECS[currentPlan]
-		if !ok {
-			spec = PLAN_SPECS["solo"]
-		}
-		if usedMailboxes >= spec.MailboxLimit {
+		if usedMailboxes >= seatCount {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusPaymentRequired)
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"error": "mailbox_limit_reached",
-				"limit": spec.MailboxLimit,
-				"plan":  spec.Plan,
+				"error":      "mailbox_limit_reached",
+				"limit":      seatCount,
+				"seat_count": seatCount,
 			})
 			return
 		}
@@ -806,22 +786,19 @@ func mailboxAliasesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		var usedAliases int
 		_ = tx.QueryRow(ctx, `SELECT count(*) FROM aliases WHERE mailbox_id=$1 AND is_active=true`, mailboxID).Scan(&usedAliases)
-		var currentPlan string
-		err = tx.QueryRow(ctx, `SELECT plan FROM organizations WHERE id=$1`, mailboxOrgID).Scan(&currentPlan)
-		if err != nil || currentPlan == "" {
-			currentPlan = "solo"
+		var seatCount int
+		err = tx.QueryRow(ctx, `SELECT COALESCE(seat_count, 1) FROM organizations WHERE id=$1`, mailboxOrgID).Scan(&seatCount)
+		if err != nil || seatCount < 1 {
+			seatCount = 1
 		}
-		spec, ok := PLAN_SPECS[currentPlan]
-		if !ok {
-			spec = PLAN_SPECS["solo"]
-		}
-		if usedAliases >= spec.AliasesPerMail {
+		_, aliasesCap := ComputeCapacityCaps(seatCount)
+		if usedAliases >= aliasesCap {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusPaymentRequired)
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"error": "alias_limit_reached",
-				"limit": spec.AliasesPerMail,
-				"plan":  spec.Plan,
+				"error":      "alias_limit_reached",
+				"limit":      aliasesCap,
+				"seat_count": seatCount,
 			})
 			return
 		}
@@ -1008,175 +985,6 @@ func mailboxAliasItemHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "deleted", "id": aliasID})
-}
-
-func mailboxPrivacyModeHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut && r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	orgID := r.PathValue("org_id")
-	mailboxID := r.PathValue("mailbox_id")
-	if orgID == "" || mailboxID == "" {
-		http.Error(w, "organization ID and mailbox ID required", http.StatusBadRequest)
-		return
-	}
-	if _, err := uuid.Parse(orgID); err != nil {
-		http.Error(w, "organization ID must be UUID", http.StatusBadRequest)
-		return
-	}
-	if _, err := uuid.Parse(mailboxID); err != nil {
-		http.Error(w, "mailbox ID must be UUID", http.StatusBadRequest)
-		return
-	}
-
-	userID, ok := getAuthenticatedUserID(r)
-	if !ok {
-		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
-		return
-	}
-
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
-	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		http.Error(w, "Database connection failed", http.StatusInternalServerError)
-		return
-	}
-	defer conn.Close(ctx)
-
-	// Verify caller belongs to organization and is active
-	var memberID string
-	err = conn.QueryRow(ctx, `SELECT id::text FROM users WHERE id=$1 AND org_id=$2 AND is_active=true`, userID, orgID).Scan(&memberID)
-	if err != nil {
-		http.Error(w, "not authorized for this organization", http.StatusForbidden)
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var req struct {
-		Mode              string `json:"mode"`
-		RootSecretWrapped string `json:"root_secret_wrapped,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	targetMode := strings.TrimSpace(req.Mode)
-	if targetMode != "org_managed" && targetMode != "private" {
-		http.Error(w, "invalid mode: must be 'org_managed' or 'private'", http.StatusBadRequest)
-		return
-	}
-
-	tx, err := conn.Begin(ctx)
-	if err != nil {
-		http.Error(w, "failed to begin transaction", http.StatusInternalServerError)
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	var currentMode string
-	var rootSecretID *string
-	err = tx.QueryRow(ctx, `
-		SELECT mode, root_secret_id::text 
-		FROM mailboxes 
-		WHERE id=$1 AND org_id=$2 AND is_active=true FOR UPDATE`, mailboxID, orgID).Scan(&currentMode, &rootSecretID)
-	if err != nil {
-		http.Error(w, "mailbox not found", http.StatusNotFound)
-		return
-	}
-
-	if currentMode == targetMode {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":     "unchanged",
-			"mailbox_id": mailboxID,
-			"mode":       targetMode,
-		})
-		return
-	}
-
-	if targetMode == "org_managed" {
-		// Private -> Org Managed: Requires wrapped root secret for org recovery key
-		if req.RootSecretWrapped == "" {
-			http.Error(w, "root_secret_wrapped required when migrating to org_managed mode", http.StatusBadRequest)
-			return
-		}
-		rootWrapped, err := hexDecodeString(strings.TrimSpace(req.RootSecretWrapped))
-		if err != nil || len(rootWrapped) != 81 {
-			http.Error(w, "invalid root_secret_wrapped: must be 81 bytes (162 hex characters)", http.StatusBadRequest)
-			return
-		}
-
-		// Verify organization recovery key is configured
-		var recPk []byte
-		err = tx.QueryRow(ctx, `SELECT org_recovery_pk FROM organizations WHERE id=$1`, orgID).Scan(&recPk)
-		if err != nil || len(recPk) != 32 {
-			http.Error(w, "organization recovery key not available", http.StatusBadRequest)
-			return
-		}
-
-		if rootSecretID != nil && *rootSecretID != "" {
-			_, err = tx.Exec(ctx, `UPDATE root_secrets SET root_secret_wrapped=$1, revoked_at=NULL WHERE id=$2`, rootWrapped, *rootSecretID)
-		} else {
-			var newRootID string
-			err = tx.QueryRow(ctx, `INSERT INTO root_secrets (root_secret_wrapped) VALUES ($1) RETURNING id::text`, rootWrapped).Scan(&newRootID)
-			if err == nil {
-				_, err = tx.Exec(ctx, `UPDATE mailboxes SET root_secret_id=$1 WHERE id=$2`, newRootID, mailboxID)
-			}
-		}
-		if err != nil {
-			http.Error(w, "failed to update root secret", http.StatusInternalServerError)
-			return
-		}
-
-		_, err = tx.Exec(ctx, `UPDATE mailboxes SET mode='org_managed' WHERE id=$1`, mailboxID)
-		if err != nil {
-			http.Error(w, "failed to update mailbox mode", http.StatusInternalServerError)
-			return
-		}
-	} else {
-		// Org Managed -> Private: Sever org recovery link, revoke wrapped root secret
-		if req.RootSecretWrapped != "" {
-			http.Error(w, "root_secret_wrapped must be omitted when migrating to private mode", http.StatusBadRequest)
-			return
-		}
-
-		if rootSecretID != nil && *rootSecretID != "" {
-			_, err = tx.Exec(ctx, `UPDATE root_secrets SET root_secret_wrapped=NULL, revoked_at=now() WHERE id=$1`, *rootSecretID)
-			if err != nil {
-				http.Error(w, "failed to revoke root secret", http.StatusInternalServerError)
-				return
-			}
-		}
-
-		_, err = tx.Exec(ctx, `UPDATE mailboxes SET mode='private' WHERE id=$1`, mailboxID)
-		if err != nil {
-			http.Error(w, "failed to update mailbox mode", http.StatusInternalServerError)
-			return
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		http.Error(w, "failed to commit transaction", http.StatusInternalServerError)
-		return
-	}
-
-	auditLog(ctx, conn, orgID, userID, "migrate_mailbox_privacy_mode", "mailbox", mailboxID, map[string]interface{}{
-		"from_mode": currentMode,
-		"to_mode":   targetMode,
-	})
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":     "migrated",
-		"mailbox_id": mailboxID,
-		"mode":       targetMode,
-	})
 }
 
 type UserMailboxItem struct {

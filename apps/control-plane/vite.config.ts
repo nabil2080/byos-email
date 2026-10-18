@@ -7,14 +7,14 @@ export default defineConfig({
   plugins: [wasm(), solid(), tailwindcss()],
   server: {
     port: 3000,
-    host: "127.0.0.1",
+    host: process.env.VITE_HOST || "0.0.0.0",
     proxy: {
       "/v1": {
-        target: "http://127.0.0.1:8080",
+        target: process.env.VITE_API_URL || "http://127.0.0.1:8080",
         changeOrigin: true,
       },
       "/health": {
-        target: "http://127.0.0.1:8080",
+        target: process.env.VITE_API_URL || "http://127.0.0.1:8080",
         changeOrigin: true,
       },
     },

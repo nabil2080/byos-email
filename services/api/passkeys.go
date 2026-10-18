@@ -363,12 +363,13 @@ func passkeyLoginHandler(w http.ResponseWriter, r *http.Request) {
 	`, passkeyID)
 
 	// Fetch full user details
-	var userEmail, orgID, displayName, role, plan string
+	var userEmail, orgID, displayName, role, subscriptionStatus string
+	var seatCount int
 	err = conn.QueryRow(ctx, `
-		SELECT u.email, u.org_id::text, COALESCE(u.display_name,''), COALESCE(u.role, 'member'), COALESCE(o.plan, 'solo')
+		SELECT u.email, u.org_id::text, COALESCE(u.display_name,''), COALESCE(u.role, 'member'), COALESCE(o.seat_count, 1), COALESCE(o.subscription_status, 'active')
 		FROM users u
 		LEFT JOIN organizations o ON o.id = u.org_id
-		WHERE u.id=$1 AND u.is_active=true`, userID).Scan(&userEmail, &orgID, &displayName, &role, &plan)
+		WHERE u.id=$1 AND u.is_active=true`, userID).Scan(&userEmail, &orgID, &displayName, &role, &seatCount, &subscriptionStatus)
 	if err != nil {
 		http.Error(w, "user inactive or not found", http.StatusUnauthorized)
 		return
@@ -418,7 +419,8 @@ func passkeyLoginHandler(w http.ResponseWriter, r *http.Request) {
 		"organization_id":          orgID,
 		"display_name":             displayName,
 		"role":                     role,
-		"plan":                     plan,
+		"seat_count":               seatCount,
+		"subscription_status":      subscriptionStatus,
 		"mailbox_id":               mailboxID,
 		"mailbox_local_part":       mailboxLocalPart,
 		"mailbox_mode":             mailboxMode,
@@ -431,7 +433,8 @@ func passkeyLoginHandler(w http.ResponseWriter, r *http.Request) {
 			"organization_id":          orgID,
 			"display_name":             displayName,
 			"role":                     role,
-			"plan":                     plan,
+			"seat_count":               seatCount,
+			"subscription_status":      subscriptionStatus,
 			"mailbox_id":               mailboxID,
 			"mailbox_local_part":       mailboxLocalPart,
 			"mailbox_mode":             mailboxMode,

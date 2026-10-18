@@ -1667,7 +1667,7 @@ const App: Component = () => {
           id: user.mailbox_id,
           local_part: user.mailbox_local_part,
           domain_id: "",
-          mode: user.mailbox_mode || "org_managed",
+          mode: user.mailbox_mode || "private",
         };
       }
     }
@@ -1795,7 +1795,7 @@ const App: Component = () => {
         email: user.email,
         displayName: user.display_name || targetBox.local_part || user.email.split("@")[0],
         role: user.role || "member",
-        privacyMode: targetBox.mode || "org_managed",
+        privacyMode: targetBox.mode || "private",
         sessionToken: tokenToSave,
         mailboxSkHex: currentSkHex,
         searchKeyHex: currentSKey,
@@ -2452,8 +2452,11 @@ const App: Component = () => {
 
   async function handleLogin(e: Event) {
     e.preventDefault();
-    const email = loginEmail().trim().toLowerCase();
-    const password = loginPassword();
+    const form = e.currentTarget as HTMLFormElement;
+    const emailInput = form?.elements?.namedItem("email") as HTMLInputElement | null;
+    const passwordInput = form?.elements?.namedItem("password") as HTMLInputElement | null;
+    const email = (emailInput?.value || loginEmail()).trim().toLowerCase();
+    const password = passwordInput?.value || loginPassword();
     if (!email || !password) {
       setLoginError("Enter your email and password.");
       return;
@@ -2513,6 +2516,8 @@ const App: Component = () => {
         setLoginError("Too many attempts. Please try again later.");
       } else if (status === 401) {
         setLoginError("Invalid email or password.");
+      } else if (status >= 500 || err?.message?.includes("API error 500") || err?.message?.includes("Failed to fetch")) {
+        setLoginError("Authentication service is temporarily unavailable. Please verify backend services are running.");
       } else {
         setLoginError(err?.message || "Failed to log in.");
       }
@@ -2887,7 +2892,9 @@ const App: Component = () => {
   async function handleUnlock(e: Event) {
     e.preventDefault();
     const user = currentUser();
-    const password = loginPassword();
+    const form = e.currentTarget as HTMLFormElement;
+    const passwordInput = form?.elements?.namedItem("password") as HTMLInputElement | null;
+    const password = passwordInput?.value || loginPassword();
     if (!user || !password) {
       setLoginError("Enter your password.");
       return;
@@ -2945,7 +2952,12 @@ const App: Component = () => {
         throw new Error("Unable to unlock mailbox with this password. If your mailbox was created with a recovery phrase, use your recovery phrase below.");
       }
     } catch (err: any) {
-      setLoginError(err?.message || "Invalid password.");
+      const status = err?.status;
+      if (status >= 500 || err?.message?.includes("API error 500") || err?.message?.includes("Failed to fetch")) {
+        setLoginError("Authentication service is temporarily unavailable. Please verify backend services are running.");
+      } else {
+        setLoginError(err?.message || "Invalid password.");
+      }
     } finally {
       setLoginPassword("");
       setLoginBusy(false);
@@ -4875,7 +4887,7 @@ const App: Component = () => {
         local_part: matchingAccount.email.split("@")[0],
         domain_id: "",
         mode: matchingAccount.privacyMode,
-      } : (selectedMailbox()?.id === payload.mailboxId ? selectedMailbox()! : { id: payload.mailboxId, local_part: "", domain_id: "", mode: "org_managed" }));
+      } : (selectedMailbox()?.id === payload.mailboxId ? selectedMailbox()! : { id: payload.mailboxId, local_part: "", domain_id: "", mode: "private" }));
     if (!box || !box.id) return;
 
     setComposeStatus("Preparing encrypted message…");
@@ -5847,21 +5859,27 @@ const App: Component = () => {
                           <form onSubmit={handleLogin} class="mt-4 space-y-3">
                             <input
                               type="email"
+                              name="email"
                               autocomplete="username"
                               placeholder="you@example.com"
                               value={loginEmail()}
                               onInput={(e) => setLoginEmail(e.currentTarget.value)}
+                              onChange={(e) => setLoginEmail(e.currentTarget.value)}
                               disabled={loginBusy()}
+                              required
                               class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3 py-2 text-xs text-[#2B2C2D] dark:text-[#F3F4F6] focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6] dark:bg-[#18191D] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50"
                             />
                             <div>
                               <input
                                 type="password"
+                                name="password"
                                 autocomplete="current-password"
                                 placeholder="Password"
                                 value={loginPassword()}
                                 onInput={(e) => setLoginPassword(e.currentTarget.value)}
+                                onChange={(e) => setLoginPassword(e.currentTarget.value)}
                                 disabled={loginBusy()}
+                                required
                                 class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3 py-2 text-xs text-[#2B2C2D] dark:text-[#F3F4F6] focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6] dark:bg-[#18191D] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50"
                               />
                               <div class="flex justify-end mt-1.5">
@@ -5899,7 +5917,7 @@ const App: Component = () => {
                             </div>
                             <button
                               type="submit"
-                              disabled={loginBusy() || !loginEmail().trim() || !loginPassword()}
+                              disabled={loginBusy()}
                               class="w-full rounded-xl bg-[#A27561] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#8F6452] transition disabled:opacity-50 cursor-pointer shadow-2xs"
                             >
                               {loginBusy() ? "Signing in…" : "Sign in"}
@@ -6073,17 +6091,20 @@ const App: Component = () => {
                     <form onSubmit={handleUnlock} class="mt-4 space-y-3">
                       <input
                         type="password"
+                        name="password"
                         autocomplete="current-password"
                         placeholder="Enter password to unlock"
                         value={loginPassword()}
                         onInput={(e) => setLoginPassword(e.currentTarget.value)}
+                        onChange={(e) => setLoginPassword(e.currentTarget.value)}
                         disabled={loginBusy()}
                         autofocus
+                        required
                         class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3.5 py-2.5 text-xs text-[#2B2C2D] dark:text-[#F3F4F6] focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6] dark:bg-[#18191D] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50"
                       />
                       <button
                         type="submit"
-                        disabled={loginBusy() || !loginPassword()}
+                        disabled={loginBusy()}
                         class="w-full rounded-xl bg-[#A27561] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#8F6452] transition disabled:opacity-50 cursor-pointer shadow-2xs"
                       >
                         {loginBusy() ? "Unlocking…" : "Unlock Mailbox"}

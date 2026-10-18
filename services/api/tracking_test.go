@@ -30,6 +30,19 @@ func createTestDomainAndMailbox(t *testing.T, db *sql.DB, orgID string) (domainI
 	if err != nil {
 		t.Fatalf("failed to insert mailbox: %v", err)
 	}
+
+	t.Cleanup(func() {
+		cleanupDB, err := sql.Open("pgx", testDSN)
+		if err != nil {
+			t.Errorf("cleanup open: %v", err)
+			return
+		}
+		defer cleanupDB.Close()
+		_, _ = cleanupDB.Exec(`DELETE FROM message_tracking WHERE mailbox_id = $1`, mailboxID)
+		_, _ = cleanupDB.Exec(`DELETE FROM mailboxes WHERE id = $1`, mailboxID)
+		_, _ = cleanupDB.Exec(`DELETE FROM domains WHERE id = $1`, domainID)
+	})
+
 	return domainID, mailboxID
 }
 

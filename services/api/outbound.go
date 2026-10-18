@@ -434,9 +434,11 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not authorized", http.StatusForbidden)
 		return
 	}
-	var mailboxOrgID, domainID, mailboxPlan, orgPlan string
+	var mailboxOrgID, domainID string
 	var mailboxActive bool
-	err = tx.QueryRow(ctx, `SELECT m.org_id::text, m.domain_id::text, m.is_active, COALESCE(m.plan,'solo'), COALESCE(o.plan,'solo') FROM mailboxes m JOIN organizations o ON o.id=m.org_id WHERE m.id=$1`, req.MailboxID).Scan(&mailboxOrgID, &domainID, &mailboxActive, &mailboxPlan, &orgPlan)
+	err = tx.QueryRow(ctx, `SELECT m.org_id::text, m.domain_id::text, m.is_active FROM mailboxes m WHERE m.id=$1`, req.MailboxID).Scan(&mailboxOrgID, &domainID, &mailboxActive)
+	mailboxPlan := "solo"
+	orgPlan := "solo"
 	if err != nil {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return

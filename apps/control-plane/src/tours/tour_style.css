@@ -1,0 +1,110 @@
+/* BYOS Sovereign Infrastructure Tour Theme */
+@import "driver.js/dist/driver.css";
+
+.driver-popover.byos-tour-popover {
+  background-color: #FAF9F6;
+  color: #3C3D3E;
+  border: 1px solid #E2DFD8;
+  border-radius: 1rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  padding: 18px 20px;
+  max-width: min(380px, calc(100vw - 24px));
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+@media (max-width: 640px) {
+  .driver-popover.byos-tour-popover {
+    position: fixed !important;
+    left: 12px !important;
+    right: 12px !important;
+    top: auto !important;
+    bottom: 16px !important;
+    width: auto !important;
+    max-width: calc(100vw - 24px) !important;
+    min-width: 0 !important;
+    transform: none !important;
+    margin: 0 !important;
+  }
+  .driver-popover.byos-tour-popover .driver-popover-arrow {
+    display: none !important;
+  }
+}
+
+.driver-popover.byos-tour-popover .driver-popover-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #3C3D3E;
+  letter-spacing: -0.01em;
+  margin-bottom: 6px;
+}
+
+.driver-popover.byos-tour-popover .driver-popover-description {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #6F7173;
+  margin-bottom: 16px;
+}
+
+.driver-popover.byos-tour-popover .driver-popover-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #E2DFD8;
+}
+
+.driver-popover.byos-tour-popover .driver-popover-progress-text {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: monospace;
+  color: #9E725F;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.driver-popover.byos-tour-popover .driver-popover-close-btn {
+  color: #878A8E;
+  transition: color 0.15s;
+  top: 14px;
+  right: 14px;
+}
+
+.driver-popover.byos-tour-popover .driver-popover-close-btn:hover {
+  color: #3C3D3E;
+}
+
+.driver-popover.byos-tour-popover .driver-popover-prev-btn {
+  font-size: 12px;
+  font-weight: 500;
+  color: #6F7173;
+  background: transparent;
+  border: 1px solid #E2DFD8;
+  border-radius: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.driver-popover.byos-tour-popover .driver-popover-prev-btn:hover {
+  background: #F3ECE8;
+  color: #9E725F;
+}
+
+.driver-popover.byos-tour-popover .driver-popover-next-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: #FFFFFF;
+  background: #9E725F;
+  border: 1px solid #9E725F;
+  border-radius: 8px;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.driver-popover.byos-tour-popover .driver-popover-next-btn:hover {
+  background: #865E4D;
+}

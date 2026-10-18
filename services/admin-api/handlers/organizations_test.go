@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -16,32 +18,57 @@ import (
 
 func setupAdminTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	connStr := os.Getenv("DATABASE_URL")
+	connStr := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
 	if connStr == "" {
-		connStr = "postgres://byos:byos_dev_password@localhost:5432/byos"
+		t.Skip("skipping admin integration test: TEST_DATABASE_URL environment variable is not set")
+		return nil
+	}
+	u, err := url.Parse(connStr)
+	if err != nil {
+		t.Fatalf("invalid TEST_DATABASE_URL: %v", err)
+	}
+	host := u.Hostname()
+	allowedHosts := map[string]bool{
+		"localhost":     true,
+		"127.0.0.1":     true,
+		"::1":           true,
+		"postgres":      true,
+		"byos-postgres": true,
+	}
+	if !allowedHosts[host] && os.Getenv("BYOS_ALLOW_REMOTE_TEST_DB") != "true" {
+		t.Fatalf("SAFETY VIOLATION: Refusing to run tests against non-local host '%s' (set BYOS_ALLOW_REMOTE_TEST_DB=true to override)", host)
+	}
+	dbName := strings.TrimPrefix(u.Path, "/")
+	if strings.EqualFold(dbName, "byos") && os.Getenv("BYOS_ALLOW_DEV_DB_TEST") != "true" {
+		t.Fatalf("SAFETY VIOLATION: Refusing to run tests against development database '%s' (set BYOS_ALLOW_DEV_DB_TEST=true to override)", dbName)
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, connStr)
 	if err != nil {
 		t.Fatalf("failed to connect to test db: %v", err)
 	}
+	t.Cleanup(func() { pool.Close() })
 	return pool
 }
 
 func TestAdminDomainQuotaEnforcement(t *testing.T) {
 	pool := setupAdminTestPool(t)
-	defer pool.Close()
 	ctx := context.Background()
 
 	// Find or pick an organization to test
 	var orgUUID uuid.UUID
-	err := pool.QueryRow(ctx, `SELECT id FROM organizations LIMIT 1`).Scan(&orgUUID)
+	var origSeats int
+	err := pool.QueryRow(ctx, `SELECT id, seat_count FROM organizations LIMIT 1`).Scan(&orgUUID, &origSeats)
 	if err != nil {
 		t.Fatalf("failed to query test org: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM domains WHERE org_id = $1 AND name LIKE 'admin-test-%'`, orgUUID)
+		_, _ = pool.Exec(ctx, `UPDATE organizations SET seat_count = $1 WHERE id = $2`, origSeats, orgUUID)
+	})
 
-	// Adjust capacity to 5 seats (max_domains = 3)
-	capBody := bytes.NewBufferString(`{"seat_count":5,"reason":"test quota enforcement"}`)
+	// Adjust capacity to 15 seats (max_domains = 3)
+	capBody := bytes.NewBufferString(`{"seat_count":15,"reason":"test quota enforcement"}`)
 	capReq := httptest.NewRequest(http.MethodPost, "/admin/v1/organizations/"+orgUUID.String()+"/capacity", capBody)
 	capRec := httptest.NewRecorder()
 	handleAdjustCapacity(capRec, capReq, pool, orgUUID)
@@ -93,13 +120,13 @@ func TestAdminDomainQuotaEnforcement(t *testing.T) {
 		t.Fatalf("expected addon_product_id pdt_extra_domain_v1, got %v", errResp["addon_product_id"])
 	}
 
-	// Upgrade capacity to 15 seats (max_domains = 5)
-	capBody = bytes.NewBufferString(`{"seat_count":15,"reason":"test upgrade quota"}`)
+	// Upgrade capacity to 20 seats (max_domains = 4)
+	capBody = bytes.NewBufferString(`{"seat_count":20,"reason":"test upgrade quota"}`)
 	capReq = httptest.NewRequest(http.MethodPost, "/admin/v1/organizations/"+orgUUID.String()+"/capacity", capBody)
 	capRec = httptest.NewRecorder()
 	handleAdjustCapacity(capRec, capReq, pool, orgUUID)
 	if capRec.Code != http.StatusOK {
-		t.Fatalf("failed to adjust capacity to 15: %d %s", capRec.Code, capRec.Body.String())
+		t.Fatalf("failed to adjust capacity to 20: %d %s", capRec.Code, capRec.Body.String())
 	}
 
 	// Now creating the domain should succeed
@@ -117,16 +144,19 @@ func TestAdminDomainQuotaEnforcement(t *testing.T) {
 
 func TestAdminAdjustCapacityLimits(t *testing.T) {
 	pool := setupAdminTestPool(t)
-	defer pool.Close()
 	ctx := context.Background()
 
 	var orgUUID uuid.UUID
-	err := pool.QueryRow(ctx, `SELECT id FROM organizations LIMIT 1`).Scan(&orgUUID)
+	var origSeats int
+	err := pool.QueryRow(ctx, `SELECT id, seat_count FROM organizations LIMIT 1`).Scan(&orgUUID, &origSeats)
 	if err != nil {
 		t.Fatalf("failed to query test org: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `UPDATE organizations SET seat_count = $1 WHERE id = $2`, origSeats, orgUUID)
+	})
 
-	// Adjust capacity to 30 seats -> max_domains=10, max_aliases=300
+	// Adjust capacity to 30 seats -> max_domains=6, max_aliases=60
 	capBody := bytes.NewBufferString(`{"seat_count":30,"reason":"test capacity 30"}`)
 	capReq := httptest.NewRequest(http.MethodPost, "/admin/v1/organizations/"+orgUUID.String()+"/capacity", capBody)
 	capRec := httptest.NewRecorder()
@@ -142,28 +172,29 @@ func TestAdminAdjustCapacityLimits(t *testing.T) {
 	if resp["seat_count"] != float64(30) {
 		t.Fatalf("expected seat_count 30, got %v", resp["seat_count"])
 	}
-	if resp["max_domains"] != float64(10) {
-		t.Fatalf("expected max_domains 10, got %v", resp["max_domains"])
+	if resp["max_domains"] != float64(6) {
+		t.Fatalf("expected max_domains 6, got %v", resp["max_domains"])
 	}
-	if resp["max_aliases"] != float64(300) {
-		t.Fatalf("expected max_aliases 300, got %v", resp["max_aliases"])
+	if resp["max_aliases"] != float64(60) {
+		t.Fatalf("expected max_aliases 60, got %v", resp["max_aliases"])
 	}
 
 	// Verify in DB
-	var maxDom, maxAli, seats int
-	err = pool.QueryRow(ctx, `SELECT max_domains, max_aliases, seat_count FROM organizations WHERE id = $1`, orgUUID).Scan(&maxDom, &maxAli, &seats)
+	var seats int
+	err = pool.QueryRow(ctx, `SELECT seat_count FROM organizations WHERE id = $1`, orgUUID).Scan(&seats)
 	if err != nil {
 		t.Fatalf("failed to query org from DB: %v", err)
 	}
-	if maxDom != 10 || maxAli != 300 || seats != 30 {
-		t.Fatalf("expected (10, 300, 30), got (%d, %d, %d)", maxDom, maxAli, seats)
+	if seats != 30 {
+		t.Fatalf("expected seat_count 30, got %d", seats)
 	}
 }
 
 func TestAdminZeroKnowledgeIsolation(t *testing.T) {
-	connStr := os.Getenv("SUPPORT_DB_URL")
+	connStr := strings.TrimSpace(os.Getenv("SUPPORT_DB_URL"))
 	if connStr == "" {
-		connStr = "postgres://role_support_agent:support_crm_password@localhost:5432/byos"
+		t.Skip("skipping support db test: SUPPORT_DB_URL environment variable is not set")
+		return
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, connStr)

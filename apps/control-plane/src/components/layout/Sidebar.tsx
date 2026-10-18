@@ -1,11 +1,19 @@
-import { Component } from "solid-js";
+import { Component, Show, For } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
 import { useOrg } from "../../context/OrgContext";
 
-const nav = [
+export interface NavItem {
+  label: string;
+  href: string;
+  dataTestId: string;
+  icon: () => any;
+}
+
+const nav: NavItem[] = [
   {
     label: "Overview",
     href: "/dashboard",
+    dataTestId: "nav-overview",
     icon: () => (
       <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="7" height="7" rx="1.5" />
@@ -18,6 +26,7 @@ const nav = [
   {
     label: "Domains",
     href: "/dashboard/domains",
+    dataTestId: "nav-domains",
     icon: () => (
       <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="9" />
@@ -29,6 +38,7 @@ const nav = [
   {
     label: "Mailboxes",
     href: "/dashboard/mailboxes",
+    dataTestId: "nav-mailboxes",
     icon: () => (
       <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="2" y="4" width="20" height="16" rx="2" />
@@ -39,6 +49,7 @@ const nav = [
   {
     label: "Team & Access",
     href: "/dashboard/members",
+    dataTestId: "nav-members",
     icon: () => (
       <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
@@ -51,6 +62,7 @@ const nav = [
   {
     label: "Storage",
     href: "/dashboard/storage",
+    dataTestId: "nav-storage",
     icon: () => (
       <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <ellipse cx="12" cy="5" rx="9" ry="3" />
@@ -62,6 +74,7 @@ const nav = [
   {
     label: "Billing",
     href: "/dashboard/billing",
+    dataTestId: "nav-billing",
     icon: () => (
       <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <rect x="2" y="4" width="20" height="16" rx="2.5" />
@@ -73,6 +86,7 @@ const nav = [
   {
     label: "Settings",
     href: "/dashboard/settings",
+    dataTestId: "nav-settings",
     icon: () => (
       <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <line x1="4" y1="21" x2="4" y2="14" />
@@ -92,12 +106,16 @@ const nav = [
 interface Props {
   currentPath?: string;
   isMobile?: boolean;
+  collapsed?: boolean;
+  onCloseMobile?: () => void;
 }
 
 const Sidebar: Component<Props> = (props) => {
   const location = useLocation();
   const org = useOrg();
   const currentPath = () => props.currentPath ?? location.pathname;
+  const isCollapsed = () => !props.isMobile && Boolean(props.collapsed);
+
   const isActive = (href: string) =>
     href === "/dashboard"
       ? currentPath() === "/dashboard"
@@ -106,78 +124,147 @@ const Sidebar: Component<Props> = (props) => {
   return (
     <aside
       aria-label="Administrative navigation"
-      class={`w-64 shrink-0 border-r border-[#E2DFD8] bg-white p-5 flex flex-col justify-between select-none ${
-        props.isMobile ? "h-full flex" : "hidden lg:flex sticky top-0 h-screen overflow-y-auto"
+      data-testid="sidebar"
+      class={`shrink-0 border-r border-[#E2DFD8] bg-white flex flex-col justify-between select-none transition-all duration-200 ease-in-out ${
+        props.isMobile
+          ? "h-full w-64 p-5 flex"
+          : isCollapsed()
+          ? "w-[72px] p-3 hidden lg:flex sticky top-0 h-screen overflow-y-auto"
+          : "w-64 p-5 hidden lg:flex sticky top-0 h-screen overflow-y-auto"
       }`}
     >
       <div>
         {/* Brand Header */}
-        <div class="flex items-center gap-3 pb-6 border-b border-[#E2DFD8]">
-          <div class="w-9 h-9 rounded-lg bg-[#9E725F] flex items-center justify-center text-[#F0EEE9] font-mono font-bold text-xs tracking-wider shadow-sm">
+        <div
+          class={`flex items-center pb-5 border-b border-[#E2DFD8] ${
+            isCollapsed() ? "justify-center" : "gap-3"
+          }`}
+        >
+          <div
+            class="w-9 h-9 rounded-xl bg-[#9E725F] flex items-center justify-center text-[#F0EEE9] font-mono font-bold text-xs tracking-wider shadow-sm shrink-0"
+            title="BYOS Self-Sovereign Platform"
+          >
             BYOS
           </div>
-          <div class="flex flex-col">
-            <span class="font-bold text-sm tracking-tight text-[#3C3D3E]">Control Panel</span>
-            <span class="text-[10px] font-mono uppercase tracking-widest text-[#9E725F] font-semibold">
-              Self-Sovereign
-            </span>
-          </div>
+          <Show when={!isCollapsed()}>
+            <div class="flex flex-col min-w-0">
+              <span class="font-bold text-sm tracking-tight text-[#3C3D3E] truncate">
+                Control Panel
+              </span>
+              <span class="text-[9px] font-mono uppercase tracking-widest text-[#9E725F] font-semibold truncate">
+                Self-Sovereign
+              </span>
+            </div>
+          </Show>
         </div>
 
         {/* Section Label */}
-        <div class="mt-6 mb-2 px-3 text-[11px] font-bold tracking-wider uppercase text-[#6F7173]">
-          Management
-        </div>
+        <Show when={!isCollapsed()}>
+          <div class="mt-5 mb-2 px-3 text-[11px] font-bold tracking-wider uppercase text-[#6F7173]">
+            Management
+          </div>
+        </Show>
+        <Show when={isCollapsed()}>
+          <div class="my-3 border-t border-[#E2DFD8]/60" />
+        </Show>
 
         {/* Navigation List */}
-        <ul class="space-y-1">
-          {nav.map((item) => {
-            const active = () => isActive(item.href);
-            return (
-              <li>
-                <A
-                  href={item.href}
-                  end={item.href === "/dashboard"}
-                  class={`flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-medium transition-all group ${
-                    active()
-                      ? "bg-[#9E725F] text-white shadow-sm"
-                      : "text-[#3C3D3E] hover:bg-[#F3ECE8] hover:text-[#9E725F]"
-                  }`}
-                  aria-current={active() ? "page" : undefined}
-                >
-                  <span class={`transition-colors ${active() ? "text-white" : "text-[#6F7173] group-hover:text-[#9E725F]"}`}>
-                    {item.icon()}
-                  </span>
-                  <span>{item.label}</span>
-                </A>
-              </li>
-            );
-          })}
-        </ul>
+        <nav aria-label="Main menu">
+          <ul class="space-y-1">
+            <For each={nav}>
+              {(item) => {
+                const active = () => isActive(item.href);
+                return (
+                  <li>
+                    <A
+                      href={item.href}
+                      data-testid={item.dataTestId}
+                      end={item.href === "/dashboard"}
+                      onClick={() => props.onCloseMobile?.()}
+                      title={isCollapsed() ? item.label : undefined}
+                      class={`flex items-center rounded-xl text-sm font-medium transition-all group focus:outline-none focus:ring-2 focus:ring-[#9E725F]/40 ${
+                        isCollapsed()
+                          ? "justify-center p-2.5"
+                          : "gap-3 px-3.5 py-2.5"
+                      } ${
+                        active()
+                          ? "bg-[#9E725F] text-white shadow-xs font-semibold"
+                          : "text-[#3C3D3E] hover:bg-[#F3ECE8] hover:text-[#9E725F]"
+                      }`}
+                      aria-current={active() ? "page" : undefined}
+                    >
+                      <span
+                        class={`transition-colors shrink-0 ${
+                          active() ? "text-white" : "text-[#6F7173] group-hover:text-[#9E725F]"
+                        }`}
+                      >
+                        {item.icon()}
+                      </span>
+                      <Show when={!isCollapsed()}>
+                        <span class="truncate">{item.label}</span>
+                      </Show>
+                    </A>
+                  </li>
+                );
+              }}
+            </For>
+          </ul>
+        </nav>
       </div>
 
       {/* User & Org Footer */}
       <div class="pt-4 border-t border-[#E2DFD8]">
-        <div class="rounded-xl bg-[#F0EEE9]/70 border border-[#E2DFD8] p-3">
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-semibold text-[#3C3D3E] truncate max-w-[120px]">
-              {org.user?.email || "Admin"}
-            </span>
-            <span class="rounded bg-[#9E725F]/15 px-1.5 py-0.5 text-[10px] font-mono font-bold uppercase text-[#9E725F]">
-              {org.role || "Admin"}
-            </span>
+        <Show when={!isCollapsed()}>
+          <div class="rounded-xl bg-[#F0EEE9]/70 border border-[#E2DFD8] p-3 text-xs">
+            <div class="flex items-center justify-between">
+              <span
+                class="font-semibold text-[#3C3D3E] truncate max-w-[130px]"
+                title={org.user?.email || "Admin"}
+              >
+                {org.user?.email || "Admin"}
+              </span>
+              <span class="rounded bg-[#9E725F]/15 px-1.5 py-0.5 text-[10px] font-mono font-bold uppercase text-[#9E725F]">
+                {org.role || "Admin"}
+              </span>
+            </div>
+            <div class="mt-1 flex items-center justify-between text-[11px] text-[#6F7173]">
+              <span class="font-mono">
+                {org.seatCount || 1} Seat{(org.seatCount || 1) === 1 ? "" : "s"}
+              </span>
+              <button
+                type="button"
+                onClick={() => org.logout()}
+                class="text-xs text-[#9E725F] hover:text-[#865E4D] font-medium hover:underline focus:outline-none"
+              >
+                Sign out
+              </button>
+            </div>
           </div>
-          <div class="mt-1 flex items-center justify-between text-[11px] text-[#6F7173]">
-            <span class="capitalize">{org.plan} Plan</span>
+        </Show>
+
+        <Show when={isCollapsed()}>
+          <div class="flex flex-col items-center gap-2">
+            <div
+              class="w-8 h-8 rounded-full bg-[#9E725F]/15 text-[#9E725F] flex items-center justify-center text-xs font-mono font-bold uppercase"
+              title={`${org.user?.email || "Admin"} (${org.role || "Admin"})`}
+            >
+              {org.user?.email ? org.user.email[0].toUpperCase() : "A"}
+            </div>
             <button
               type="button"
               onClick={() => org.logout()}
-              class="text-xs text-[#9E725F] hover:text-[#865E4D] font-medium hover:underline"
+              class="p-1.5 rounded-lg text-[#6F7173] hover:text-[#9E725F] hover:bg-[#F3ECE8] text-xs transition-colors"
+              title="Sign out"
+              aria-label="Sign out"
             >
-              Sign out
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
             </button>
           </div>
-        </div>
+        </Show>
       </div>
     </aside>
   );

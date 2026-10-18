@@ -6,7 +6,6 @@ import {
   inviteMailbox,
   impersonateMailbox,
   InviteMailboxResponse,
-  recoverMailboxSecret,
   listOrgAliases,
   createAlias,
   deleteAlias,
@@ -21,16 +20,12 @@ const MailboxesPage: Component = () => {
   const [localPart, setLocalPart] = createSignal("");
   const [displayName, setDisplayName] = createSignal("");
   const [selectedDomainId, setSelectedDomainId] = createSignal("");
-  const [selectedMode, setSelectedMode] = createSignal<"org_managed" | "private">("private");
   const [createdInvite, setCreatedInvite] = createSignal<InviteMailboxResponse | null>(null);
   const [copiedLink, setCopiedLink] = createSignal(false);
   const [isAccessing, setIsAccessing] = createSignal<string | null>(null);
   const [knownInvites, setKnownInvites] = createSignal<Record<string, string>>({});
   const [banner, setBanner] = createSignal<{ kind: "success" | "error"; text: string } | null>(null);
   const [isCreating, setIsCreating] = createSignal(false);
-  const [recoveryMailboxId, setRecoveryMailboxId] = createSignal("");
-  const [recoveryKeyFile, setRecoveryKeyFile] = createSignal<File | null>(null);
-  const [isRecovering, setIsRecovering] = createSignal(false);
   const [deleteTargetMailbox, setDeleteTargetMailbox] = createSignal<Mailbox | null>(null);
   const [isDeletingMailbox, setIsDeletingMailbox] = createSignal(false);
 
@@ -124,7 +119,6 @@ const MailboxesPage: Component = () => {
     e.preventDefault();
     const lp = localPart().trim();
     const domId = selectedDomainId().trim();
-    const mode = selectedMode();
     const domName = getDomainName(domId);
     if (!lp || !domId || !org.orgId || !domName) return;
 
@@ -143,7 +137,7 @@ const MailboxesPage: Component = () => {
       const inviteResp = await inviteMailbox(org.orgId, {
         address: email,
         name: displayName().trim() || lp,
-        privacy_mode: mode,
+        privacy_mode: "private",
       });
       setCreatedInvite(inviteResp);
       setKnownInvites((prev) => ({
@@ -299,36 +293,6 @@ const MailboxesPage: Component = () => {
     }
   }
 
-  async function handleRecovery(e: Event) {
-    e.preventDefault();
-    const file = recoveryKeyFile();
-    const mailboxId = recoveryMailboxId();
-    if (!file || !mailboxId || !org.orgId) return;
-
-    setIsRecovering(true);
-    setBanner(null);
-    try {
-      const mailboxSkHex = await recoverMailboxSecret(org.orgId, mailboxId, await file.text());
-      const output = new Blob([mailboxSkHex], { type: "text/plain" });
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(output);
-      link.download = `byos-mailbox-${mailboxId}-recovered-sk.hex`;
-      link.click();
-      URL.revokeObjectURL(link.href);
-      setBanner({ kind: "success", text: "Mailbox secret key recovered and downloaded successfully." });
-    } catch (e: any) {
-      const status = e?.status;
-      setBanner({
-        kind: "error",
-        text: status === 403
-          ? "Private mailboxes cannot be recovered by the organization."
-          : "Mailbox recovery failed. Ensure you uploaded the correct organization recovery key.",
-      });
-    } finally {
-      setIsRecovering(false);
-    }
-  }
-
   const getDomainName = (domainId: string) => {
     const found = (domains() ?? []).find((d) => d.id === domainId);
     return found ? found.name : domainId.slice(0, 8);
@@ -352,7 +316,7 @@ const MailboxesPage: Component = () => {
             <div class="flex items-center gap-3 bg-white border border-[#E2DFD8] rounded-xl px-4 py-2.5 shadow-xs shrink-0">
               <div class="text-right">
                 <div class="text-[10px] font-bold uppercase tracking-wider text-[#6F7173]">
-                  {b().plan.toUpperCase()} PLAN
+                  {b().seat_count} SEAT{b().seat_count === 1 ? "" : "S"}
                 </div>
                 <div class="text-xs font-semibold text-[#3C3D3E]">
                   <span class={isQuotaFull() ? "text-amber-600 font-bold" : "text-[#9E725F] font-bold"}>
@@ -453,15 +417,15 @@ const MailboxesPage: Component = () => {
                   <div class="flex items-center gap-2">
                     <span class="text-sm">⚠️</span>
                     <span>
-                      <strong>Plan Limit Reached:</strong> Your {billing()?.plan || "current"} plan allows up to {mailboxLimit()} mailbox(es).
-                      Upgrade your subscription to provision additional mailboxes.
+                      <strong>Capacity Limit Reached:</strong> Your organization has {billing()?.seat_count || mailboxLimit()} seat(s) allowing up to {mailboxLimit()} mailbox(es).
+                      Add seats in Billing to provision additional mailboxes.
                     </span>
                   </div>
                   <a
                     href="/dashboard/billing"
                     class="font-bold text-amber-900 underline hover:text-amber-950 whitespace-nowrap ml-4 text-[11px]"
                   >
-                    Upgrade in Billing →
+                    Add Seats in Billing →
                   </a>
                 </div>
               </Show>
@@ -819,49 +783,6 @@ const MailboxesPage: Component = () => {
           )}
         </Show>
 
-        {/* Institutional Recovery Card */}
-        <div class="rounded-2xl border border-[#E2DFD8] bg-[#F0EEE9]/40 p-6 shadow-xs">
-          <h3 class="text-sm font-bold text-[#3C3D3E] mb-1">
-            Recover Organization-Managed Mailbox Key
-          </h3>
-          <p class="text-xs text-[#6F7173] mb-4">
-            If an employee loses their device or credentials, an organization owner can restore access by uploading the master recovery key file downloaded during setup.
-          </p>
-
-          <form onSubmit={handleRecovery} class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <select
-              value={recoveryMailboxId()}
-              onChange={(e) => setRecoveryMailboxId(e.currentTarget.value)}
-              class="rounded-lg border border-[#E2DFD8] bg-white px-3 py-2 text-xs text-[#3C3D3E] focus:border-[#9E725F] focus:outline-none"
-            >
-              <option value="">Select target mailbox…</option>
-              <For each={(mailboxes() ?? []).filter((mb) => mb.mode === "org_managed")}>
-                {(mb) => (
-                  <option value={mb.id}>
-                    {mb.local_part} ({mb.id.slice(0, 8)}…)
-                  </option>
-                )}
-              </For>
-            </select>
-
-            <input
-              type="file"
-              accept=".hex,text/plain"
-              onChange={(e) => setRecoveryKeyFile(e.currentTarget.files?.[0] ?? null)}
-              class="rounded-lg border border-[#E2DFD8] bg-white px-3 py-1.5 text-xs text-[#3C3D3E] file:mr-2 file:rounded file:border-0 file:bg-[#9E725F]/10 file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-[#9E725F]"
-            />
-
-            <div class="sm:col-span-2 pt-2">
-              <button
-                type="submit"
-                disabled={!recoveryMailboxId() || !recoveryKeyFile() || isRecovering()}
-                class="rounded-lg bg-[#9E725F] px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-[#865E4D] disabled:opacity-50 transition-colors"
-              >
-                {isRecovering() ? "Decrypting Root…" : "Recover & Download Mailbox Key"}
-              </button>
-            </div>
-          </form>
-        </div>
       </Show>
 
       {/* Aliases Tab */}

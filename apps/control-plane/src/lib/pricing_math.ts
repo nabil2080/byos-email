@@ -92,19 +92,16 @@ export const TIER_BRACKETS: readonly TierBracket[] = [
 
 /**
  * Calculates dynamic resource limits based on provisioned seat count:
- * - Aliases: seat_count * 10
- * - Domains: <= 10 -> 3; 11-25 -> 5; >= 26 -> 10
+ * - Mailboxes: 1 per seat, exact
+ * - Domains: max(1, ceil(seats / 5))
+ * - Aliases: max(5, seats * 2)
+ * - Storage: Unlimited (customer-controlled)
  * - Extra domain add-on: $1.50/month
  */
 export function calculateResourceLimits(seats: number): ResourceLimits {
   const seatCount = Math.max(1, Math.floor(seats || 1));
-  const maxAliases = seatCount * 10;
-  let maxDomains = 3;
-  if (seatCount >= 26) {
-    maxDomains = 10;
-  } else if (seatCount >= 11) {
-    maxDomains = 5;
-  }
+  const maxDomains = Math.max(1, Math.ceil(seatCount / 5));
+  const maxAliases = Math.max(5, seatCount * 2);
   return {
     maxDomains,
     maxAliases,

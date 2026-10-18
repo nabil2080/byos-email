@@ -8,7 +8,7 @@ import {
   deleteAlias,
   listAliases,
   listOrgAliases,
-  fetchOrgRecoveryPkHex,
+  inviteMailbox,
 } from "./mailboxes";
 
 function assert(condition: boolean, message: string) {
@@ -40,7 +40,7 @@ export async function runMailboxesTests(): Promise<{ passed: number; failed: num
   await test("listMailboxes returns array of mailboxes", async () => {
     const mockMailboxes = [
       { id: "mbx_1", local_part: "alice", domain_id: "dom_1", mode: "private" },
-      { id: "mbx_2", local_part: "bob", domain_id: "dom_1", mode: "org_managed" },
+      { id: "mbx_2", local_part: "bob", domain_id: "dom_1", mode: "private" },
     ];
 
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -192,21 +192,31 @@ export async function runMailboxesTests(): Promise<{ passed: number; failed: num
     assert(orgAliases[0].local_part === "support", "Expected support alias");
   });
 
-  await test("fetchOrgRecoveryPkHex parses base64 org recovery key to hex", async () => {
-    const sample32Bytes = new Uint8Array(32).fill(0xab);
-    const b64 = btoa(String.fromCharCode(...sample32Bytes));
-
-    globalThis.fetch = (async (url: string | URL | Request) => {
-      assert(url.toString().includes("/v1/organizations/org_123"), "Incorrect URL for fetchOrgRecoveryPkHex");
+  await test("inviteMailbox sends privacy_mode: 'private'", async () => {
+    let capturedBody: any = null;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      assert(
+        url.toString().includes("/v1/organizations/org_123/mailboxes/invite"),
+        "Incorrect URL for inviteMailbox"
+      );
+      assert(init?.method === "POST", "Expected POST method");
+      capturedBody = JSON.parse(init?.body as string);
       return new Response(
-        JSON.stringify({ id: "org_123", name: "Test Org", org_recovery_pk: b64 }),
+        JSON.stringify({
+          invitation_id: "inv_1",
+          invite_url: "http://localhost:3000/invite/inv_1",
+          mailbox_id: "mbx_1",
+          email: "carol@demo.local",
+          privacy_mode: "private",
+          expires_at: "2026-12-31T00:00:00Z",
+        }),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
     }) as typeof fetch;
 
-    const hex = await fetchOrgRecoveryPkHex("org_123");
-    assert(hex.length === 64, "Expected 64 char hex string");
-    assert(hex === "ab".repeat(32), "Expected repeated ab hex");
+    const res = await inviteMailbox("org_123", { address: "carol@demo.local", name: "Carol" });
+    assert(res.invitation_id === "inv_1", "Expected invitation_id");
+    assert(capturedBody.privacy_mode === "private", "Expected privacy_mode 'private' sent in request body");
   });
 
   await test("handles non-200 HTTP error responses", async () => {

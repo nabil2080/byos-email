@@ -139,7 +139,7 @@ services:
       BYOS_LEGACY_AUTH_ENABLED: "false"
       BYOS_ENV: "development"
       BYOS_DEV_MODE: "${BYOS_DEV_MODE}"
-      BYOS_ALLOWED_ORIGINS: "${BYOS_ALLOWED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:3001,http://localhost:3001,http://127.0.0.1:3002,http://localhost:3002,http://127.0.0.1:4173,http://localhost:4173,http://127.0.0.1:4321,http://localhost:4321,http://127.0.0.1:5173,http://localhost:5173}"
+      BYOS_ALLOWED_ORIGINS: "${BYOS_ALLOWED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:3001,http://localhost:3001,http://127.0.0.1:3002,http://localhost:3002,http://127.0.0.1:3003,http://localhost:3003,http://127.0.0.1:4173,http://localhost:4173,http://127.0.0.1:4321,http://localhost:4321,http://127.0.0.1:5173,http://localhost:5173}"
       STORAGE_HEALTH_INTERVAL: "${STORAGE_HEALTH_INTERVAL:-300}"
       STORAGE_WORKER_INTERNAL_KEY_FILE: /run/secrets/storage_worker_internal_key
       INTERNAL_API_KEY_FILE: /run/secrets/internal_api_key
@@ -352,6 +352,79 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  admin-api:
+    build:
+      context: ..
+      dockerfile: services/admin-api/Dockerfile
+    container_name: byos-admin-api
+    ports:
+      - "127.0.0.1:8087:8087"
+    environment:
+      PORT: "8087"
+      BYOS_DEV_MODE: "1"
+      SUPPORT_DB_URL: "postgres://role_support_agent:support_crm_password@postgres:5432/byos"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  control-plane:
+    build:
+      context: ..
+      dockerfile: apps/control-plane/Dockerfile
+    container_name: byos-control-plane
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      VITE_HOST: "0.0.0.0"
+      VITE_API_URL: "http://api:8080"
+    depends_on:
+      api:
+        condition: service_started
+
+  webmail:
+    build:
+      context: ..
+      dockerfile: apps/webmail/Dockerfile
+    container_name: byos-webmail
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      VITE_HOST: "0.0.0.0"
+      VITE_API_URL: "http://api:8080"
+    depends_on:
+      api:
+        condition: service_started
+
+  public-site:
+    build:
+      context: ..
+      dockerfile: apps/public-site/Dockerfile
+    container_name: byos-public-site
+    ports:
+      - "127.0.0.1:3002:3002"
+    environment:
+      ASTRO_DEV_BACKGROUND: "false"
+      ASTRO_HOST: "0.0.0.0"
+      PUBLIC_CP_URL: "http://localhost:3000"
+      PUBLIC_API_URL: "http://localhost:8080"
+    depends_on:
+      control-plane:
+        condition: service_started
+
+  support-crm:
+    build:
+      context: ..
+      dockerfile: apps/support-crm/Dockerfile
+    container_name: byos-support-crm
+    ports:
+      - "127.0.0.1:3003:3003"
+    environment:
+      VITE_HOST: "0.0.0.0"
+      VITE_ADMIN_API_URL: "http://admin-api:8087"
+    depends_on:
+      admin-api:
+        condition: service_started
 
 secrets:
   outbound_delivery_sk:

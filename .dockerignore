@@ -1,0 +1,8 @@
+**/node_modules
+**/.git
+**/target
+**/dist
+**/.astro
+tests/browser/artifacts
+scratch
+*.log

@@ -81,8 +81,8 @@ func TestBillingGet(t *testing.T) {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	if resp.Plan == "" {
-		t.Fatalf("expected plan in response, got empty")
+	if resp.SeatCount < 1 {
+		t.Fatalf("expected seat_count >= 1 in response, got %d", resp.SeatCount)
 	}
 	if resp.UsedMailboxes != 1 {
 		t.Fatalf("expected 1 used mailbox, got %d", resp.UsedMailboxes)
@@ -101,8 +101,8 @@ func TestBillingPost(t *testing.T) {
 	adminToken := createTestSession(t, db, adminID)
 	memberToken := createTestSession(t, db, memberID)
 
-	// 1. Non-owner (member) cannot update plan (403)
-	body := bytes.NewBufferString(`{"plan":"starter"}`)
+	// 1. Non-owner (member) cannot update seats (403)
+	body := bytes.NewBufferString(`{"seat_count":10}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/billing", body)
 	req.SetPathValue("org_id", orgID)
 	req.AddCookie(&http.Cookie{Name: "byos_session", Value: memberToken})
@@ -112,8 +112,8 @@ func TestBillingPost(t *testing.T) {
 		t.Fatalf("expected 403 when member updates plan, got %d", rec.Code)
 	}
 
-	// Non-owner (admin) cannot update plan (403)
-	body = bytes.NewBufferString(`{"plan":"starter"}`)
+	// Non-owner (admin) cannot update seats (403)
+	body = bytes.NewBufferString(`{"seat_count":10}`)
 	req = httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/billing", body)
 	req.SetPathValue("org_id", orgID)
 	req.AddCookie(&http.Cookie{Name: "byos_session", Value: adminToken})
@@ -123,19 +123,19 @@ func TestBillingPost(t *testing.T) {
 		t.Fatalf("expected 403 when admin updates plan, got %d", rec.Code)
 	}
 
-	// 2. Invalid plan name (400)
-	body = bytes.NewBufferString(`{"plan":"super_platinum_unlimited"}`)
+	// 2. Invalid seat count (400)
+	body = bytes.NewBufferString(`{"seat_count":0}`)
 	req = httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/billing", body)
 	req.SetPathValue("org_id", orgID)
 	req.AddCookie(&http.Cookie{Name: "byos_session", Value: ownerToken})
 	rec = httptest.NewRecorder()
 	billingHandler(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for invalid plan name, got %d", rec.Code)
+		t.Fatalf("expected 400 for invalid seat count, got %d", rec.Code)
 	}
 
-	// 3. Owner updates plan successfully (200)
-	body = bytes.NewBufferString(`{"plan":"business"}`)
+	// 3. Owner updates seats successfully (200)
+	body = bytes.NewBufferString(`{"seat_count":10}`)
 	req = httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/billing", body)
 	req.SetPathValue("org_id", orgID)
 	req.AddCookie(&http.Cookie{Name: "byos_session", Value: ownerToken})
@@ -149,11 +149,11 @@ func TestBillingPost(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if resp.Plan != "business" {
-		t.Fatalf("expected plan business, got %s", resp.Plan)
+	if resp.SeatCount != 10 {
+		t.Fatalf("expected seat_count 10, got %d", resp.SeatCount)
 	}
 	if resp.MailboxLimit != 10 {
-		t.Fatalf("expected mailbox limit 10 for business plan, got %d", resp.MailboxLimit)
+		t.Fatalf("expected mailbox limit 10, got %d", resp.MailboxLimit)
 	}
 
 	// 4. Unsupported method -> 405
@@ -163,6 +163,85 @@ func TestBillingPost(t *testing.T) {
 	rec = httptest.NewRecorder()
 	billingHandler(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("expected 405 for DELETE, got %d", rec.Code)
+		t.Fatalf("expected 405 Method Not Allowed, got %d", rec.Code)
+	}
+}
+
+func TestOrganizationSeatsHandler(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
+	ownerToken := createTestSession(t, db, ownerID)
+	createTestDomainAndMailbox(t, db, orgID) // 1 active mailbox
+
+	// 1. Valid PATCH to 20 seats
+	body := bytes.NewBufferString(`{"seat_count":20}`)
+	req := httptest.NewRequest(http.MethodPatch, "/v1/organizations/"+orgID+"/seats", body)
+	req.SetPathValue("org_id", orgID)
+	req.AddCookie(&http.Cookie{Name: "byos_session", Value: ownerToken})
+	rec := httptest.NewRecorder()
+	organizationSeatsHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["seat_count"] != float64(20) {
+		t.Fatalf("expected seat_count 20, got %v", resp["seat_count"])
+	}
+	if resp["monthly_total_cents"] != float64(5850) {
+		t.Fatalf("expected monthly_total_cents 5850, got %v", resp["monthly_total_cents"])
+	}
+	if resp["annual_total_cents"] != float64(58500) {
+		t.Fatalf("expected annual_total_cents 58500, got %v", resp["annual_total_cents"])
+	}
+
+	// 2. Reduce below active mailbox count (1 mailbox -> try 0 seats)
+	body = bytes.NewBufferString(`{"seat_count":0}`)
+	req = httptest.NewRequest(http.MethodPatch, "/v1/organizations/"+orgID+"/seats", body)
+	req.SetPathValue("org_id", orgID)
+	req.AddCookie(&http.Cookie{Name: "byos_session", Value: ownerToken})
+	rec = httptest.NewRecorder()
+	organizationSeatsHandler(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for seat_count 0, got %d", rec.Code)
+	}
+}
+
+func TestOrganizationCapacityHandler(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
+	ownerToken := createTestSession(t, db, ownerID)
+	createTestDomainAndMailbox(t, db, orgID)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/organizations/"+orgID+"/capacity", nil)
+	req.SetPathValue("org_id", orgID)
+	req.AddCookie(&http.Cookie{Name: "byos_session", Value: ownerToken})
+	rec := httptest.NewRecorder()
+	organizationCapacityHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	mailboxes := resp["mailboxes"].(map[string]interface{})
+	if mailboxes["used"] != float64(1) {
+		t.Fatalf("expected 1 used mailbox, got %v", mailboxes["used"])
+	}
+	domains := resp["domains"].(map[string]interface{})
+	if domains["used"] != float64(1) {
+		t.Fatalf("expected 1 used domain, got %v", domains["used"])
 	}
 }

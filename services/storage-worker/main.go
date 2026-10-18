@@ -334,17 +334,50 @@ func (s *S3Storage) ListObjects(ctx context.Context, bucket, prefix string) ([]O
 	return res, nil
 }
 func (s *S3Storage) TestConnection(ctx context.Context) error {
-	_, err := s.client.ListBuckets(ctx)
+	exists, err := s.client.BucketExists(ctx, s.bucket)
 	if err != nil {
-		// fallback to HeadBucket
-		exists, err2 := s.client.BucketExists(ctx, s.bucket)
-		if err2 != nil {
-			return err2
+		// fallback to ListBuckets
+		if _, errList := s.client.ListBuckets(ctx); errList != nil {
+			return err
 		}
-		if !exists {
-			return fmt.Errorf("bucket %s not exists", s.bucket)
-		}
+	} else if !exists {
+		return fmt.Errorf("bucket %s not exists", s.bucket)
 	}
+
+	// Live write/read/verify/delete probe
+	probeKey := fmt.Sprintf(".byos-probe-%d", time.Now().UnixNano())
+	probeContent := []byte(fmt.Sprintf("byos-probe-%d", time.Now().UnixNano()))
+
+	// 1. Write
+	_, err = s.client.PutObject(ctx, s.bucket, probeKey, bytes.NewReader(probeContent), int64(len(probeContent)), minio.PutObjectOptions{
+		ContentType: "text/plain",
+	})
+	if err != nil {
+		return fmt.Errorf("probe write failed: %w", err)
+	}
+
+	// Ensure cleanup
+	defer func() {
+		_ = s.client.RemoveObject(context.Background(), s.bucket, probeKey, minio.RemoveObjectOptions{})
+	}()
+
+	// 2. Read
+	obj, err := s.client.GetObject(ctx, s.bucket, probeKey, minio.GetObjectOptions{})
+	if err != nil {
+		return fmt.Errorf("probe read failed: %w", err)
+	}
+	defer obj.Close()
+
+	readBytes, err := io.ReadAll(obj)
+	if err != nil {
+		return fmt.Errorf("probe read content failed: %w", err)
+	}
+
+	// 3. Verify
+	if !bytes.Equal(readBytes, probeContent) {
+		return fmt.Errorf("probe verify failed: byte mismatch")
+	}
+
 	return nil
 }
 

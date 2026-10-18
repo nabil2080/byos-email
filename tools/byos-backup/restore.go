@@ -46,6 +46,13 @@ func RunRestore(ctx context.Context, backupDir string, dbURL string, dryRun bool
 		return nil, fmt.Errorf("backup verification failed with %d error(s): %s", len(verifyResult.Errors), strings.Join(verifyResult.Errors, "; "))
 	}
 
+	// 2. Mandatory Pre-Flight Safety & Zero-Knowledge Verification
+	// Refuses restore if backup contains non-Private modes or legacy escrow key material.
+	// Executes before connecting to database or performing any destructive actions (clean/truncate).
+	if err := validateRestoreSafety(backupDir); err != nil {
+		return nil, err
+	}
+
 	conn, err := pgx.Connect(ctx, dbURL)
 	if err != nil {
 		return nil, fmt.Errorf("connect to PostgreSQL: %w", err)
@@ -64,13 +71,18 @@ func RunRestore(ctx context.Context, backupDir string, dbURL string, dryRun bool
 		Success:     false,
 		DryRun:      dryRun,
 		TableCounts: make(map[string]int),
+		Warnings:    []string{},
 	}
 
 	if cleanExisting {
-		// Clean tables in reverse dependency order or cascade
+		// Clean tables in reverse dependency order or cascade for existing tables
 		for i := len(DefaultTables) - 1; i >= 0; i-- {
 			table := DefaultTables[i]
-			_, _ = tx.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s CASCADE", table))
+			var exists bool
+			_ = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`, table).Scan(&exists)
+			if exists {
+				_, _ = tx.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s CASCADE", table))
+			}
 		}
 	}
 
@@ -107,11 +119,61 @@ func RunRestore(ctx context.Context, backupDir string, dbURL string, dryRun bool
 		}
 		if !exists {
 			fmt.Printf("Notice: destination table %q does not exist, skipping insert.\n", table)
+			result.Warnings = append(result.Warnings, fmt.Sprintf("destination table %q does not exist, skipped", table))
 			continue
 		}
 
+		// Fetch destination table columns to ensure compatibility across schema versions
+		destCols := make(map[string]bool)
+		colRows, err := tx.Query(ctx, `
+			SELECT column_name 
+			FROM information_schema.columns 
+			WHERE table_schema = 'public' AND table_name = $1
+		`, table)
+		if err != nil {
+			return nil, fmt.Errorf("query columns for destination table %s: %w", table, err)
+		}
+		for colRows.Next() {
+			var colName string
+			if err := colRows.Scan(&colName); err == nil {
+				destCols[colName] = true
+			}
+		}
+		colRows.Close()
+
+		// Check which source columns are not in destination
+		for col := range rows[0] {
+			if !destCols[col] {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("omitted column %q from table %q (not present in destination schema)", col, table))
+			}
+		}
+
 		for _, row := range rows {
-			cols, vals, placeholders := buildInsertParams(table, row)
+			filteredRow := make(map[string]any, len(row))
+			for col, val := range row {
+				if destCols[col] {
+					filteredRow[col] = val
+				}
+			}
+
+			if table == "organizations" {
+				// Prevent silently repopulating retired organization-recovery metadata into the current application schema.
+				// Post-058 organizations strictly store NULL for org_recovery_pk.
+				if _, hasCol := destCols["org_recovery_pk"]; hasCol {
+					if origVal, hasKey := row["org_recovery_pk"]; hasKey && origVal != nil {
+						if strVal, isStr := origVal.(string); isStr && strings.TrimSpace(strVal) != "" {
+							result.Warnings = append(result.Warnings, fmt.Sprintf("cleared retired org_recovery_pk for organization %v to prevent repopulating retired metadata", filteredRow["id"]))
+						}
+					}
+					filteredRow["org_recovery_pk"] = nil
+				}
+			}
+
+			cols, vals, placeholders := buildInsertParams(table, filteredRow)
+			if len(cols) == 0 {
+				continue
+			}
+
 			query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT DO NOTHING",
 				table, strings.Join(cols, ", "), strings.Join(placeholders, ", "))
 
@@ -174,4 +236,84 @@ func buildInsertParams(table string, row map[string]any) ([]string, []any, []str
 	}
 
 	return cols, vals, placeholders
+}
+
+func validateRestoreSafety(backupDir string) error {
+	// 1. Check mailboxes.json: refuse if non-Private mode or non-null wrapped_sk_org
+	mbPath := filepath.Join(backupDir, "mailboxes.json")
+	if mbBytes, err := os.ReadFile(mbPath); err == nil {
+		var rows []map[string]any
+		if err := json.Unmarshal(mbBytes, &rows); err == nil {
+			var nonPrivateIDs []string
+			var escrowIDs []string
+			for _, row := range rows {
+				id, _ := row["id"].(string)
+				if id == "" {
+					id = "unknown"
+				}
+
+				if mode, ok := row["mode"].(string); ok && mode != "private" {
+					nonPrivateIDs = append(nonPrivateIDs, id)
+				}
+
+				if wsk, ok := row["wrapped_sk_org"]; ok && wsk != nil {
+					if strWsk, isStr := wsk.(string); isStr && strings.TrimSpace(strWsk) != "" {
+						escrowIDs = append(escrowIDs, id)
+					}
+				}
+			}
+
+			if len(nonPrivateIDs) > 0 {
+				return fmt.Errorf("restore rejected: table 'mailboxes' contains non-Private mode for records: %s", strings.Join(nonPrivateIDs, ", "))
+			}
+			if len(escrowIDs) > 0 {
+				return fmt.Errorf("restore rejected: table 'mailboxes' contains legacy wrapped_sk_org for records: %s", strings.Join(escrowIDs, ", "))
+			}
+		}
+	}
+
+	// 2. Check account_invitations.json: refuse if non-Private mode or legacy escrow keys exist
+	invPath := filepath.Join(backupDir, "account_invitations.json")
+	if invBytes, err := os.ReadFile(invPath); err == nil {
+		var rows []map[string]any
+		if err := json.Unmarshal(invBytes, &rows); err == nil {
+			var nonPrivateIDs []string
+			var escrowIDs []string
+			for _, row := range rows {
+				id, _ := row["id"].(string)
+				if id == "" {
+					id = "unknown"
+				}
+
+				if pmode, ok := row["privacy_mode"].(string); ok && pmode != "private" {
+					nonPrivateIDs = append(nonPrivateIDs, id)
+				}
+
+				hasEscrow := false
+				if wsk, ok := row["wrapped_sk_org"]; ok && wsk != nil {
+					if strWsk, isStr := wsk.(string); isStr && strings.TrimSpace(strWsk) != "" {
+						hasEscrow = true
+					}
+				}
+				if twsk, ok := row["temp_wrapped_sk"]; ok && twsk != nil {
+					if strTwsk, isStr := twsk.(string); isStr && strings.TrimSpace(strTwsk) != "" {
+						hasEscrow = true
+					}
+				}
+
+				if hasEscrow {
+					escrowIDs = append(escrowIDs, id)
+				}
+			}
+
+			if len(nonPrivateIDs) > 0 {
+				return fmt.Errorf("restore rejected: table 'account_invitations' contains non-Private privacy_mode for records: %s", strings.Join(nonPrivateIDs, ", "))
+			}
+			if len(escrowIDs) > 0 {
+				return fmt.Errorf("restore rejected: table 'account_invitations' contains legacy escrow keys (wrapped_sk_org or temp_wrapped_sk) for records: %s", strings.Join(escrowIDs, ", "))
+			}
+		}
+	}
+
+	return nil
 }

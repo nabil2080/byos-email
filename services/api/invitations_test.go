@@ -49,8 +49,8 @@ func TestMailboxInvite(t *testing.T) {
 	domainName := "invite-test-" + uuid.New().String() + ".com"
 	domainID := createTestDomain(t, db, orgID, domainName)
 
-	// Upgrade plan so multiple mailboxes can be created
-	db.Exec(`UPDATE organizations SET plan='business' WHERE id=$1`, orgID)
+	// Upgrade seat count so multiple mailboxes can be created
+	db.Exec(`UPDATE organizations SET seat_count=10 WHERE id=$1`, orgID)
 
 	ownerToken := createTestSession(t, db, ownerID)
 	adminToken := createTestSession(t, db, adminID)
@@ -58,17 +58,13 @@ func TestMailboxInvite(t *testing.T) {
 
 	dummyPk := hex.EncodeToString(bytes.Repeat([]byte{0x01}, 32))
 	dummyWskOrg := "wrapped_org_key_material_test"
-	dummyTempWsk := "temp_wrapped_sk_material_test"
 
-	// 1. Admin creates Org-Managed mailbox
+	// 1. Admin attempts to invite with deprecated organization_managed mode -> 400 Bad Request
 	{
 		body, _ := json.Marshal(map[string]interface{}{
-			"address":         "bob@" + domainName,
-			"name":            "Bob Builder",
-			"privacy_mode":    "organization_managed",
-			"mailbox_pk":      dummyPk,
-			"wrapped_sk_org":  dummyWskOrg,
-			"temp_wrapped_sk": dummyTempWsk,
+			"address":      "bob@" + domainName,
+			"name":         "Bob Builder",
+			"privacy_mode": "organization_managed",
 		})
 		req := httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/mailboxes/invite", bytes.NewReader(body))
 		req.SetPathValue("org_id", orgID)
@@ -76,28 +72,28 @@ func TestMailboxInvite(t *testing.T) {
 		w := httptest.NewRecorder()
 		mailboxInviteHandler(w, req)
 
-		if w.Code != http.StatusCreated {
-			t.Fatalf("expected 201 for org_managed invite, got %d: %s", w.Code, w.Body.String())
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for org_managed invite, got %d: %s", w.Code, w.Body.String())
 		}
-		var resp map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &resp)
-		if resp["invite_url"] == nil || resp["invitation_id"] == nil {
-			t.Fatalf("expected invite_url and invitation_id in response: %v", resp)
-		}
+	}
 
-		// Verify stored status is pending_activation and keys are stored
-		var mStatus, mMode string
-		var storedPk []byte
-		var storedWskOrg *string
-		err := db.QueryRow(`SELECT status, mode, mailbox_pk, wrapped_sk_org FROM mailboxes WHERE id=$1`, resp["mailbox_id"]).Scan(&mStatus, &mMode, &storedPk, &storedWskOrg)
-		if err != nil {
-			t.Fatalf("failed to query created mailbox: %v", err)
-		}
-		if mStatus != "pending_activation" || mMode != "org_managed" {
-			t.Fatalf("unexpected mailbox state: status=%s mode=%s", mStatus, mMode)
-		}
-		if storedWskOrg == nil || *storedWskOrg != dummyWskOrg {
-			t.Fatalf("expected wrapped_sk_org to match, got %v", storedWskOrg)
+	// 1b. Admin attempts to provide key material in invite -> 400 Bad Request
+	{
+		body, _ := json.Marshal(map[string]interface{}{
+			"address":        "bob2@" + domainName,
+			"name":           "Bob Builder 2",
+			"privacy_mode":   "private",
+			"mailbox_pk":     dummyPk,
+			"wrapped_sk_org": dummyWskOrg,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/mailboxes/invite", bytes.NewReader(body))
+		req.SetPathValue("org_id", orgID)
+		req.AddCookie(&http.Cookie{Name: "byos_session", Value: adminToken})
+		w := httptest.NewRecorder()
+		mailboxInviteHandler(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for invite with key material, got %d: %s", w.Code, w.Body.String())
 		}
 	}
 
@@ -107,9 +103,6 @@ func TestMailboxInvite(t *testing.T) {
 			"address":      "alice@" + domainName,
 			"name":         "Alice Private",
 			"privacy_mode": "private",
-			// Even if client sent junk keys, private mode must zero them
-			"mailbox_pk":     dummyPk,
-			"wrapped_sk_org": dummyWskOrg,
 		})
 		req := httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/mailboxes/invite", bytes.NewReader(body))
 		req.SetPathValue("org_id", orgID)
@@ -123,11 +116,10 @@ func TestMailboxInvite(t *testing.T) {
 		var resp map[string]interface{}
 		json.Unmarshal(w.Body.Bytes(), &resp)
 
-		// Verify that in private mode mailbox_pk and wrapped_sk_org are strictly NULL
+		// Verify that in private mode mailbox_pk is strictly NULL
 		var mStatus, mMode string
 		var storedPk []byte
-		var storedWskOrg *string
-		err := db.QueryRow(`SELECT status, mode, mailbox_pk, wrapped_sk_org FROM mailboxes WHERE id=$1`, resp["mailbox_id"]).Scan(&mStatus, &mMode, &storedPk, &storedWskOrg)
+		err := db.QueryRow(`SELECT status, mode, mailbox_pk FROM mailboxes WHERE id=$1`, resp["mailbox_id"]).Scan(&mStatus, &mMode, &storedPk)
 		if err != nil {
 			t.Fatalf("failed to query created private mailbox: %v", err)
 		}
@@ -137,18 +129,15 @@ func TestMailboxInvite(t *testing.T) {
 		if storedPk != nil {
 			t.Fatalf("expected mailbox_pk to be NULL for pending private mailbox, got %x", storedPk)
 		}
-		if storedWskOrg != nil {
-			t.Fatalf("expected wrapped_sk_org to be NULL for private mailbox, got %v", storedWskOrg)
-		}
 
-		// Also verify in account_invitations that keys are NULL
-		var invPk, invWskOrg, invTempWsk *string
-		err = db.QueryRow(`SELECT mailbox_pk, wrapped_sk_org, temp_wrapped_sk FROM account_invitations WHERE id=$1`, resp["invitation_id"]).Scan(&invPk, &invWskOrg, &invTempWsk)
+		// Also verify in account_invitations that mailbox_pk is NULL
+		var invPk *string
+		err = db.QueryRow(`SELECT mailbox_pk FROM account_invitations WHERE id=$1`, resp["invitation_id"]).Scan(&invPk)
 		if err != nil {
 			t.Fatalf("failed to query invitation row: %v", err)
 		}
-		if invPk != nil || invWskOrg != nil || invTempWsk != nil {
-			t.Fatalf("expected all invitation key fields to be NULL for private mailbox, got pk=%v wsk=%v temp=%v", invPk, invWskOrg, invTempWsk)
+		if invPk != nil {
+			t.Fatalf("expected invitation key field to be NULL for private mailbox, got pk=%v", invPk)
 		}
 	}
 
@@ -289,35 +278,13 @@ func TestImpersonation(t *testing.T) {
 	defer db.Close()
 	orgID, _, adminID, memberID := createTestOrgAndUsers(t, db)
 	createTestStorage(t, db, orgID)
-	// Upgrade plan so multiple mailboxes can be created
-	db.Exec(`UPDATE organizations SET plan='business' WHERE id=$1`, orgID)
+	// Upgrade seat count so multiple mailboxes can be created
+	db.Exec(`UPDATE organizations SET seat_count=10 WHERE id=$1`, orgID)
 	domainName := "impersonate-test-" + uuid.New().String() + ".com"
 	createTestDomain(t, db, orgID, domainName)
 
 	adminToken := createTestSession(t, db, adminID)
 	memberToken := createTestSession(t, db, memberID)
-
-	dummyPk := hex.EncodeToString(bytes.Repeat([]byte{0x01}, 32))
-	dummyWskOrg := "wrapped_org_key_material_test"
-
-	// Create Org-Managed mailbox
-	body, _ := json.Marshal(map[string]interface{}{
-		"address":        "orguser@" + domainName,
-		"privacy_mode":   "organization_managed",
-		"mailbox_pk":     dummyPk,
-		"wrapped_sk_org": dummyWskOrg,
-	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/mailboxes/invite", bytes.NewReader(body))
-	req.SetPathValue("org_id", orgID)
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: adminToken})
-	w := httptest.NewRecorder()
-	mailboxInviteHandler(w, req)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("setup org invite failed: %s", w.Body.String())
-	}
-	var orgInviteResp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &orgInviteResp)
-	orgMailboxID := orgInviteResp["mailbox_id"].(string)
 
 	// Create Private mailbox
 	bodyPriv, _ := json.Marshal(map[string]interface{}{
@@ -336,26 +303,7 @@ func TestImpersonation(t *testing.T) {
 	json.Unmarshal(wPriv.Body.Bytes(), &privInviteResp)
 	privMailboxID := privInviteResp["mailbox_id"].(string)
 
-	// 1. Admin accesses Org-Managed mailbox -> 200 OK with wrapped_sk_org and session_token
-	{
-		impReq := httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/mailboxes/"+orgMailboxID+"/impersonate", nil)
-		impReq.SetPathValue("org_id", orgID)
-		impReq.SetPathValue("mailbox_id", orgMailboxID)
-		impReq.AddCookie(&http.Cookie{Name: "byos_session", Value: adminToken})
-		rec := httptest.NewRecorder()
-		mailboxImpersonateHandler(rec, impReq)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 OK for org-managed impersonation, got %d: %s", rec.Code, rec.Body.String())
-		}
-		var resp map[string]interface{}
-		json.Unmarshal(rec.Body.Bytes(), &resp)
-		if resp["wrapped_sk_org"] != dummyWskOrg || resp["session_token"] == nil {
-			t.Fatalf("unexpected impersonation payload: %v", resp)
-		}
-	}
-
-	// 2. Admin attempts to access Private mailbox -> strictly 403 Forbidden
+	// 1. Admin attempts to access Private mailbox -> strictly 403 Forbidden
 	{
 		impReq := httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/mailboxes/"+privMailboxID+"/impersonate", nil)
 		impReq.SetPathValue("org_id", orgID)
@@ -374,11 +322,11 @@ func TestImpersonation(t *testing.T) {
 		}
 	}
 
-	// 3. Member attempts to access any mailbox -> 403 Forbidden
+	// 2. Member attempts to access any mailbox -> 403 Forbidden
 	{
-		impReq := httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/mailboxes/"+orgMailboxID+"/impersonate", nil)
+		impReq := httptest.NewRequest(http.MethodPost, "/v1/organizations/"+orgID+"/mailboxes/"+privMailboxID+"/impersonate", nil)
 		impReq.SetPathValue("org_id", orgID)
-		impReq.SetPathValue("mailbox_id", orgMailboxID)
+		impReq.SetPathValue("mailbox_id", privMailboxID)
 		impReq.AddCookie(&http.Cookie{Name: "byos_session", Value: memberToken})
 		rec := httptest.NewRecorder()
 		mailboxImpersonateHandler(rec, impReq)

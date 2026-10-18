@@ -156,6 +156,10 @@ if (Test-Path $seedBin) {
 $ensureStorageSql = "INSERT INTO mailbox_storage (mailbox_id, storage_connection_id, object_prefix, status) SELECT m.id, COALESCE((SELECT id FROM storage_connections WHERE status = 'active' LIMIT 1), 'a0000000-0000-0000-0000-000000000001'::uuid), 'mailboxes/' || m.id::text, 'active' FROM mailboxes m WHERE NOT EXISTS (SELECT 1 FROM mailbox_storage ms WHERE ms.mailbox_id = m.id);"
 docker exec -i byos-postgres psql -U byos -d byos -c $ensureStorageSql | Out-Null
 
+# Ensure seed users (Alice & Bob) have tours marked completed so general smoke tests are not interrupted by orientation tours
+$ensureToursSeenSql = "UPDATE users SET tours_seen = '{\`"control_plane_v1\`": {\`"completed_at\`": \`"2026-01-01T00:00:00Z\`", \`"last_step\`": 7}}'::jsonb WHERE email IN ('alice@byos.local', 'bob@byos.local');"
+docker exec -i byos-postgres psql -U byos -d byos -c $ensureToursSeenSql | Out-Null
+
 # Fetch remaining mailboxes and their Ed25519 pubkey prefixes
 $queryRemaining = "SELECT m.local_part, d.name, m.id::text, encode(m.mailbox_ed25519_pk, 'hex') FROM mailboxes m JOIN domains d ON d.id = m.domain_id ORDER BY m.local_part;"
 $rawRemaining = docker exec byos-postgres psql -U byos -d byos -A -F "|" -t -c $queryRemaining

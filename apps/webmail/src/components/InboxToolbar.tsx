@@ -395,7 +395,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
         </Show>
 
         {/* Search Bar with mathematically centered icon */}
-        <div class="relative flex-1 min-w-0 max-w-[540px]">
+        <div data-testid="search-bar" class="relative flex-1 min-w-0 max-w-[540px]">
           <input
             id="webmail-search-input"
             type="text"

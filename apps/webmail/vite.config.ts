@@ -7,10 +7,10 @@ export default defineConfig({
   plugins: [wasm(), solid(), tailwindcss()],
   server: {
     port: 3001,
-    host: "127.0.0.1",
+    host: process.env.VITE_HOST || "0.0.0.0",
     proxy: {
-      "/v1": "http://127.0.0.1:8080",
-      "/api/v1": "http://127.0.0.1:8080",
+      "/v1": process.env.VITE_API_URL || "http://127.0.0.1:8080",
+      "/api/v1": process.env.VITE_API_URL || "http://127.0.0.1:8080",
     },
   },
   build: {

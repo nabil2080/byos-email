@@ -118,7 +118,7 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
       email: res.email || mail,
       displayName: res.mailbox_local_part || (res.email ? res.email.split("@")[0] : mail.split("@")[0]),
       role: res.role || "member",
-      privacyMode: res.mailbox_mode || "org_managed",
+      privacyMode: res.mailbox_mode || "private",
       sessionToken: res.token || "",
       mailboxSkHex: skHex,
       searchKeyHex: searchKeyHex,

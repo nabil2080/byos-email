@@ -126,7 +126,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
   };
 
   return (
-    <section class="w-full bg-[#FAF9F6] dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2A2D35] rounded-2xl flex flex-col min-w-0 overflow-hidden shadow-2xs h-full">
+    <section data-testid="message-list" class="w-full bg-[#FAF9F6] dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2A2D35] rounded-2xl flex flex-col min-w-0 overflow-hidden shadow-2xs h-full">
       {/* Storage Outage / Disconnected Banner (Section 11) */}
       <Show when={props.storageError}>
         <div role="alert" class="p-3 bg-amber-50/90 border-b border-amber-200/80 text-xs text-amber-900 flex items-start justify-between gap-2 flex-shrink-0">

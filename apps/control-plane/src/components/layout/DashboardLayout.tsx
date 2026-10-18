@@ -1,6 +1,7 @@
-import { Component, createSignal, JSX } from "solid-js";
+import { Component, createSignal, JSX, Show, onMount } from "solid-js";
 import { useLocation } from "@solidjs/router";
 import Sidebar from "./Sidebar";
+import Header from "./Header";
 import { useOrg } from "../../context/OrgContext";
 
 interface Props {
@@ -9,28 +10,56 @@ interface Props {
 
 const DashboardLayout: Component<Props> = (props) => {
   const [mobileOpen, setMobileOpen] = createSignal(false);
+  const [isCollapsed, setIsCollapsed] = createSignal(false);
   const location = useLocation();
   const org = useOrg();
+
+  onMount(() => {
+    try {
+      const saved = localStorage.getItem("byos_cp_sidebar_collapsed");
+      if (saved === "true") {
+        setIsCollapsed(true);
+      }
+    } catch {}
+  });
+
+  const toggleSidebarCollapse = () => {
+    setIsCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("byos_cp_sidebar_collapsed", String(next));
+      } catch {}
+      return next;
+    });
+  };
 
   return (
     <div class="min-h-screen flex bg-[#F0EEE9] text-[#3C3D3E]">
       {/* Desktop sidebar */}
-      <Sidebar currentPath={location.pathname} />
+      <Sidebar
+        currentPath={location.pathname}
+        collapsed={isCollapsed()}
+      />
 
       {/* Mobile drawer */}
       {mobileOpen() && (
-        <div class="fixed inset-0 z-40 lg:hidden">
+        <div class="fixed inset-0 z-40 lg:hidden" data-testid="mobile-nav-drawer">
           <div
-            class="fixed inset-0 bg-[#3C3D3E]/40 backdrop-blur-xs"
+            class="fixed inset-0 bg-[#2B2C2D]/50 backdrop-blur-xs transition-opacity"
             onClick={() => setMobileOpen(false)}
             aria-hidden="true"
           />
-          <div class="fixed inset-y-0 left-0 w-64 bg-white shadow-2xl flex flex-col border-r border-[#E2DFD8]">
-            <Sidebar currentPath={location.pathname} isMobile={true} />
+          <div class="fixed inset-y-0 left-0 w-64 bg-white shadow-2xl flex flex-col border-r border-[#E2DFD8] z-50">
+            <Sidebar
+              currentPath={location.pathname}
+              isMobile={true}
+              onCloseMobile={() => setMobileOpen(false)}
+            />
             <button
               onClick={() => setMobileOpen(false)}
-              class="absolute top-4 right-4 text-[#6F7173] hover:text-[#3C3D3E] p-1 text-sm font-bold"
+              class="absolute top-4 right-4 text-[#6F7173] hover:text-[#3C3D3E] p-1.5 rounded-lg text-sm font-bold hover:bg-[#F0EEE9]"
               aria-label="Close navigation"
+              data-testid="close-mobile-nav"
             >
               ✕
             </button>
@@ -41,46 +70,36 @@ const DashboardLayout: Component<Props> = (props) => {
       {/* Main Content Viewport */}
       <div class="flex-1 flex flex-col min-w-0 min-h-screen">
         {/* Top Navbar */}
-        <header class="flex items-center justify-between px-6 py-3.5 bg-white/80 backdrop-blur-md border-b border-[#E2DFD8] sticky top-0 z-30">
-          <div class="flex items-center gap-3">
-            <button
-              onClick={() => setMobileOpen(true)}
-              class="lg:hidden rounded-lg p-2 text-[#3C3D3E] hover:bg-[#F3ECE8] transition-colors"
-              aria-label="Open navigation"
-            >
-              ☰
-            </button>
-            <div class="flex items-center gap-2">
-              <span class="text-xs font-mono font-bold uppercase tracking-wider text-[#9E725F] bg-[#9E725F]/10 px-2 py-0.5 rounded">
-                BYOS
-              </span>
-              <span class="text-sm font-bold text-[#3C3D3E] hidden sm:inline">
-                Admin Console
-              </span>
-            </div>
-          </div>
+        <Header
+          isSidebarCollapsed={isCollapsed()}
+          onToggleSidebarCollapse={toggleSidebarCollapse}
+          onOpenMobileNav={() => setMobileOpen(true)}
+        />
 
-          <div class="flex items-center gap-4">
-            <div class="hidden sm:flex items-center gap-2 text-xs text-[#6F7173]">
-              <span class="font-medium text-[#3C3D3E]">{org.user?.email}</span>
-              <span class="rounded bg-[#9E725F]/15 px-2 py-0.5 font-mono text-[10px] font-bold text-[#9E725F] uppercase">
-                {org.role || "Admin"}
+        {/* Persistent Onboarding Resume Banner */}
+        <Show when={org.onboardingSkipped && !org.onboardingCompleted}>
+          <div class="bg-[#F2E8E2] border-b border-[#9E725F]/30 px-4 sm:px-6 py-2.5 flex items-center justify-between text-xs text-[#3C3D3E] shadow-2xs">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-[#9E725F] animate-pulse" />
+              <span class="font-medium">
+                Onboarding is incomplete. Your email organization is operating with default settings.
               </span>
             </div>
             <a
-              href={(import.meta as unknown as { env: Record<string, string> }).env?.VITE_WEBMAIL_URL || "http://127.0.0.1:3001"}
-              target="_blank"
-              rel="noreferrer"
-              class="inline-flex items-center gap-1.5 rounded-lg border border-[#E2DFD8] bg-[#F0EEE9]/70 px-3 py-1.5 text-xs font-medium text-[#3C3D3E] hover:bg-[#F3ECE8] hover:text-[#9E725F] transition-colors"
+              href={`/onboarding/${org.onboardingCurrentStep || 1}`}
+              class="inline-flex items-center gap-1 font-bold text-[#9E725F] hover:text-[#865E4D] underline cursor-pointer"
             >
-              <span>Webmail</span>
-              <span class="text-[10px]">↗</span>
+              Resume Setup (Step {org.onboardingCurrentStep || 1}) →
             </a>
           </div>
-        </header>
+        </Show>
 
-        {/* Dynamic Route Content */}
-        <main class="flex-1 overflow-y-auto">{props.children}</main>
+        {/* Main Content Container with max width and responsive padding */}
+        <main class="flex-1 overflow-y-auto">
+          <div class="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+            {props.children}
+          </div>
+        </main>
       </div>
     </div>
   );

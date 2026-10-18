@@ -44,20 +44,18 @@ export async function checkEmailAvailability(email: string): Promise<CheckEmailR
 export async function register(
   email: string,
   passwordVerifier: string,
-  orgRecoveryPk: string,
-  wrappedOrgRecoverySk?: string,
-  recoverySalt?: string
+  publicKey?: string,
+  orgName?: string
 ): Promise<{ id: string; email: string; org_id: string; org_name: string }> {
   const payload: Record<string, string> = {
     email: email.trim(),
     password: passwordVerifier,
-    org_recovery_pk: orgRecoveryPk,
   };
-  if (wrappedOrgRecoverySk) {
-    payload.wrapped_org_recovery_sk = wrappedOrgRecoverySk;
-  }
-  if (recoverySalt) {
-    payload.recovery_salt = recoverySalt;
+  // Note: publicKey parameter is retained for call-site signature compatibility,
+  // but org_recovery_pk is intentionally omitted because organization recovery keys are deprecated
+  // and new organizations store org_recovery_pk = NULL.
+  if (orgName) {
+    payload.org_name = orgName;
   }
   const res = await fetch(`${apiBase()}/v1/auth/register`, {
     method: "POST",
@@ -71,7 +69,11 @@ export async function register(
     err.status = res.status;
     throw err;
   }
-  return (await res.json()) as { id: string; email: string; org_id: string; org_name: string };
+  const data = (await res.json()) as { id: string; email: string; org_id: string; org_name: string; token?: string };
+  if (data.token && typeof window !== "undefined") {
+    localStorage.setItem("byos_cp_session_token", data.token);
+  }
+  return data;
 }
 
 export async function login(email: string, password: string): Promise<AuthSessionResponse> {
@@ -328,3 +330,100 @@ export async function deletePasskey(id: string): Promise<void> {
     throw err;
   }
 }
+
+export interface TwoFactorStatus {
+  two_factor_enabled: boolean;
+  has_totp: boolean;
+  recovery_email: string;
+  recovery_phone: string;
+}
+
+export interface TOTPSetupResponse {
+  secret: string;
+  otpauth_url: string;
+}
+
+export async function fetch2FAStatus(): Promise<TwoFactorStatus> {
+  const res = await fetch(`${apiBase()}/v1/auth/2fa/status`, {
+    headers: getCpHeaders(),
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const err = new Error(text || `Failed to fetch 2FA status: ${res.status}`) as Error & { status: number };
+    err.status = res.status;
+    throw err;
+  }
+  return (await res.json()) as TwoFactorStatus;
+}
+
+export async function setupTOTP(): Promise<TOTPSetupResponse> {
+  const res = await fetch(`${apiBase()}/v1/auth/2fa/totp/setup`, {
+    method: "POST",
+    headers: getCpHeaders(),
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const err = new Error(text || `Failed to setup TOTP: ${res.status}`) as Error & { status: number };
+    err.status = res.status;
+    throw err;
+  }
+  return (await res.json()) as TOTPSetupResponse;
+}
+
+export async function verifyTOTP(
+  secret: string,
+  code: string
+): Promise<{ valid: boolean; message?: string; error?: string }> {
+  const res = await fetch(`${apiBase()}/v1/auth/2fa/totp/verify`, {
+    method: "POST",
+    headers: getCpHeaders({ "Content-Type": "application/json" }),
+    credentials: "include",
+    body: JSON.stringify({ secret, code }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { valid: false, error: data.error || `Verification failed: ${res.status}` };
+  }
+  return data as { valid: boolean; message?: string };
+}
+
+export async function disableTOTP(
+  password: string
+): Promise<{ success: boolean; error?: string; message?: string }> {
+  const res = await fetch(`${apiBase()}/v1/auth/2fa/totp/disable`, {
+    method: "POST",
+    headers: getCpHeaders({ "Content-Type": "application/json" }),
+    credentials: "include",
+    body: JSON.stringify({ password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { success: false, error: data.error || `Disable 2FA failed: ${res.status}` };
+  }
+  return data as { success: boolean; message?: string };
+}
+
+export async function saveRecoveryMethods(
+  recoveryEmail: string,
+  recoveryPhone: string
+): Promise<{ success: boolean }> {
+  const res = await fetch(`${apiBase()}/v1/auth/2fa/recovery-methods`, {
+    method: "POST",
+    headers: getCpHeaders({ "Content-Type": "application/json" }),
+    credentials: "include",
+    body: JSON.stringify({
+      recovery_email: recoveryEmail,
+      recovery_phone: recoveryPhone,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const err = new Error(text || `Failed to save recovery methods: ${res.status}`) as Error & { status: number };
+    err.status = res.status;
+    throw err;
+  }
+  return (await res.json()) as { success: boolean };
+}
+

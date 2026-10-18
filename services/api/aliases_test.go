@@ -26,7 +26,7 @@ func setupTestUser(t *testing.T, conn *pgx.Conn, orgName, userPrefix string) (st
 	domainID := uuid.New().String()
 	domainName := "test-" + uuid.New().String()[:8] + ".org"
 
-	_, err := conn.Exec(ctx, `INSERT INTO organizations (id, name, plan, org_recovery_pk) VALUES ($1, $2, 'business', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))`, orgID, orgName)
+	_, err := conn.Exec(ctx, `INSERT INTO organizations (id, name, seat_count, org_recovery_pk) VALUES ($1, $2, 10, decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))`, orgID, orgName)
 	if err != nil {
 		t.Fatalf("failed to insert org: %v", err)
 	}
@@ -56,6 +56,23 @@ func setupTestUser(t *testing.T, conn *pgx.Conn, orgName, userPrefix string) (st
 		t.Fatalf("failed to insert session: %v", err)
 	}
 
+	t.Cleanup(func() {
+		dsn := getValidatedTestDSN(t)
+		cleanupConn, err := pgx.Connect(context.Background(), dsn)
+		if err == nil {
+			defer cleanupConn.Close(context.Background())
+			cCtx := context.Background()
+			_, _ = cleanupConn.Exec(cCtx, `DELETE FROM masked_alias_reply_map WHERE alias_id IN (SELECT id FROM masked_aliases WHERE user_id=$1)`, userID)
+			_, _ = cleanupConn.Exec(cCtx, `DELETE FROM masked_aliases WHERE user_id=$1`, userID)
+			_, _ = cleanupConn.Exec(cCtx, `DELETE FROM message_metadata WHERE mailbox_id=$1 OR domain_id=$2`, mbID, domainID)
+			_, _ = cleanupConn.Exec(cCtx, `DELETE FROM sessions WHERE user_id=$1`, userID)
+			_, _ = cleanupConn.Exec(cCtx, `DELETE FROM mailboxes WHERE org_id=$1`, orgID)
+			_, _ = cleanupConn.Exec(cCtx, `DELETE FROM users WHERE org_id=$1`, orgID)
+			_, _ = cleanupConn.Exec(cCtx, `DELETE FROM domains WHERE org_id=$1`, orgID)
+			_, _ = cleanupConn.Exec(cCtx, `DELETE FROM organizations WHERE id=$1`, orgID)
+		}
+	})
+
 	return orgID, userID, mbID, domainID, token
 }
 
@@ -74,10 +91,7 @@ func loadSignedVectorForAlias(t *testing.T) signedVector {
 }
 
 func TestCreateAliasGeneratesUniqueAddress(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -120,10 +134,7 @@ func TestCreateAliasGeneratesUniqueAddress(t *testing.T) {
 }
 
 func TestCreateAliasRateLimit(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -168,10 +179,7 @@ func TestCreateAliasRateLimit(t *testing.T) {
 }
 
 func TestListAliasesOnlyOwnUser(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -240,10 +248,7 @@ func TestListAliasesOnlyOwnUser(t *testing.T) {
 }
 
 func TestDisableAliasStopsRouting(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -295,10 +300,7 @@ func TestDisableAliasStopsRouting(t *testing.T) {
 }
 
 func TestDeleteAliasClearsReplyMap(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -378,10 +380,7 @@ func TestReplyFromAliasUsesAliasAddress(t *testing.T) {
 	t.Cleanup(func() { mockStorage.Close() })
 	t.Setenv("STORAGE_WORKER_URL", mockStorage.URL)
 
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -404,6 +403,15 @@ func TestReplyFromAliasUsesAliasAddress(t *testing.T) {
 	// Clean up any stale data for recipientMailboxID
 	_, _ = conn.Exec(ctx, "DELETE FROM message_metadata WHERE mailbox_id = $1", recipientMailboxID)
 	_, _ = conn.Exec(ctx, "DELETE FROM mailboxes WHERE id = $1", recipientMailboxID)
+	t.Cleanup(func() {
+		dsn := getValidatedTestDSN(t)
+		cleanupConn, err := pgx.Connect(context.Background(), dsn)
+		if err == nil {
+			defer cleanupConn.Close(context.Background())
+			_, _ = cleanupConn.Exec(context.Background(), "DELETE FROM message_metadata WHERE mailbox_id = $1", recipientMailboxID)
+			_, _ = cleanupConn.Exec(context.Background(), "DELETE FROM mailboxes WHERE id = $1", recipientMailboxID)
+		}
+	})
 
 	orgID, userID, mbID, domainID, token := setupTestUser(t, conn, "Reply Alias Org", "replyuser")
 	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
@@ -556,10 +564,7 @@ func TestValidateCustomLocalPartUnit(t *testing.T) {
 }
 
 func TestCreateAliasCustomLocalPart(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -593,10 +598,7 @@ func TestCreateAliasCustomLocalPart(t *testing.T) {
 }
 
 func TestCreateAliasCustomRejectsDuplicate(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -639,10 +641,7 @@ func TestCreateAliasCustomRejectsDuplicate(t *testing.T) {
 }
 
 func TestCreateAliasCustomRejectsReserved(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -677,10 +676,7 @@ func TestCreateAliasCustomRejectsReserved(t *testing.T) {
 }
 
 func TestCreateAliasCustomRejectsInvalidChars(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -715,10 +711,7 @@ func TestCreateAliasCustomRejectsInvalidChars(t *testing.T) {
 }
 
 func TestCreateAliasCustomRejectsLeadingTrailingPunct(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -750,10 +743,7 @@ func TestCreateAliasCustomRejectsLeadingTrailingPunct(t *testing.T) {
 }
 
 func TestCreateAliasCustomRejectsConsecutivePunct(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -785,10 +775,7 @@ func TestCreateAliasCustomRejectsConsecutivePunct(t *testing.T) {
 }
 
 func TestCreateAliasCustomRejectsTooShort(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -817,10 +804,7 @@ func TestCreateAliasCustomRejectsTooShort(t *testing.T) {
 }
 
 func TestCreateAliasCustomRejectsTooLong(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -850,10 +834,7 @@ func TestCreateAliasCustomRejectsTooLong(t *testing.T) {
 }
 
 func TestCreateAliasCustomLowercases(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -883,10 +864,7 @@ func TestCreateAliasCustomLowercases(t *testing.T) {
 }
 
 func TestCreateAliasCustomRespectsRateLimit(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {

@@ -12,7 +12,7 @@ export default defineConfig({
     server: {
       proxy: {
         "/v1": {
-          target: "http://127.0.0.1:8080",
+          target: process.env.PUBLIC_API_URL || "http://127.0.0.1:8080",
           changeOrigin: true,
         },
       },
@@ -25,6 +25,6 @@ export default defineConfig({
   },
   server: {
     port: 3002,
-    host: "127.0.0.1",
+    host: process.env.ASTRO_HOST || "0.0.0.0",
   },
 });

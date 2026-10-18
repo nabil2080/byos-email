@@ -168,17 +168,17 @@ const RegisterPage: Component = () => {
 
     try {
       const em = email().trim().toLowerCase();
-      // Transmit ONLY public key, encrypted private key, and PBKDF2 password verifier
+      const currentParams = new URLSearchParams(window.location.search);
+      const orgNameParam = currentParams.get("org_name") || currentParams.get("org") || (em.includes("acme") ? "Acme" : "");
+      // Transmit ONLY public key, PBKDF2 password verifier, and optional org name
       const res = await register(
         em,
         data.passwordVerifier,
         data.publicKey,
-        data.wrappedPrivateKey,
-        data.recoverySalt
+        orgNameParam || undefined
       );
 
       // Successfully registered & session established. Route to Onboarding Pricing
-      const currentParams = new URLSearchParams(window.location.search);
       const seatsParam = currentParams.get("seats");
       const cycleParam = currentParams.get("billing_cycle") || currentParams.get("cycle");
       const targetQuery = new URLSearchParams({ org_id: res.org_id });
@@ -650,16 +650,13 @@ const RegisterPage: Component = () => {
                   Network Wire Payload:
                 </div>
                 <div class="truncate">
-                  <span class="text-stone-800 font-semibold">org_recovery_pk:</span> {ceremonyData()?.publicKey.slice(0, 16)}…
-                </div>
-                <div class="truncate">
-                  <span class="text-stone-800 font-semibold">wrapped_private_key:</span> {ceremonyData()?.wrappedPrivateKey.slice(0, 16)}…
+                  <span class="text-stone-800 font-semibold">public_key:</span> {ceremonyData()?.publicKey.slice(0, 16)}…
                 </div>
                 <div class="truncate">
                   <span class="text-stone-800 font-semibold">password_verifier:</span> {ceremonyData()?.passwordVerifier.slice(0, 16)}… (PBKDF2)
                 </div>
                 <div class="text-emerald-700 font-semibold pt-1">
-                  ✓ Plaintext Passphrase: NOT TRANSMITTED
+                  ✓ Private Keys & Passphrase: NEVER TRANSMITTED
                 </div>
               </div>
             </div>

@@ -56,9 +56,23 @@ func createTestMailbox(t *testing.T, db *sql.DB, orgID, userID, tag string) (dom
 	if err := db.QueryRow(`INSERT INTO root_secrets (root_secret_wrapped) VALUES (decode('AA==','base64')) RETURNING id`).Scan(&rootID); err != nil {
 		t.Fatalf("failed to insert root secret: %v", err)
 	}
-	if err := db.QueryRow(`INSERT INTO mailboxes (org_id, user_id, domain_id, local_part, mode, root_secret_id, mailbox_sk_wrapped, mailbox_pk) VALUES ($1, $2, $3, $4, 'org_managed', $5, decode('AA==','base64'), decode('AA==','base64')) RETURNING id`, orgID, userID, domainID, "drafter-"+uniqueTag, rootID).Scan(&mailboxID); err != nil {
+	if err := db.QueryRow(`INSERT INTO mailboxes (org_id, user_id, domain_id, local_part, mode, root_secret_id, mailbox_sk_wrapped, mailbox_pk, wrapped_sk_user) VALUES ($1, $2, $3, $4, 'private', $5, decode('AA==','base64'), decode('AA==','base64'), 'test_wrapped_sk_user') RETURNING id`, orgID, userID, domainID, "drafter-"+uniqueTag, rootID).Scan(&mailboxID); err != nil {
 		t.Fatalf("failed to insert mailbox: %v", err)
 	}
+
+	t.Cleanup(func() {
+		cleanupDB, err := sql.Open("pgx", testDSN)
+		if err != nil {
+			t.Errorf("cleanup open failed: %v", err)
+			return
+		}
+		defer cleanupDB.Close()
+		_, _ = cleanupDB.Exec(`DELETE FROM drafts WHERE mailbox_id = $1`, mailboxID)
+		_, _ = cleanupDB.Exec(`DELETE FROM mailboxes WHERE id = $1`, mailboxID)
+		_, _ = cleanupDB.Exec(`DELETE FROM root_secrets WHERE id = $1`, rootID)
+		_, _ = cleanupDB.Exec(`DELETE FROM domains WHERE id = $1`, domainID)
+	})
+
 	return domainID, mailboxID
 }
 
@@ -90,6 +104,17 @@ func createTestOrgWithEmail(t *testing.T, db *sql.DB, tag string) (orgID, ownerI
 	ownerIDVal = mkuser(uniqueTag+"-owner@byos.local", "Owner", "owner")
 	adminIDVal = mkuser(uniqueTag+"-admin@byos.local", "Admin", "admin")
 	memberIDVal = mkuser(uniqueTag+"-member@byos.local", "Member", "member")
+
+	t.Cleanup(func() {
+		cleanupDB, err := sql.Open("pgx", testDSN)
+		if err != nil {
+			t.Errorf("cleanup open failed: %v", err)
+			return
+		}
+		defer cleanupDB.Close()
+		_, _ = cleanupDB.Exec(`DELETE FROM organizations WHERE id = $1`, orgIDVal)
+	})
+
 	return orgIDVal, ownerIDVal, adminIDVal, memberIDVal
 }
 

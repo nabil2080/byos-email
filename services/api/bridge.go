@@ -454,10 +454,10 @@ func bridgeOutboundSendHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	// Authenticate token, verify mailbox is active, and ensure domain is verified
-	var credentialID, mailboxUserID, mailboxOrgID, domainID, mailboxPlan, orgPlan string
+	var credentialID, mailboxUserID, mailboxOrgID, domainID string
 	var domainVerified bool
 	err = conn.QueryRow(ctx, `
-		SELECT b.id::text, COALESCE(m.user_id::text, ''), m.org_id::text, m.domain_id::text, d.is_verified, COALESCE(m.plan, 'solo'), COALESCE(o.plan, 'solo')
+		SELECT b.id::text, COALESCE(m.user_id::text, ''), m.org_id::text, m.domain_id::text, d.is_verified
 		FROM bridge_credentials b
 		JOIN mailboxes m ON m.id = b.mailbox_id
 		JOIN domains d ON d.id = m.domain_id
@@ -468,7 +468,7 @@ func bridgeOutboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		  AND b.revoked_at IS NULL 
 		  AND m.is_active=true 
 		  AND (u.is_active IS NULL OR u.is_active=true)
-	`, req.MailboxID, tokenHash[:]).Scan(&credentialID, &mailboxUserID, &mailboxOrgID, &domainID, &domainVerified, &mailboxPlan, &orgPlan)
+	`, req.MailboxID, tokenHash[:]).Scan(&credentialID, &mailboxUserID, &mailboxOrgID, &domainID, &domainVerified)
 	if err != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
@@ -479,7 +479,7 @@ func bridgeOutboundSendHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limit check
-	allowed, retryAfter, _ := checkAndIncrRate(ctx, req.MailboxID, mailboxOrgID, mailboxPlan, orgPlan)
+	allowed, retryAfter, _ := checkAndIncrRate(ctx, req.MailboxID, mailboxOrgID, "solo", "solo")
 	if !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)

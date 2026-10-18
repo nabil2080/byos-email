@@ -39,7 +39,10 @@ async function runPublicSiteTest() {
   console.log("                    PUBLIC SITE VERIFICATION SUITE                             ");
   console.log("================================================================================\n");
 
-  const baseUrl = "http://localhost:4321";
+  let baseUrl = "http://localhost:4321";
+  if (await isServerReady("http://localhost:3002/")) {
+    baseUrl = "http://localhost:3002";
+  }
   let devProcess = null;
 
   // Check if dev server is running, otherwise start it

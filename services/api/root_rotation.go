@@ -99,35 +99,28 @@ func rootRotationHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Admins rotate any org mailbox; otherwise only the owning user may
-	// rotate (covers member-owned private mailboxes).
-	if !isAdmin(userID, orgID, conn) && ownerUserID != userID {
-		http.Error(w, "not authorized to rotate this mailbox", http.StatusForbidden)
+	// Migration 058 enforces that all mailboxes are strictly private.
+	// ONLY the mailbox owner (ownerUserID == userID) may initiate root rotation.
+	// Organization owners and administrators must receive HTTP 403 Forbidden.
+	// Organization administration must not grant authority over an employee's
+	// cryptographic lifecycle.
+	if ownerUserID != userID {
+		http.Error(w, "not authorized to rotate private mailbox: only mailbox owner may rotate", http.StatusForbidden)
 		return
 	}
 
-	// Mode-specific wrap rules mirror provisioning exactly.
-	var newWrapped []byte
-	if mode == "org_managed" {
-		if strings.TrimSpace(req.RootSecretWrapped) == "" {
-			http.Error(w, "root_secret_wrapped required for org_managed mailbox", http.StatusBadRequest)
-			return
-		}
-		newWrapped, err = hexDecodeString(strings.TrimSpace(req.RootSecretWrapped))
-		if err != nil || len(newWrapped) != 81 {
-			http.Error(w, "invalid root_secret_wrapped", http.StatusBadRequest)
-			return
-		}
-	} else if mode == "private" {
-		if strings.TrimSpace(req.RootSecretWrapped) != "" {
-			http.Error(w, "root_secret_wrapped must be omitted for private mailbox", http.StatusBadRequest)
-			return
-		}
-		newWrapped = nil
-	} else {
-		http.Error(w, "unknown mailbox mode", http.StatusInternalServerError)
+	// Defensive check: only private mailbox mode is supported.
+	if mode != "private" {
+		http.Error(w, "invalid mailbox mode: only private mailboxes supported", http.StatusBadRequest)
 		return
 	}
+
+	// For private mailboxes, root_secret_wrapped must be omitted.
+	if strings.TrimSpace(req.RootSecretWrapped) != "" {
+		http.Error(w, "root_secret_wrapped must be omitted for private mailbox", http.StatusBadRequest)
+		return
+	}
+	var newWrapped []byte = nil
 
 	var currentVersion int
 	err = tx.QueryRow(ctx, `SELECT version FROM root_secrets WHERE id=$1 FOR UPDATE`, currentRootID).Scan(&currentVersion)
@@ -160,8 +153,7 @@ func rootRotationHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// A rotation is a compromise response: kill the mailbox owner's other
 	// sessions so a stolen session does not survive the operation. The
-	// request's own session stays alive; an admin rotating someone else's
-	// mailbox keeps theirs while the owner's sessions die.
+	// request's own session stays alive.
 	var sessionsRevoked int64
 	if ownerUserID != "" {
 		var currentHash []byte

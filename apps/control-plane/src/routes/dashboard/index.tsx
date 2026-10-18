@@ -1,13 +1,56 @@
-import { Component, createResource, createSignal, Show } from "solid-js";
-import { A } from "@solidjs/router";
+import { Component, createResource, createSignal, Show, onMount, onCleanup, createEffect } from "solid-js";
+import { A, useLocation } from "@solidjs/router";
 import { useOrg } from "../../context/OrgContext";
 import { listDomains } from "../../lib/api/domains";
 import { listMailboxes } from "../../lib/api/mailboxes";
 import { getStorageConnection } from "../../lib/api/storage";
+import { fetchTourState, startControlPlaneTour, destroyControlPlaneTour } from "../../tours/runner";
+import { CONTROL_PLANE_V1_ID } from "../../tours/control_plane_v1";
 
 const DashboardOverview: Component = () => {
   const org = useOrg();
+  const location = useLocation();
   const [copiedOrgId, setCopiedOrgId] = createSignal(false);
+
+  let tourTriggered = false;
+
+  if (typeof window !== "undefined" && Boolean((import.meta as any).env?.DEV)) {
+    (window as any).__startControlPlaneTour = startControlPlaneTour;
+  }
+
+  createEffect(() => {
+    if (org.isLoading) return;
+    if (tourTriggered) return;
+    // Guard: Tour MUST NOT fire during onboarding
+    if (!org.onboardingCompleted && !org.onboardingSkipped) {
+      return;
+    }
+
+    tourTriggered = true;
+    const isRestart = location.search.includes("tour=restart");
+    if (isRestart) {
+      setTimeout(() => {
+        startControlPlaneTour({ force: true });
+      }, 300);
+      return;
+    }
+
+    // Auto-launch orientation tour if not previously completed or skipped
+    fetchTourState().then((tourState) => {
+      const cpTour = tourState[CONTROL_PLANE_V1_ID];
+      const isSeen = Boolean(cpTour?.completed_at || cpTour?.skipped_at);
+
+      if (!isSeen) {
+        setTimeout(() => {
+          startControlPlaneTour();
+        }, 400);
+      }
+    });
+  });
+
+  onCleanup(() => {
+    destroyControlPlaneTour();
+  });
 
   const handleCopyOrgId = async () => {
     if (!org.orgId) return;
@@ -62,14 +105,14 @@ const DashboardOverview: Component = () => {
   return (
     <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
       {/* Top Banner / Org Header */}
-      <div class="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div data-testid="dashboard-overview" class="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <div class="flex items-center gap-3">
             <h1 class="text-2xl font-bold tracking-tight text-[#3C3D3E]">
               Organization Overview
             </h1>
             <span class="rounded-full bg-[#9E725F]/15 px-3 py-0.5 text-xs font-mono font-bold uppercase text-[#9E725F]">
-              {org.plan} Plan
+              {org.seatCount} Seat{org.seatCount === 1 ? "" : "s"}
             </span>
           </div>
           <p class="mt-1 text-sm text-[#6F7173]">

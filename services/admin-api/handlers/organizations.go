@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -20,12 +21,13 @@ type OrganizationResponse struct {
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
 	MailboxCount int       `json:"mailbox_count"`
-	SeatCount    int       `json:"seat_count"`
-	BillingCycle string    `json:"billing_cycle"`
-	MaxDomains   int       `json:"max_domains"`
-	MaxAliases   int       `json:"max_aliases"`
-	StorageUsed  int64     `json:"storage_used"`
-	StorageQuota int64     `json:"storage_quota"`
+	SeatCount          int       `json:"seat_count"`
+	BillingCycle       string    `json:"billing_cycle"`
+	SubscriptionStatus string    `json:"subscription_status"`
+	MaxDomains         int       `json:"max_domains"`
+	MaxAliases         int       `json:"max_aliases"`
+	StorageUsed        int64     `json:"storage_used"`
+	StorageQuota       int64     `json:"storage_quota"`
 }
 
 type AuditLogEntry struct {
@@ -84,6 +86,8 @@ func RegisterOrganizationRoutes(mux *http.ServeMux, db *pgxpool.Pool, authMiddle
 				return
 			}
 			handleSuspendOrganization(w, r, db, orgUUID)
+		case "seats":
+			HandleUpdateSeatCount(w, r, db, orgUUID)
 		case "plan":
 			if r.Method != http.MethodPost {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -91,11 +95,13 @@ func RegisterOrganizationRoutes(mux *http.ServeMux, db *pgxpool.Pool, authMiddle
 			}
 			handleUpdatePlan(w, r, db, orgUUID)
 		case "capacity":
-			if r.Method != http.MethodPost {
+			if r.Method == http.MethodGet {
+				HandleGetCapacity(w, r, db, orgUUID)
+			} else if r.Method == http.MethodPost {
+				handleAdjustCapacity(w, r, db, orgUUID)
+			} else {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-				return
 			}
-			handleAdjustCapacity(w, r, db, orgUUID)
 		case "state-reset", "recovery":
 			if r.Method != http.MethodPost {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -135,13 +141,12 @@ func handleGetOrganizations(w http.ResponseWriter, r *http.Request, db *pgxpool.
 	}
 
 	rows, err := db.Query(r.Context(), `
-		SELECT o.id, o.name, COALESCE(o.plan, 'starter'), COALESCE(o.status, 'active'), o.created_at,
+		SELECT o.id, o.name, COALESCE(o.status, 'active'), o.created_at,
 		       COALESCE((SELECT COUNT(*) FROM mailboxes m WHERE m.org_id = o.id), 0) AS mailbox_count,
 		       COALESCE((SELECT SUM(sc.used_bytes) FROM storage_connections sc WHERE sc.org_id = o.id), 0) AS used_bytes,
-		       COALESCE(o.seat_count, 10) AS seat_count,
+		       COALESCE(o.seat_count, 1) AS seat_count,
 		       COALESCE(o.billing_cycle, 'annual') AS billing_cycle,
-		       COALESCE(o.max_domains, 3) AS max_domains,
-		       COALESCE(o.max_aliases, 100) AS max_aliases
+		       COALESCE(o.subscription_status, 'active') AS subscription_status
 		FROM organizations o
 		ORDER BY o.created_at DESC
 		LIMIT 100
@@ -157,37 +162,17 @@ func handleGetOrganizations(w http.ResponseWriter, r *http.Request, db *pgxpool.
 		var org OrganizationResponse
 		var uid uuid.UUID
 		var usedBytes int64
-		if err := rows.Scan(&uid, &org.Name, &org.Plan, &org.Status, &org.CreatedAt, &org.MailboxCount, &usedBytes, &org.SeatCount, &org.BillingCycle, &org.MaxDomains, &org.MaxAliases); err != nil {
+		if err := rows.Scan(&uid, &org.Name, &org.Status, &org.CreatedAt, &org.MailboxCount, &usedBytes, &org.SeatCount, &org.BillingCycle, &org.SubscriptionStatus); err != nil {
 			log.Printf("handleGetOrganizations scan error: %v", err)
 			http.Error(w, `{"error":"Failed to scan organization record"}`, http.StatusInternalServerError)
 			return
 		}
 		org.ID = uid.String()
 		org.OrgUUID = uid.String()
+		org.Plan = fmt.Sprintf("%d Seats", org.SeatCount)
 		org.PlanTier = org.Plan
-
-		switch org.Plan {
-		case "enterprise":
-			org.StorageQuota = 100 * 1024 * 1024 * 1024
-		case "business":
-			org.StorageQuota = 25 * 1024 * 1024 * 1024
-		case "starter":
-			org.StorageQuota = 10 * 1024 * 1024 * 1024
-		default:
-			org.StorageQuota = 5 * 1024 * 1024 * 1024
-		}
-
-		if usedBytes == 0 {
-			if org.Plan == "enterprise" {
-				usedBytes = int64(float64(org.StorageQuota) * 0.42)
-			} else if org.Plan == "business" {
-				usedBytes = int64(float64(org.StorageQuota) * 0.28)
-			} else if org.Plan == "starter" {
-				usedBytes = int64(float64(org.StorageQuota) * 0.42)
-			} else {
-				usedBytes = int64(float64(org.StorageQuota) * 0.15)
-			}
-		}
+		org.MaxDomains, org.MaxAliases = ComputeCapacityCaps(org.SeatCount)
+		org.StorageQuota = 0
 		org.StorageUsed = usedBytes
 		orgs = append(orgs, org)
 	}
@@ -211,16 +196,15 @@ func handleGetSingleOrganization(w http.ResponseWriter, r *http.Request, db *pgx
 	var org OrganizationResponse
 	var usedBytes int64
 	err := db.QueryRow(r.Context(), `
-		SELECT o.id, o.name, o.plan, COALESCE(o.status, 'active'), o.created_at,
+		SELECT o.id, o.name, COALESCE(o.status, 'active'), o.created_at,
 		       COALESCE((SELECT COUNT(*) FROM mailboxes m WHERE m.org_id = o.id), 0) AS mailbox_count,
 		       COALESCE((SELECT SUM(sc.used_bytes) FROM storage_connections sc WHERE sc.org_id = o.id), 0) AS used_bytes,
-		       COALESCE(o.seat_count, 10) AS seat_count,
+		       COALESCE(o.seat_count, 1) AS seat_count,
 		       COALESCE(o.billing_cycle, 'annual') AS billing_cycle,
-		       COALESCE(o.max_domains, 3) AS max_domains,
-		       COALESCE(o.max_aliases, 100) AS max_aliases
+		       COALESCE(o.subscription_status, 'active') AS subscription_status
 		FROM organizations o
 		WHERE o.id = $1
-	`, orgUUID).Scan(&org.ID, &org.Name, &org.Plan, &org.Status, &org.CreatedAt, &org.MailboxCount, &usedBytes, &org.SeatCount, &org.BillingCycle, &org.MaxDomains, &org.MaxAliases)
+	`, orgUUID).Scan(&org.ID, &org.Name, &org.Status, &org.CreatedAt, &org.MailboxCount, &usedBytes, &org.SeatCount, &org.BillingCycle, &org.SubscriptionStatus)
 
 	if err != nil {
 		http.Error(w, "Organization not found", http.StatusNotFound)
@@ -228,7 +212,10 @@ func handleGetSingleOrganization(w http.ResponseWriter, r *http.Request, db *pgx
 	}
 
 	org.OrgUUID = org.ID
+	org.Plan = fmt.Sprintf("%d Seats", org.SeatCount)
 	org.PlanTier = org.Plan
+	org.MaxDomains, org.MaxAliases = ComputeCapacityCaps(org.SeatCount)
+	org.StorageQuota = 0
 	org.StorageUsed = usedBytes
 
 	w.Header().Set("Content-Type", "application/json")
@@ -415,16 +402,9 @@ func handleAdjustCapacity(w http.ResponseWriter, r *http.Request, db *pgxpool.Po
 	}
 	defer tx.Rollback(ctx)
 
-	// 1. Update seat_count, max_domains, and max_aliases
-	maxDomains := 3
-	if req.SeatCount >= 26 {
-		maxDomains = 10
-	} else if req.SeatCount >= 11 {
-		maxDomains = 5
-	}
-	maxAliases := req.SeatCount * 10
+	maxDomains, maxAliases := ComputeCapacityCaps(req.SeatCount)
 
-	cmdTag, err := tx.Exec(ctx, "UPDATE organizations SET seat_count = $1, max_domains = $2, max_aliases = $3, updated_at = now() WHERE id = $4", req.SeatCount, maxDomains, maxAliases, orgUUID)
+	cmdTag, err := tx.Exec(ctx, "UPDATE organizations SET seat_count = $1, updated_at = now() WHERE id = $2", req.SeatCount, orgUUID)
 	if err != nil || cmdTag.RowsAffected() == 0 {
 		http.Error(w, "Organization capacity update failed or not found", http.StatusInternalServerError)
 		return
@@ -616,29 +596,19 @@ func handleAdminCreateDomain(w http.ResponseWriter, r *http.Request, db *pgxpool
 	}
 	defer tx.Rollback(ctx)
 
-	// Check organization exists and fetch max_domains
-	var maxDomains int
+	// Check organization exists and compute max_domains from seat_count
 	var seatCount int
 	err = tx.QueryRow(ctx, `
-		SELECT COALESCE(max_domains, 3), COALESCE(seat_count, 10) 
+		SELECT COALESCE(seat_count, 1) 
 		FROM organizations 
 		WHERE id = $1
-	`, orgUUID).Scan(&maxDomains, &seatCount)
+	`, orgUUID).Scan(&seatCount)
 	if err != nil {
 		http.Error(w, "Organization not found", http.StatusNotFound)
 		return
 	}
 
-	// Dynamic calculation fallback if maxDomains <= 0
-	if maxDomains <= 0 {
-		if seatCount >= 26 {
-			maxDomains = 10
-		} else if seatCount >= 11 {
-			maxDomains = 5
-		} else {
-			maxDomains = 3
-		}
-	}
+	maxDomains, _ := ComputeCapacityCaps(seatCount)
 
 	// Check domain quota
 	var usedDomains int
@@ -710,5 +680,90 @@ func handleAdminCreateDomain(w http.ResponseWriter, r *http.Request, db *pgxpool
 		"domain":          domainName,
 		"target_org_uuid": orgUUID.String(),
 		"message":         "Domain registered successfully under quota.",
+	})
+}
+
+// HandleUpdateSeatCount updates seat_count with floor validation and returns graduated price calculation.
+func HandleUpdateSeatCount(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool, orgUUID uuid.UUID) {
+	if r.Method != http.MethodPatch && r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		SeatCount int `json:"seat_count"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.SeatCount < 1 || req.SeatCount > 10000 {
+		http.Error(w, "seat_count must be between 1 and 10000", http.StatusBadRequest)
+		return
+	}
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx := r.Context()
+	var activeMailboxes int
+	_ = db.QueryRow(ctx, `SELECT count(*) FROM mailboxes WHERE org_id = $1 AND is_active = true`, orgUUID).Scan(&activeMailboxes)
+	if req.SeatCount < activeMailboxes {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":             "seat_count_below_active_mailboxes",
+			"current_mailboxes": activeMailboxes,
+		})
+		return
+	}
+
+	cmdTag, err := db.Exec(ctx, "UPDATE organizations SET seat_count = $1, updated_at = now() WHERE id = $2", req.SeatCount, orgUUID)
+	if err != nil || cmdTag.RowsAffected() == 0 {
+		http.Error(w, "Organization update failed or not found", http.StatusInternalServerError)
+		return
+	}
+
+	monthlyCents, annualCents := CalculateSeatPriceCents(req.SeatCount)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"org_id":              orgUUID.String(),
+		"seat_count":          req.SeatCount,
+		"monthly_total_cents": monthlyCents,
+		"annual_total_cents":  annualCents,
+	})
+}
+
+// HandleGetCapacity returns capacity usage and limits for the organization.
+func HandleGetCapacity(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool, orgUUID uuid.UUID) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx := r.Context()
+	var seatCount int
+	err := db.QueryRow(ctx, `SELECT COALESCE(seat_count, 1) FROM organizations WHERE id = $1`, orgUUID).Scan(&seatCount)
+	if err != nil {
+		http.Error(w, "Organization not found", http.StatusNotFound)
+		return
+	}
+
+	var usedMailboxes, usedDomains, usedAliases int
+	_ = db.QueryRow(ctx, `SELECT count(*) FROM mailboxes WHERE org_id = $1 AND is_active = true`, orgUUID).Scan(&usedMailboxes)
+	_ = db.QueryRow(ctx, `SELECT count(*) FROM domains WHERE org_id = $1`, orgUUID).Scan(&usedDomains)
+	_ = db.QueryRow(ctx, `SELECT count(*) FROM aliases a JOIN mailboxes m ON m.id = a.mailbox_id WHERE m.org_id = $1 AND a.is_active = true`, orgUUID).Scan(&usedAliases)
+
+	domainsCap, aliasesCap := ComputeCapacityCaps(seatCount)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"mailboxes": map[string]interface{}{"used": usedMailboxes, "cap": seatCount},
+		"domains":   map[string]interface{}{"used": usedDomains, "cap": domainsCap},
+		"aliases":   map[string]interface{}{"used": usedAliases, "cap": aliasesCap},
+		"storage":   map[string]interface{}{"used": nil, "cap": nil, "note": "customer-controlled"},
 	})
 }

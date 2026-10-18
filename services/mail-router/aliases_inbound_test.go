@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -15,15 +16,37 @@ import (
 )
 
 func setupTestApp(t *testing.T) (*App, *pgxpool.Pool) {
-	dsn := os.Getenv("DATABASE_URL")
+	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
 	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+		t.Skip("skipping integration test: TEST_DATABASE_URL environment variable is not set")
+		return nil, nil
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("invalid TEST_DATABASE_URL: %v", err)
+	}
+	host := u.Hostname()
+	allowedHosts := map[string]bool{
+		"localhost":     true,
+		"127.0.0.1":     true,
+		"::1":           true,
+		"postgres":      true,
+		"byos-postgres": true,
+	}
+	if !allowedHosts[host] && os.Getenv("BYOS_ALLOW_REMOTE_TEST_DB") != "true" {
+		t.Fatalf("SAFETY VIOLATION: Refusing to run tests against non-local host '%s' (set BYOS_ALLOW_REMOTE_TEST_DB=true to override)", host)
+	}
+	dbName := strings.TrimPrefix(u.Path, "/")
+	if strings.EqualFold(dbName, "byos") && os.Getenv("BYOS_ALLOW_DEV_DB_TEST") != "true" {
+		t.Fatalf("SAFETY VIOLATION: Refusing to run tests against development database '%s' (set BYOS_ALLOW_DEV_DB_TEST=true to override)", dbName)
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Skipf("skipping test; db unreachable: %v", err)
 	}
+	t.Cleanup(func() { pool.Close() })
 
 	// Mock Crypto Worker
 	cryptoServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +92,7 @@ func setupMailboxAndAlias(t *testing.T, pool *pgxpool.Pool, prefix string, alias
 	mailboxID = uuid.New().String()
 	storageConnID := uuid.New().String()
 
-	_, err := pool.Exec(ctx, `INSERT INTO organizations (id, name, org_recovery_pk) VALUES ($1, $2, decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))`, orgID, "Alias Org "+prefix)
+	_, err := pool.Exec(ctx, `INSERT INTO organizations (id, name, org_recovery_pk) VALUES ($1, $2, NULL)`, orgID, "Alias Org "+prefix)
 	if err != nil {
 		t.Fatalf("insert org: %v", err)
 	}
@@ -115,17 +138,35 @@ func setupMailboxAndAlias(t *testing.T, pool *pgxpool.Pool, prefix string, alias
 		t.Fatalf("insert masked alias: %v", err)
 	}
 
+	t.Cleanup(func() {
+		cleanupMailboxAndAlias(t, pool, orgID, mailboxID)
+	})
+
 	mailboxEmail = prefix + "@" + domainName
 	return orgID, mailboxID, aliasID, aliasAddress, mailboxEmail
 }
 
+func cleanupMailboxAndAlias(t *testing.T, pool *pgxpool.Pool, orgID, mailboxID string) {
+	t.Helper()
+	ctx := context.Background()
+	_, _ = pool.Exec(ctx, `DELETE FROM masked_alias_reply_map WHERE alias_id IN (SELECT id FROM masked_aliases WHERE mailbox_id = $1)`, mailboxID)
+	_, _ = pool.Exec(ctx, `DELETE FROM message_metadata WHERE mailbox_id = $1`, mailboxID)
+	_, _ = pool.Exec(ctx, `DELETE FROM masked_aliases WHERE mailbox_id = $1`, mailboxID)
+	_, _ = pool.Exec(ctx, `DELETE FROM mailbox_storage WHERE mailbox_id = $1`, mailboxID)
+	_, _ = pool.Exec(ctx, `DELETE FROM storage_connections WHERE org_id = $1`, orgID)
+	_, _ = pool.Exec(ctx, `DELETE FROM mailboxes WHERE org_id = $1`, orgID)
+	_, _ = pool.Exec(ctx, `DELETE FROM domains WHERE org_id = $1`, orgID)
+	if _, err := pool.Exec(ctx, `DELETE FROM organizations WHERE id = $1`, orgID); err != nil {
+		t.Logf("cleanup organization %s: %v", orgID, err)
+	}
+}
+
 func TestAliasRoutingRewritesRecipient(t *testing.T) {
 	app, pool := setupTestApp(t)
-	defer pool.Close()
 
 	ctx := context.Background()
 	orgID, mailboxID, _, aliasAddress, mailboxEmail := setupMailboxAndAlias(t, pool, "rewritetest", true)
-	defer pool.Exec(ctx, "DELETE FROM organizations WHERE id = $1", orgID)
+	_ = orgID
 
 	rawMsg := []byte("From: sender@example.com\r\nTo: " + aliasAddress + "\r\nSubject: Hello Alias\r\n\r\nTest body")
 	delIdent := deliveryIdentity("sender@example.com", []string{aliasAddress}, rawMsg)
@@ -154,8 +195,7 @@ func TestAliasRoutingRewritesRecipient(t *testing.T) {
 }
 
 func TestAliasRoutingRejectsUnknown(t *testing.T) {
-	app, pool := setupTestApp(t)
-	defer pool.Close()
+	app, _ := setupTestApp(t)
 
 	ctx := context.Background()
 	nonExistentAlias := "nonexistent12345678@masked.byos.local"
@@ -174,11 +214,10 @@ func TestAliasRoutingRejectsUnknown(t *testing.T) {
 
 func TestAliasRoutingRejectsDisabled(t *testing.T) {
 	app, pool := setupTestApp(t)
-	defer pool.Close()
 
 	ctx := context.Background()
 	orgID, _, _, disabledAlias, _ := setupMailboxAndAlias(t, pool, "disabledtest", false)
-	defer pool.Exec(ctx, "DELETE FROM organizations WHERE id = $1", orgID)
+	_ = orgID
 
 	rawMsg := []byte("From: sender@example.com\r\nTo: " + disabledAlias + "\r\nSubject: Disabled\r\n\r\nBody")
 	delIdent := deliveryIdentity("sender@example.com", []string{disabledAlias}, rawMsg)
@@ -195,11 +234,10 @@ func TestAliasRoutingRejectsDisabled(t *testing.T) {
 
 func TestAliasReplyMapInserted(t *testing.T) {
 	app, pool := setupTestApp(t)
-	defer pool.Close()
 
 	ctx := context.Background()
 	orgID, mailboxID, aliasID, aliasAddress, _ := setupMailboxAndAlias(t, pool, "replymaptest", true)
-	defer pool.Exec(ctx, "DELETE FROM organizations WHERE id = $1", orgID)
+	_ = orgID
 
 	sender := "original-sender@external.com"
 	rawMsg := []byte("From: " + sender + "\r\nTo: " + aliasAddress + "\r\nSubject: Inbound to Alias\r\n\r\nBody content")

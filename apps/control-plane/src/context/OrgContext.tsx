@@ -1,4 +1,4 @@
-import { createContext, useContext, ParentComponent, createSignal, createMemo, onMount } from "solid-js";
+import { createContext, useContext, ParentComponent, createSignal, createMemo, onMount, batch } from "solid-js";
 
 export type UserRole = "owner" | "admin" | "member";
 
@@ -13,6 +13,11 @@ export interface OrgContextValue {
   orgId: string;
   role: UserRole | null;
   plan: string;
+  seatCount: number;
+  subscriptionStatus: string;
+  onboardingCompleted: boolean;
+  onboardingCurrentStep: number;
+  onboardingSkipped: boolean;
   isOwner: boolean;
   isAdmin: boolean;
   isMember: boolean;
@@ -26,7 +31,12 @@ const defaultContext: OrgContextValue = {
   user: null,
   orgId: "",
   role: null,
-  plan: "solo",
+  plan: "1 Seat",
+  seatCount: 1,
+  subscriptionStatus: "active",
+  onboardingCompleted: false,
+  onboardingCurrentStep: 1,
+  onboardingSkipped: false,
   isOwner: false,
   isAdmin: false,
   isMember: false,
@@ -44,11 +54,18 @@ export const OrgProvider: ParentComponent = (props) => {
   const [user, setUser] = createSignal<UserProfile | null>(null);
   const [orgId, setOrgId] = createSignal<string>("");
   const [role, setRole] = createSignal<UserRole | null>(null);
-  const [plan, setPlan] = createSignal<string>("solo");
+  const [seatCount, setSeatCount] = createSignal<number>(1);
+  const [subscriptionStatus, setSubscriptionStatus] = createSignal<string>("active");
+  const [plan, setPlan] = createSignal<string>("1 Seat");
+  const [onboardingCompleted, setOnboardingCompleted] = createSignal<boolean>(false);
+  const [onboardingCurrentStep, setOnboardingCurrentStep] = createSignal<number>(1);
+  const [onboardingSkipped, setOnboardingSkipped] = createSignal<boolean>(false);
   const [isLoading, setIsLoading] = createSignal<boolean>(true);
 
   const fetchSession = async () => {
-    setIsLoading(true);
+    if (!user()) {
+      setIsLoading(true);
+    }
     try {
       const res = await fetch(`${apiBase()}/v1/auth/me`, {
         credentials: "include",
@@ -62,25 +79,53 @@ export const OrgProvider: ParentComponent = (props) => {
         const userDisplayName = data.display_name || userEmail.split("@")[0] || "User";
         const userOrgId = data.org_id || data.organization_id || "";
         const userRole = (data.role as UserRole) || "member";
-        const userPlan = data.plan || "solo";
+        const seats = Number(data.seat_count) || 1;
+        const subStatus = data.subscription_status || "active";
+        const userPlan = `${seats} Seat${seats === 1 ? "" : "s"}`;
+        const obCompleted = Boolean(data.onboarding_completed);
+        const obStep = Number(data.onboarding_current_step) || 1;
+        const obSkipped = Boolean(data.onboarding_skipped);
 
-        setUser({ id: userId, email: userEmail, displayName: userDisplayName });
-        setOrgId(userOrgId);
-        setRole(userRole);
-        setPlan(userPlan);
+        batch(() => {
+          setUser({ id: userId, email: userEmail, displayName: userDisplayName });
+          setOrgId(userOrgId);
+          setRole(userRole);
+          setSeatCount(seats);
+          setSubscriptionStatus(subStatus);
+          setPlan(userPlan);
+          setOnboardingCompleted(obCompleted);
+          setOnboardingCurrentStep(obStep);
+          setOnboardingSkipped(obSkipped);
+          setIsLoading(false);
+        });
       } else {
+        batch(() => {
+          setUser(null);
+          setOrgId("");
+          setRole(null);
+          setSeatCount(1);
+          setSubscriptionStatus("active");
+          setPlan("1 Seat");
+          setOnboardingCompleted(false);
+          setOnboardingCurrentStep(1);
+          setOnboardingSkipped(false);
+          setIsLoading(false);
+        });
+      }
+    } catch (err) {
+      console.error("[OrgContext fetchSession ERROR]:", err);
+      batch(() => {
         setUser(null);
         setOrgId("");
         setRole(null);
-        setPlan("solo");
-      }
-    } catch {
-      setUser(null);
-      setOrgId("");
-      setRole(null);
-      setPlan("solo");
-    } finally {
-      setIsLoading(false);
+        setSeatCount(1);
+        setSubscriptionStatus("active");
+        setPlan("1 Seat");
+        setOnboardingCompleted(false);
+        setOnboardingCurrentStep(1);
+        setOnboardingSkipped(false);
+        setIsLoading(false);
+      });
     }
   };
 
@@ -100,7 +145,9 @@ export const OrgProvider: ParentComponent = (props) => {
       setUser(null);
       setOrgId("");
       setRole(null);
-      setPlan("solo");
+      setSeatCount(1);
+      setSubscriptionStatus("active");
+      setPlan("1 Seat");
       window.location.href = "/login";
     }
   };
@@ -126,6 +173,21 @@ export const OrgProvider: ParentComponent = (props) => {
     },
     get plan() {
       return plan();
+    },
+    get seatCount() {
+      return seatCount();
+    },
+    get subscriptionStatus() {
+      return subscriptionStatus();
+    },
+    get onboardingCompleted() {
+      return onboardingCompleted();
+    },
+    get onboardingCurrentStep() {
+      return onboardingCurrentStep();
+    },
+    get onboardingSkipped() {
+      return onboardingSkipped();
     },
     get isOwner() {
       return isOwner();
@@ -167,6 +229,8 @@ export function useAuth() {
     displayName: ctx.user?.displayName || "",
     role: ctx.role,
     plan: ctx.plan,
+    seatCount: ctx.seatCount,
+    subscriptionStatus: ctx.subscriptionStatus,
     isLoading: ctx.isLoading,
   };
 }

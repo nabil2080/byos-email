@@ -399,12 +399,7 @@ func main() {
 	http.HandleFunc("/v1/organizations/{org_id}/mailboxes/{mailbox_id}", withSecurityHeaders(withCORS(mailboxItemHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/mailboxes/invite", withSecurityHeaders(withCORS(mailboxInviteHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/mailboxes/{mailbox_id}/impersonate", withSecurityHeaders(withCORS(mailboxImpersonateHandler)))
-	http.HandleFunc("/v1/organizations/{org_id}/mailboxes/{mailbox_id}/privacy-mode", withSecurityHeaders(withCORS(mailboxPrivacyModeHandler)))
-	http.HandleFunc("/v1/organizations/{org_id}/mailboxes/{mailbox_id}/recovery-material", withSecurityHeaders(withCORS(mailboxRecoveryMaterialHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/mailboxes/{mailbox_id}/rotate-root", withSecurityHeaders(withCORS(rootRotationHandler)))
-	http.HandleFunc("/v1/organizations/{org_id}/recovery-principals", withSecurityHeaders(withCORS(recoveryPrincipalsHandler)))
-	http.HandleFunc("/v1/organizations/{org_id}/recovery-principals/{principal_id}", withSecurityHeaders(withCORS(recoveryPrincipalsHandler)))
-	http.HandleFunc("/v1/organizations/{org_id}/recovery-principals/{principal_id}/revoke", withSecurityHeaders(withCORS(recoveryPrincipalsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}", withSecurityHeaders(withCORS(mailboxGetHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages", withSecurityHeaders(withCORS(messagesHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/body", withSecurityHeaders(withCORS(messageBodyHandler)))
@@ -479,6 +474,32 @@ func main() {
 
 	http.HandleFunc("/v1/organizations/{org_id}/billing", withSecurityHeaders(withCORS(billingHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/billing/plan", withSecurityHeaders(withCORS(billingHandler)))
+	http.HandleFunc("/v1/organizations/{org_id}/seats", withSecurityHeaders(withCORS(organizationSeatsHandler)))
+	http.HandleFunc("/v1/organizations/{org_id}/capacity", withSecurityHeaders(withCORS(organizationCapacityHandler)))
+	http.HandleFunc("/v1/organizations/{org_id}/search", withSecurityHeaders(withCORS(organizationSearchHandler)))
+	http.HandleFunc("/api/v1/organizations/{org_id}/search", withSecurityHeaders(withCORS(organizationSearchHandler)))
+
+	// Post-Payment Onboarding Wizard
+	http.HandleFunc("/v1/onboarding/state", withSecurityHeaders(withCORS(onboardingStateGetHandler)))
+	http.HandleFunc("/v1/onboarding/state/verify", withSecurityHeaders(withCORS(onboardingStateVerifyHandler)))
+	http.HandleFunc("/v1/onboarding/step/domain", withSecurityHeaders(withCORS(onboardingStepDomainHandler)))
+	http.HandleFunc("/v1/onboarding/step/domain/verify", withSecurityHeaders(withCORS(onboardingStepDomainVerifyHandler)))
+	http.HandleFunc("/v1/onboarding/step/storage", withSecurityHeaders(withCORS(onboardingStepStorageHandler)))
+	http.HandleFunc("/v1/onboarding/step/storage/connect", withSecurityHeaders(withCORS(onboardingStepStorageConnectHandler)))
+	http.HandleFunc("/v1/onboarding/step/mailboxes", withSecurityHeaders(withCORS(onboardingStepMailboxesHandler)))
+	http.HandleFunc("/v1/onboarding/step/invite", withSecurityHeaders(withCORS(onboardingStepInviteHandler)))
+	http.HandleFunc("/v1/onboarding/complete", withSecurityHeaders(withCORS(onboardingCompleteHandler)))
+	http.HandleFunc("/v1/onboarding/skip", withSecurityHeaders(withCORS(onboardingSkipHandler)))
+
+	// Product Tours State Persistence
+	http.HandleFunc("/v1/tours/state", withSecurityHeaders(withCORS(tourStateHandler)))
+	http.HandleFunc("/api/v1/tours/state", withSecurityHeaders(withCORS(tourStateHandler)))
+	http.HandleFunc("/v1/tours/{tour_id}/complete", withSecurityHeaders(withCORS(tourCompleteHandler)))
+	http.HandleFunc("/api/v1/tours/{tour_id}/complete", withSecurityHeaders(withCORS(tourCompleteHandler)))
+	http.HandleFunc("/v1/tours/{tour_id}/skip", withSecurityHeaders(withCORS(tourSkipHandler)))
+	http.HandleFunc("/api/v1/tours/{tour_id}/skip", withSecurityHeaders(withCORS(tourSkipHandler)))
+	http.HandleFunc("/v1/tours/{tour_id}/reset", withSecurityHeaders(withCORS(tourResetHandler)))
+	http.HandleFunc("/api/v1/tours/{tour_id}/reset", withSecurityHeaders(withCORS(tourResetHandler)))
 
 	// Filters & Address Rules
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/filters", withSecurityHeaders(withCORS(mailboxFiltersHandler)))

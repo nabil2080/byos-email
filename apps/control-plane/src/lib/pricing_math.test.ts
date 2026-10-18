@@ -123,33 +123,36 @@ export function runPricingMathTests(): { passed: number; failed: number } {
   // 3. Dynamic Resource Limits Tests
   // =========================================================================
   {
-    // Seats <= 10 -> 3 domains, seats * 10 aliases
+    // Domains: max(1, ceil(seats / 5))
+    // Aliases: max(5, seats * 2)
     const lim1 = calculateResourceLimits(1);
-    assert(lim1.maxDomains === 3, "N=1 maxDomains should be 3");
-    assert(lim1.maxAliases === 10, "N=1 maxAliases should be 10");
+    assert(lim1.maxDomains === 1, "N=1 maxDomains should be 1");
+    assert(lim1.maxAliases === 5, "N=1 maxAliases should be 5");
     assert(lim1.extraDomainPriceMonthly === 1.50, "Extra domain add-on rate is 1.50");
 
     const lim10 = calculateResourceLimits(10);
-    assert(lim10.maxDomains === 3, "N=10 maxDomains should be 3");
-    assert(lim10.maxAliases === 100, "N=10 maxAliases should be 100");
+    assert(lim10.maxDomains === 2, "N=10 maxDomains should be 2");
+    assert(lim10.maxAliases === 20, "N=10 maxAliases should be 20");
 
-    // Seats 11-25 -> 5 domains
     const lim11 = calculateResourceLimits(11);
-    assert(lim11.maxDomains === 5, "N=11 maxDomains should be 5");
-    assert(lim11.maxAliases === 110, "N=11 maxAliases should be 110");
+    assert(lim11.maxDomains === 3, "N=11 maxDomains should be 3");
+    assert(lim11.maxAliases === 22, "N=11 maxAliases should be 22");
+
+    const lim20 = calculateResourceLimits(20);
+    assert(lim20.maxDomains === 4, "N=20 maxDomains should be 4");
+    assert(lim20.maxAliases === 40, "N=20 maxAliases should be 40");
 
     const lim25 = calculateResourceLimits(25);
     assert(lim25.maxDomains === 5, "N=25 maxDomains should be 5");
-    assert(lim25.maxAliases === 250, "N=25 maxAliases should be 250");
+    assert(lim25.maxAliases === 50, "N=25 maxAliases should be 50");
 
-    // Seats >= 26 -> 10 domains
     const lim26 = calculateResourceLimits(26);
-    assert(lim26.maxDomains === 10, "N=26 maxDomains should be 10");
-    assert(lim26.maxAliases === 260, "N=26 maxAliases should be 260");
+    assert(lim26.maxDomains === 6, "N=26 maxDomains should be 6");
+    assert(lim26.maxAliases === 52, "N=26 maxAliases should be 52");
 
     const lim74 = calculateResourceLimits(74);
-    assert(lim74.maxDomains === 10, "N=74 maxDomains should be 10");
-    assert(lim74.maxAliases === 740, "N=74 maxAliases should be 740");
+    assert(lim74.maxDomains === 15, "N=74 maxDomains should be 15");
+    assert(lim74.maxAliases === 148, "N=74 maxAliases should be 148");
   }
 
   // =========================================================================

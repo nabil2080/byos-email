@@ -205,7 +205,12 @@ DELETE FROM user_passkeys WHERE user_id IN (SELECT id FROM target_test_users);
 DELETE FROM auth_challenges WHERE user_id IN (SELECT id FROM target_test_users);
 DELETE FROM recovery_challenges WHERE user_id IN (SELECT id FROM target_test_users);
 DELETE FROM devices WHERE user_id IN (SELECT id FROM target_test_users);
-DELETE FROM org_recovery_principals WHERE user_id IN (SELECT id FROM target_test_users);
+DO $$
+BEGIN
+    IF to_regclass('org_recovery_principals') IS NOT NULL THEN
+        EXECUTE 'DELETE FROM org_recovery_principals WHERE user_id IN (SELECT id FROM target_test_users)';
+    END IF;
+END $$;
 DELETE FROM google_drive_oauth_states WHERE user_id IN (SELECT id FROM target_test_users);
 DELETE FROM audit_log WHERE user_id IN (SELECT id FROM target_test_users);
 DELETE FROM storage_migrations WHERE created_by IN (SELECT id FROM target_test_users);
@@ -252,7 +257,13 @@ WHERE id NOT IN (
     'aaaaaaaa-0000-0000-0000-000000000001'::uuid
 );
 
-DELETE FROM org_recovery_principals WHERE org_id IN (SELECT id FROM target_test_orgs);
+UPDATE organizations SET default_storage_connection_id = NULL WHERE id IN (SELECT id FROM target_test_orgs);
+DO $$
+BEGIN
+    IF to_regclass('org_recovery_principals') IS NOT NULL THEN
+        EXECUTE 'DELETE FROM org_recovery_principals WHERE org_id IN (SELECT id FROM target_test_orgs)';
+    END IF;
+END $$;
 DELETE FROM storage_connections WHERE org_id IN (SELECT id FROM target_test_orgs);
 DELETE FROM account_invitations WHERE org_id IN (SELECT id FROM target_test_orgs);
 DELETE FROM google_drive_oauth_states WHERE org_id IN (SELECT id FROM target_test_orgs);

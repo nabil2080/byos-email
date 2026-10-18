@@ -90,6 +90,7 @@ type RestoreResult struct {
 	RestoredRecords int            `json:"restored_records"`
 	TableCounts     map[string]int `json:"table_counts"`
 	Duration        string         `json:"duration"`
+	Warnings        []string       `json:"warnings,omitempty"`
 }
 
 // InspectReport provides a human-readable high-level inspection summary.

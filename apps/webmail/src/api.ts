@@ -1000,7 +1000,7 @@ export interface VerifyInvitationResponse {
   organization_id: string;
   organization_name: string;
   mailbox_id: string;
-  privacy_mode: "organization_managed" | "private";
+  privacy_mode: "private";
   expires_at: string;
   mailbox_pk?: string;
   wrapped_sk_org?: string;

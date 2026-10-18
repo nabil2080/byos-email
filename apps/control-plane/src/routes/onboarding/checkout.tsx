@@ -71,17 +71,17 @@ const OnboardingCheckoutPage: Component = () => {
       await new Promise((r) => setTimeout(r, 500));
 
       setIsSuccess(true);
-      setProcessingStep("Provisioning Complete! Redirecting to Control Panel…");
+      setProcessingStep("Provisioning Complete! Starting Onboarding Wizard…");
       await new Promise((r) => setTimeout(r, 700));
 
-      navigate("/dashboard");
+      navigate("/onboarding/1");
     } catch (err: any) {
       console.warn("Checkout gateway error bypassed for onboarding flow:", err);
-      // Gracefully bypass errors during checkout so administrators are never locked out of the dashboard
+      // Gracefully bypass errors during checkout so administrators are never locked out of the flow
       setIsSuccess(true);
-      setProcessingStep("Checkout bypassed (simulated/offline gateway). Redirecting to Control Panel…");
+      setProcessingStep("Checkout bypassed (simulated/offline gateway). Starting Onboarding Wizard…");
       await new Promise((r) => setTimeout(r, 800));
-      navigate("/dashboard");
+      navigate("/onboarding/1");
     }
   }
 

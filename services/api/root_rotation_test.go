@@ -39,8 +39,8 @@ func insertPrivateMailbox(t *testing.T, db *sql.DB, orgID, userID string) (mailb
 	if err := db.QueryRow(`INSERT INTO root_secrets (root_secret_wrapped) VALUES (NULL) RETURNING id`).Scan(&rootID); err != nil {
 		t.Fatalf("insert root: %v", err)
 	}
-	if err := db.QueryRow(`INSERT INTO mailboxes (org_id, user_id, domain_id, local_part, mode, root_secret_id, mailbox_sk_wrapped, mailbox_pk)
-		VALUES ($1, $2, $3, $4, 'private', $5, decode('AA==','base64'), decode('AA==','base64'))
+	if err := db.QueryRow(`INSERT INTO mailboxes (org_id, user_id, domain_id, local_part, mode, root_secret_id, mailbox_sk_wrapped, mailbox_pk, wrapped_sk_user)
+		VALUES ($1, $2, $3, $4, 'private', $5, decode('AA==','base64'), decode('AA==','base64'), 'test_wrapped_sk_user')
 		RETURNING id`, orgID, userID, domainID, "rot-private-"+uniqueTag, rootID).Scan(&mailboxID); err != nil {
 		t.Fatalf("insert mailbox: %v", err)
 	}
@@ -54,6 +54,25 @@ func TestRootRotationPrivateFlow(t *testing.T) {
 
 	orgID, _, _, memberID := createTestOrgAndUsers(t, db)
 	mailboxID, oldRootID := insertPrivateMailbox(t, db, orgID, memberID)
+
+	t.Cleanup(func() {
+		cleanupDB, err := sql.Open("pgx", testDSN)
+		if err != nil {
+			t.Errorf("cleanup open: %v", err)
+			return
+		}
+		defer cleanupDB.Close()
+		var currentRootID string
+		_ = cleanupDB.QueryRow(`SELECT root_secret_id FROM mailboxes WHERE id = $1`, mailboxID).Scan(&currentRootID)
+		_, _ = cleanupDB.Exec(`DELETE FROM device_mailbox_access WHERE mailbox_id = $1`, mailboxID)
+		_, _ = cleanupDB.Exec(`DELETE FROM devices WHERE user_id = $1`, memberID)
+		_, _ = cleanupDB.Exec(`DELETE FROM mailboxes WHERE id = $1`, mailboxID)
+		_, _ = cleanupDB.Exec(`DELETE FROM root_secrets WHERE id = $1`, oldRootID)
+		if currentRootID != "" && currentRootID != oldRootID {
+			_, _ = cleanupDB.Exec(`DELETE FROM root_secrets WHERE id = $1`, currentRootID)
+		}
+		_, _ = cleanupDB.Exec(`DELETE FROM organizations WHERE id = $1`, orgID)
+	})
 
 	// Device grant sealed under the old root must die on rotation.
 	if _, err := db.Exec(`INSERT INTO devices (user_id, device_name, device_pk) VALUES ($1, 'd', decode('AA==','base64'))`, memberID); err != nil {
@@ -139,12 +158,45 @@ func TestRootRotationAuthz(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	orgID, ownerID, _, memberID := createTestOrgAndUsers(t, db)
+	orgID, ownerID, adminID, memberID := createTestOrgAndUsers(t, db)
 	org2, _, _, _ := createTestOrgWithEmail(t, db, "rot2")
-	mailboxID, _ := insertPrivateMailbox(t, db, orgID, memberID)
+	mailboxID, rootID := insertPrivateMailbox(t, db, orgID, memberID)
 	ownerToken := createTestSession(t, db, ownerID)
+	adminToken := createTestSession(t, db, adminID)
+	memberToken := createTestSession(t, db, memberID)
 
-	// stranger member (not owner of mailbox, not admin) -> 403.
+	// Add device grant and active session to verify they are NOT modified on unauthorized requests
+	if _, err := db.Exec(`INSERT INTO devices (user_id, device_name, device_pk) VALUES ($1, 'd', decode('AA==','base64'))`, memberID); err != nil {
+		t.Fatal(err)
+	}
+	var deviceID string
+	if err := db.QueryRow(`SELECT id FROM devices WHERE user_id=$1`, memberID).Scan(&deviceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO device_mailbox_access (device_id, mailbox_id, wrapped_root_secret) VALUES ($1, $2, decode('AA==','base64'))`, deviceID, mailboxID); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		cleanupDB, err := sql.Open("pgx", testDSN)
+		if err != nil {
+			t.Errorf("cleanup open: %v", err)
+			return
+		}
+		defer cleanupDB.Close()
+		var currentRootID string
+		_ = cleanupDB.QueryRow(`SELECT root_secret_id FROM mailboxes WHERE id = $1`, mailboxID).Scan(&currentRootID)
+		_, _ = cleanupDB.Exec(`DELETE FROM device_mailbox_access WHERE mailbox_id = $1`, mailboxID)
+		_, _ = cleanupDB.Exec(`DELETE FROM devices WHERE user_id = $1`, memberID)
+		_, _ = cleanupDB.Exec(`DELETE FROM mailboxes WHERE id = $1`, mailboxID)
+		_, _ = cleanupDB.Exec(`DELETE FROM root_secrets WHERE id = $1`, rootID)
+		if currentRootID != "" && currentRootID != rootID {
+			_, _ = cleanupDB.Exec(`DELETE FROM root_secrets WHERE id = $1`, currentRootID)
+		}
+		_, _ = cleanupDB.Exec(`DELETE FROM organizations WHERE id IN ($1, $2)`, orgID, org2)
+	})
+
+	// Stranger member (not owner of mailbox, not admin) -> 403 Forbidden.
 	var stranger string
 	if err := db.QueryRow(`INSERT INTO users (org_id, email, display_name, password_hash, is_active, role)
 		VALUES ($1, $2, 'S', 'x', true, 'member') RETURNING id`, orgID, "stranger-rot-"+uuid.New().String()+"@byos.local").Scan(&stranger); err != nil {
@@ -154,12 +206,62 @@ func TestRootRotationAuthz(t *testing.T) {
 	if rec := rotateRequest(t, orgID, mailboxID, `{}`, strangerToken); rec.Code != http.StatusForbidden {
 		t.Fatalf("stranger rotate = %d, want 403", rec.Code)
 	}
+
 	// Cross-org mailbox id -> 404 (org-scoped lookup).
 	if rec := rotateRequest(t, org2, mailboxID, `{}`, ownerToken); rec.Code != http.StatusNotFound {
 		t.Fatalf("cross-org rotate = %d, want 404", rec.Code)
 	}
-	// Owner (admin-equivalent) can rotate member's mailbox.
-	if rec := rotateRequest(t, orgID, mailboxID, `{}`, ownerToken); rec.Code != http.StatusOK {
-		t.Fatalf("owner rotate = %d, want 200: %s", rec.Code, rec.Body.String())
+
+	// (b) Admin receives 403 on employee private mailbox.
+	if rec := rotateRequest(t, orgID, mailboxID, `{}`, adminToken); rec.Code != http.StatusForbidden {
+		t.Fatalf("admin rotate on member private mailbox = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+
+	// (c) Org owner receives 403 on employee private mailbox.
+	if rec := rotateRequest(t, orgID, mailboxID, `{}`, ownerToken); rec.Code != http.StatusForbidden {
+		t.Fatalf("owner rotate on member private mailbox = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+
+	// (d) Assert unauthorized requests did NOT modify root_secrets, envelopes, sessions, or device grants.
+	var currentRootID string
+	var currentWrappedSK string
+	if err := db.QueryRow(`SELECT root_secret_id::text, wrapped_sk_user FROM mailboxes WHERE id=$1`, mailboxID).Scan(&currentRootID, &currentWrappedSK); err != nil {
+		t.Fatal(err)
+	}
+	if currentRootID != rootID {
+		t.Fatalf("unauthorized rotate altered mailbox.root_secret_id: got %s, want %s", currentRootID, rootID)
+	}
+	if currentWrappedSK != "test_wrapped_sk_user" {
+		t.Fatalf("unauthorized rotate altered wrapped_sk_user: %s", currentWrappedSK)
+	}
+
+	var rootVersion int
+	var rootRevoked *string
+	if err := db.QueryRow(`SELECT version, revoked_at::text FROM root_secrets WHERE id=$1`, rootID).Scan(&rootVersion, &rootRevoked); err != nil {
+		t.Fatal(err)
+	}
+	if rootVersion != 1 || rootRevoked != nil {
+		t.Fatalf("unauthorized rotate modified root_secrets: version=%d revoked=%v", rootVersion, rootRevoked)
+	}
+
+	var grantActive bool
+	if err := db.QueryRow(`SELECT is_active FROM device_mailbox_access WHERE device_id=$1 AND mailbox_id=$2`, deviceID, mailboxID).Scan(&grantActive); err != nil {
+		t.Fatal(err)
+	}
+	if !grantActive {
+		t.Fatal("unauthorized rotate revoked device grant")
+	}
+
+	var memberSessionRevoked *string
+	if err := db.QueryRow(`SELECT revoked_at::text FROM sessions WHERE token_hash=$1`, hashToken(memberToken)).Scan(&memberSessionRevoked); err != nil {
+		t.Fatal(err)
+	}
+	if memberSessionRevoked != nil {
+		t.Fatal("unauthorized rotate revoked member session")
+	}
+
+	// (a) Mailbox owner CAN rotate their private mailbox.
+	if rec := rotateRequest(t, orgID, mailboxID, `{}`, memberToken); rec.Code != http.StatusOK {
+		t.Fatalf("mailbox owner rotate = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 }

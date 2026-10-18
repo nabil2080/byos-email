@@ -25,7 +25,7 @@ if (-not $SkipClean) {
 
 # 2. Ensure all containers are running
 Write-Host "`n[2/3] Checking Docker container health and status..." -ForegroundColor Yellow
-docker compose -f "$scriptDir\infra\docker-compose.yml" up -d
+docker compose -f "$scriptDir\infra\docker-compose.yml" up -d postgres redis minio api mail-router storage-worker crypto-worker outbound-worker inbound-bridge postfix rspamd minio-init mailpit
 if ($LASTEXITCODE -ne 0) {
     Write-Error "docker compose up failed with exit code $LASTEXITCODE"
     exit $LASTEXITCODE
@@ -49,7 +49,11 @@ $tests = @(
     "tests/browser/test_contacts.mjs",
     "tests/browser/test_import.mjs",
     "tests/browser/test_sent_folder_display.mjs",
-    "tests/browser/test_public_site.mjs"
+    "tests/browser/test_public_site.mjs",
+    "tests/browser/test_control_plane_billing.mjs",
+    "tests/browser/test_control_plane_ui.mjs",
+    "tests/browser/test_onboarding.mjs",
+    "tests/browser/test_tours.mjs"
 )
 
 $results = @{}

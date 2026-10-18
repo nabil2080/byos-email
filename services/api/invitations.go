@@ -76,18 +76,19 @@ func mailboxInviteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	privacyMode := strings.TrimSpace(req.PrivacyMode)
+	if privacyMode == "organization_managed" || privacyMode == "org_managed" {
+		http.Error(w, "org_managed mode is deprecated; all mailboxes must be private", http.StatusBadRequest)
+		return
+	}
 	if privacyMode == "" {
 		privacyMode = "private"
 	}
-	if privacyMode != "organization_managed" && privacyMode != "org_managed" && privacyMode != "private" {
-		http.Error(w, "unsupported privacy_mode; must be organization_managed or private", http.StatusBadRequest)
+	if privacyMode != "private" {
+		http.Error(w, "unsupported privacy_mode; only private is supported", http.StatusBadRequest)
 		return
 	}
 
 	mailboxMode := "private"
-	if privacyMode == "organization_managed" || privacyMode == "org_managed" {
-		mailboxMode = "org_managed"
-	}
 
 	var localPart, domainID, email string
 	if strings.Contains(req.Address, "@") {
@@ -126,29 +127,13 @@ func mailboxInviteHandler(w http.ResponseWriter, r *http.Request) {
 		displayName = localPart
 	}
 
-	var mailboxPk *string
-	var wrappedSkOrg *string
-	var tempWrappedSk *string
-
-	if privacyMode == "organization_managed" {
-		mpk := strings.TrimSpace(req.MailboxPk)
-		wsk := strings.TrimSpace(req.WrappedSkOrg)
-		twsk := strings.TrimSpace(req.TempWrappedSk)
-		if mpk != "" {
-			mailboxPk = &mpk
-		}
-		if wsk != "" {
-			wrappedSkOrg = &wsk
-		}
-		if twsk != "" {
-			tempWrappedSk = &twsk
-		}
-	} else {
-		// Private mode: Zero key material allowed from admin client
-		mailboxPk = nil
-		wrappedSkOrg = nil
-		tempWrappedSk = nil
+	// Reject any admin-supplied key material in invitations
+	if strings.TrimSpace(req.MailboxPk) != "" || strings.TrimSpace(req.WrappedSkOrg) != "" || strings.TrimSpace(req.TempWrappedSk) != "" {
+		http.Error(w, "key material cannot be provided by organization admin for private mailboxes", http.StatusBadRequest)
+		return
 	}
+
+	var mailboxPk *string
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -157,25 +142,21 @@ func mailboxInviteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Enforce plan quota
+	// Enforce seat mailbox quota
 	var usedMailboxes int
 	_ = tx.QueryRow(ctx, `SELECT count(*) FROM mailboxes WHERE org_id=$1 AND is_active=true`, orgID).Scan(&usedMailboxes)
-	var currentPlan string
-	err = tx.QueryRow(ctx, `SELECT plan FROM organizations WHERE id=$1 FOR UPDATE`, orgID).Scan(&currentPlan)
-	if err != nil || currentPlan == "" {
-		currentPlan = "solo"
+	var seatCount int
+	err = tx.QueryRow(ctx, `SELECT COALESCE(seat_count, 1) FROM organizations WHERE id=$1 FOR UPDATE`, orgID).Scan(&seatCount)
+	if err != nil || seatCount < 1 {
+		seatCount = 1
 	}
-	spec, ok := PLAN_SPECS[currentPlan]
-	if !ok {
-		spec = PLAN_SPECS["solo"]
-	}
-	if usedMailboxes >= spec.MailboxLimit {
+	if usedMailboxes >= seatCount {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusPaymentRequired)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error": "mailbox_limit_reached",
-			"limit": spec.MailboxLimit,
-			"plan":  spec.Plan,
+			"error":      "mailbox_limit_reached",
+			"limit":      seatCount,
+			"seat_count": seatCount,
 		})
 		return
 	}
@@ -239,10 +220,10 @@ func mailboxInviteHandler(w http.ResponseWriter, r *http.Request) {
 		pkBytes, _ = hex.DecodeString(*mailboxPk)
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO mailboxes (org_id, user_id, domain_id, local_part, mode, status, is_active, mailbox_pk, wrapped_sk_org)
-		VALUES ($1, $2, $3, $4, $5, 'pending_activation', true, $6, $7)
+		INSERT INTO mailboxes (org_id, user_id, domain_id, local_part, mode, status, is_active, mailbox_pk)
+		VALUES ($1, $2, $3, $4, $5, 'pending_activation', true, $6)
 		RETURNING id::text
-	`, orgID, newUserID, domainID, localPart, mailboxMode, pkBytes, wrappedSkOrg).Scan(&newMailboxID)
+	`, orgID, newUserID, domainID, localPart, mailboxMode, pkBytes).Scan(&newMailboxID)
 	if err != nil {
 		log.Printf("failed to insert pending mailbox: %v", err)
 		http.Error(w, "failed to create mailbox record", http.StatusInternalServerError)
@@ -264,10 +245,10 @@ func mailboxInviteHandler(w http.ResponseWriter, r *http.Request) {
 	expiresAt := time.Now().Add(7 * 24 * time.Hour)
 	var invitationID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO account_invitations (org_id, mailbox_id, email, token_hash, privacy_mode, mailbox_pk, wrapped_sk_org, temp_wrapped_sk, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO account_invitations (org_id, mailbox_id, email, token_hash, privacy_mode, mailbox_pk, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id::text
-	`, orgID, newMailboxID, email, tokenHash, privacyMode, mailboxPk, wrappedSkOrg, tempWrappedSk, expiresAt).Scan(&invitationID)
+	`, orgID, newMailboxID, email, tokenHash, privacyMode, mailboxPk, expiresAt).Scan(&invitationID)
 	if err != nil {
 		log.Printf("failed to insert account invitation: %v", err)
 		http.Error(w, "failed to create invitation", http.StatusInternalServerError)
@@ -331,19 +312,19 @@ func invitationVerifyHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	var id, orgID, mailboxID, email, privacyMode string
-	var mailboxPk, wrappedSkOrg, tempWrappedSk *string
+	var mailboxPk *string
 	var expiresAt time.Time
 	var consumedAt *time.Time
 	var orgName string
 
 	err = conn.QueryRow(ctx, `
 		SELECT i.id::text, i.org_id::text, i.mailbox_id::text, i.email, i.privacy_mode,
-		       i.mailbox_pk, i.wrapped_sk_org, i.temp_wrapped_sk, i.expires_at, i.consumed_at,
+		       i.mailbox_pk, i.expires_at, i.consumed_at,
 		       o.name
 		FROM account_invitations i
 		JOIN organizations o ON o.id = i.org_id
 		WHERE i.token_hash = $1
-	`, tokenHash).Scan(&id, &orgID, &mailboxID, &email, &privacyMode, &mailboxPk, &wrappedSkOrg, &tempWrappedSk, &expiresAt, &consumedAt, &orgName)
+	`, tokenHash).Scan(&id, &orgID, &mailboxID, &email, &privacyMode, &mailboxPk, &expiresAt, &consumedAt, &orgName)
 
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -378,12 +359,6 @@ func invitationVerifyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if mailboxPk != nil {
 		resp["mailbox_pk"] = *mailboxPk
-	}
-	if wrappedSkOrg != nil {
-		resp["wrapped_sk_org"] = *wrappedSkOrg
-	}
-	if tempWrappedSk != nil {
-		resp["temp_wrapped_sk"] = *tempWrappedSk
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -564,10 +539,10 @@ func invitationClaimHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark invitation consumed and wipe temp_wrapped_sk
+	// Mark invitation consumed
 	_, err = tx.Exec(ctx, `
 		UPDATE account_invitations
-		SET consumed_at=now(), temp_wrapped_sk=NULL, mailbox_pk=$1
+		SET consumed_at=now(), mailbox_pk=$1
 		WHERE id=$2
 	`, finalMailboxPk, inviteID)
 	if err != nil {
@@ -656,65 +631,20 @@ func mailboxImpersonateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var targetUserID, mode, localPart string
-	var wrappedSkOrg *string
 	err = conn.QueryRow(ctx, `
-		SELECT user_id::text, mode, wrapped_sk_org, local_part
+		SELECT user_id::text, mode, local_part
 		FROM mailboxes
 		WHERE id=$1 AND org_id=$2
-	`, mailboxID, orgID).Scan(&targetUserID, &mode, &wrappedSkOrg, &localPart)
+	`, mailboxID, orgID).Scan(&targetUserID, &mode, &localPart)
 	if err != nil {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
 
-	// Strict Privacy Boundary: Private mailboxes cannot be accessed or impersonated by admins
-	if mode == "private" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error": "Private mailboxes cannot be accessed by administrators",
-		})
-		return
-	}
-
-	if wrappedSkOrg == nil || *wrappedSkOrg == "" {
-		var invWsk *string
-		_ = conn.QueryRow(ctx, `SELECT wrapped_sk_org FROM account_invitations WHERE mailbox_id=$1 ORDER BY created_at DESC LIMIT 1`, mailboxID).Scan(&invWsk)
-		wrappedSkOrg = invWsk
-	}
-
-	// Issue short-lived audited impersonation session
-	token, sessionTokenHash := generateSessionToken()
-	sessionExpires := time.Now().Add(2 * time.Hour)
-	clientIP := getClientIP(r)
-	impersonateUA := "Administrator Impersonation (" + r.UserAgent() + ")"
-	_, err = conn.Exec(ctx, `
-		INSERT INTO sessions (user_id, token_hash, expires_at, ip_address, user_agent, last_active_at)
-		VALUES ($1, $2, $3, $4, $5, now())
-	`, targetUserID, sessionTokenHash, sessionExpires, clientIP, impersonateUA)
-	if err != nil {
-		http.Error(w, "failed to issue impersonation session", http.StatusInternalServerError)
-		return
-	}
-
-	auditLog(ctx, conn, orgID, callerUserID, "mailbox_impersonate", "mailbox", mailboxID, map[string]interface{}{
-		"target_user_id": targetUserID,
-		"local_part":     localPart,
-		"mode":           mode,
-	})
-
-	webmailBaseURL := os.Getenv("WEBMAIL_BASE_URL")
-	if webmailBaseURL == "" {
-		webmailBaseURL = "http://127.0.0.1:3001"
-	}
-	webmailURL := fmt.Sprintf("%s/?impersonate=1&mailbox_id=%s&email=%s&session_token=%s", webmailBaseURL, mailboxID, localPart, token)
-
+	// Strict Privacy Boundary: All mailboxes are private; administrators cannot access or impersonate mailboxes.
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"mailbox_id":     mailboxID,
-		"target_user_id": targetUserID,
-		"wrapped_sk_org": wrappedSkOrg,
-		"session_token":  token,
-		"webmail_url":    webmailURL,
+	w.WriteHeader(http.StatusForbidden)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error": "Private mailboxes cannot be accessed by administrators",
 	})
 }

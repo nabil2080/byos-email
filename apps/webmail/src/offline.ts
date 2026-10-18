@@ -10,9 +10,9 @@ const getInitialState = (): NetworkState => {
 };
 
 const [networkState, setNetworkState] = createSignal<NetworkState>(getInitialState());
-const isOffline = createMemo(() => networkState() === "offline");
-const isReconnecting = createMemo(() => networkState() === "reconnecting");
-const isBackOnline = createMemo(() => networkState() === "back_online");
+const isOffline = () => networkState() === "offline";
+const isReconnecting = () => networkState() === "reconnecting";
+const isBackOnline = () => networkState() === "back_online";
 
 type ReconnectHandler = () => Promise<void> | void;
 const reconnectHandlers = new Set<ReconnectHandler>();

@@ -385,13 +385,14 @@ func recoveryFlowResetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 		LIMIT 1
 	`, userID).Scan(&mailboxID, &mailboxLocalPart, &mailboxMode, &currentWrappedSkUser, &previousWrappedSkUser)
 
-	var role, plan string
+	var role, subscriptionStatus string
+	var seatCount int
 	_ = tx.QueryRow(ctx, `
-		SELECT COALESCE(u.role, 'member'), COALESCE(o.plan, 'solo')
+		SELECT COALESCE(u.role, 'member'), COALESCE(o.seat_count, 1), COALESCE(o.subscription_status, 'active')
 		FROM users u
 		LEFT JOIN organizations o ON o.id = u.org_id
 		WHERE u.id=$1
-	`, userID).Scan(&role, &plan)
+	`, userID).Scan(&role, &seatCount, &subscriptionStatus)
 
 	// Issue fresh session
 	userAgent := r.UserAgent()
@@ -430,7 +431,8 @@ func recoveryFlowResetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 		"org_id":                   orgID,
 		"organization_id":          orgID,
 		"role":                     role,
-		"plan":                     plan,
+		"seat_count":               seatCount,
+		"subscription_status":      subscriptionStatus,
 		"mailbox_id":               mailboxID,
 		"mailbox_local_part":       mailboxLocalPart,
 		"mailbox_mode":             mailboxMode,
@@ -442,7 +444,8 @@ func recoveryFlowResetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 			"org_id":                   orgID,
 			"organization_id":          orgID,
 			"role":                     role,
-			"plan":                     plan,
+			"seat_count":               seatCount,
+			"subscription_status":      subscriptionStatus,
 			"mailbox_id":               mailboxID,
 			"mailbox_local_part":       mailboxLocalPart,
 			"mailbox_mode":             mailboxMode,

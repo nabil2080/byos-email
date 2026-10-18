@@ -465,14 +465,15 @@ func login2FAVerifyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch user details & credentials
-	var userEmail, orgID, displayName, role, plan string
+	var userEmail, orgID, displayName, role, subscriptionStatus string
+	var seatCount int
 	var totpSecret *string
 	err = conn.QueryRow(ctx, `
-		SELECT u.email, u.org_id::text, COALESCE(u.display_name,''), COALESCE(u.role, 'member'), COALESCE(o.plan, 'solo'), u.totp_secret
+		SELECT u.email, u.org_id::text, COALESCE(u.display_name,''), COALESCE(u.role, 'member'), COALESCE(o.seat_count, 1), COALESCE(o.subscription_status, 'active'), u.totp_secret
 		FROM users u
 		LEFT JOIN organizations o ON o.id = u.org_id
 		WHERE u.id=$1 AND u.is_active=true
-	`, userID).Scan(&userEmail, &orgID, &displayName, &role, &plan, &totpSecret)
+	`, userID).Scan(&userEmail, &orgID, &displayName, &role, &seatCount, &subscriptionStatus, &totpSecret)
 	if err != nil {
 		http.Error(w, "user not found or inactive", http.StatusUnauthorized)
 		return
@@ -545,7 +546,8 @@ func login2FAVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		"org_id":                   orgID,
 		"organization_id":          orgID,
 		"role":                     role,
-		"plan":                     plan,
+		"seat_count":               seatCount,
+		"subscription_status":      subscriptionStatus,
 		"token":                    token,
 		"mailbox_id":               mailboxID,
 		"mailbox_local_part":       mailboxLocalPart,

@@ -86,12 +86,12 @@ func createTestDirectoryMailbox(t *testing.T, db *sql.DB, tag, localPart, domain
 	err = db.QueryRow(`
 		INSERT INTO mailboxes (
 			org_id, user_id, domain_id, local_part, mode,
-			root_secret_id, mailbox_sk_wrapped, mailbox_pk,
+			root_secret_id, mailbox_sk_wrapped, mailbox_pk, wrapped_sk_user,
 			mailbox_xwing_pk, mailbox_ed25519_pk,
 			key_epoch, signing_key_epoch, key_status, is_active
 		) VALUES (
-			$1, $2, $3, $4, 'org_managed',
-			$5, decode('AA==', 'base64'), decode('AA==', 'base64'),
+			$1, $2, $3, $4, 'private',
+			$5, decode('AA==', 'base64'), decode('AA==', 'base64'), 'test_wrapped_sk_user',
 			$6, $7,
 			$8, $9, $10, true
 		) RETURNING id
@@ -99,6 +99,37 @@ func createTestDirectoryMailbox(t *testing.T, db *sql.DB, tag, localPart, domain
 	if err != nil {
 		t.Fatalf("insert mailbox failed: %v", err)
 	}
+
+	t.Cleanup(func() {
+		cleanupDB, err := sql.Open("pgx", testDSN)
+		if err != nil {
+			t.Errorf("cleanup open failed: %v", err)
+			return
+		}
+		defer cleanupDB.Close()
+
+		if _, err := cleanupDB.Exec(`DELETE FROM mailboxes WHERE id = $1`, mailboxID); err != nil {
+			t.Errorf("cleanup mailboxes failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec(`DELETE FROM root_secrets WHERE id = $1`, rootSecretID); err != nil {
+			t.Errorf("cleanup root_secrets failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec(`DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
+			t.Errorf("cleanup sessions failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec(`DELETE FROM audit_log WHERE user_id = $1`, userID); err != nil {
+			t.Errorf("cleanup audit_log failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec(`DELETE FROM users WHERE id = $1`, userID); err != nil {
+			t.Errorf("cleanup users failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec(`DELETE FROM domains WHERE id = $1 AND org_id = $2`, domainID, orgID); err != nil {
+			t.Errorf("cleanup domains failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec(`DELETE FROM organizations WHERE id = $1`, orgID); err != nil {
+			t.Errorf("cleanup organizations failed: %v", err)
+		}
+	})
 
 	return userID, mailboxID, token
 }

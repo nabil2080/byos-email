@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -17,10 +16,7 @@ import (
 )
 
 func TestSessionsListingAndRevokeOthers(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -35,7 +31,7 @@ func TestSessionsListingAndRevokeOthers(t *testing.T) {
 	orgID := uuid.New().String()
 	userID := uuid.New().String()
 
-	_, err = conn.Exec(ctx, `INSERT INTO organizations (id, name, plan, org_recovery_pk) VALUES ($1, $2, 'business', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))`, orgID, "Sessions Org")
+	_, err = conn.Exec(ctx, `INSERT INTO organizations (id, name, seat_count, org_recovery_pk) VALUES ($1, $2, 10, decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))`, orgID, "Sessions Org")
 	if err != nil {
 		t.Fatalf("failed to insert org: %v", err)
 	}
@@ -113,10 +109,7 @@ func TestSessionsListingAndRevokeOthers(t *testing.T) {
 }
 
 func TestVerifyPasswordAndRateLimiter(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getValidatedTestDSN(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -131,7 +124,7 @@ func TestVerifyPasswordAndRateLimiter(t *testing.T) {
 	orgID := uuid.New().String()
 	userID := uuid.New().String()
 
-	_, err = conn.Exec(ctx, `INSERT INTO organizations (id, name, plan, org_recovery_pk) VALUES ($1, $2, 'business', decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))`, orgID, "Verify PW Org")
+	_, err = conn.Exec(ctx, `INSERT INTO organizations (id, name, seat_count, org_recovery_pk) VALUES ($1, $2, 10, decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))`, orgID, "Verify PW Org")
 	if err != nil {
 		t.Fatalf("failed to insert org: %v", err)
 	}

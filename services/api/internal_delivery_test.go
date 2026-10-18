@@ -115,12 +115,12 @@ func setupInternalDeliveryTest(t *testing.T, db *sql.DB, vec signedVector) (send
 	err = db.QueryRow(`
 		INSERT INTO mailboxes (
 			org_id, user_id, domain_id, local_part, mode,
-			root_secret_id, mailbox_sk_wrapped, mailbox_pk,
+			root_secret_id, mailbox_sk_wrapped, mailbox_pk, wrapped_sk_user,
 			mailbox_xwing_pk, mailbox_ed25519_pk,
 			key_epoch, signing_key_epoch, key_status, is_active
 		) VALUES (
-			$1, $2, $3, 'sender', 'org_managed',
-			$4, decode('AA==', 'base64'), decode('AA==', 'base64'),
+			$1, $2, $3, 'sender', 'private',
+			$4, decode('AA==', 'base64'), decode('AA==', 'base64'), 'test_wrapped_sk_user',
 			decode('AA==', 'base64'), $5,
 			1, 1, 'active', true
 		) RETURNING id
@@ -148,12 +148,12 @@ func setupInternalDeliveryTest(t *testing.T, db *sql.DB, vec signedVector) (send
 	_, err = db.Exec(`
 		INSERT INTO mailboxes (
 			id, org_id, user_id, domain_id, local_part, mode,
-			root_secret_id, mailbox_sk_wrapped, mailbox_pk,
+			root_secret_id, mailbox_sk_wrapped, mailbox_pk, wrapped_sk_user,
 			mailbox_xwing_pk, mailbox_ed25519_pk,
 			key_epoch, signing_key_epoch, key_status, is_active
 		) VALUES (
-			$1, $2, $3, $4, 'recipient', 'org_managed',
-			$5, decode('AA==', 'base64'), decode('AA==', 'base64'),
+			$1, $2, $3, $4, 'recipient', 'private',
+			$5, decode('AA==', 'base64'), decode('AA==', 'base64'), 'test_wrapped_sk_user',
 			$6, decode('AA==', 'base64'),
 			1, 1, 'active', true
 		)
@@ -163,13 +163,46 @@ func setupInternalDeliveryTest(t *testing.T, db *sql.DB, vec signedVector) (send
 	}
 
 	t.Cleanup(func() {
-		_, _ = db.Exec("DELETE FROM message_metadata WHERE mailbox_id = $1", recipientMailboxID)
-		_, _ = db.Exec("DELETE FROM mailboxes WHERE id = $1", recipientMailboxID)
-		_, _ = db.Exec("DELETE FROM mailboxes WHERE id = $1", senderMailboxID)
-		_, _ = db.Exec("DELETE FROM users WHERE id IN ($1, $2)", senderUserID, recipientUserID)
-		_, _ = db.Exec("DELETE FROM domains WHERE id = $1", domainID)
-		_, _ = db.Exec("DELETE FROM root_secrets WHERE id = $1", rootSecretID)
-		_, _ = db.Exec("DELETE FROM organizations WHERE id = $1", orgID)
+		cleanupDB, err := sql.Open("pgx", testDSN)
+		if err != nil {
+			t.Errorf("cleanup open failed: %v", err)
+			return
+		}
+		defer cleanupDB.Close()
+
+		if _, err := cleanupDB.Exec("DELETE FROM outbound_queue WHERE mailbox_id IN ($1, $2)", senderMailboxID, recipientMailboxID); err != nil {
+			t.Errorf("cleanup outbound_queue failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec("DELETE FROM scheduled_messages WHERE mailbox_id IN ($1, $2)", senderMailboxID, recipientMailboxID); err != nil {
+			t.Errorf("cleanup scheduled_messages failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec("DELETE FROM outbound_reservations WHERE mailbox_id IN ($1, $2) OR user_id IN ($3, $4)", senderMailboxID, recipientMailboxID, senderUserID, recipientUserID); err != nil {
+			t.Errorf("cleanup outbound_reservations failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec("DELETE FROM message_metadata WHERE mailbox_id IN ($1, $2)", senderMailboxID, recipientMailboxID); err != nil {
+			t.Errorf("cleanup message_metadata failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec("DELETE FROM mailboxes WHERE id IN ($1, $2)", senderMailboxID, recipientMailboxID); err != nil {
+			t.Errorf("cleanup mailboxes failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec("DELETE FROM audit_log WHERE user_id IN ($1, $2)", senderUserID, recipientUserID); err != nil {
+			t.Errorf("cleanup audit_log failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec("DELETE FROM sessions WHERE user_id IN ($1, $2)", senderUserID, recipientUserID); err != nil {
+			t.Errorf("cleanup sessions failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec("DELETE FROM users WHERE id IN ($1, $2)", senderUserID, recipientUserID); err != nil {
+			t.Errorf("cleanup users failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec("DELETE FROM domains WHERE id = $1", domainID); err != nil {
+			t.Errorf("cleanup domains failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec("DELETE FROM root_secrets WHERE id = $1", rootSecretID); err != nil {
+			t.Errorf("cleanup root_secrets failed: %v", err)
+		}
+		if _, err := cleanupDB.Exec("DELETE FROM organizations WHERE id = $1", orgID); err != nil {
+			t.Errorf("cleanup organizations failed: %v", err)
+		}
 	})
 
 	return senderUserID, senderMailboxID, senderToken, recipientMailboxID, recipientEmail
@@ -860,8 +893,19 @@ func TestPathAAppliesRules(t *testing.T) {
 		t.Fatalf("create mail rule: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = conn.Exec(context.Background(), "DELETE FROM mail_rules WHERE id = $1", ruleID)
-		_, _ = conn.Exec(context.Background(), "DELETE FROM mailbox_labels WHERE id = $1", labelID)
+		ctx := context.Background()
+		cleanupConn, err := pgx.Connect(ctx, testDSN)
+		if err != nil {
+			t.Errorf("cleanup connect failed: %v", err)
+			return
+		}
+		defer cleanupConn.Close(ctx)
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM mail_rules WHERE id = $1", ruleID); err != nil {
+			t.Errorf("cleanup mail_rules failed: %v", err)
+		}
+		if _, err := cleanupConn.Exec(ctx, "DELETE FROM mailbox_labels WHERE id = $1", labelID); err != nil {
+			t.Errorf("cleanup mailbox_labels failed: %v", err)
+		}
 	})
 
 	reqBody, _ := json.Marshal(InternalSendRequest{

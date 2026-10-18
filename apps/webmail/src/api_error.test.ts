@@ -79,7 +79,7 @@ export async function runApiErrorTests(): Promise<{ passed: number; failed: numb
           return {
             ok: true,
             status: 200,
-            json: async () => ({ mailboxes: [{ id: "box-1", local_part: "alice", domain_id: "d1", mode: "org_managed" }] }),
+            json: async () => ({ mailboxes: [{ id: "box-1", local_part: "alice", domain_id: "d1", mode: "private" }] }),
           } as unknown as Response;
         }
         return {

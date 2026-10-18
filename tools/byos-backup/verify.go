@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // RunVerify checks manifest integrity, recomputes SHA-256 checksums of all
@@ -139,8 +140,15 @@ func validateCryptoMetadata(table string, rows []map[string]any) []string {
 	for idx, row := range rows {
 		switch table {
 		case "organizations":
-			if val, ok := row["org_recovery_pk"].(string); !ok || val == "" {
-				errs = append(errs, fmt.Sprintf("row %d missing required org_recovery_pk", idx))
+			// Post-058 organizations allow org_recovery_pk to be NULL, empty, or omitted.
+			// If non-empty hex is provided (historical pre-058 backup), validate its format.
+			if val, ok := row["org_recovery_pk"]; ok && val != nil {
+				if strVal, isStr := val.(string); isStr && strVal != "" {
+					cleanHex := strings.TrimPrefix(strVal, `\x`)
+					if _, err := hex.DecodeString(cleanHex); err != nil {
+						errs = append(errs, fmt.Sprintf("row %d org_recovery_pk is invalid hex: %v", idx, err))
+					}
+				}
 			}
 		case "mailboxes":
 			if val, ok := row["mailbox_pk"].(string); !ok || val == "" {

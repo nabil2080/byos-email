@@ -413,7 +413,6 @@ async fn verify_least_privilege(client: &Client) {
         ("root_secrets", "SELECT * FROM root_secrets LIMIT 1"),
         ("message_metadata", "SELECT * FROM message_metadata LIMIT 1"),
         ("device_mailbox_access", "SELECT * FROM device_mailbox_access LIMIT 1"),
-        ("org_recovery_principals", "SELECT * FROM org_recovery_principals LIMIT 1"),
         ("storage_connections", "SELECT * FROM storage_connections LIMIT 1"),
     ];
     for (tbl, sql) in checks {

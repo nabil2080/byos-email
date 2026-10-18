@@ -9,16 +9,22 @@ import StoragePage from "./routes/dashboard/storage";
 import BillingPage from "./routes/dashboard/billing";
 import SettingsPage from "./routes/dashboard/settings";
 import MembersPage from "./routes/dashboard/members";
-import RecoveryPage from "./routes/dashboard/recovery";
 import SecurityPage from "./routes/dashboard/security";
 import LoginPage from "./routes/login";
 import RegisterPage from "./routes/register";
 import OnboardingPricingPage from "./routes/onboarding/pricing";
 import OnboardingCheckoutPage from "./routes/onboarding/checkout";
+import OnboardingWizardPage from "./routes/onboarding/wizard";
 
 const ProtectedDashboard: Component<{ children?: JSX.Element }> = (props) => (
   <AuthGuard>
     <DashboardLayout>{props.children}</DashboardLayout>
+  </AuthGuard>
+);
+
+const ProtectedOnboarding: Component<{ children?: JSX.Element }> = () => (
+  <AuthGuard>
+    <OnboardingWizardPage />
   </AuthGuard>
 );
 
@@ -29,6 +35,8 @@ const App: Component = () => {
       <Route path="/register" component={RegisterPage} />
       <Route path="/onboarding/pricing" component={OnboardingPricingPage} />
       <Route path="/onboarding/checkout" component={OnboardingCheckoutPage} />
+      <Route path="/onboarding/:step" component={ProtectedOnboarding} />
+      <Route path="/onboarding" component={ProtectedOnboarding} />
       <Route path="/dashboard" component={ProtectedDashboard}>
         <Route path="/" component={DashboardOverview} />
         <Route path="/domains" component={DomainsPage} />
@@ -37,7 +45,6 @@ const App: Component = () => {
         <Route path="/billing" component={BillingPage} />
         <Route path="/settings" component={SettingsPage} />
         <Route path="/members" component={MembersPage} />
-        <Route path="/recovery" component={RecoveryPage} />
         <Route path="/security" component={SecurityPage} />
       </Route>
       {/* Fallback: redirect root to dashboard */}
