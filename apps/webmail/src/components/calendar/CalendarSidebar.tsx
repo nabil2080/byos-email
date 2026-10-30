@@ -605,9 +605,9 @@ export const CalendarSidebar: Component<CalendarSidebarProps> = (props) => {
       </Show>
       </div>
 
-      {/* ── FIXED BOTTOM: Contacts, Settings & Sign Out ── */}
-      <div class="p-2 border-t border-[#E2DFD8]/60 dark:border-[#333336] space-y-1.5 relative z-40 overflow-visible flex-shrink-0">
-        <div class="grid grid-cols-2 gap-1.5">
+      {/* ── FIXED BOTTOM: Unified Contacts | Settings | Sign out Capsule Pill ── */}
+      <div class="p-2 border-t border-[#E2DFD8]/60 dark:border-[#333336] relative z-40 overflow-visible flex-shrink-0">
+        <div class="w-full rounded-full bg-[#EAE7DF]/85 dark:bg-[#1E2025] border border-[#DDD8CE] dark:border-[#2E3138] p-1 flex items-center justify-between shadow-2xs transition-colors">
           <button
             type="button"
             onClick={() => {
@@ -616,17 +616,19 @@ export const CalendarSidebar: Component<CalendarSidebarProps> = (props) => {
             }}
             data-testid="sidebar-contacts-btn"
             data-testid-secondary="contacts-nav-btn"
-            class="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] border border-[#E2DFD8]/80 dark:border-[#2E3138] transition-colors cursor-pointer select-none"
             title="Contacts"
+            class="flex-1 flex items-center justify-center gap-1.5 py-1 px-1.5 sm:px-2 rounded-full text-[11px] sm:text-xs font-medium text-[#46484B] dark:text-[#D1D5DB] hover:text-[#1A1B1E] dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none truncate"
           >
-            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
               <circle cx="9" cy="7" r="4" />
               <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
               <path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg>
-            <span>Contacts</span>
+            <span class="truncate">Contacts</span>
           </button>
+
+          <div class="w-px h-3.5 bg-[#D2CDC3] dark:bg-[#383B44] flex-shrink-0" />
 
           <button
             type="button"
@@ -635,42 +637,31 @@ export const CalendarSidebar: Component<CalendarSidebarProps> = (props) => {
               props.onCloseMobile?.();
             }}
             data-testid="sidebar-settings-btn"
-            class="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] border border-[#E2DFD8]/80 dark:border-[#2E3138] transition-colors cursor-pointer select-none"
             title="Settings"
+            class="flex-1 flex items-center justify-center gap-1.5 py-1 px-1.5 sm:px-2 rounded-full text-[11px] sm:text-xs font-medium text-[#46484B] dark:text-[#D1D5DB] hover:text-[#1A1B1E] dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none truncate"
           >
-            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
-            <span>Settings</span>
+            <span class="truncate">Settings</span>
           </button>
-        </div>
 
-        <div class="px-2.5 py-1.5 rounded-xl bg-black/[0.03] dark:bg-white/[0.04] border border-[#E2DFD8]/70 dark:border-[#2E3138] flex items-center justify-between gap-2 shadow-2xs">
-          <div class="flex items-center gap-1.5 min-w-0">
-            <div class="w-5 h-5 rounded-full bg-[#EAE6DE] dark:bg-[#252830] border border-[#DDD9D0] dark:border-[#33363F] flex items-center justify-center text-[10px] font-bold text-[#8C6351] dark:text-[#E2B7A3] flex-shrink-0 select-none">
-              {(props.currentUser?.email?.[0] || "U").toUpperCase()}
-            </div>
-            <span
-              class="text-[11px] font-medium text-[#464748] dark:text-[#D1D5DB] truncate max-w-[105px]"
-              title={props.currentUser?.email || "User"}
-            >
-              {props.currentUser?.email?.split("@")[0] || "User"}
-            </span>
-          </div>
+          <div class="w-px h-3.5 bg-[#D2CDC3] dark:bg-[#383B44] flex-shrink-0" />
+
           <button
             type="button"
             onClick={() => props.onLogout?.(props.selectedMailbox?.id, false)}
             data-testid="sidebar-signout-btn"
-            title="Sign out of this session"
-            class="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-[#6E7075] dark:text-[#A1A1AA] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/15 transition-all duration-150 cursor-pointer select-none active:scale-95"
+            title="Sign out"
+            class="flex-1 flex items-center justify-center gap-1.5 py-1 px-1.5 sm:px-2 rounded-full text-[11px] sm:text-xs font-medium text-[#46484B] dark:text-[#D1D5DB] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/15 transition-all duration-150 cursor-pointer select-none truncate"
           >
             <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
               <polyline points="16 17 21 12 16 7" />
               <line x1="21" y1="12" x2="9" y2="12" />
             </svg>
-            <span>Sign out</span>
+            <span class="truncate">Sign out</span>
           </button>
         </div>
       </div>

@@ -109,19 +109,42 @@ async function run() {
     await page.screenshot({ path: path.join(artifactsDir, 'initial_inbox_pill_selection.png') });
     console.log("  Saved screenshot: initial_inbox_pill_selection.png");
 
-    console.log("\n--- [STEP 3] Verify Mailbox Sidebar Sign-Out Button ---");
-    const mailSignoutBtn = await page.$('[data-testid="sidebar-signout-btn"]');
-    assert(mailSignoutBtn !== null, "Sign-out button is present in Mailbox sidebar");
-    const mailSignoutText = await page.$eval('[data-testid="sidebar-signout-btn"]', (el) => el.textContent.trim());
+    console.log("\n--- [STEP 3] Verify Mailbox Sidebar Unified Capsule Pill [Contacts | Settings | Sign out] ---");
+    const mailCapsule = await page.$('[data-testid="sidebar"] .rounded-full.border');
+    assert(mailCapsule !== null, "Unified capsule pill container is present in Mailbox sidebar");
+
+    const mailContactsBtn = await page.$('[data-testid="sidebar"] [data-testid="sidebar-contacts-btn"]');
+    assert(mailContactsBtn !== null, "Contacts button is present inside Mailbox capsule");
+    const mailContactsText = await page.$eval('[data-testid="sidebar"] [data-testid="sidebar-contacts-btn"]', (el) => el.textContent.trim());
+    assert(mailContactsText === "Contacts", `Contacts button text is 'Contacts' (got '${mailContactsText}')`);
+
+    const mailSettingsBtn = await page.$('[data-testid="sidebar"] [data-testid="sidebar-settings-btn"]');
+    assert(mailSettingsBtn !== null, "Settings button is present inside Mailbox capsule");
+    const mailSettingsText = await page.$eval('[data-testid="sidebar"] [data-testid="sidebar-settings-btn"]', (el) => el.textContent.trim());
+    assert(mailSettingsText === "Settings", `Settings button text is 'Settings' (got '${mailSettingsText}')`);
+
+    const mailSignoutBtn = await page.$('[data-testid="sidebar"] [data-testid="sidebar-signout-btn"]');
+    assert(mailSignoutBtn !== null, "Sign-out button is present inside Mailbox capsule");
+    const mailSignoutText = await page.$eval('[data-testid="sidebar"] [data-testid="sidebar-signout-btn"]', (el) => el.textContent.trim());
     assert(mailSignoutText === "Sign out", `Sign-out button text is 'Sign out' (got '${mailSignoutText}')`);
 
-    console.log("\n--- [STEP 4] Verify Calendar View Scrollbars & Sign-Out Button ---");
+    await page.screenshot({ path: path.join(artifactsDir, 'sidebar_bottom_capsule_pill.png') });
+    console.log("  Saved screenshot: sidebar_bottom_capsule_pill.png");
+
+    console.log("\n--- [STEP 4] Verify Calendar View Scrollbars & Unified Capsule Pill ---");
     await page.click('[data-testid="nav-calendar-tab"]');
     await sleep(700);
 
     await page.waitForSelector('[data-testid="calendar-sidebar"]', { timeout: 5000 });
+    const calCapsule = await page.$('[data-testid="calendar-sidebar"] .rounded-full.border');
+    assert(calCapsule !== null, "Unified capsule pill container is present in Calendar sidebar");
+
+    const calContactsBtn = await page.$('[data-testid="calendar-sidebar"] [data-testid="sidebar-contacts-btn"]');
+    assert(calContactsBtn !== null, "Contacts button is present in Calendar capsule");
+    const calSettingsBtn = await page.$('[data-testid="calendar-sidebar"] [data-testid="sidebar-settings-btn"]');
+    assert(calSettingsBtn !== null, "Settings button is present in Calendar capsule");
     const calSignoutBtn = await page.$('[data-testid="calendar-sidebar"] [data-testid="sidebar-signout-btn"]');
-    assert(calSignoutBtn !== null, "Sign-out button is present in Calendar sidebar");
+    assert(calSignoutBtn !== null, "Sign-out button is present in Calendar capsule");
 
     // Check custom-scrollbar class in Calendar views
     const calCustomScrollbars = await page.evaluate(() => {
@@ -150,13 +173,19 @@ async function run() {
     await page.screenshot({ path: path.join(artifactsDir, 'calendar_custom_scrollbar_applied.png') });
     console.log("  Saved screenshot: calendar_custom_scrollbar_applied.png");
 
-    console.log("\n--- [STEP 5] Switch to Notes View & Verify Sidebar Signout ---");
+    console.log("\n--- [STEP 5] Switch to Notes View & Verify Unified Capsule Pill ---");
     await page.click('[data-testid="nav-notes-tab"]');
     await sleep(700);
 
     await page.waitForSelector('[data-testid="notes-sidebar"]', { timeout: 5000 });
+    const notesCapsule = await page.$('[data-testid="notes-sidebar"] .rounded-full.border');
+    assert(notesCapsule !== null, "Unified capsule pill container is present in Notes sidebar");
+    const notesContactsBtn = await page.$('[data-testid="notes-sidebar"] [data-testid="sidebar-contacts-btn"]');
+    assert(notesContactsBtn !== null, "Contacts button is present in Notes capsule");
+    const notesSettingsBtn = await page.$('[data-testid="notes-sidebar"] [data-testid="sidebar-settings-btn"]');
+    assert(notesSettingsBtn !== null, "Settings button is present in Notes capsule");
     const notesSignoutBtn = await page.$('[data-testid="notes-sidebar"] [data-testid="sidebar-signout-btn"]');
-    assert(notesSignoutBtn !== null, "Sign-out button is present in Notes sidebar");
+    assert(notesSignoutBtn !== null, "Sign-out button is present in Notes capsule");
 
     console.log("\n--- [STEP 6] Test Note Composer Label Creation & Assignment ---");
     // Click collapsed composer to expand

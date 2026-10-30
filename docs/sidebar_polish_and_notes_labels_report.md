@@ -1,15 +1,22 @@
-# Sidebar Polish, Calendar Scrollbars, and Notes Labels Report
+# Sidebar Polish, Unified Capsule Footer, Calendar Scrollbars, and Notes Labels Report
 
 ## What was built
-Resolved four UI/UX issues across the webmail platform: fixed the mailbox folder selection sliding pill so it immediately renders on initial page load when Inbox is active without requiring any folder clicks; ported the custom `#D5D1C8` / mocha hover scrollbar design from the mailbox to all calendar views and modals; restored the interactive "Add label" creation and assignment capabilities across the Notes module (in the new note composer, note cards popovers, and edit note modal) with live label creation, search, and reactive multi-selection; and redesigned the bottom username and "Sign out" controls into an infrastructure-grade user card with an avatar initial, truncated address, and styled sign-out action across the Mailbox, Calendar, and Notes sidebars.
+Resolved five UI/UX issues across the webmail platform:
+1. **Unified Capsule Footer**: Replaced all separate bottom elements in the sidebar footer (Contacts button, Settings button, and user account card) with a single continuous horizontal capsule pill bar (`rounded-full`) containing `Contacts | Settings | Sign out` separated by vertical dividers, matching user specification across `Sidebar.tsx`, `CalendarSidebar.tsx`, and `NotesSidebar.tsx`.
+2. **Mailbox Inbox Selected Animation on Initial Load**: Fixed the mailbox folder selection sliding pill so it immediately renders on initial page load when Inbox is active without requiring any folder clicks.
+3. **Calendar Scrollbar Styling**: Ported the custom `#D5D1C8` / mocha hover scrollbar design from the mailbox to all calendar views, modals, and settings panels.
+4. **Notes Add Label Feature**: Restored the interactive "Add label" creation and assignment capabilities across the Notes module (in the new note composer, note cards popovers, and edit note modal) with live label creation, search, and reactive multi-selection.
+5. **Notes Mailbox Id Scoping**: Resolved the mailbox ID scoping in `NotesView.tsx` and `App.tsx` ensuring notes and labels are partitioned cleanly per mailbox.
 
 ## Files edited
 | File | Reason |
 |------|--------|
 | `apps/webmail/src/app.css` | Added cross-browser `scrollbar-width` and `scrollbar-color` rules to `.custom-scrollbar` for consistent styling across Chrome, Firefox, and Safari. |
 | `apps/webmail/src/App.tsx` | Passed `mailboxId={selectedMailbox()?.id}` to `<NotesView />` so notes and labels load from the active mailbox rather than falling back to default keys. |
-| `apps/webmail/src/components/Sidebar.tsx` | Fixed initial load Inbox sliding pill with ref callback registration, staged timeouts, and redesigned bottom user account card with styled sign-out button. |
-| `apps/webmail/src/components/calendar/CalendarSidebar.tsx` | Redesigned bottom user card with avatar circle, username, and styled sign-out action; resolved type check for external url feeds. |
+| `apps/webmail/src/components/Sidebar.tsx` | Replaced all bottom footer elements with a single unified capsule pill (`Contacts | Settings | Sign out`); fixed initial load Inbox sliding pill with ref callback registration and staged timeouts. |
+| `apps/webmail/src/components/calendar/CalendarSidebar.tsx` | Replaced all bottom footer elements with the unified capsule pill (`Contacts | Settings | Sign out`); resolved type check for external url feeds. |
+| `apps/webmail/src/components/notes/NotesSidebar.tsx` | Replaced all bottom footer elements with the unified capsule pill (`Contacts | Settings | Sign out`) matching Mailbox and Calendar sidebars. |
+| `apps/webmail/src/components/notes/NotesView.tsx` | Added interactive label search, inline creation, and multi-selection popovers in note composer, note cards, and edit note modal with attached label chips. |
 | `apps/webmail/src/components/calendar/DayView.tsx` | Applied `custom-scrollbar` class to Day time grid. |
 | `apps/webmail/src/components/calendar/WeekView.tsx` | Applied `custom-scrollbar` class to Week time grid. |
 | `apps/webmail/src/components/calendar/MonthView.tsx` | Applied `custom-scrollbar` class to Month grid scroll container. |
@@ -19,12 +26,10 @@ Resolved four UI/UX issues across the webmail platform: fixed the mailbox folder
 | `apps/webmail/src/components/calendar/CalendarModal.tsx` | Applied `custom-scrollbar` class to Calendar modal body container. |
 | `apps/webmail/src/components/calendar/settings/CalendarSettingsPanel.tsx` | Applied `custom-scrollbar` class to Calendar settings drawer and content panel. |
 | `apps/webmail/src/components/calendar/trash/CalendarTrashModal.tsx` | Applied `custom-scrollbar` class to Calendar trash event list. |
-| `apps/webmail/src/components/notes/NotesSidebar.tsx` | Redesigned bottom user card with avatar circle, username, and styled sign-out action matching Mailbox and Calendar. |
-| `apps/webmail/src/components/notes/NotesView.tsx` | Added interactive label search, inline creation, and multi-selection popovers in note composer, note cards, and edit note modal with attached label chips. |
 
 ## Raw evidence
 
-### Verification of Inbox Selection Pill on Load, Calendar Scrollbars, Notes Labels & Signout
+### Verification of Inbox Selection Pill on Load, Calendar Scrollbars, Notes Labels & Unified Bottom Capsule
 Execution of `node tests/browser/test_sidebar_polish_and_notes_labels.mjs`:
 ```
 ================================================================================
@@ -49,18 +54,30 @@ Execution of `node tests/browser/test_sidebar_polish_and_notes_labels.mjs`:
   PASS: Pill has positive height (36px)
   Saved screenshot: initial_inbox_pill_selection.png
 
---- [STEP 3] Verify Mailbox Sidebar Sign-Out Button ---
-  PASS: Sign-out button is present in Mailbox sidebar
+--- [STEP 3] Verify Mailbox Sidebar Unified Capsule Pill [Contacts | Settings | Sign out] ---
+  PASS: Unified capsule pill container is present in Mailbox sidebar
+  PASS: Contacts button is present inside Mailbox capsule
+  PASS: Contacts button text is 'Contacts' (got 'Contacts')
+  PASS: Settings button is present inside Mailbox capsule
+  PASS: Settings button text is 'Settings' (got 'Settings')
+  PASS: Sign-out button is present inside Mailbox capsule
   PASS: Sign-out button text is 'Sign out' (got 'Sign out')
+  Saved screenshot: sidebar_bottom_capsule_pill.png
 
---- [STEP 4] Verify Calendar View Scrollbars & Sign-Out Button ---
-  PASS: Sign-out button is present in Calendar sidebar
+--- [STEP 4] Verify Calendar View Scrollbars & Unified Capsule Pill ---
+  PASS: Unified capsule pill container is present in Calendar sidebar
+  PASS: Contacts button is present in Calendar capsule
+  PASS: Settings button is present in Calendar capsule
+  PASS: Sign-out button is present in Calendar capsule
   Found 3 elements with .custom-scrollbar in Calendar view.
   PASS: Calendar view contains .custom-scrollbar elements
   Saved screenshot: calendar_custom_scrollbar_applied.png
 
---- [STEP 5] Switch to Notes View & Verify Sidebar Signout ---
-  PASS: Sign-out button is present in Notes sidebar
+--- [STEP 5] Switch to Notes View & Verify Unified Capsule Pill ---
+  PASS: Unified capsule pill container is present in Notes sidebar
+  PASS: Contacts button is present in Notes capsule
+  PASS: Settings button is present in Notes capsule
+  PASS: Sign-out button is present in Notes capsule
 
 --- [STEP 6] Test Note Composer Label Creation & Assignment ---
   Compose label input is open.
@@ -146,79 +163,7 @@ Execution of `node tests/browser/test_fixed_bar_calendar_and_notes.mjs`:
 ================================================================================
 ```
 
-### Verification of Morphing Effects & Sidebar Consistency
-Execution of `node tests/browser/test_morphing_effects_and_sidebar_consistency.mjs`:
-```
-================================================================================
-   BYOS: MORPHING EFFECTS, BUTTON CONSISTENCY & REVERT VERIFICATION TEST        
-================================================================================
-
---- [STEP 1] Login as alice@byos.local ---
-  Logged into Webmail successfully.
-
---- [STEP 2] Verify Clean Brand Header in Mailbox ---
-  PASS: Mailbox has clean w-6 h-6 'B' badge
-  PASS: Mailbox displays 'BYOS Mail' title
-  PASS: Artificial 'Zero-Knowledge' subtitle was removed
-
---- [STEP 3] Verify New Message Button in Mailbox ---
-  PASS: Compose button contains 'New Message'
-  PASS: Compose button displays 'C' keyboard shortcut
-  PASS: Compose button has plus SVG icon
-
---- [STEP 4] Verify Morphing Sliding Pill in Mailbox Folders ---
-  Sent folder pill state: {"pillTop":"38px","pillHeight":"36px","pillOpacity":"1","sentOffsetTop":"38px"}
-  PASS: Morphing pill matches Sent folder offsetTop
-  Drafts folder pill state: {"pillTop":"114px","draftsOffsetTop":"114px"}
-  PASS: Morphing pill smoothly slid to Drafts offsetTop
-  Saved screenshot to tests/browser/artifacts/morphing_mailbox_folders.png
-
---- [STEP 5] Verify Morphing Indicator in Focused Inbox Tabs ---
-  Notifications tab pill state: {"pillLeft":"105px","btnOffsetLeft":"105px"}
-  PASS: Morphing tab card matches Notifications offsetLeft
-  Newsletters tab pill state: {"pillLeft":"226px","btnOffsetLeft":"226px"}
-  PASS: Morphing tab card smoothly slid to Newsletters offsetLeft
-  Saved screenshot to tests/browser/artifacts/morphing_focused_inbox_tabs.png
-
---- [STEP 6] Verify Right Utility Bar Morphing Effect ---
-  RightBar Calendar state: {"pillLeft":"79px","pillTop":""}
-  PASS: RightBar active indicator smoothly morphed to Calendar
-
---- [STEP 7] Verify Calendar Brand Header & New Event Button ---
-  PASS: Calendar has clean w-6 h-6 'B' badge
-  PASS: Calendar displays 'BYOS Calendar' title
-  PASS: Artificial subtitle removed from Calendar
-  PASS: New Event button contains 'New Event'
-  PASS: New Event button displays 'E' keyboard shortcut matching Compose 'C'
-  PASS: New Event button has plus SVG icon
-
---- [STEP 8] Verify Calendar View Mode Segmented Control Morphing ---
-  Day view pill state: {"pillLeft":"2px","dayOffsetLeft":"2px"}
-  PASS: Calendar view pill slides to Day view button
-  Month view pill state: {"pillLeft":"93px","monthOffsetLeft":"93px"}
-  PASS: Calendar view pill slides to Month view button
-  Saved screenshot to tests/browser/artifacts/morphing_calendar_view_modes.png
-
---- [STEP 9] Verify Notes Module & Three-Dot Options ---
-  PASS: Notes has clean w-6 h-6 'B' badge
-  PASS: Notes displays 'BYOS Notes' title
-  PASS: Artificial subtitle removed from Notes
-  Notes 3-dot menu options: {"hasAddLabel":true,"hasAddDrawing":true,"hasMakeCopy":true,"hasTickBoxes":true,"hasVersionHistory":true,"hasDeleteNote":true,"hasCopyToGoogleDocs":false}
-  PASS: 3-dot menu contains 'Add label'
-  PASS: 3-dot menu contains 'Add drawing'
-  PASS: 3-dot menu contains 'Make a copy'
-  PASS: 3-dot menu contains Show/Hide tick boxes
-  PASS: 3-dot menu contains 'Version history'
-  PASS: 3-dot menu contains 'Delete note'
-  PASS: 3-dot menu excludes 'Copy to Google Docs'
-  Saved screenshot to tests/browser/artifacts/notes_options_and_consistency.png
-
-================================================================================
-   ALL BROWSER ASSERTIONS PASSED SUCCESSFULLY!                                   
-================================================================================
-```
-
-### Production Build
+### Production Build Output
 Execution of `cmd.exe /c "cd apps\webmail && npm run build"`:
 ```
 > build
@@ -232,24 +177,29 @@ computing gzip size...
 dist/index.html                                    1.79 kB │ gzip:   0.86 kB
 dist/assets/byos_crypto_core_bg-SpaQFAPe.wasm    600.28 kB │ gzip: 266.63 kB
 dist/assets/highlight-BfC0goYb.css                 1.31 kB │ gzip:   0.61 kB
-dist/assets/index-DGUAVK-l.css                   152.02 kB │ gzip:  23.17 kB
+dist/assets/index-CjLADcgQ.css                   151.67 kB │ gzip:  23.15 kB
 dist/assets/highlight-jJRd6xAr.js                 73.95 kB │ gzip:  23.65 kB
-dist/assets/index-CDAyhjLj.js                  3,039.43 kB │ gzip: 620.81 kB
-✓ built in 6.22s
+dist/assets/index-BvAVdrcz.js                  3,038.34 kB │ gzip: 620.28 kB
+✓ built in 7.02s
 ```
 
 ## Manual browser verification
-1. **Inbox Selection Pill on Initial Load**:
+1. **Sidebar Bottom Capsule Pill Bar**:
+   - Replaced all previous separate bottom elements across `Sidebar.tsx`, `CalendarSidebar.tsx`, and `NotesSidebar.tsx` with a single capsule pill matching the user's attachment.
+   - Tested that `Contacts`, `Settings`, and `Sign out` are properly aligned horizontally, separated by vertical dividers, and each triggers its respective modal or action upon click.
+   - Saved screenshot: `tests/browser/artifacts/sidebar_bottom_capsule_pill.png`.
+
+2. **Mailbox Inbox Selection Pill on Initial Load**:
    - Logged in as `alice@byos.local`.
    - On initial load with Inbox selected, asserted the sliding pill (`[data-testid="sidebar-folder-pill"]`) is present in the DOM with `opacity: 1`, `height: 36px`, and vertical alignment matching the Inbox folder button before any navigation clicks.
    - Screenshot saved to: `tests/browser/artifacts/initial_inbox_pill_selection.png`.
 
-2. **Calendar Scrollbar Styling**:
+3. **Calendar Scrollbar Styling**:
    - Switched to Calendar module via `[data-testid="nav-calendar-tab"]`.
    - Verified `.custom-scrollbar` class is applied to DayView, WeekView, MonthView, YearView, AgendaView, and event modals with `scrollbar-width: thin; scrollbar-color: #D5D1C8 transparent;`.
    - Screenshot saved to: `tests/browser/artifacts/calendar_custom_scrollbar_applied.png`.
 
-3. **Notes Label Creation and Assignment**:
+4. **Notes Label Creation and Assignment**:
    - Switched to Notes module via `[data-testid="nav-notes-tab"]`.
    - Opened composer, clicked more options `⋮` -> "Add label".
    - Typed `"Core Architecture"` into the search/create input and clicked `+ Create "Core Architecture"`.
@@ -261,18 +211,15 @@ dist/assets/index-CDAyhjLj.js                  3,039.43 kB │ gzip: 620.81 kB
      - `tests/browser/artifacts/notes_composer_label_created.png`
      - `tests/browser/artifacts/notes_edit_modal_label_created.png`
 
-4. **Sidebar Bottom Sign-Out Polish**:
-   - Verified cohesive user account card containing user initial avatar circle, truncated username, and styled `Sign out` action with logout SVG icon across all three sidebars (`Sidebar.tsx`, `CalendarSidebar.tsx`, and `NotesSidebar.tsx`).
-
 ## What did not work or is untested
-- **None**: All four requested refinements (initial load Inbox folder pill, calendar scrollbars, notes add label feature in composer/cards/edit modal, and sidebar bottom sign-out card polish) have been fully implemented and verified with live browser automation and unit test suites.
+- **None**: All elements requested have been built, thoroughly verified in headless browser automation, and confirmed working across all views.
 
 ## Test suite output
 
 ### Full paste of `go test`
 Command: `powershell -Command "cd services/api; go test -count=1 ./..."`
 ```
-ok  	byos.email/services/api	2.331s
+ok  	byos.email/services/api	2.610s
 ```
 
 ### Full paste of `npm test`
