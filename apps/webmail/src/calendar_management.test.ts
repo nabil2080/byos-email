@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import { CALENDAR_TEMPLATES, CalendarTemplate } from "./components/calendar/CalendarModal";
+export { CALENDAR_TEMPLATES };
+export type { CalendarTemplate };
+export function getCalendarTemplate(id: string): CalendarTemplate | undefined {
+  return CALENDAR_TEMPLATES.find((t) => t.id === id);
+}
 import {
   saveCalendarOverrides,
   loadCalendarOverrides,

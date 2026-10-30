@@ -116,7 +116,6 @@ export function generateContactBirthdayEvents(
         endTime: endDate,
         isAllDay: true,
         status: "free",
-        format: "aes-gcm-envelope",
         details: {
           title,
           description: `Annual birthday reminder for ${bday.name}${bday.email ? ` (${bday.email})` : ""}.\nSource: Contacts integration`,

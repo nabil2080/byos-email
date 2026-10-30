@@ -12,6 +12,52 @@ function getTasksKey(mailboxId: string): string {
   return `${TASKS_PREFIX}${mailboxId}`;
 }
 
+export const MAX_TASKS_PER_MAILBOX = 1000;
+export const MAX_TASK_LISTS_PER_MAILBOX = 50;
+export const MAX_TITLE_LENGTH = 500;
+export const MAX_DESCRIPTION_LENGTH = 10000;
+export const MAX_TAGS_COUNT = 50;
+
+function persistTaskLists(mailboxId: string, lists: TaskList[]): void {
+  if (typeof window === "undefined" || !mailboxId) return;
+  const bounded = lists.slice(0, MAX_TASK_LISTS_PER_MAILBOX);
+  try {
+    localStorage.setItem(getListsKey(mailboxId), JSON.stringify(bounded));
+  } catch (err) {
+    console.warn("[taskStore] Failed to persist task lists:", err);
+  }
+}
+
+function persistTasks(mailboxId: string, tasks: TaskItem[]): void {
+  if (typeof window === "undefined" || !mailboxId) return;
+  let bounded = tasks;
+  if (bounded.length > MAX_TASKS_PER_MAILBOX) {
+    const uncompleted = bounded.filter((t) => !t.completed);
+    const completed = bounded.filter((t) => t.completed);
+    completed.sort((a, b) => new Date(b.completedAt || b.updatedAt).getTime() - new Date(a.completedAt || a.updatedAt).getTime());
+    if (uncompleted.length > MAX_TASKS_PER_MAILBOX) {
+      uncompleted.sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
+      bounded = uncompleted.slice(0, MAX_TASKS_PER_MAILBOX);
+    } else {
+      const allowedCompleted = Math.max(0, MAX_TASKS_PER_MAILBOX - uncompleted.length);
+      bounded = [...uncompleted, ...completed.slice(0, allowedCompleted)];
+    }
+  }
+
+  const key = getTasksKey(mailboxId);
+  try {
+    localStorage.setItem(key, JSON.stringify(bounded));
+  } catch (err: any) {
+    console.warn("[taskStore] Quota warning, pruning completed tasks:", err);
+    try {
+      const activeOnly = bounded.filter((t) => !t.completed);
+      localStorage.setItem(key, JSON.stringify(activeOnly));
+    } catch (fallbackErr) {
+      console.error("[taskStore] Storage quota completely exhausted:", fallbackErr);
+    }
+  }
+}
+
 function dispatchTasksUpdated() {
   if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
     try {
@@ -64,11 +110,15 @@ export function createTaskList(mailboxId: string, name: string, color?: string):
   if (!mailboxId || !name.trim()) {
     throw new Error("Missing required fields for task list creation");
   }
+  const cleanName = name.trim().slice(0, 100);
   const current = getTaskLists(mailboxId);
+  if (current.length >= MAX_TASK_LISTS_PER_MAILBOX) {
+    throw new Error(`Maximum number of task lists (${MAX_TASK_LISTS_PER_MAILBOX}) reached`);
+  }
   const newList: TaskList = {
     id: `list-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     mailboxId,
-    name: name.trim(),
+    name: cleanName,
     color: color || "#9E725F",
     isDefault: false,
     createdAt: new Date().toISOString(),
@@ -76,9 +126,7 @@ export function createTaskList(mailboxId: string, name: string, color?: string):
   };
 
   const updated = [...current, newList];
-  if (typeof window !== "undefined") {
-    localStorage.setItem(getListsKey(mailboxId), JSON.stringify(updated));
-  }
+  persistTaskLists(mailboxId, updated);
   dispatchTasksUpdated();
   return newList;
 }
@@ -97,16 +145,19 @@ export function updateTaskList(
     throw new Error(`Task list not found: ${listId}`);
   }
 
+  const cleanUpdates = { ...updates };
+  if (cleanUpdates.name) {
+    cleanUpdates.name = cleanUpdates.name.trim().slice(0, 100);
+  }
+
   const updatedList: TaskList = {
     ...current[idx],
-    ...updates,
+    ...cleanUpdates,
     updatedAt: new Date().toISOString(),
   };
 
   current[idx] = updatedList;
-  if (typeof window !== "undefined") {
-    localStorage.setItem(getListsKey(mailboxId), JSON.stringify(current));
-  }
+  persistTaskLists(mailboxId, current);
   dispatchTasksUpdated();
   return updatedList;
 }
@@ -125,23 +176,21 @@ export function deleteTaskList(mailboxId: string, listId: string): void {
   const remaining = current.filter((l) => l.id !== listId);
   const defaultList = remaining.find((l) => l.isDefault) || remaining[0];
 
-  if (typeof window !== "undefined") {
-    localStorage.setItem(getListsKey(mailboxId), JSON.stringify(remaining));
+  persistTaskLists(mailboxId, remaining);
 
-    // Reassign orphan tasks to default list
-    const tasks = getTasks(mailboxId);
-    let tasksChanged = false;
-    const updatedTasks = tasks.map((t) => {
-      if (t.listId === listId) {
-        tasksChanged = true;
-        return { ...t, listId: defaultList ? defaultList.id : "default", updatedAt: new Date().toISOString() };
-      }
-      return t;
-    });
-
-    if (tasksChanged) {
-      localStorage.setItem(getTasksKey(mailboxId), JSON.stringify(updatedTasks));
+  // Reassign orphan tasks to default list
+  const tasks = getTasks(mailboxId);
+  let tasksChanged = false;
+  const updatedTasks = tasks.map((t) => {
+    if (t.listId === listId) {
+      tasksChanged = true;
+      return { ...t, listId: defaultList ? defaultList.id : "default", updatedAt: new Date().toISOString() };
     }
+    return t;
+  });
+
+  if (tasksChanged) {
+    persistTasks(mailboxId, updatedTasks);
   }
   dispatchTasksUpdated();
 }
@@ -177,6 +226,10 @@ export function saveTask(
     throw new Error("Task title cannot be empty");
   }
 
+  const cleanTitle = taskData.title.trim().slice(0, MAX_TITLE_LENGTH);
+  const cleanDescription = taskData.description ? taskData.description.slice(0, MAX_DESCRIPTION_LENGTH) : undefined;
+  const cleanTags = taskData.tags ? taskData.tags.slice(0, MAX_TAGS_COUNT) : undefined;
+
   const current = getTasks(mailboxId);
   const now = new Date().toISOString();
 
@@ -192,7 +245,9 @@ export function saveTask(
     savedTask = {
       ...current[idx],
       ...taskData,
-      title: taskData.title.trim(),
+      title: cleanTitle,
+      description: cleanDescription,
+      tags: cleanTags,
       updatedAt: now,
     };
     current[idx] = savedTask;
@@ -202,7 +257,9 @@ export function saveTask(
       ...taskData,
       id: `task-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       mailboxId,
-      title: taskData.title.trim(),
+      title: cleanTitle,
+      description: cleanDescription,
+      tags: cleanTags,
       completed: false,
       createdAt: now,
       updatedAt: now,
@@ -210,9 +267,7 @@ export function saveTask(
     current.push(savedTask);
   }
 
-  if (typeof window !== "undefined") {
-    localStorage.setItem(getTasksKey(mailboxId), JSON.stringify(current));
-  }
+  persistTasks(mailboxId, current);
   dispatchTasksUpdated();
   return savedTask;
 }
@@ -251,7 +306,7 @@ export function toggleTaskComplete(mailboxId: string, taskId: string): TaskItem 
         completed: false,
         completedAt: undefined,
         dueDate: nextDueDate,
-        scheduledDate: target.scheduledDate ? computeNextTaskDueDate(target.scheduledDate, target.rrule) : undefined,
+        scheduledDate: target.scheduledDate ? (computeNextTaskDueDate(target.scheduledDate, target.rrule) ?? undefined) : undefined,
         createdAt: nowIso,
         updatedAt: nowIso,
       };
@@ -259,9 +314,7 @@ export function toggleTaskComplete(mailboxId: string, taskId: string): TaskItem 
     }
   }
 
-  if (typeof window !== "undefined") {
-    localStorage.setItem(getTasksKey(mailboxId), JSON.stringify(current));
-  }
+  persistTasks(mailboxId, current);
   dispatchTasksUpdated();
   return updated;
 }
@@ -272,9 +325,7 @@ export function toggleTaskComplete(mailboxId: string, taskId: string): TaskItem 
 export function deleteTask(mailboxId: string, taskId: string): void {
   const current = getTasks(mailboxId);
   const remaining = current.filter((t) => t.id !== taskId);
-  if (typeof window !== "undefined") {
-    localStorage.setItem(getTasksKey(mailboxId), JSON.stringify(remaining));
-  }
+  persistTasks(mailboxId, remaining);
   dispatchTasksUpdated();
 }
 

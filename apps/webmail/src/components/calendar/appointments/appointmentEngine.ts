@@ -398,17 +398,17 @@ export function createBookingRecord(
       {
         email: attendee.email.trim().toLowerCase(),
         name: attendee.name.trim(),
-        rsvpStatus: "accepted",
+        status: "accepted",
         isOrganizer: false,
       },
       {
         email: hostEmail,
         name: "Host",
-        rsvpStatus: "accepted",
+        status: "accepted",
         isOrganizer: true,
       },
     ],
-    reminders: [{ minutes: 15, method: "banner" }],
+    reminders: [{ minutesBefore: 15, method: "notification" }],
     uid: calendarEventId,
   };
 

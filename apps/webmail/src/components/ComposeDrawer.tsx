@@ -52,6 +52,16 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
   const [showScheduleInput, setShowScheduleInput] = createSignal(false);
   const [showCcBcc, setShowCcBcc] = createSignal(false);
 
+  createEffect(() => {
+    if (props.isOpen) {
+      if (props.cc || props.bcc) {
+        setShowCcBcc(true);
+      }
+    } else {
+      setShowCcBcc(false);
+    }
+  });
+
   // Input refs
   let toInputRef: HTMLInputElement | undefined;
   let subjectInputRef: HTMLInputElement | undefined;

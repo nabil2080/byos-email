@@ -97,7 +97,7 @@ export const CalendarModal: Component<CalendarModalProps> = (props) => {
     if (props.calendarToEdit) {
       const cal = props.calendarToEdit;
       setName(cal.name);
-      setColor(cal.color);
+      setColor(cal.color || "#9E725F");
       setIsDefault(cal.is_default);
 
       // Load overrides from local storage if available

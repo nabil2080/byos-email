@@ -132,7 +132,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
   createEffect(() => {
     // Re-load notes and labels reactively when active mailbox changes
-    const _mb = props.mailboxId || props.selectedMailbox?.id;
+    const _mb = effectiveMailboxId();
     refreshAll();
   });
 
@@ -287,8 +287,8 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
   function pushComposerHistory(title: string, content: string) {
     const curIdx = composerHistoryIdx();
-    const next = [...composerHistory().slice(0, curIdx + 1), { title, content }];
-    setComposerHistory(next.slice(-20));
+    const next = [...composerHistory().slice(0, curIdx + 1), { title, content }].slice(-20);
+    setComposerHistory(next);
     setComposerHistoryIdx(next.length - 1);
   }
 
@@ -403,7 +403,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     reader.onload = () => {
       const dataUrl = reader.result as string;
       if (targetNoteId) {
-        addNoteImage(props.mailboxId, targetNoteId, dataUrl);
+        addNoteImage(effectiveMailboxId(), targetNoteId, dataUrl);
         refreshAll();
       } else {
         setNewImages([...newImages(), dataUrl]);
@@ -417,7 +417,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
   function handleDrawingSaved(dataUrl: string) {
     const noteId = drawingTargetNoteId();
     if (noteId) {
-      addNoteDrawing(props.mailboxId, noteId, dataUrl);
+      addNoteDrawing(effectiveMailboxId(), noteId, dataUrl);
       refreshAll();
     } else {
       setNewDrawings([...newDrawings(), dataUrl]);
@@ -429,43 +429,43 @@ export const NotesView: Component<NotesViewProps> = (props) => {
   // Card Quick Actions
   function handleTogglePin(id: string, e: MouseEvent) {
     e.stopPropagation();
-    togglePinNote(props.mailboxId, id);
+    togglePinNote(effectiveMailboxId(), id);
     refreshAll();
   }
 
   function handleArchive(id: string, e: MouseEvent) {
     e.stopPropagation();
-    archiveNote(props.mailboxId, id);
+    archiveNote(effectiveMailboxId(), id);
     refreshAll();
   }
 
   function handleUnarchive(id: string, e: MouseEvent) {
     e.stopPropagation();
-    unarchiveNote(props.mailboxId, id);
+    unarchiveNote(effectiveMailboxId(), id);
     refreshAll();
   }
 
   function handleDelete(id: string, e: MouseEvent) {
     e.stopPropagation();
-    deleteNote(props.mailboxId, id);
+    deleteNote(effectiveMailboxId(), id);
     refreshAll();
   }
 
   function handleRestore(id: string, e: MouseEvent) {
     e.stopPropagation();
-    restoreNoteFromBin(props.mailboxId, id);
+    restoreNoteFromBin(effectiveMailboxId(), id);
     refreshAll();
   }
 
   function handleDeleteForever(id: string, e: MouseEvent) {
     e.stopPropagation();
-    deleteNoteForever(props.mailboxId, id);
+    deleteNoteForever(effectiveMailboxId(), id);
     refreshAll();
   }
 
   function handleDuplicate(id: string, e: MouseEvent) {
     e.stopPropagation();
-    duplicateNote(props.mailboxId, id);
+    duplicateNote(effectiveMailboxId(), id);
     refreshAll();
   }
 
@@ -474,13 +474,13 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     const items = (note.checklistItems || []).map((it) =>
       it.id === itemId ? { ...it, completed: !it.completed } : it
     );
-    updateNote(props.mailboxId, note.id, { checklistItems: items });
+    updateNote(effectiveMailboxId(), note.id, { checklistItems: items });
     refreshAll();
   }
 
   function handleSetCardColor(id: string, color: string, e: MouseEvent) {
     e.stopPropagation();
-    updateNote(props.mailboxId, id, { color });
+    updateNote(effectiveMailboxId(), id, { color });
     refreshAll();
     setActivePaletteCardId(null);
   }
@@ -488,7 +488,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
   function handleSetCardReminder(id: string, hoursAhead: number, e: MouseEvent) {
     e.stopPropagation();
     const ts = Date.now() + hoursAhead * 3600000;
-    updateNote(props.mailboxId, id, {
+    updateNote(effectiveMailboxId(), id, {
       reminder: { timestamp: ts, label: formatReminderLabel(ts) },
     });
     refreshAll();
@@ -497,7 +497,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
   function handleRemoveCardReminder(id: string, e: MouseEvent) {
     e.stopPropagation();
-    updateNote(props.mailboxId, id, { reminder: null });
+    updateNote(effectiveMailboxId(), id, { reminder: null });
     refreshAll();
   }
 
@@ -574,15 +574,26 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     if (!title && !content && items.length === 0 && (!note.drawings || note.drawings.length === 0) && (!note.images || note.images.length === 0)) {
       deleteNote(effectiveMailboxId(), note.id);
     } else {
-      updateNote(effectiveMailboxId(), note.id, {
-        title,
-        content,
-        isChecklist: editIsChecklist(),
-        checklistItems: items,
-        color: editColor(),
-        isPinned: editIsPinned(),
-        labels: editLabels(),
-      });
+      const isUnchanged =
+        title === (note.title || "").trim() &&
+        content === (note.content || "").trim() &&
+        editIsChecklist() === Boolean(note.isChecklist) &&
+        editColor() === (note.color || "default") &&
+        editIsPinned() === Boolean(note.isPinned) &&
+        JSON.stringify(items) === JSON.stringify((note.checklistItems || []).filter((it) => it.text.trim())) &&
+        JSON.stringify(editLabels()) === JSON.stringify(note.labels || []);
+
+      if (!isUnchanged) {
+        updateNote(effectiveMailboxId(), note.id, {
+          title,
+          content,
+          isChecklist: editIsChecklist(),
+          checklistItems: items,
+          color: editColor(),
+          isPinned: editIsPinned(),
+          labels: editLabels(),
+        });
+      }
     }
     refreshAll();
     setEditingNote(null);
@@ -735,7 +746,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                   <button
                     type="button"
                     onClick={() => {
-                      emptyBin(props.mailboxId);
+                      emptyBin(effectiveMailboxId());
                       refreshAll();
                     }}
                     data-testid="empty-bin-btn"
@@ -1556,7 +1567,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
       {/* ── EDIT LABELS MODAL ── */}
       <EditLabelsModal
-        mailboxId={props.mailboxId || props.selectedMailbox?.id}
+        mailboxId={effectiveMailboxId()}
         labels={labels()}
         isOpen={isEditLabelsOpen()}
         onClose={() => setIsEditLabelsOpen(false)}
@@ -1584,8 +1595,18 @@ export const NotesView: Component<NotesViewProps> = (props) => {
         onRestoreVersion={(verId) => {
           const note = versionHistoryTargetNote();
           if (note) {
-            restoreNoteVersion(props.mailboxId, note.id, verId);
-            refreshAll();
+            const restored = restoreNoteVersion(effectiveMailboxId(), note.id, verId);
+            if (restored) {
+              refreshAll();
+              const freshNotes = loadNotes(effectiveMailboxId());
+              const updated = freshNotes.find((n) => n.id === note.id);
+              if (updated) {
+                setVersionHistoryTargetNote(updated);
+                if (editingNote() && editingNote()!.id === note.id) {
+                  openEditModal(updated);
+                }
+              }
+            }
           }
         }}
       />
@@ -1646,7 +1667,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                       <button
                         type="button"
                         onClick={() => {
-                          removeNoteDrawing(props.mailboxId, editingNote()!.id, idx());
+                          removeNoteDrawing(effectiveMailboxId(), editingNote()!.id, idx());
                           refreshAll();
                           setEditingNote(notes().find((n) => n.id === editingNote()!.id) || null);
                         }}
@@ -1674,7 +1695,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                       <button
                         type="button"
                         onClick={() => {
-                          removeNoteImage(props.mailboxId, editingNote()!.id, idx());
+                          removeNoteImage(effectiveMailboxId(), editingNote()!.id, idx());
                           refreshAll();
                           setEditingNote(notes().find((n) => n.id === editingNote()!.id) || null);
                         }}
@@ -2136,7 +2157,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        removeNoteCollaborator(props.mailboxId, note.id, collab);
+                        removeNoteCollaborator(effectiveMailboxId(), note.id, collab);
                         refreshAll();
                       }}
                       class="hover:text-red-500 cursor-pointer"
@@ -2439,7 +2460,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                           type="button"
                           onClick={() => {
                             setActiveMenuCardId(null);
-                            toggleNoteChecklist(props.mailboxId, note.id);
+                            toggleNoteChecklist(effectiveMailboxId(), note.id);
                             refreshAll();
                           }}
                           class="w-full px-2.5 py-1 text-left rounded hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer font-medium"

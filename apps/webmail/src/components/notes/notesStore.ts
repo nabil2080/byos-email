@@ -558,8 +558,19 @@ export function restoreNoteVersion(mailboxId: string | undefined, noteId: string
   const ver = note.versionHistory.find((v) => v.id === versionId);
   if (!ver) return false;
 
-  // Snapshot before restoring
-  saveNoteVersion(mailboxId, noteId);
+  // Snapshot current state before restoring
+  const snapshot: NoteVersion = {
+    id: "ver-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+    timestamp: Date.now(),
+    title: note.title,
+    content: note.content,
+    isChecklist: note.isChecklist,
+    checklistItems: note.checklistItems ? JSON.parse(JSON.stringify(note.checklistItems)) : [],
+    images: note.images ? [...note.images] : [],
+    drawings: note.drawings ? [...note.drawings] : [],
+  };
+  const history = note.versionHistory || [];
+  note.versionHistory = [snapshot, ...history].slice(0, 25);
 
   note.title = ver.title;
   note.content = ver.content;

@@ -36,6 +36,9 @@ import {
   isValidCalendarUrl,
   buildUrlDecryptedRecords,
   CachedUrlEvent,
+  refreshDueUrlSubscriptions,
+  startUrlFeedAutoRefresh,
+  fetchAndParseUrlFeed,
 } from "./components/calendar/url/urlCalendarStore";
 import { DecryptedEventRecord } from "./components/calendar/CalendarSidebar";
 import { UserCalendar } from "./api";
@@ -454,7 +457,7 @@ export async function runCalendarCategory14Tests(): Promise<{ passed: number; fa
   });
 
   // Cat 14.7: Subscribed Feed Error Handling & Invalid URL Rejection
-  await check("Cat 14.7: Subscribed feed error handling, invalid URL rejection, and safe fallback", () => {
+  await check("Cat 14.7: Subscribed feed error handling, invalid URL rejection, and safe fallback", async () => {
     // 1. URL validation tests
     assert.strictEqual(isValidCalendarUrl("https://calendar.google.com/feed.ics"), true, "https:// is valid");
     assert.strictEqual(isValidCalendarUrl("http://internal.corp/calendar.ics"), true, "http:// is valid");
@@ -485,6 +488,76 @@ export async function runCalendarCategory14Tests(): Promise<{ passed: number; fa
     const reloaded = getUrlSubscriptions(mbx);
     assert.strictEqual(reloaded[0].errorMessage, "HTTP 404: Remote calendar not found", "Must preserve error message");
     assert.strictEqual(reloaded[0].cachedEvents.length, 1, "Cached events must not be wiped out on refresh error");
+
+    // 3. Robust CORS error wrapping on network failure
+    const prevFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () => {
+        const err = new TypeError("Failed to fetch");
+        throw err;
+      };
+
+      let threwCors = false;
+      try {
+        await fetchAndParseUrlFeed("https://calendar.google.com/calendar/ical/feed.ics");
+      } catch (err: any) {
+        threwCors = true;
+        assert.ok(err.message.includes("cross-origin restriction (CORS)"), "CORS error mentions cross-origin restriction");
+        assert.ok(err.message.includes("Import ICS"), "CORS error directs user to Import ICS alternative");
+      }
+      assert.strictEqual(threwCors, true, "Must catch TypeError and format user-friendly CORS error");
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+
+    // 4. Auto-refresh lifecycle interval
+    const testMbx = "mbx-auto-refresh";
+    const subFeed = subscribeUrlFeed(testMbx, {
+      url: "https://example.com/cal.ics",
+      refreshIntervalMinutes: 60,
+    });
+
+    // Case A: Just refreshed -> 0 refreshed
+    const dueImmediately = await refreshDueUrlSubscriptions(testMbx);
+    assert.strictEqual(dueImmediately, 0, "No feeds due immediately after subscription");
+
+    // Case B: Lifecycle timer start and cancel
+    const cancelTimer = startUrlFeedAutoRefresh(testMbx, 60000);
+    assert.strictEqual(typeof cancelTimer, "function", "startUrlFeedAutoRefresh returns cancellation cleanup function");
+    cancelTimer();
+
+    // Case C: Failed refresh updates lastRefreshed to prevent rapid retry storms
+    const failedMbx = "mbx-failed-refresh-backoff";
+    const subBroken = subscribeUrlFeed(failedMbx, {
+      url: "https://broken-external.local/calendar.ics",
+      refreshIntervalMinutes: 60,
+    });
+    // Artificially age lastRefreshed so it becomes due
+    const storedSubs = getUrlSubscriptions(failedMbx);
+    storedSubs[0].lastRefreshed = new Date(Date.now() - 120 * 60 * 1000).toISOString();
+    (globalThis as any).localStorage.setItem("byos_calendar_url_subs_" + failedMbx, JSON.stringify(storedSubs));
+
+    // Simulated failing network fetch
+    const oldFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () => {
+        throw new TypeError("Failed to fetch");
+      };
+      // Initial refresh attempt fails
+      const refreshedCount = await refreshDueUrlSubscriptions(failedMbx);
+      assert.strictEqual(refreshedCount, 0, "Failing feed reports 0 refreshed");
+
+      // Verify that lastRefreshed was updated to current time despite failure
+      const updatedSub = getUrlSubscriptions(failedMbx)[0];
+      const timeDiffMs = Date.now() - new Date(updatedSub.lastRefreshed!).getTime();
+      assert.ok(timeDiffMs < 5000, "lastRefreshed must be updated to recent timestamp on failure");
+
+      // Immediate subsequent check must NOT consider it due
+      const secondCheckDue = await refreshDueUrlSubscriptions(failedMbx);
+      assert.strictEqual(secondCheckDue, 0, "Failed feed must back off according to refreshIntervalMinutes");
+    } finally {
+      globalThis.fetch = oldFetch;
+    }
   });
 
   // Cat 14.8: CalDAV Protocol Metadata & Endpoint URL Generation

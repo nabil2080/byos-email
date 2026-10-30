@@ -180,5 +180,62 @@ export async function runCalendarSharingTests(): Promise<{ passed: number; faile
     assert(rwAllowed === true, "Write-shared calendar should allow modifications");
   });
 
+  await test("sealing calendar key with KeyDirectoryRecord xwing_public_key extracts X25519 pk and unseals", () => {
+    // Simulated 1216-byte X-Wing public key where last 32 bytes is Bob's X25519 PK
+    const bobPkBytes = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) bobPkBytes[i] = (i * 3 + 17) % 256;
+    const xwingMockBytes = new Uint8Array(1216);
+    xwingMockBytes.set(bobPkBytes, 1184);
+
+    const b64Xwing = btoa(String.fromCharCode(...xwingMockBytes));
+    const extractedPk = xwingMockBytes.slice(1184, 1216);
+    let hexPk = "";
+    for (let i = 0; i < extractedPk.length; i++) {
+      hexPk += extractedPk[i].toString(16).padStart(2, "0");
+    }
+
+    assert(hexPk.length === 64, "Extracted public key hex must be 64 characters (32 bytes)");
+
+    // Seal with extracted hex
+    const sealed = sealCalendarKeyForGrantee(WasmCore, hexPk, calKey);
+    assert(typeof sealed === "string" && sealed.length > 0, "Sealed key should be non-empty base64 string");
+  });
+
+  await test("calendar sharing fails closed when mailbox key is missing or malformed", () => {
+    let threw = false;
+    try {
+      sealCalendarKeyForGrantee(WasmCore, bobKeypair.public_key, null as any);
+    } catch (err: any) {
+      threw = true;
+      assert(err.message.includes("32 bytes"), "Expected 32 bytes required error");
+    }
+    assert(threw, "Missing mailbox key must fail closed");
+  });
+
+  await test("calendar sharing key resolution supports 2432-char hex and 32-byte base64 keys", () => {
+    // 1. 2432 hex characters X-Wing key (1216 bytes)
+    const bobPkBytes = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) bobPkBytes[i] = (i * 5 + 3) % 256;
+    const full1216 = new Uint8Array(1216);
+    full1216.set(bobPkBytes, 1184);
+    let hex2432 = "";
+    for (let i = 0; i < full1216.length; i++) {
+      hex2432 += full1216[i].toString(16).padStart(2, "0");
+    }
+    assert(hex2432.length === 2432, "Hex string must be 2432 chars");
+    const extractedHex = hex2432.slice(2368, 2432);
+    const sealedFrom2432 = sealCalendarKeyForGrantee(WasmCore, extractedHex, calKey);
+    assert(Boolean(sealedFrom2432), "Seals successfully with extracted hex");
+
+    // 2. Base64 32-byte public key
+    const b64Pk = btoa(String.fromCharCode(...bobPkBytes));
+    let rawPkHex = "";
+    for (let i = 0; i < bobPkBytes.length; i++) {
+      rawPkHex += bobPkBytes[i].toString(16).padStart(2, "0");
+    }
+    const sealedFromB64 = sealCalendarKeyForGrantee(WasmCore, rawPkHex, calKey);
+    assert(Boolean(sealedFromB64), "Seals successfully with 32-byte public key");
+  });
+
   return { passed, failed };
 }

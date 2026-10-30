@@ -360,9 +360,11 @@ export const WeekView: Component<WeekViewProps> = (props) => {
                               </svg>
                             </Show>
                             <Show when={ev.rrule || ev.isOccurrence}>
-                              <svg class="w-2.5 h-2.5 shrink-0 stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24" data-testid="recurring-event-icon" title="Recurring event">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                              </svg>
+                              <span title="Recurring event" class="inline-flex shrink-0">
+                                <svg class="w-2.5 h-2.5 shrink-0 stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24" data-testid="recurring-event-icon">
+                                  <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                                </svg>
+                              </span>
                             </Show>
                             <Show when={ev.isException}>
                               <span class="inline-block px-1 py-0.2 text-[8px] font-bold rounded bg-amber-500/30 text-white shrink-0" data-testid="exception-event-badge" title="Modified occurrence">
@@ -623,9 +625,11 @@ export const WeekView: Component<WeekViewProps> = (props) => {
                               </svg>
                             </Show>
                             <Show when={ev.rrule || ev.isOccurrence}>
-                              <svg class="w-2.5 h-2.5 shrink-0 stroke-current fill-none stroke-[2.2]" style={{ color: calColor }} viewBox="0 0 24 24" data-testid="recurring-event-icon" title="Recurring event">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                              </svg>
+                              <span title="Recurring event" class="inline-flex shrink-0">
+                                <svg class="w-2.5 h-2.5 shrink-0 stroke-current fill-none stroke-[2.2]" style={{ color: calColor }} viewBox="0 0 24 24" data-testid="recurring-event-icon">
+                                  <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                                </svg>
+                              </span>
                             </Show>
                             <Show when={ev.isException}>
                               <span class="inline-block px-1 py-0.2 text-[8px] font-bold rounded bg-amber-500/20 text-amber-700 dark:text-amber-400 shrink-0" data-testid="exception-event-badge" title="Modified occurrence">

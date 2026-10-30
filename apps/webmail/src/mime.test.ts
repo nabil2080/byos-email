@@ -237,5 +237,33 @@ export function runMimeTests(): { passed: number; failed: number } {
     assert(parsed.calendarPart!.rawIcs.includes("UID:inline-1"), "Should extract inline VCALENDAR");
   });
 
+  // 11. buildMimeString with CC and BCC headers
+  test("11. buildMimeString includes Cc and Bcc headers when provided", () => {
+    const rawPlain = buildMimeString({
+      to: "bob@byos.local",
+      cc: "charlie@byos.local, dan@byos.local",
+      bcc: "secret@byos.local",
+      subject: "CC & BCC Test",
+      signedBody: "Plain body content",
+      htmlBody: "",
+    });
+    assert(rawPlain.includes("To: bob@byos.local"), "plain includes To");
+    assert(rawPlain.includes("Cc: charlie@byos.local, dan@byos.local"), "plain includes Cc");
+    assert(rawPlain.includes("Bcc: secret@byos.local"), "plain includes Bcc");
+
+    const rawRich = buildMimeString({
+      to: "bob@byos.local",
+      cc: "charlie@byos.local",
+      bcc: "secret@byos.local",
+      subject: "Rich CC & BCC Test",
+      signedBody: "Plain body content",
+      htmlBody: "<p>HTML body</p>",
+      body: "Plain body content",
+    });
+    assert(rawRich.includes("To: bob@byos.local"), "rich includes To");
+    assert(rawRich.includes("Cc: charlie@byos.local"), "rich includes Cc");
+    assert(rawRich.includes("Bcc: secret@byos.local"), "rich includes Bcc");
+  });
+
   return { passed, failed };
 }

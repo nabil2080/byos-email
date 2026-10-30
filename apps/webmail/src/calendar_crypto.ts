@@ -109,6 +109,10 @@ export interface CalendarEventPlaintext {
   sourceCategory?: "flight" | "hotel" | "restaurant" | "ticket" | "event" | "other";
   sourceConfirmationCode?: string;
   sourceProvider?: string;
+  status?: string;
+  startTime?: string;
+  endTime?: string;
+  isAllDay?: boolean;
 }
 
 /**

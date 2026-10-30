@@ -103,12 +103,28 @@ export async function fetchAndParseUrlFeed(
   url: string
 ): Promise<{ title?: string; events: CachedUrlEvent[] }> {
   const normalized = normalizeCalendarUrl(url);
-  const resp = await fetch(normalized, {
-    method: "GET",
-    headers: {
-      Accept: "text/calendar, text/plain, */*",
-    },
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(normalized, {
+      method: "GET",
+      headers: {
+        Accept: "text/calendar, text/plain, */*",
+      },
+    });
+  } catch (err: any) {
+    const isCorsOrNetwork =
+      err instanceof TypeError ||
+      err?.name === "TypeError" ||
+      err?.message?.includes("Failed to fetch") ||
+      err?.message?.includes("NetworkError") ||
+      err?.message?.includes("CORS");
+    if (isCorsOrNetwork) {
+      throw new Error(
+        `Unable to fetch calendar feed due to cross-origin restriction (CORS) or network error: ${err.message}. To import external feeds that block direct browser requests, download the .ics file and use Calendar Settings -> Import ICS.`
+      );
+    }
+    throw new Error(`Failed to connect to calendar feed: ${err?.message || String(err)}`);
+  }
 
   if (!resp.ok) {
     throw new Error(`Failed to fetch calendar feed: HTTP ${resp.status} ${resp.statusText}`);
@@ -245,6 +261,7 @@ export async function refreshUrlSubscription(
   } catch (err: any) {
     console.warn(`[urlCalendarStore] Refresh failed for ${target.url}:`, err);
     target.errorMessage = err?.message || "Failed to refresh feed";
+    target.lastRefreshed = new Date().toISOString();
     persistUrlSubscriptions(mailboxId, current);
     return false;
   }
@@ -267,14 +284,10 @@ export function buildUrlDecryptedRecords(
       if (item.rrule) {
         // Expand recurring feed events
         const occurrences = expandEventOccurrences(
-          {
-            id: item.uid,
-            start_time: item.startTime,
-            end_time: item.endTime,
-            rrule: item.rrule,
-            is_all_day: item.isAllDay,
-            timezone: "UTC",
-          },
+          item.uid,
+          start,
+          end,
+          item.rrule,
           windowStart,
           windowEnd
         );
@@ -285,7 +298,7 @@ export function buildUrlDecryptedRecords(
             calendarId: sub.calendarId,
             startTime: occ.startTime,
             endTime: occ.endTime,
-            isAllDay: occ.isAllDay,
+            isAllDay: item.isAllDay,
             status: item.status || "busy",
             baseEventId: item.uid,
             rrule: item.rrule,
@@ -294,7 +307,6 @@ export function buildUrlDecryptedRecords(
               title: item.summary,
               description: item.description,
               location: item.location,
-              isAllDay: occ.isAllDay,
             },
           });
         }
@@ -312,7 +324,6 @@ export function buildUrlDecryptedRecords(
               title: item.summary,
               description: item.description,
               location: item.location,
-              isAllDay: item.isAllDay,
             },
           });
         }
@@ -321,4 +332,71 @@ export function buildUrlDecryptedRecords(
   }
 
   return records;
+}
+
+/**
+ * Automatically checks all active URL subscriptions for the mailbox
+ * and refreshes any subscription whose lastRefreshed is older than its refreshIntervalMinutes.
+ */
+export async function refreshDueUrlSubscriptions(mailboxId: string): Promise<number> {
+  if (!mailboxId) return 0;
+  const subs = getUrlSubscriptions(mailboxId);
+  const now = Date.now();
+  let refreshedCount = 0;
+
+  for (const sub of subs) {
+    if (sub.isPaused) continue;
+    const intervalMinutes = sub.refreshIntervalMinutes ?? 1440;
+    const lastRefreshedMs = sub.lastRefreshed ? new Date(sub.lastRefreshed).getTime() : 0;
+    const elapsedMinutes = (now - lastRefreshedMs) / (1000 * 60);
+
+    if (elapsedMinutes >= intervalMinutes) {
+      const ok = await refreshUrlSubscription(mailboxId, sub.calendarId);
+      if (ok) refreshedCount++;
+    }
+  }
+
+  return refreshedCount;
+}
+
+/**
+ * Starts a background interval lifecycle that periodically refreshes due URL subscriptions.
+ * Returns a cleanup cancellation function.
+ */
+export function startUrlFeedAutoRefresh(
+  mailboxId: string,
+  checkIntervalMs: number = 60000,
+  onRefresh?: () => void
+): () => void {
+  if (typeof window === "undefined" || !mailboxId) {
+    return () => {};
+  }
+
+  // Initial check shortly after starting
+  const initialTimer = setTimeout(() => {
+    refreshDueUrlSubscriptions(mailboxId)
+      .then((count) => {
+        if (count > 0 && onRefresh) onRefresh();
+      })
+      .catch((err) => console.warn("[urlCalendarStore] Initial auto-refresh failed:", err));
+  }, 2000);
+  if (typeof (initialTimer as any)?.unref === "function") {
+    (initialTimer as any).unref();
+  }
+
+  const intervalId = setInterval(() => {
+    refreshDueUrlSubscriptions(mailboxId)
+      .then((count) => {
+        if (count > 0 && onRefresh) onRefresh();
+      })
+      .catch((err) => console.warn("[urlCalendarStore] Interval auto-refresh failed:", err));
+  }, checkIntervalMs);
+  if (typeof (intervalId as any)?.unref === "function") {
+    (intervalId as any).unref();
+  }
+
+  return () => {
+    clearTimeout(initialTimer);
+    clearInterval(intervalId);
+  };
 }

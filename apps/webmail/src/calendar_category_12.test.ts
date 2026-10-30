@@ -18,6 +18,7 @@ import {
   toggleScheduleActive,
   getBookedAppointments,
   saveBookedAppointment,
+  findAppointmentByCancellationToken,
 } from "./components/calendar/appointments/appointmentStore.js";
 import {
   computeAvailableSlots,
@@ -463,7 +464,7 @@ export async function runCalendarCategory12Tests(): Promise<{ passed: number; fa
 
     // 8. Cancellation and Rescheduling Lifecycle
     runTest("Cat 12.8: Cancellation and rescheduling lifecycle with participant updates", () => {
-      const schedule = createDefaultAppointmentSchedule(mailboxId, "UTC");
+      const schedule = saveAppointmentSchedule(mailboxId, createDefaultAppointmentSchedule(mailboxId, "UTC"));
       const slot1 = "2026-11-06T10:00:00.000Z";
       const slot2 = "2026-11-06T11:00:00.000Z";
 
@@ -514,6 +515,18 @@ export async function runCalendarCategory12Tests(): Promise<{ passed: number; fa
       assert(rescheduleRes.newAppointment?.status === "confirmed", "New appointment confirmed");
       assert(rescheduleRes.newAppointment?.rescheduledFromId === activeBooking.id, "New appointment links to old ID");
       assert(rescheduleRes.newAppointment?.startUtc === slot2, "New appointment booked for slot 2");
+
+      // Case 4: findAppointmentByCancellationToken resolves appointment and schedule across storage
+      saveBookedAppointment(mailboxId, rescheduleRes.newAppointment!);
+      const tokenMatch = findAppointmentByCancellationToken(rescheduleRes.newAppointment!.cancellationToken);
+      assert(tokenMatch !== null, "Appointment resolved by cancellation token");
+      assert(tokenMatch?.appointment.id === rescheduleRes.newAppointment!.id, "Resolved appointment ID matches");
+      assert(tokenMatch?.schedule.id === schedule.id, "Resolved schedule ID matches");
+      assert(tokenMatch?.mailboxId === mailboxId, "Resolved mailboxId matches");
+
+      // Invalid token returns null
+      const nonExistentMatch = findAppointmentByCancellationToken("non-existent-token-xyz");
+      assert(nonExistentMatch === null, "Invalid cancellation token returns null");
     });
 
     // 9. Privacy Disclosure Boundary (Zero Host Secret Leakage)

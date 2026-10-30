@@ -1,5 +1,19 @@
 import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } from "solid-js";
-import { UserCalendar, CalendarShare, fetchCalendarShares, shareCalendar, updateCalendarShare, revokeCalendarShare, ContactItem } from "../../api";
+import {
+  UserCalendar,
+  CalendarShare,
+  fetchCalendarShares,
+  shareCalendar,
+  updateCalendarShare,
+  revokeCalendarShare,
+  ContactItem,
+  lookupMailboxKeys,
+  type KeyDirectoryRecord,
+} from "../../api";
+import { sealCalendarKeyForGrantee } from "../../calendar_crypto";
+import * as WasmCore from "../../generated/crypto-core/byos_crypto_core.js";
+import { base64ToBytes } from "../../message_crypto";
+import { bytesToHex } from "../../attachment_crypto";
 
 interface ShareCalendarModalProps {
   isOpen: boolean;
@@ -9,6 +23,8 @@ interface ShareCalendarModalProps {
   mailboxKey?: Uint8Array | null;
   contacts?: ContactItem[];
   onSharesChanged?: () => void;
+  lookupMailboxKeys?: (email: string) => Promise<KeyDirectoryRecord>;
+  wasm?: typeof WasmCore;
 }
 
 export const ShareCalendarModal: Component<ShareCalendarModalProps> = (props) => {
@@ -64,14 +80,79 @@ export const ShareCalendarModal: Component<ShareCalendarModalProps> = (props) =>
       return;
     }
 
+    if (!props.mailboxId) {
+      setErrorMsg("No active mailbox selected.");
+      return;
+    }
+
+    if (!props.mailboxKey || !(props.mailboxKey instanceof Uint8Array) || props.mailboxKey.length !== 32) {
+      setErrorMsg("Mailbox is locked. Please unlock to share calendar encryption key.");
+      return;
+    }
+
     setIsSubmitting(true);
     setErrorMsg(null);
     setSuccessMsg(null);
     try {
+      const lookupFn = props.lookupMailboxKeys || lookupMailboxKeys;
+      let record: KeyDirectoryRecord;
+      try {
+        record = await lookupFn(email);
+      } catch (err: any) {
+        throw new Error(`Could not find public key for ${email}. Grantee must be a registered BYOS user.`);
+      }
+
+      if (!record || (!record.xwing_public_key && !(record as any).public_key)) {
+        throw new Error(`Grantee ${email} has no published public keys`);
+      }
+
+      if (record.status && record.status !== "active") {
+        throw new Error(`Grantee ${email} key status is ${record.status}. Only active keys can be used for sharing.`);
+      }
+
+      let granteePkHex = "";
+      if ((record as any).public_key) {
+        const pk = (record as any).public_key;
+        if (/^[0-9a-fA-F]{64}$/.test(pk)) {
+          granteePkHex = pk;
+        } else {
+          try {
+            const raw = base64ToBytes(pk);
+            if (raw.length === 32) {
+              granteePkHex = bytesToHex(raw);
+            }
+          } catch {}
+        }
+      }
+
+      if (!granteePkHex && record.xwing_public_key) {
+        if (/^[0-9a-fA-F]{64}$/.test(record.xwing_public_key)) {
+          granteePkHex = record.xwing_public_key;
+        } else if (/^[0-9a-fA-F]{2432}$/.test(record.xwing_public_key)) {
+          granteePkHex = record.xwing_public_key.slice(2368, 2432);
+        } else {
+          const raw = base64ToBytes(record.xwing_public_key);
+          if (raw.length === 32) {
+            granteePkHex = bytesToHex(raw);
+          } else if (raw.length === 1216) {
+            granteePkHex = bytesToHex(raw.slice(1184, 1216));
+          } else {
+            throw new Error("Invalid recipient public key length");
+          }
+        }
+      }
+
+      if (!granteePkHex) {
+        throw new Error("Unable to resolve recipient public key for HPKE encryption");
+      }
+
+      const wasm = props.wasm || WasmCore;
+      const encryptedKey = sealCalendarKeyForGrantee(wasm, granteePkHex, props.mailboxKey);
+
       await shareCalendar(props.mailboxId, props.calendar.id, {
         grantee_email: email,
         permission: permission(),
-        encrypted_key: "shared_cal_key_envelope_v1",
+        encrypted_key: encryptedKey,
       });
       setGranteeEmail("");
       setSuccessMsg(`Calendar shared with ${email}`);

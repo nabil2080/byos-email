@@ -57,6 +57,7 @@ import {
   createCalendarSettings,
   saveCalendarOverrides,
   loadCalendarOverrides,
+  CalendarOverrides,
 } from "./settings/calendarSettingsStore";
 import { CalendarSettingsModal } from "./CalendarSettingsModal";
 import {
@@ -76,6 +77,7 @@ import {
   toggleUrlSubscriptionVisibility,
   unsubscribeUrlFeed,
   refreshUrlSubscription,
+  startUrlFeedAutoRefresh,
 } from "./url/urlCalendarStore";
 import { SubscribeFromUrlModal } from "./url/SubscribeFromUrlModal";
 import { detectBrowserTimeZone } from "../../utils/calendarTimezones";
@@ -97,7 +99,6 @@ import {
   markAlertDispatched,
   unmarkAlertDispatched,
 } from "../../utils/calendarNotifications";
-import { CalendarNotificationBanner } from "./CalendarNotificationBanner";
 import { CalendarTrashModal } from "./trash/CalendarTrashModal";
 import {
   moveEventToTrash,
@@ -151,6 +152,8 @@ interface CalendarViewProps {
   onToggleTheme?: () => void;
   savedViewMode?: CalendarViewMode;
   onViewModeChange?: (mode: CalendarViewMode) => void;
+  onCheckReminders?: () => void;
+  selectedEventId?: string | null;
 }
 
 export const CalendarView: Component<CalendarViewProps> = (props) => {
@@ -214,7 +217,12 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
     window.addEventListener("byos_offline_queue_updated", updateQueue);
     window.addEventListener("keydown", handleGlobalKeyDown);
 
+    const stopUrlRefresh = startUrlFeedAutoRefresh(props.mailboxId || "", 60000, () => {
+      loadCalendars();
+    });
+
     onCleanup(() => {
+      stopUrlRefresh();
       window.removeEventListener("online", updateOnline);
       window.removeEventListener("offline", updateOnline);
       window.removeEventListener("byos_offline_queue_updated", updateQueue);
@@ -714,6 +722,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
     const list = allDecryptedEvents();
     if (props.mailboxId && list.length > 0 && props.mailboxKey) {
       cacheDecryptedEvents(props.mailboxId, list);
+      props.onCheckReminders?.();
     }
   });
 
@@ -725,105 +734,26 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
       .sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
   });
 
-  // ── Active Reminders & Notification Engine (Category 08) ──
-  const [activeAlerts, setActiveAlerts] = createSignal<ActiveCalendarReminderAlert[]>([]);
-  const dispatchedLedger = getDispatchedLedger();
-
-  function checkReminders() {
-    const settings = calendarSettings.settings();
-    const isLocked = !props.mailboxKey || !(props.mailboxKey instanceof Uint8Array) || props.mailboxKey.length !== 32;
-
-    const overridesMap: Record<string, CalendarOverrides> = {};
-    if (props.mailboxId) {
-      for (const cal of allCalendars()) {
-        const ov = loadCalendarOverrides(props.mailboxId, cal.id);
-        if (ov) {
-          overridesMap[cal.id] = ov;
-        }
+  // ── Reminders & Notification Delegation (Category 08) ──
+  // Reminders are evaluated centrally in App.tsx for cross-module reliability.
+  createEffect(() => {
+    const id = props.selectedEventId;
+    if (id) {
+      const ev = allDecryptedEvents().find((e) => e.id === id || e.baseEventId === id);
+      if (ev) {
+        setEventToEdit(ev);
+        setIsEventModalOpen(true);
       }
     }
-
-    const triggered = evaluateUpcomingReminders(
-      allDecryptedEvents(),
-      new Date(),
-      settings,
-      overridesMap,
-      dispatchedLedger,
-      isLocked
-    );
-
-    const taskTriggered = evaluateUpcomingTaskReminders(
-      tasks(),
-      new Date(),
-      settings,
-      dispatchedLedger
-    );
-
-    const allTriggered = [...triggered, ...taskTriggered];
-
-    if (allTriggered.length > 0) {
-      for (const alert of allTriggered) {
-        markAlertDispatched(alert.alertId);
-      }
-      setActiveAlerts((prev) => {
-        const existingIds = new Set(prev.map((a) => a.alertId));
-        const newOnes = allTriggered.filter((a) => !existingIds.has(a.alertId));
-        return [...prev, ...newOnes];
-      });
-
-      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-        for (const alert of allTriggered) {
-          try {
-            new Notification(alert.title, {
-              body: alert.location ? `${alert.location}` : undefined,
-              icon: "/favicon.ico",
-              tag: alert.alertId,
-            });
-          } catch {
-            // Silently fall back to in-app banner
-          }
-        }
-      }
-    }
-  }
-
-  function handleDismissAlert(alertId: string) {
-    markAlertDispatched(alertId);
-    setActiveAlerts((prev) => prev.filter((a) => a.alertId !== alertId));
-  }
-
-  function handleSnoozeAlert(alertId: string, minutes: number) {
-    const alert = activeAlerts().find((a) => a.alertId === alertId);
-    if (!alert) return;
-    markAlertDispatched(alertId);
-    setActiveAlerts((prev) => prev.filter((a) => a.alertId !== alertId));
-
-    setTimeout(() => {
-      unmarkAlertDispatched(alertId);
-      checkReminders();
-    }, minutes * 60000);
-  }
-
-  function handleSelectEventFromAlert(eventId: string) {
-    const ev = allDecryptedEvents().find((e) => e.id === eventId || e.baseEventId === eventId);
-    if (ev) {
-      setEventToEdit(ev);
-      setIsEventModalOpen(true);
-    }
-  }
+  });
 
   onMount(() => {
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission().catch(() => {});
-    }
-    checkReminders();
-    const reminderInterval = setInterval(checkReminders, 15000);
-    onCleanup(() => clearInterval(reminderInterval));
+    props.onCheckReminders?.();
   });
 
   createEffect(() => {
     allDecryptedEvents();
-    checkReminders();
+    props.onCheckReminders?.();
   });
 
   // Period Title formatting
@@ -1124,7 +1054,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
     endTime: Date;
     isAllDay: boolean;
     rrule?: string;
-    status: string;
+    status?: string;
     sendInvitations?: boolean;
     details: CalendarEventPlaintext;
     editScope?: "occurrence" | "series";
@@ -1226,8 +1156,8 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
                     start_time: payload.startTime.toISOString(),
                     end_time: payload.endTime.toISOString(),
                     is_all_day: payload.isAllDay,
-                    rrule: payload.rrule || null,
-                    status: payload.status,
+                    rrule: payload.rrule || undefined,
+                    status: payload.status || "confirmed",
                     encrypted_payload: encryptedPayload,
                   }
                 : e
@@ -1270,8 +1200,8 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
           start_time: payload.startTime.toISOString(),
           end_time: payload.endTime.toISOString(),
           is_all_day: payload.isAllDay,
-          rrule: payload.rrule || null,
-          status: payload.status,
+          rrule: payload.rrule || undefined,
+          status: payload.status || "confirmed",
           encrypted_payload: encryptedPayload,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -1681,7 +1611,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
             setIsCalendarModalOpen(true);
           }}
           onOpenShareCalendar={(cal) => {
-            setCalendarToShare(cal);
+            setCalendarToShare(cal || null);
             setIsShareModalOpen(true);
           }}
           onUnsubscribeCalendar={handleUnsubscribeCalendar}
@@ -1761,7 +1691,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
               setIsCalendarModalOpen(true);
             }}
             onOpenShareCalendar={(cal) => {
-              setCalendarToShare(cal);
+              setCalendarToShare(cal || null);
               setMobileSidebarOpen(false);
               setIsShareModalOpen(true);
             }}
@@ -2265,7 +2195,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
         onCancelBooking={async (booking) => {
           if (booking.calendarEventId) {
             try {
-              await handleDeleteEvent(booking.calendarEventId, allCalendars()[0]?.id || "");
+              await handleDeleteEvent(booking.calendarEventId, "series");
             } catch (err) {
               console.warn("[CalendarView] Failed to cancel calendar event on booking cancellation:", err);
             }
@@ -2304,6 +2234,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
               mailboxId={props.mailboxId || ""}
               existingEvents={allDecryptedEvents()}
               settings={calendarSettings.settings()}
+              hostEmail={props.currentUserEmail}
               onClose={() => setIsBookingPreviewOpen(false)}
               onBookingConfirmed={async (appt, eventPayload) => {
                 // Insert confirmed appointment into calendar if key is unlocked
@@ -2328,12 +2259,13 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
                 if (props.onSendInvitation) {
                   try {
                     const ics = generateIcs({
+                      uid: appt.calendarEventId || appt.id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : "booking-" + Date.now()),
                       title: eventPayload.title,
                       description: eventPayload.description,
                       startTime: new Date(appt.startUtc),
                       endTime: new Date(appt.endUtc),
                       location: eventPayload.location,
-                      organizer: eventPayload.organizer || { email: "host@byos.local", name: "Host" },
+                      organizer: eventPayload.organizer || { email: props.currentUserEmail || "host@byos.local", name: "Host" },
                       attendees: eventPayload.attendees,
                     });
                     await props.onSendInvitation(appt.attendeeEmail, ics, `Confirmed: ${eventPayload.title}`);
@@ -2342,19 +2274,21 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
                   }
                 }
               }}
+              onBookingCancelled={async (appt) => {
+                if (appt.calendarEventId) {
+                  try {
+                    await handleDeleteEvent(appt.calendarEventId, "series");
+                  } catch (err) {
+                    console.warn("[CalendarView] Failed to cancel calendar event on booking cancellation:", err);
+                  }
+                }
+              }}
             />
           </div>
         </div>
       </Show>
 
-      {/* ── Active Reminder Toast Banner (Category 08) ── */}
-      <CalendarNotificationBanner
-        alerts={activeAlerts()}
-        defaultSnoozeMinutes={calendarSettings.settings().snoozeDefaultMinutes || 10}
-        onDismiss={handleDismissAlert}
-        onSnooze={handleSnoozeAlert}
-        onSelectEvent={handleSelectEventFromAlert}
-      />
+
 
       {/* ── Calendar Trash Bin Modal (Category 15) ── */}
       <CalendarTrashModal

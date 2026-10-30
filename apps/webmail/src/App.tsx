@@ -216,6 +216,24 @@ import {
   unsealAccountKeys,
 } from "./session_isolation";
 import { OfflineBanner } from "./components/OfflineBanner";
+import {
+  ActiveCalendarReminderAlert,
+  getDispatchedLedger,
+  markAlertDispatched,
+  unmarkAlertDispatched,
+  evaluateUpcomingReminders,
+  evaluateUpcomingTaskReminders,
+} from "./utils/calendarNotifications";
+import {
+  loadCalendarSettings,
+  loadCalendarOverrides,
+  CalendarOverrides,
+} from "./components/calendar/settings/calendarSettingsStore";
+import { getTasks } from "./components/calendar/tasks/taskStore";
+import { BookingPageView } from "./components/calendar/appointments/BookingPageView";
+import { findScheduleBySlug, findAppointmentByCancellationToken } from "./components/calendar/appointments/appointmentStore";
+import { getCachedDecryptedEvents } from "./components/calendar/offline/calendarOfflineSync";
+import { CalendarNotificationBanner } from "./components/calendar/CalendarNotificationBanner";
 import { sanitizeOnSend } from "./composer_sanitizer";
 import {
   initNetworkListeners,
@@ -291,24 +309,28 @@ export function buildMimeString(params: {
   body?: string;
   from?: string;
   replyTo?: string;
+  cc?: string;
+  bcc?: string;
 }): string {
-  const { to, subject, signedBody, htmlBody, trackingToken, body, from, replyTo } = params;
+  const { to, subject, signedBody, htmlBody, trackingToken, body, from, replyTo, cc, bcc } = params;
   const trackingPixelHtml = trackingToken
     ? `<img src="${getTrackingPixelUrl(trackingToken)}" alt="" width="1" height="1" style="display:none !important; width:1px; height:1px; border:0;" />`
     : "";
 
-  const extraHeaders: string[] = [];
-  if (from) extraHeaders.push(`From: ${from}`);
-  if (replyTo) extraHeaders.push(`Reply-To: ${replyTo}`);
+  const headers: string[] = [];
+  if (from) headers.push(`From: ${from}`);
+  if (replyTo) headers.push(`Reply-To: ${replyTo}`);
+  if (to && to.trim()) headers.push(`To: ${to.trim()}`);
+  if (cc && cc.trim()) headers.push(`Cc: ${cc.trim()}`);
+  if (bcc && bcc.trim()) headers.push(`Bcc: ${bcc.trim()}`);
+  headers.push(`Subject: ${subject}`);
 
   const isHtml = body !== undefined ? htmlBody !== body : htmlBody !== signedBody;
   if (htmlBody && htmlBody.trim() && isHtml) {
     const fullHtml = trackingPixelHtml ? `${htmlBody}\r\n${trackingPixelHtml}` : htmlBody;
     const boundary = "----=_Part_" + Date.now() + "_" + Math.random().toString(36).slice(2);
     return [
-      ...extraHeaders,
-      `To: ${to}`,
-      `Subject: ${subject}`,
+      ...headers,
       "MIME-Version: 1.0",
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
       "",
@@ -326,9 +348,7 @@ export function buildMimeString(params: {
     const boundary = "----=_Part_" + Date.now() + "_" + Math.random().toString(36).slice(2);
     const autoHtml = `<div style="font-family: sans-serif; font-size: 14px; color: #1a1a1a; white-space: pre-wrap;">${signedBody}</div>\r\n${trackingPixelHtml}`;
     return [
-      ...extraHeaders,
-      `To: ${to}`,
-      `Subject: ${subject}`,
+      ...headers,
       "MIME-Version: 1.0",
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
       "",
@@ -344,9 +364,7 @@ export function buildMimeString(params: {
     ].join("\r\n");
   } else {
     return [
-      ...extraHeaders,
-      `To: ${to}`,
-      `Subject: ${subject}`,
+      ...headers,
       "Content-Type: text/plain; charset=utf-8",
       "MIME-Version: 1.0",
       "",
@@ -727,7 +745,7 @@ const App: Component = () => {
       sessionStorage.removeItem("byos_mailbox_sk_" + mbId);
       sessionStorage.removeItem("byos_xwing_seed_" + mbId);
       setConnectedAccounts((prev) =>
-        prev.map((a) => (a.id === mbId ? { ...a, mailboxSkHex: undefined, searchKeyHex: undefined } : a))
+        prev.map((a) => (a.id === mbId ? { ...a, mailboxSkHex: undefined, searchKeyHex: undefined, isLocked: true } : a))
       );
     };
     (window as any).__BYOS_TEST_TRIGGER_UNLOCK_MODAL__ = (target: { mailboxId: string; email: string }) => {
@@ -781,6 +799,113 @@ const App: Component = () => {
   const [unlockAccountBusy, setUnlockAccountBusy] = createSignal(false);
   const [pendingSwitchAccount, setPendingSwitchAccount] = createSignal<ConnectedAccount | null>(null);
 
+  // ── Global Calendar Reminders Engine ──
+  const [calendarAlerts, setCalendarAlerts] = createSignal<ActiveCalendarReminderAlert[]>([]);
+  const dispatchedLedger = getDispatchedLedger();
+
+  function checkCalendarReminders() {
+    const boxId = selectedMailbox()?.id;
+    if (!boxId) return;
+
+    const settings = loadCalendarSettings(boxId);
+    const mKey = mailboxKey();
+    const isLocked = !mKey || !(mKey instanceof Uint8Array) || mKey.length !== 32;
+
+    const events = getCachedDecryptedEvents(boxId);
+    const overridesMap: Record<string, CalendarOverrides> = {};
+    for (const ev of events) {
+      if (ev.calendarId && !overridesMap[ev.calendarId]) {
+        const ov = loadCalendarOverrides(boxId, ev.calendarId);
+        if (ov) {
+          overridesMap[ev.calendarId] = ov;
+        }
+      }
+    }
+    const triggered = evaluateUpcomingReminders(
+      events,
+      new Date(),
+      settings,
+      overridesMap,
+      dispatchedLedger,
+      isLocked
+    );
+
+    const taskList = getTasks(boxId);
+    const taskTriggered = evaluateUpcomingTaskReminders(
+      taskList,
+      new Date(),
+      settings,
+      dispatchedLedger
+    );
+
+    const allTriggered = [...triggered, ...taskTriggered];
+
+    if (allTriggered.length > 0) {
+      for (const alert of allTriggered) {
+        markAlertDispatched(alert.alertId);
+      }
+      setCalendarAlerts((prev) => {
+        const existingIds = new Set(prev.map((a) => a.alertId));
+        const newOnes = allTriggered.filter((a) => !existingIds.has(a.alertId));
+        return [...prev, ...newOnes];
+      });
+
+      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+        for (const alert of allTriggered) {
+          try {
+            new Notification(alert.title, {
+              body: alert.location ? `${alert.location}` : undefined,
+              icon: "/favicon.ico",
+              tag: alert.alertId,
+            });
+          } catch {
+            // Silently fall back to in-app banner
+          }
+        }
+      }
+    }
+  }
+
+  function handleDismissCalendarAlert(alertId: string) {
+    markAlertDispatched(alertId);
+    setCalendarAlerts((prev) => prev.filter((a) => a.alertId !== alertId));
+  }
+
+  function handleSnoozeCalendarAlert(alertId: string, minutes: number) {
+    const alert = calendarAlerts().find((a) => a.alertId === alertId);
+    if (!alert) return;
+    markAlertDispatched(alertId);
+    setCalendarAlerts((prev) => prev.filter((a) => a.alertId !== alertId));
+
+    setTimeout(() => {
+      unmarkAlertDispatched(alertId);
+      checkCalendarReminders();
+    }, minutes * 60000);
+  }
+
+  const [selectedCalendarEventId, setSelectedCalendarEventId] = createSignal<string | null>(null);
+
+  function handleSelectCalendarEventFromAlert(eventId: string) {
+    setActiveModule("calendar");
+    setSelectedCalendarEventId(eventId);
+  }
+
+  onMount(() => {
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+    checkCalendarReminders();
+    const calendarReminderInterval = setInterval(checkCalendarReminders, 15000);
+    onCleanup(() => clearInterval(calendarReminderInterval));
+  });
+
+  createEffect(() => {
+    selectedMailbox();
+    mailboxKey();
+    activeModule();
+    checkCalendarReminders();
+  });
+
   // Per-mailbox signature draft (device-local; see signature.ts).
   const [signatureText, setSignatureText] = createSignal("");
   const [signatureSaved, setSignatureSaved] = createSignal(false);
@@ -801,6 +926,8 @@ const App: Component = () => {
 
   // Compose Form signals
   const [composeTo, setComposeTo] = createSignal("");
+  const [composeCc, setComposeCc] = createSignal("");
+  const [composeBcc, setComposeBcc] = createSignal("");
   const [composeSubject, setComposeSubject] = createSignal("");
   const [composeBody, setComposeBody] = createSignal("");
   const [composeBodyHtml, setComposeBodyHtml] = createSignal("");
@@ -2814,6 +2941,11 @@ const App: Component = () => {
     window.addEventListener("storage", handleStorageChange);
 
     const urlParams = new URLSearchParams(window.location.search);
+    if (window.location.pathname.startsWith("/book/")) {
+      setIsLoading(false);
+      return;
+    }
+
     if (window.location.pathname === "/setup-account" || urlParams.has("token")) {
       setIsSetupAccount(true);
       setIsLoading(false);
@@ -5392,6 +5524,8 @@ const App: Component = () => {
 
   function clearComposeForm() {
     setComposeTo("");
+    setComposeCc("");
+    setComposeBcc("");
     setComposeSubject("");
     setComposeBody("");
     setComposeBodyHtml("");
@@ -5571,6 +5705,8 @@ const App: Component = () => {
     if (!boxId) return null;
     return buildPendingSendPayload({
       to: composeTo(),
+      cc: composeCc(),
+      bcc: composeBcc(),
       subject: composeSubject(),
       body: composeBody(),
       bodyHtml: sanitizeOnSend(composeBodyHtml()),
@@ -5591,6 +5727,8 @@ const App: Component = () => {
     }
     restoreComposeState(payload, {
       setTo: setComposeTo,
+      setCc: setComposeCc,
+      setBcc: setComposeBcc,
       setSubject: setComposeSubject,
       setBody: setComposeBody,
       setBodyHtml: setComposeBodyHtml,
@@ -5665,9 +5803,15 @@ const App: Component = () => {
     setComposeStatus("Preparing encrypted message…");
     try {
       const to = payload.recipient;
+      const cc = payload.cc;
+      const bcc = payload.bcc;
       const subject = payload.subject;
       const signedBody = payload.bodyPlaintext;
       const htmlBody = sanitizeOnSend(payload.bodyHtml);
+
+      const envelopeRecipients = [to, cc, bcc]
+        .filter((r) => Boolean(r && r.trim()))
+        .join(", ");
 
       let trackingToken: string | undefined;
       if (payload.trackOpens) {
@@ -5685,6 +5829,8 @@ const App: Component = () => {
       const senderFrom = payload.fromAlias || matchingAccount?.email || (currentUser()?.email ? currentUser()!.email : (box?.local_part ? `${box.local_part}@byos.local` : undefined));
       const mimeMessage = buildMimeString({
         to,
+        cc,
+        bcc,
         subject,
         signedBody,
         htmlBody,
@@ -5702,7 +5848,7 @@ const App: Component = () => {
         let sealedPathA = false;
         let envJson = "";
         let senderEnvJson = "";
-        const singleRec = !to.includes(",") && !to.includes(";");
+        const singleRec = !envelopeRecipients.includes(",") && !envelopeRecipients.includes(";");
         const sSeed = getSigningSeedFor(payload.mailboxId);
         const sXwing = getXWingSeedFor(payload.mailboxId);
 
@@ -5738,7 +5884,7 @@ const App: Component = () => {
         await enqueueSend({
           client_queue_id: clientQueueId,
           mailbox_id: box.id,
-          recipient: to,
+          recipient: envelopeRecipients,
           payload: sealedPathA ? {
             envelope_json: envJson,
             sender_envelope_json: senderEnvJson,
@@ -5765,7 +5911,7 @@ const App: Component = () => {
       const senderSeed = getSigningSeedFor(payload.mailboxId);
       const senderXwing = getXWingSeedFor(payload.mailboxId);
 
-      const singleRecipient = !to.includes(",") && !to.includes(";");
+      const singleRecipient = !envelopeRecipients.includes(",") && !envelopeRecipients.includes(";");
 
       if (!isScheduled && singleRecipient && senderSeed && senderXwing) {
         setComposeStatus("Delivering via end-to-end encrypted Path A…");
@@ -6065,7 +6211,7 @@ const App: Component = () => {
         await scheduleOutbound({
           reservation_id: reservation.reservation_id,
           mailbox_id: box.id,
-          recipient: to,
+          recipient: envelopeRecipients,
           encrypted_message: encrypted.ciphertext,
           send_token_wrapped: encrypted.send_token_wrapped,
           outbox_seq: reservation.outbox_seq,
@@ -6082,7 +6228,7 @@ const App: Component = () => {
         await sendOutbound({
           reservation_id: reservation.reservation_id,
           mailbox_id: box.id,
-          recipient: to,
+          recipient: envelopeRecipients,
           encrypted_message: encrypted.ciphertext,
           send_token_wrapped: encrypted.send_token_wrapped,
           outbox_seq: reservation.outbox_seq,
@@ -6597,6 +6743,50 @@ const App: Component = () => {
 
   if (typeof window !== "undefined" && window.location.pathname === "/import/callback") {
     return <OAuthCallback />;
+  }
+
+  if (typeof window !== "undefined" && (window.location.pathname === "/book" || window.location.pathname.startsWith("/book/"))) {
+    const rawSlug = window.location.pathname.replace(/^\/book\/?/, "").split("/")[0] || "";
+    const slug = decodeURIComponent(rawSlug).trim();
+    const urlParams = new URLSearchParams(window.location.search);
+    const bookingToken = urlParams.get("token") || undefined;
+    const cancelToken = urlParams.get("cancel") || urlParams.get("cancellationToken") || undefined;
+
+    let appointmentMatch = cancelToken ? findAppointmentByCancellationToken(cancelToken) : null;
+    let bookingMatch = slug ? findScheduleBySlug(slug) : null;
+
+    if (!bookingMatch && appointmentMatch) {
+      bookingMatch = {
+        schedule: appointmentMatch.schedule,
+        mailboxId: appointmentMatch.mailboxId,
+      };
+    }
+
+    return (
+      <div class="min-h-screen bg-[#F0EEE9] dark:bg-[#121316] p-4 flex items-center justify-center">
+        {bookingMatch ? (
+          <div class="w-full max-w-4xl bg-white dark:bg-[#1E1F23] rounded-2xl shadow-xl border border-[#E2DFD8] dark:border-[#2A2D35] overflow-hidden">
+            <BookingPageView
+              schedule={bookingMatch.schedule}
+              mailboxId={bookingMatch.mailboxId}
+              accessToken={bookingToken}
+              cancellationToken={cancelToken}
+              initialAppointment={appointmentMatch?.appointment}
+              existingEvents={getCachedDecryptedEvents(bookingMatch.mailboxId)}
+              settings={loadCalendarSettings(bookingMatch.mailboxId)}
+            />
+          </div>
+        ) : (
+          <div class="w-full max-w-md bg-white dark:bg-[#1E1F23] rounded-2xl shadow-xl border border-[#E2DFD8] dark:border-[#2A2D35] p-6 text-center">
+            <h2 class="text-lg font-bold text-[#2B2C2D] dark:text-[#ECEBE8]">Schedule Not Found</h2>
+            <p class="mt-2 text-sm text-[#6F7173] dark:text-[#878A8E]">The booking link you followed is invalid, inactive, or has expired.</p>
+            <a href="/" class="mt-4 inline-block px-4 py-2 bg-[#9E725F] hover:bg-[#885F4D] text-white text-xs font-medium rounded-lg transition-colors">
+              Return to BYOS
+            </a>
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -7846,6 +8036,8 @@ const App: Component = () => {
                 onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
                 savedViewMode={calendarViewMode()}
                 onViewModeChange={setCalendarViewMode}
+                onCheckReminders={checkCalendarReminders}
+                selectedEventId={selectedCalendarEventId()}
               />
             </div>
           </Show>
@@ -8200,6 +8392,10 @@ const App: Component = () => {
         }}
         to={composeTo()}
         onToChange={setComposeTo}
+        cc={composeCc()}
+        onCcChange={setComposeCc}
+        bcc={composeBcc()}
+        onBccChange={setComposeBcc}
         subject={composeSubject()}
         onSubjectChange={setComposeSubject}
         body={composeBody()}
@@ -8517,6 +8713,15 @@ const App: Component = () => {
           )}
         </For>
       </div>
+
+      {/* ── Active Calendar Reminder Toast Banner (Global) ── */}
+      <CalendarNotificationBanner
+        alerts={calendarAlerts()}
+        defaultSnoozeMinutes={loadCalendarSettings(selectedMailbox()?.id).snoozeDefaultMinutes || 10}
+        onDismiss={handleDismissCalendarAlert}
+        onSnooze={handleSnoozeCalendarAlert}
+        onSelectEvent={handleSelectCalendarEventFromAlert}
+      />
       </div>
     </Show>
     </Show>

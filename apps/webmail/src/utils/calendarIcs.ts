@@ -297,7 +297,7 @@ export function formatIcsLocalTime(d: Date | string | number, timezone?: string)
     if (p.hour === "24") p.hour = "00";
     return `${p.year}${p.month}${p.day}T${p.hour}${p.minute}${p.second}`;
   } catch {
-    return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
+    return `${dateObj.getUTCFullYear()}${pad(dateObj.getUTCMonth() + 1)}${pad(dateObj.getUTCDate())}T${pad(dateObj.getUTCHours())}${pad(dateObj.getUTCMinutes())}${pad(dateObj.getUTCSeconds())}`;
   }
 }
 
@@ -478,6 +478,8 @@ export function cleanEmail(val: string): string {
     .replace(/[<>\"']/g, "")
     .replace(/[\x00-\x1F\x7F]/g, "");
 }
+
+export const parseIcsText = (rawIcs: string): ParsedIcs => parseIcs(rawIcs);
 
 /** Parses raw ICS content into a structured ParsedIcs representation */
 export function parseIcs(rawIcs: string): ParsedIcs {
@@ -789,9 +791,9 @@ export interface GenerateIcsParams {
   exceptions?: IcsExceptionParams[];
   status?: "CONFIRMED" | "TENTATIVE" | "CANCELLED";
   classification?: "PUBLIC" | "PRIVATE" | "CONFIDENTIAL";
-  reminders?: { minutesBefore: number }[];
+  reminders?: { minutesBefore: number; method?: "notification" | "email" | string }[];
   attachments?: { url?: string; name?: string; contentType?: string }[];
-  organizer: IcsOrganizer;
+  organizer?: IcsOrganizer;
   attendees?: IcsAttendee[];
 }
 

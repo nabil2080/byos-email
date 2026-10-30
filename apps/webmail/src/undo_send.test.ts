@@ -192,5 +192,41 @@ export async function runUndoSendTests(): Promise<{ passed: number; failed: numb
     assert((restoredPayload as PendingSend | null)?.id === "send-789", "onRestore is called with original payload");
   });
 
+  // 5. TestCcBccPendingSendPayloadAndRestore
+  test("5. TestCcBccPendingSendPayloadAndRestore", () => {
+    const payloadWithCcBcc = buildPendingSendPayload({
+      to: "primary@byos.local",
+      cc: "cc1@byos.local, cc2@byos.local",
+      bcc: "bcc@byos.local",
+      subject: "CC BCC Test",
+      body: "Testing CC/BCC",
+      bodyHtml: "<p>Testing CC/BCC</p>",
+      boxId: "box-cc-bcc",
+      signatureApplied: true,
+    });
+    assert(payloadWithCcBcc !== null, "payload with CC/BCC should build successfully");
+    assert(payloadWithCcBcc!.cc === "cc1@byos.local, cc2@byos.local", "captures CC correctly");
+    assert(payloadWithCcBcc!.bcc === "bcc@byos.local", "captures BCC correctly");
+
+    const restoredState: Record<string, any> = {};
+    restoreComposeState(payloadWithCcBcc!, {
+      setTo: (v) => { restoredState.to = v; },
+      setCc: (v) => { restoredState.cc = v; },
+      setBcc: (v) => { restoredState.bcc = v; },
+      setSubject: (v) => { restoredState.subject = v; },
+      setBody: (v) => { restoredState.body = v; },
+      setBodyHtml: (v) => { restoredState.bodyHtml = v; },
+      setAttachments: (v) => { restoredState.attachments = v; },
+      setScheduledTime: (v) => { restoredState.scheduledTime = v; },
+      setTrackOpens: (v) => { restoredState.trackOpens = v; },
+      setSignatureApplied: (v) => { restoredState.signatureApplied = v; },
+      setOpen: (v) => { restoredState.open = v; },
+    });
+
+    assert(restoredState.to === "primary@byos.local", "restores primary recipient");
+    assert(restoredState.cc === "cc1@byos.local, cc2@byos.local", "restores CC recipient");
+    assert(restoredState.bcc === "bcc@byos.local", "restores BCC recipient");
+  });
+
   return { passed, failed };
 }

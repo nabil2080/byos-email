@@ -9,7 +9,7 @@ import {
   CalendarReminder,
   CalendarEventType,
 } from "../../calendar_crypto";
-import { parseRRule, buildRRuleString } from "../../utils/calendarRrule";
+import { parseRRule, buildRRuleString, ParsedRRule } from "../../utils/calendarRrule";
 import { SUPPORTED_TIMEZONES, zonedTimeToUtc, utcToZonedParts } from "../../utils/calendarTimezones";
 import { generateVideoMeetingUrl } from "./integrations/calendarIntegrationsStore";
 

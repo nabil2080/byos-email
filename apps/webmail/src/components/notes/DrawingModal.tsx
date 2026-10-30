@@ -1,4 +1,4 @@
-import { Component, createSignal, onMount, onCleanup, For, Show } from "solid-js";
+import { Component, createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
 
 export interface DrawingModalProps {
   isOpen: boolean;
@@ -47,11 +47,26 @@ export const DrawingModal: Component<DrawingModalProps> = (props) => {
     saveCanvasState();
   };
 
-  onMount(() => {
-    if (props.isOpen) {
-      setTimeout(initCanvas, 50);
-    }
+  const setupCanvas = (el: HTMLCanvasElement) => {
+    canvasRef = el;
+    setHistory([]);
+    setIsEraser(false);
+    initCanvas();
+  };
 
+  createEffect(() => {
+    if (props.isOpen) {
+      setIsEraser(false);
+      if (canvasRef) {
+        setHistory([]);
+        initCanvas();
+      }
+    } else {
+      canvasRef = undefined;
+    }
+  });
+
+  onMount(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && props.isOpen) {
         props.onClose();
@@ -292,7 +307,7 @@ export const DrawingModal: Component<DrawingModalProps> = (props) => {
           {/* Interactive Canvas */}
           <div class="p-3 bg-[#F0EEE9] dark:bg-[#121316] flex items-center justify-center overflow-hidden">
             <canvas
-              ref={canvasRef}
+              ref={setupCanvas}
               width={640}
               height={380}
               onMouseDown={startDrawing}

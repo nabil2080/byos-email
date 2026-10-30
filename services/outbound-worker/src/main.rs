@@ -766,10 +766,16 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
         };
 
         // Build envelope and send signed message raw to Postfix (do not reconstruct via Message::builder)
-        let recipient_addr: Address = match recipient.parse() {
-            Ok(a) => a,
-            Err(e) => {
-                warn!("invalid recipient {} {}: {}", delivery_id, recipient, e);
+        let recipient_addrs: Result<Vec<Address>, _> = recipient
+            .split([',', ';'])
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse::<Address>())
+            .collect();
+        let recipient_addrs = match recipient_addrs {
+            Ok(addrs) if !addrs.is_empty() => addrs,
+            _ => {
+                warn!("invalid recipient {} {}: parse failed", delivery_id, recipient);
                 client.execute("UPDATE outbound_queue SET status='bounced', failed_at=now(), attempts=attempts+1 WHERE id=$1", &[&Uuid::parse_str(&id).unwrap()]).await?;
                 continue;
             }
@@ -787,7 +793,7 @@ async fn poll_once(client: &Client, sk: &[u8; 32], dkim_dek: &[u8; 32], postfix_
                 continue;
             }
         };
-        let envelope = match Envelope::new(Some(sender_addr), vec![recipient_addr]) {
+        let envelope = match Envelope::new(Some(sender_addr), recipient_addrs) {
             Ok(env) => env,
             Err(e) => {
                 warn!("envelope build failed {}: {}", delivery_id, e);

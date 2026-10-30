@@ -18,6 +18,7 @@ import {
 import {
   saveBookedAppointment,
   getBookedAppointments,
+  findAppointmentByCancellationToken,
 } from "./appointmentStore";
 import { DecryptedEventRecord } from "../CalendarSidebar";
 import { CalendarSettings, DEFAULT_CALENDAR_SETTINGS } from "../settings/calendarSettingsStore";
@@ -29,6 +30,9 @@ interface BookingPageViewProps {
   existingEvents?: DecryptedEventRecord[];
   settings?: CalendarSettings;
   accessToken?: string;
+  cancellationToken?: string;
+  initialAppointment?: BookedAppointment;
+  hostEmail?: string;
   isEmbed?: boolean;
   onClose?: () => void;
   onBookingConfirmed?: (appointment: BookedAppointment, eventPayload: any) => void;
@@ -67,7 +71,18 @@ export const BookingPageView: Component<BookingPageViewProps> = (props) => {
   const [bookingError, setBookingError] = createSignal<string | null>(null);
 
   // Confirmed booking state
-  const [confirmedBooking, setConfirmedBooking] = createSignal<BookedAppointment | null>(null);
+  const [confirmedBooking, setConfirmedBooking] = createSignal<BookedAppointment | null>(
+    props.initialAppointment || null
+  );
+
+  onMount(() => {
+    if (!confirmedBooking() && props.cancellationToken) {
+      const match = findAppointmentByCancellationToken(props.cancellationToken);
+      if (match) {
+        setConfirmedBooking(match.appointment);
+      }
+    }
+  });
 
   // Cancellation and Rescheduling states
   const [isCancelling, setIsCancelling] = createSignal(false);
@@ -150,7 +165,8 @@ export const BookingPageView: Component<BookingPageViewProps> = (props) => {
           name: attendeeName(),
           email: attendeeEmail(),
           notes: attendeeNotes(),
-        }
+        },
+        props.hostEmail || "host@byos.local"
       );
 
       saveBookedAppointment(props.mailboxId, appointment);
@@ -251,7 +267,7 @@ export const BookingPageView: Component<BookingPageViewProps> = (props) => {
               data-testid="booking-timezone-select"
             >
               <For each={SUPPORTED_TIMEZONES}>
-                {(tz) => <option value={tz}>{tz}</option>}
+                {(tz) => <option value={tz.id}>{tz.label}</option>}
               </For>
             </select>
           </div>

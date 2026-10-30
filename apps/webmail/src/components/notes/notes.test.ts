@@ -17,6 +17,8 @@ import {
   addLabel,
   renameLabel,
   deleteLabel,
+  saveNoteVersion,
+  restoreNoteVersion,
 } from "./notesStore";
 
 export async function runNotesTests() {
@@ -165,7 +167,68 @@ export async function runNotesTests() {
     }
     console.log("  ✓ 7. Verified all 8 approved Google Keep pastel color definitions");
 
-    console.log("GOOGLE NOTE FEATURE TESTS: All 7 passed, 0 failed\n");
+    // 8. Version history snapshot and restore
+    const noteForVer = createNote(testMailboxId, "Version Original", "Initial content");
+    saveNoteVersion(testMailboxId, noteForVer.id);
+    const updatedNote = updateNote(testMailboxId, noteForVer.id, {
+      title: "Version Modified",
+      content: "Edited content",
+    });
+    if (!updatedNote || updatedNote.title !== "Version Modified") {
+      throw new Error("updateNote failed before version restore test");
+    }
+    const noteWithHistory = loadNotes(testMailboxId).find((n) => n.id === noteForVer.id);
+    if (!noteWithHistory?.versionHistory || noteWithHistory.versionHistory.length === 0) {
+      throw new Error("versionHistory should contain saved snapshot");
+    }
+    const firstVerId = noteWithHistory.versionHistory[0].id;
+    const restoredOk = restoreNoteVersion(testMailboxId, noteForVer.id, firstVerId);
+    if (!restoredOk) {
+      throw new Error("restoreNoteVersion returned false");
+    }
+    const restoredNote = loadNotes(testMailboxId).find((n) => n.id === noteForVer.id);
+    if (restoredNote?.title !== "Version Original" || restoredNote?.content !== "Initial content") {
+      throw new Error(`Restored note content mismatch: title=${restoredNote?.title}, content=${restoredNote?.content}`);
+    }
+    if (!restoredNote?.versionHistory || restoredNote.versionHistory.length !== 2) {
+      throw new Error(`Expected versionHistory to retain 2 revisions (initial + pre-restore snapshot), got ${restoredNote?.versionHistory?.length}`);
+    }
+    if (restoredNote.versionHistory[0].title !== "Version Modified") {
+      throw new Error(`Expected pre-restore snapshot title 'Version Modified', got '${restoredNote.versionHistory[0].title}'`);
+    }
+    console.log("  ✓ 8. Version history snapshot and restoration round-trip functions correctly");
+
+    // 9. Composer history indexing bounds (>20 entries)
+    let historyStack: Array<{ title: string; content: string }> = [{ title: "", content: "" }];
+    let historyIdx = 0;
+    const pushHistory = (t: string, c: string) => {
+      const next = [...historyStack.slice(0, historyIdx + 1), { title: t, content: c }].slice(-20);
+      historyStack = next;
+      historyIdx = next.length - 1;
+    };
+    for (let i = 1; i <= 30; i++) {
+      pushHistory(`Title ${i}`, `Content ${i}`);
+    }
+    if (historyStack.length !== 20) {
+      throw new Error(`Expected history length capped at 20, got ${historyStack.length}`);
+    }
+    if (historyIdx !== 19) {
+      throw new Error(`Expected historyIdx to be 19 (in-bounds), got ${historyIdx}`);
+    }
+    if (historyStack[historyIdx].title !== "Title 30") {
+      throw new Error(`Expected latest title 'Title 30', got '${historyStack[historyIdx].title}'`);
+    }
+    // Perform undo
+    if (historyIdx > 0) {
+      historyIdx--;
+      const undone = historyStack[historyIdx];
+      if (undone.title !== "Title 29") {
+        throw new Error(`Expected undone title 'Title 29', got '${undone.title}'`);
+      }
+    }
+    console.log("  ✓ 9. Composer history undo/redo bounded indexing maintains valid array bounds");
+
+    console.log("GOOGLE NOTE FEATURE TESTS: All 9 passed, 0 failed\n");
   } finally {
     if (origLocalStorage !== undefined) {
       (globalThis as any).localStorage = origLocalStorage;

@@ -262,7 +262,7 @@ export async function runCalendarCategory06Tests(): Promise<{ passed: number; fa
   try {
     const globalDefaultReminder = 10; // 10 minutes
     const calendarDefaultReminder = 30; // 30 minutes
-    const eventReminderOverride = 5; // 5 minutes
+    const eventReminderOverride: number = 5; // 5 minutes
 
     // When event provides an override, it wins
     const resolvedReminder = eventReminderOverride !== -1 ? eventReminderOverride : calendarDefaultReminder;

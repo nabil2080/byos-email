@@ -251,10 +251,8 @@ export function findAppointmentByCancellationToken(
           if (found) {
             const mailboxId = key.replace(BOOKINGS_PREFIX, "");
             const schedules = getAppointmentSchedules(mailboxId);
-            const schedule = schedules.find((s) => s.id === found.scheduleId);
-            if (schedule) {
-              return { appointment: found, schedule, mailboxId };
-            }
+            const schedule = schedules.find((s) => s.id === found.scheduleId) || schedules[0] || createDefaultAppointmentSchedule(mailboxId);
+            return { appointment: found, schedule, mailboxId };
           }
         }
       }

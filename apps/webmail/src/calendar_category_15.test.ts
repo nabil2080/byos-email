@@ -303,6 +303,19 @@ export async function runCalendarCategory15Tests(): Promise<{ passed: number; fa
     emptyTrash(TEST_MAILBOX_ID);
     assert.strictEqual(getTrashEvents(TEST_MAILBOX_ID).length, 0, "Trash completely emptied");
 
+    // Test bounds: oversized attachment truncation
+    const bigAttEvent = createDummyRecord("ev-big-att", "Event with large attachment");
+    bigAttEvent.details.attachments = [{
+      id: "att-huge",
+      name: "large.bin",
+      size: 5000000,
+      contentType: "application/octet-stream",
+      url: "data:application/octet-stream;base64," + "X".repeat(5000),
+    }];
+    const bigTrash = moveEventToTrash(TEST_MAILBOX_ID, bigAttEvent);
+    assert.ok(bigTrash.event.details.attachments![0].url!.length <= 2000, "Oversized attachment URL is truncated in trash");
+    emptyTrash(TEST_MAILBOX_ID);
+
     console.log("  ✓ Cat 15.6: Deleted-event trash lifecycle (30-day retention countdown, restore, permanent delete, empty)");
     passed++;
   } catch (err) {

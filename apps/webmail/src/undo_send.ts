@@ -17,6 +17,8 @@ export interface PendingSend {
   trackOpens: boolean;
   mailboxId: string;
   fromAlias?: string;
+  cc?: string;
+  bcc?: string;
 }
 
 export function buildPendingSendPayload(params: {
@@ -34,6 +36,8 @@ export function buildPendingSendPayload(params: {
   id?: string;
   expiresAt?: number;
   fromAlias?: string;
+  cc?: string;
+  bcc?: string;
 }): PendingSend | null {
   const to = params.to.trim();
   const subject = params.subject.trim();
@@ -65,6 +69,8 @@ export function buildPendingSendPayload(params: {
     trackOpens: params.trackOpens ?? false,
     mailboxId: params.boxId,
     fromAlias: params.fromAlias,
+    cc: params.cc?.trim() || undefined,
+    bcc: params.bcc?.trim() || undefined,
   };
 }
 
@@ -81,9 +87,13 @@ export function restoreComposeState(
     setSignatureApplied: (v: boolean) => void;
     setOpen: (v: boolean) => void;
     setFromAlias?: (v: string | null) => void;
+    setCc?: (v: string) => void;
+    setBcc?: (v: string) => void;
   }
 ) {
   setters.setTo(payload.recipient);
+  if (setters.setCc) setters.setCc(payload.cc || "");
+  if (setters.setBcc) setters.setBcc(payload.bcc || "");
   setters.setSubject(payload.subject);
   setters.setBody(payload.bodyPlaintext);
   setters.setBodyHtml(payload.bodyHtml);

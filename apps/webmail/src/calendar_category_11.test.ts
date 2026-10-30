@@ -14,6 +14,10 @@ import {
   isTaskOverdue,
   getTasksForDate,
   computeNextTaskDueDate,
+  MAX_TASKS_PER_MAILBOX,
+  MAX_TASK_LISTS_PER_MAILBOX,
+  MAX_TITLE_LENGTH,
+  MAX_DESCRIPTION_LENGTH,
 } from "./components/calendar/tasks/taskStore.js";
 import {
   evaluateUpcomingTaskReminders,
@@ -366,6 +370,62 @@ export async function runCalendarCategory11Tests(): Promise<{ passed: number; fa
     const freshLedger = new Set<string>();
     const noAlerts = evaluateUpcomingTaskReminders([taskWithReminder], testNow, noNotifySettings, freshLedger);
     assert(noAlerts.length === 0, "Reminders suppressed when notifyOnTasks is disabled");
+  });
+
+  // Cat 11.10: Task Storage Bounds and Quota Safeguards
+  runTest("Cat 11.10: Task storage bounds and quota safeguards", () => {
+    const mbx = "mbx-storage-safeguards";
+
+    // 1. Title and Description truncation
+    const longTitle = "A".repeat(MAX_TITLE_LENGTH + 100);
+    const longDesc = "B".repeat(MAX_DESCRIPTION_LENGTH + 500);
+    const saved = saveTask(mbx, {
+      listId: "default",
+      title: longTitle,
+      description: longDesc,
+      completed: false,
+    });
+
+    assert(saved.title.length === MAX_TITLE_LENGTH, `Title must be capped at ${MAX_TITLE_LENGTH}`);
+    assert(saved.description?.length === MAX_DESCRIPTION_LENGTH, `Description must be capped at ${MAX_DESCRIPTION_LENGTH}`);
+
+    // 2. Task list creation bounds
+    for (let i = 1; i < MAX_TASK_LISTS_PER_MAILBOX; i++) {
+      createTaskList(mbx, `List ${i}`);
+    }
+
+    let threwListCap = false;
+    try {
+      createTaskList(mbx, "Exceeding List");
+    } catch (e: any) {
+      threwListCap = true;
+      assert(e.message.includes("Maximum number of task lists"), "Expected list cap error");
+    }
+    assert(threwListCap, "Must reject task lists beyond maximum limit");
+
+    // 3. Task storage bounds for uncompleted tasks (MAX_TASKS_PER_MAILBOX = 1000)
+    const taskKey = "byos_calendar_tasks_" + mbx;
+    const oversizedTasks: any[] = [];
+    for (let i = 0; i < 1005; i++) {
+      oversizedTasks.push({
+        id: `task-oversized-${i}`,
+        mailboxId: mbx,
+        listId: "default",
+        title: `Task ${i}`,
+        completed: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    // Saving one more task triggers persistTasks with 1006 tasks
+    (globalThis as any).localStorage.setItem(taskKey, JSON.stringify(oversizedTasks));
+    saveTask(mbx, {
+      listId: "default",
+      title: "Task 1006",
+      completed: false,
+    });
+    const boundedTasks = getTasks(mbx);
+    assert(boundedTasks.length === MAX_TASKS_PER_MAILBOX, `Total tasks must be bounded strictly to ${MAX_TASKS_PER_MAILBOX}, got ${boundedTasks.length}`);
   });
 
   return { passed, failed };

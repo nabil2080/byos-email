@@ -20,6 +20,7 @@ export interface TrashEventRecord {
 
 const TRASH_STORAGE_PREFIX = "byos_calendar_trash_";
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+export const MAX_TRASH_RECORDS = 200;
 
 function getTrashKey(mailboxId: string): string {
   return `${TRASH_STORAGE_PREFIX}${mailboxId}`;
@@ -59,18 +60,29 @@ export function getTrashEvents(mailboxId: string): TrashEventRecord[] {
  */
 function persistTrash(mailboxId: string, items: TrashEventRecord[]): void {
   if (typeof window === "undefined" || !mailboxId) return;
+  const key = getTrashKey(mailboxId);
+  const boundedItems = items.slice(0, MAX_TRASH_RECORDS);
+
   try {
-    localStorage.setItem(getTrashKey(mailboxId), JSON.stringify(items));
-    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-      try {
-        const CEvent = (window as any).CustomEvent || (window as any).Event || CustomEvent;
-        window.dispatchEvent(new CEvent("byos_calendar_trash_updated"));
-      } catch {
-        // Non-browser or JSDOM realm mismatch fallback
-      }
+    localStorage.setItem(key, JSON.stringify(boundedItems));
+  } catch (err: any) {
+    console.warn("[calendarTrashStore] Storage quota warning, pruning oldest trash items:", err);
+    try {
+      // Prune oldest half of trash records to recover quota
+      const pruned = boundedItems.slice(0, Math.floor(boundedItems.length / 2));
+      localStorage.setItem(key, JSON.stringify(pruned));
+    } catch (fallbackErr) {
+      console.error("[calendarTrashStore] Failed to persist trash even after pruning:", fallbackErr);
     }
-  } catch (err) {
-    console.warn("[calendarTrashStore] Failed to persist trash items:", err);
+  }
+
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    try {
+      const CEvent = (window as any).CustomEvent || (window as any).Event || CustomEvent;
+      window.dispatchEvent(new CEvent("byos_calendar_trash_updated"));
+    } catch {
+      // Non-browser or JSDOM realm mismatch fallback
+    }
   }
 }
 
@@ -89,10 +101,20 @@ export function moveEventToTrash(
   const trashId = `trash-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
   // Store serializable copy of DecryptedEventRecord
+  // Strip oversized base64 data URIs in attachments to preserve local storage bounds
+  const sanitizedDetails = { ...event.details };
+  if (sanitizedDetails.attachments && sanitizedDetails.attachments.length > 0) {
+    sanitizedDetails.attachments = sanitizedDetails.attachments.map((att) => ({
+      ...att,
+      url: att.url && att.url.length > 2000 ? att.url.slice(0, 2000) : att.url,
+    }));
+  }
+
   const serializableEvent: DecryptedEventRecord = {
     ...event,
     startTime: new Date(event.startTime),
     endTime: new Date(event.endTime),
+    details: sanitizedDetails,
   };
 
   const record: TrashEventRecord = {
@@ -108,6 +130,10 @@ export function moveEventToTrash(
 
   // Remove previous trash version of this event if any
   const filtered = current.filter((i) => i.originalEventId !== event.id);
+  // Cap at MAX_TRASH_RECORDS - 1 before unshifting
+  if (filtered.length >= MAX_TRASH_RECORDS) {
+    filtered.splice(MAX_TRASH_RECORDS - 1);
+  }
   filtered.unshift(record);
   persistTrash(mailboxId, filtered);
 

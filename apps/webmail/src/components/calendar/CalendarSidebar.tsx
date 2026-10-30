@@ -13,7 +13,7 @@ export interface DecryptedEventRecord {
   startTime: Date;
   endTime: Date;
   isAllDay: boolean;
-  status: string;
+  status?: string;
   details: CalendarEventPlaintext;
   baseEventId?: string;
   recurrenceId?: string;

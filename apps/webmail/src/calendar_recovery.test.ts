@@ -11,7 +11,7 @@ import {
 import * as WasmCore from "./generated/crypto-core/byos_crypto_core.js";
 import { CalendarEventItem } from "./api";
 
-function assert(condition: boolean, message: string) {
+function assert(condition: unknown, message: string) {
   if (!condition) {
     throw new Error(`Assertion failed: ${message}`);
   }
@@ -164,9 +164,9 @@ export async function runCalendarRecoveryTests(): Promise<{ passed: number; fail
         updated_at: "2026-10-24T00:00:00Z",
       };
 
-      let stageCalled = false;
-      let finalizeCalled = false;
-      let rollbackCalled = false;
+      let stageCalled: boolean = false;
+      let finalizeCalled: boolean = false;
+      let rollbackCalled: boolean = false;
       let stagedPayloadSent = "";
 
       let currentEventPayload = legacyPayloadB64;
@@ -244,9 +244,9 @@ export async function runCalendarRecoveryTests(): Promise<{ passed: number; fail
       );
 
       assert(res.success === true, `Expected recovery to succeed: ${res.error}`);
-      assert(stageCalled === true, "Stage migration must be called");
-      assert(finalizeCalled === true, "Finalize migration must be called on verified match");
-      assert(rollbackCalled === false, "Rollback must NOT be called on success");
+      assert((stageCalled as boolean) === true, "Stage migration must be called");
+      assert((finalizeCalled as boolean) === true, "Finalize migration must be called on verified match");
+      assert((rollbackCalled as boolean) === false, "Rollback must NOT be called on success");
       assert(classifyCalendarPayload(stagedPayloadSent) === "aes-gcm-envelope", "Staged payload must be AES-GCM envelope");
     });
 
@@ -271,8 +271,8 @@ export async function runCalendarRecoveryTests(): Promise<{ passed: number; fail
         updated_at: "2026-10-24T00:00:00Z",
       };
 
-      let rollbackCalled = false;
-      let finalizeCalled = false;
+      let rollbackCalled: boolean = false;
+      let finalizeCalled: boolean = false;
 
       // Server will return a different payload on read-back
       const differentCiphertext = encryptCalendarEventPayload(WasmCore, skA, mailboxId, {
@@ -336,8 +336,8 @@ export async function runCalendarRecoveryTests(): Promise<{ passed: number; fail
       );
 
       assert(res.success === false, "Recovery must fail on read-back mismatch");
-      assert(rollbackCalled === true, "Rollback must be called when read-back verification fails");
-      assert(finalizeCalled === false, "Finalize must never be called on mismatch");
+      assert((rollbackCalled as boolean) === true, "Rollback must be called when read-back verification fails");
+      assert((finalizeCalled as boolean) === false, "Finalize must never be called on mismatch");
       assert(res.error?.includes("verification mismatch"), "Error must state verification mismatch");
     });
 
@@ -362,7 +362,7 @@ export async function runCalendarRecoveryTests(): Promise<{ passed: number; fail
         updated_at: "2026-10-24T00:00:00Z",
       };
 
-      let rollbackCalled = false;
+      let rollbackCalled: boolean = false;
       let getCount = 0;
 
       globalThis.fetch = (async (input: any, init?: any) => {
@@ -411,7 +411,7 @@ export async function runCalendarRecoveryTests(): Promise<{ passed: number; fail
       );
 
       assert(res.success === false, "Recovery must fail if read-back decryption fails");
-      assert(rollbackCalled === true, "Rollback must be called on decryption failure");
+      assert((rollbackCalled as boolean) === true, "Rollback must be called on decryption failure");
     });
 
     await test("executeLegacyCalendarEventRecovery: stage 412 Precondition Failed aborts cleanly without rollback", async () => {

@@ -381,7 +381,7 @@ export const CalendarSettingsPanel: Component<CalendarSettingsPanelProps> = (pro
       url: urlInput().trim(),
       name,
       color: urlColor(),
-      autoRefresh: urlRefresh(),
+      refreshIntervalMinutes: urlRefresh() ? 1440 : 0,
     });
     setUrlSuccess(true);
     setUrlInput("");
@@ -2579,9 +2579,9 @@ export const CalendarSettingsPanel: Component<CalendarSettingsPanelProps> = (pro
 
                       <Show when={importResult()}>
                         <div class="p-3 rounded-xl bg-emerald-50 text-emerald-800 text-xs font-semibold" data-testid="ics-import-result">
-                          Successfully imported {importResult()?.importedCount} event(s)
-                          {importResult()?.updatedCount ? ` (${importResult()?.updatedCount} updated)` : ""}
-                          {importResult()?.skippedCount ? ` (${importResult()?.skippedCount} skipped)` : ""}.
+                          Successfully imported {importResult()?.imported} event(s)
+                          {importResult()?.updated ? ` (${importResult()?.updated} updated)` : ""}
+                          {importResult()?.skipped ? ` (${importResult()?.skipped} skipped)` : ""}.
                         </div>
                       </Show>
 

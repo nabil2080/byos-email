@@ -267,8 +267,8 @@ export interface ConnectedAccount {
   role: string;
   privacyMode: string;
   sessionToken: string;   // Auth token for this mailbox
-  mailboxSkHex: string;   // Unsealed private key in memory
-  searchKeyHex: string;
+  mailboxSkHex?: string;  // Unsealed private key in memory (optional if locked)
+  searchKeyHex?: string;  // Search index key (optional if locked)
   signingSeedHex?: string;
   xwingSeedHex?: string;
   isLocked?: boolean;
@@ -1181,8 +1181,10 @@ export async function fetchMailboxAliases(mailboxId: string): Promise<MailboxAli
 export interface TwoFactorStatus {
   two_factor_enabled: boolean;
   has_totp: boolean;
-  recovery_email: string;
-  recovery_phone: string;
+  recovery_email?: string;
+  recovery_phone?: string;
+  has_passkey?: boolean;
+  is_owner?: boolean;
 }
 
 export interface TOTPSetupResponse {
@@ -1965,7 +1967,7 @@ export interface UserCalendar {
   id: string;
   mailbox_id: string;
   name: string;
-  color: string;
+  color?: string;
   is_default: boolean;
   created_at: string;
   updated_at: string;
@@ -1974,6 +1976,8 @@ export interface UserCalendar {
   owner_email?: string;
   encrypted_key?: string;
   share_id?: string;
+  template?: string;
+  description?: string;
 }
 
 export interface CalendarShare {
@@ -2128,18 +2132,30 @@ export async function fetchCalendarEvents(
   return apiRequest<CalendarEventItem[]>(`/v1/mailboxes/${mailboxId}/calendar-events${qs ? `?${qs}` : ""}`, undefined, token);
 }
 
+export interface CreateCalendarEventInput {
+  calendar_id: string;
+  start_time: string;
+  end_time: string;
+  is_all_day?: boolean;
+  rrule?: string;
+  status?: string;
+  encrypted_payload: string;
+  exceptions?: CalendarEventExceptionItem[];
+}
+
+export interface UpdateCalendarEventInput {
+  calendar_id?: string;
+  start_time?: string;
+  end_time?: string;
+  is_all_day?: boolean;
+  rrule?: string;
+  status?: string;
+  encrypted_payload?: string;
+}
+
 export async function createCalendarEvent(
   mailboxId: string,
-  payload: {
-    calendar_id: string;
-    start_time: string;
-    end_time: string;
-    is_all_day?: boolean;
-    rrule?: string;
-    status?: string;
-    encrypted_payload: string;
-  exceptions?: CalendarEventExceptionItem[];
-  },
+  payload: CreateCalendarEventInput,
   token?: string
 ): Promise<CalendarEventItem> {
   return apiRequest<CalendarEventItem>(`/v1/mailboxes/${mailboxId}/calendar-events`, {
@@ -2151,15 +2167,7 @@ export async function createCalendarEvent(
 export async function updateCalendarEvent(
   mailboxId: string,
   eventId: string,
-  payload: {
-    calendar_id?: string;
-    start_time?: string;
-    end_time?: string;
-    is_all_day?: boolean;
-    rrule?: string;
-    status?: string;
-    encrypted_payload?: string;
-  },
+  payload: UpdateCalendarEventInput,
   token?: string
 ): Promise<CalendarEventItem> {
   return apiRequest<CalendarEventItem>(`/v1/mailboxes/${mailboxId}/calendar-events/${eventId}`, {

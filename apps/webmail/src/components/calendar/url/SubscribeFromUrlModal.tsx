@@ -82,7 +82,8 @@ export const SubscribeFromUrlModal: Component<SubscribeFromUrlModalProps> = (pro
       }
     } catch (err: any) {
       setWarningMsg(
-        "Could not preview remote feed directly (may be blocked by CORS). You can still subscribe and feeds will sync when accessible."
+        err?.message ||
+          "Could not preview remote feed directly (may be blocked by CORS). To import feeds that block browser requests, download the .ics file and use Calendar Settings -> Import ICS."
       );
       setPreviewEvents([]);
     } finally {

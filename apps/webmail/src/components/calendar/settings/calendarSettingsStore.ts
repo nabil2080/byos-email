@@ -18,6 +18,7 @@ export interface WorkHoursDateException {
   enabled: boolean;
   periods: WorkPeriod[];
   location?: "office" | "home" | "remote" | string;
+  note?: string;
 }
 
 export interface CalendarSettings {
@@ -40,6 +41,7 @@ export interface CalendarSettings {
 
   // ── 3. Notification settings ──
   defaultReminderMinutes: number;
+  eventRemindersDefaultMinutes: number;
   notifyOnInvitations: boolean;
   notifyOnRsvp: boolean;
   notifyOnTasks: boolean;
@@ -129,6 +131,7 @@ export const DEFAULT_CALENDAR_SETTINGS: CalendarSettings = {
 
   // 3. Notification settings
   defaultReminderMinutes: 10,
+  eventRemindersDefaultMinutes: 15,
   notifyOnInvitations: true,
   notifyOnRsvp: true,
   notifyOnTasks: true,
