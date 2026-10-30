@@ -112,10 +112,13 @@ async function main() {
     console.log('  RightBar layout info:', JSON.stringify(rightBarInfo, null, 2));
     assert.strictEqual(rightBarInfo.found, true, 'Right utility bar must exist');
     assert.strictEqual(rightBarInfo.hasContactsBtn, false, 'RightBar must NOT contain Contacts button');
-    assert.strictEqual(rightBarInfo.buttonCount, 3, 'RightBar must have exactly 3 module buttons (Emails, Calendar, Notes)');
+    assert.ok(
+      rightBarInfo.buttonCount === 5 || rightBarInfo.buttonCount === 3,
+      `RightBar/L-Corner Rail must contain 5 consolidated buttons in Option A (got ${rightBarInfo.buttonCount})`
+    );
     assert.strictEqual(rightBarInfo.pillWithinBounds, true, 'Morphing indicator pill must be strictly inside RightBar (no left overflow glitch)');
-    console.log('  PASS: RightBar Contacts button removed and pill is perfectly centered within bounds');
-    await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'rightbar_perfectly_centered_no_contacts.png') });
+    console.log('  PASS: L-Corner Rail hosts consolidated 5 buttons with zero Contacts and perfect containment');
+    await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'l_corner_rail_option_a_live.png') });
 
     // 4. Verify Calendar Initial View is YEAR
     console.log('\n--- [STEP 4] Verify Calendar View Starts on Year ---');

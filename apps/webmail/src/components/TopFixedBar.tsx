@@ -97,13 +97,13 @@ export const TopFixedBar: Component<TopFixedBarProps> = (props) => {
         </div>
       </div>
 
-      {/* ── RIGHT: UI Customizer & Light/Dark Mode Switcher ── */}
-      <div class="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+      {/* ── RIGHT: UI Customizer & Light/Dark Mode Switcher (Visible on mobile; handled by LCornerRail on desktop) ── */}
+      <div class="flex md:hidden items-center gap-1.5 sm:gap-2 flex-shrink-0">
         {/* Appearance & UI Customizer Toggle (Artist Painting Palette Icon) */}
         <button
           type="button"
           onClick={() => props.onToggleCustomizer?.()}
-          data-testid="top-bar-appearance-btn"
+          data-testid="mobile-top-bar-appearance-btn"
           data-testid-secondary="theme-customizer-btn"
           aria-expanded={props.isCustomizerOpen}
           aria-label="Toggle UI Appearance and Customizer Panel"
@@ -130,7 +130,7 @@ export const TopFixedBar: Component<TopFixedBarProps> = (props) => {
         <button
           type="button"
           onClick={() => props.onToggleTheme?.()}
-          data-testid="top-bar-theme-toggle"
+          data-testid="mobile-top-bar-theme-toggle"
           data-testid-secondary="theme-toggle-btn"
           aria-label={props.theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
           title={props.theme === "dark" ? "Light Mode (Cloud Dancer)" : "Dark Mode"}

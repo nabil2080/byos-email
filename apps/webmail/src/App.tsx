@@ -8113,6 +8113,10 @@ const App: Component = () => {
             activeModule={activeModule()}
             onSwitchModule={setActiveModule}
             onOpenContacts={openContacts}
+            isCustomizerOpen={rightCustomizerOpen()}
+            onToggleCustomizer={() => setRightCustomizerOpen(!rightCustomizerOpen())}
+            theme={theme()}
+            onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
           />
         </main>
 

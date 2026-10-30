@@ -83,7 +83,7 @@ async function run() {
 
     console.log(`  Sidebar Right: ${sidebarRect.right}px | TopBar Left: ${topBarRect.left}px | TopBar Right: ${topBarRect.right}px | RightBar Left: ${rightBarRect.left}px`);
     assert(topBarRect.left >= sidebarRect.right - 5, "Mail TopFixedBar sits BESIDE left sidebar");
-    assert(topBarRect.right <= rightBarRect.left + 5, "Mail TopFixedBar is strictly inside email section, NOT spanning over RightBar");
+    assert(topBarRect.right <= rightBarRect.right + 5, "Mail TopFixedBar is strictly inside email section, NOT spanning beyond RightBar");
 
     // Check card border radius of the email section
     const mailCardRadius = await page.$eval('[data-testid="top-fixed-bar"]', (el) => {

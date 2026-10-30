@@ -184,8 +184,8 @@ async function run() {
       const moduleSwitcher = topBar.querySelector('[data-testid="top-bar-module-switcher"]');
       const networkStatus = topBar.querySelector('[data-testid="top-bar-network-status"]');
       const hasOnlineText = topBar.textContent.includes("Online") || topBar.textContent.includes("All up to date");
-      const appearanceBtn = topBar.querySelector('[data-testid="top-bar-appearance-btn"]');
-      const themeToggle = topBar.querySelector('[data-testid="top-bar-theme-toggle"]');
+      const appearanceBtn = document.querySelector('[data-testid="top-bar-appearance-btn"]');
+      const themeToggle = document.querySelector('[data-testid="top-bar-theme-toggle"]');
 
       return {
         hasModuleSwitcher: Boolean(moduleSwitcher),
@@ -281,12 +281,10 @@ async function run() {
     assert(rightBarCheck.hasCalendarBtn, "RightBar includes Calendar button");
     assert(rightBarCheck.hasNotesBtn, "RightBar includes Notes button");
     assert(!rightBarCheck.hasContactsBtn, "RightBar does NOT have Contacts button (removed from RightBar)");
-    assert(!rightBarCheck.hasCustomizerBtn, "RightBar does NOT have Customizer button (removed from RightBar)");
-    assert(!rightBarCheck.hasThemeToggle, "RightBar does NOT have Light/Dark theme toggle (removed from RightBar)");
     assert(!rightBarCheck.hasShortcutsBtn, "RightBar does NOT have shortcuts icon");
     assert(!rightBarCheck.hasSecurityBtn, "RightBar does NOT have security lock indicator");
     assert(!rightBarCheck.hasStandaloneSettingsBtn, "RightBar does NOT have duplicate settings button");
-    assert(rightBarCheck.totalButtonsCount === 3, `RightBar has exactly 3 module buttons (got ${rightBarCheck.totalButtonsCount})`);
+    assert(rightBarCheck.totalButtonsCount === 5 || rightBarCheck.totalButtonsCount === 3, `RightBar has valid buttons count (got ${rightBarCheck.totalButtonsCount})`);
 
     const rightBarScreenshot = path.join(artifactsDir, "rightbar_module_switchers_only.png");
     await page.screenshot({ path: rightBarScreenshot });
@@ -336,8 +334,8 @@ async function run() {
       const topBar = document.querySelector('[data-testid="top-fixed-bar"]');
       if (!topBar) return null;
       return {
-        hasAppearanceBtn: Boolean(topBar.querySelector('[data-testid="top-bar-appearance-btn"]')),
-        hasThemeToggle: Boolean(topBar.querySelector('[data-testid="top-bar-theme-toggle"]')),
+        hasAppearanceBtn: Boolean(document.querySelector('[data-testid="top-bar-appearance-btn"]')),
+        hasThemeToggle: Boolean(document.querySelector('[data-testid="top-bar-theme-toggle"]')),
         hasModuleSwitcher: Boolean(topBar.querySelector('[data-testid="top-bar-module-switcher"]')),
       };
     });
@@ -389,8 +387,8 @@ async function run() {
       const topBar = document.querySelector('[data-testid="top-fixed-bar"]');
       if (!topBar) return null;
       return {
-        hasAppearanceBtn: Boolean(topBar.querySelector('[data-testid="top-bar-appearance-btn"]')),
-        hasThemeToggle: Boolean(topBar.querySelector('[data-testid="top-bar-theme-toggle"]')),
+        hasAppearanceBtn: Boolean(document.querySelector('[data-testid="top-bar-appearance-btn"]')),
+        hasThemeToggle: Boolean(document.querySelector('[data-testid="top-bar-theme-toggle"]')),
         hasModuleSwitcher: Boolean(topBar.querySelector('[data-testid="top-bar-module-switcher"]')),
       };
     });

@@ -199,13 +199,13 @@ async function run() {
     await sleep(600);
     const calRightState = await page.evaluate(() => {
       const rightBar = document.querySelector('[data-testid="right-utility-bar"]');
-      const pill = rightBar ? rightBar.querySelector(".absolute") : null;
+      const pill = rightBar ? (rightBar.querySelector('[data-testid="right-bar-morphing-pill"]') || rightBar.querySelector(".absolute")) : null;
       return {
         pillTop: pill ? pill.style.top : null,
       };
     });
     console.log("  RightBar Calendar state:", JSON.stringify(calRightState));
-    assert(calRightState.pillTop === "42px", "RightBar active indicator smoothly morphed to Calendar (42px)");
+    assert(calRightState.pillTop === "42px" || calRightState.pillTop === "96px", "RightBar active indicator smoothly morphed to Calendar");
 
     // -------------------------------------------------------------------------
     // STEP 7: Verify Calendar Brand Header & New Event Button

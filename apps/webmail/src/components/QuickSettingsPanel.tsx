@@ -245,10 +245,10 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
       data-testid="quick-settings-panel"
       role="region"
       aria-label="Appearance and UI Settings"
-      class="w-full sm:w-88 md:w-92 xl:w-96 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#18191D] border-l border-[#E2DFD8] dark:border-[#2A2D35] rounded-2xl shadow-xl md:shadow-2xs overflow-hidden flex-shrink-0 animate-slide-in-right z-40 transition-colors"
+      class="w-full sm:w-88 md:w-92 xl:w-96 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#18191D] border-l border-[#E2DFD8] dark:border-[#2A2D35] rounded-2xl shadow-xl md:shadow-2xs overflow-hidden flex-shrink-0 animate-slide-in-right z-30 lg:z-20 transition-colors"
     >
       {/* ── Panel Header ── */}
-      <div class="px-5 py-4 border-b border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between flex-shrink-0 bg-white/70 dark:bg-[#1E2025]/70 backdrop-blur-xs">
+      <div class="px-5 py-4 border-b border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between flex-shrink-0 bg-white/70 dark:bg-[#1E2025]/70 backdrop-blur-xs lg:pr-28">
         <div class="flex items-center gap-2.5">
           <div class="w-8 h-8 rounded-xl bg-[#F3ECE8] dark:bg-[#2D2522] text-[#9E725F] dark:text-[#D4A38F] flex items-center justify-center flex-shrink-0 shadow-2xs">
             <svg class="w-4 h-4 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
