@@ -8064,6 +8064,7 @@ const App: Component = () => {
                 accountUnreadCounts={accountUnreadCounts()}
                 unifiedUnreadCount={unifiedUnreadCount()}
                 mailboxId={selectedMailbox()?.id}
+                mailboxKey={unlockedBoxId() === selectedMailbox()?.id ? mailboxKey() : null}
                 searchQuery={searchQuery()}
                 onSearchChange={setSearchQuery}
                 activeModule={activeModule()}

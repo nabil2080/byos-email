@@ -415,8 +415,9 @@ async function main() {
   await runCalendarLayoutTests();
   totalPassed += 9;
 
-  await runNotesTests();
-  totalPassed += 7;
+  const notesRes = await runNotesTests();
+  totalPassed += (notesRes?.passed ?? 21);
+  if (notesRes?.failed) totalFailed += notesRes.failed;
 
   const unlock2faRes = await runUnlockAnd2FAPersistenceTests();
   console.log(`UNLOCK & 2FA PERSISTENCE TESTS: ${unlock2faRes.passed} passed, ${unlock2faRes.failed} failed\n`);
