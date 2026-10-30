@@ -17,9 +17,18 @@ import {
   createCalendarEvent,
   updateCalendarEvent,
   deleteCalendarEvent,
+  createCalendarEventException,
+  updateCalendarEventException,
+  deleteCalendarEventException,
 } from "../../../api";
 
-export type OfflineActionType = "create" | "update" | "delete";
+export type OfflineActionType =
+  | "create"
+  | "update"
+  | "delete"
+  | "create_exception"
+  | "update_exception"
+  | "delete_exception";
 
 export type OfflineSyncStatus = "queued_locally" | "syncing" | "synced" | "conflict";
 
@@ -29,6 +38,7 @@ export interface OfflineQueuedAction {
   mailboxId: string;
   calendarId: string;
   eventId?: string;
+  exceptionId?: string;
   tempId?: string;
   payload?: any;
   queuedAt: string;
@@ -103,6 +113,7 @@ export function enqueueOfflineAction(
     actionType: OfflineActionType;
     calendarId: string;
     eventId?: string;
+    exceptionId?: string;
     tempId?: string;
     payload?: any;
   }
@@ -116,6 +127,7 @@ export function enqueueOfflineAction(
     mailboxId,
     calendarId: input.calendarId,
     eventId: input.eventId,
+    exceptionId: input.exceptionId,
     tempId: input.tempId,
     payload: input.payload,
     queuedAt: new Date().toISOString(),
@@ -205,6 +217,9 @@ export async function syncOfflineQueue(
     createFn?: (mailboxId: string, data: CreateCalendarEventInput) => Promise<CalendarEventItem>;
     updateFn?: (mailboxId: string, eventId: string, data: UpdateCalendarEventInput) => Promise<CalendarEventItem>;
     deleteFn?: (mailboxId: string, eventId: string) => Promise<void>;
+    createExceptionFn?: (mailboxId: string, eventId: string, payload: any) => Promise<any>;
+    updateExceptionFn?: (mailboxId: string, eventId: string, exceptionId: string, payload: any) => Promise<any>;
+    deleteExceptionFn?: (mailboxId: string, eventId: string, exceptionId: string) => Promise<void>;
   }
 ): Promise<SyncResult> {
   const queue = getOfflineQueue(mailboxId);
@@ -215,6 +230,9 @@ export async function syncOfflineQueue(
   const createFn = options?.createFn || createCalendarEvent;
   const updateFn = options?.updateFn || updateCalendarEvent;
   const deleteFn = options?.deleteFn || deleteCalendarEvent;
+  const createExceptionFn = options?.createExceptionFn || createCalendarEventException;
+  const updateExceptionFn = options?.updateExceptionFn || updateCalendarEventException;
+  const deleteExceptionFn = options?.deleteExceptionFn || deleteCalendarEventException;
   const remoteList = options?.remoteEvents || [];
 
   let synced = 0;
@@ -250,6 +268,26 @@ export async function syncOfflineQueue(
         synced++;
       } else if (item.actionType === "delete" && item.eventId) {
         await deleteFn(mailboxId, item.eventId);
+        removeQueuedAction(mailboxId, item.queueId);
+        synced++;
+      } else if (item.actionType === "create_exception" && item.eventId) {
+        await createExceptionFn(mailboxId, item.eventId, item.payload);
+        removeQueuedAction(mailboxId, item.queueId);
+        synced++;
+      } else if (item.actionType === "update_exception" && item.eventId) {
+        const exId = item.exceptionId || item.payload?.exceptionId;
+        if (!exId) {
+          throw new Error("Missing exceptionId for update_exception action");
+        }
+        await updateExceptionFn(mailboxId, item.eventId, exId, item.payload);
+        removeQueuedAction(mailboxId, item.queueId);
+        synced++;
+      } else if (item.actionType === "delete_exception" && item.eventId) {
+        const exId = item.exceptionId || item.payload?.exceptionId;
+        if (!exId) {
+          throw new Error("Missing exceptionId for delete_exception action");
+        }
+        await deleteExceptionFn(mailboxId, item.eventId, exId);
         removeQueuedAction(mailboxId, item.queueId);
         synced++;
       }

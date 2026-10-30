@@ -1,8 +1,13 @@
 import { TaskList, TaskItem } from "./taskTypes";
 import { utcToZonedParts } from "../../../utils/calendarTimezones";
+import { getMailboxKeyFor } from "../../../session_isolation";
+import * as WasmCore from "../../../generated/crypto-core/byos_crypto_core.js";
+import { bytesToHex, hexToBytes } from "../../../attachment_crypto";
+import { base64ToBytes, bytesToBase64 } from "../../../message_crypto";
 
 const LISTS_PREFIX = "byos_calendar_task_lists_";
 const TASKS_PREFIX = "byos_calendar_tasks_";
+const TASK_AAD_PREFIX = "byos-calendar-tasks-v1";
 
 function getListsKey(mailboxId: string): string {
   return `${LISTS_PREFIX}${mailboxId}`;
@@ -17,6 +22,59 @@ export const MAX_TASK_LISTS_PER_MAILBOX = 50;
 export const MAX_TITLE_LENGTH = 500;
 export const MAX_DESCRIPTION_LENGTH = 10000;
 export const MAX_TAGS_COUNT = 50;
+
+function resolveTaskMailboxKey(mailboxId: string, key?: Uint8Array | null): Uint8Array | null {
+  if (key && key instanceof Uint8Array && key.length === 32) {
+    return key;
+  }
+  return getMailboxKeyFor(mailboxId);
+}
+
+function encryptTaskText(
+  mailboxKey: Uint8Array,
+  mailboxId: string,
+  plaintext: string
+): string | null {
+  if (!WasmCore || typeof WasmCore.wasm_aes_gcm_encrypt !== "function") {
+    return null;
+  }
+  try {
+    const textBytes = new TextEncoder().encode(plaintext);
+    const aadHex = bytesToHex(new TextEncoder().encode(`${TASK_AAD_PREFIX}:${mailboxId}`));
+    const envHex = WasmCore.wasm_aes_gcm_encrypt(
+      bytesToHex(mailboxKey),
+      bytesToHex(textBytes),
+      aadHex
+    );
+    return bytesToBase64(hexToBytes(envHex));
+  } catch (err) {
+    console.warn("[taskStore] Failed to encrypt task text with AES-GCM:", err);
+    return null;
+  }
+}
+
+function decryptTaskText(
+  mailboxKey: Uint8Array,
+  mailboxId: string,
+  ciphertextB64: string
+): string | null {
+  if (!WasmCore || typeof WasmCore.wasm_aes_gcm_decrypt !== "function") {
+    return null;
+  }
+  try {
+    const rawBytes = base64ToBytes(ciphertextB64);
+    const aadHex = bytesToHex(new TextEncoder().encode(`${TASK_AAD_PREFIX}:${mailboxId}`));
+    const decHex = WasmCore.wasm_aes_gcm_decrypt(
+      bytesToHex(mailboxKey),
+      bytesToHex(rawBytes),
+      aadHex
+    );
+    return new TextDecoder().decode(hexToBytes(decHex));
+  } catch (err) {
+    console.warn("[taskStore] Failed to decrypt task text with AES-GCM:", err);
+    return null;
+  }
+}
 
 function persistTaskLists(mailboxId: string, lists: TaskList[]): void {
   if (typeof window === "undefined" || !mailboxId) return;
@@ -44,13 +102,25 @@ function persistTasks(mailboxId: string, tasks: TaskItem[]): void {
     }
   }
 
+  // Scrub plaintext title and description from stored JSON when encrypted fields are present
+  const sanitizedForStorage = bounded.map((t) => {
+    if (t.encryptedTitle) {
+      return {
+        ...t,
+        title: "(Encrypted Task)",
+        description: undefined,
+      };
+    }
+    return t;
+  });
+
   const key = getTasksKey(mailboxId);
   try {
-    localStorage.setItem(key, JSON.stringify(bounded));
+    localStorage.setItem(key, JSON.stringify(sanitizedForStorage));
   } catch (err: any) {
     console.warn("[taskStore] Quota warning, pruning completed tasks:", err);
     try {
-      const activeOnly = bounded.filter((t) => !t.completed);
+      const activeOnly = sanitizedForStorage.filter((t) => !t.completed);
       localStorage.setItem(key, JSON.stringify(activeOnly));
     } catch (fallbackErr) {
       console.error("[taskStore] Storage quota completely exhausted:", fallbackErr);
@@ -197,15 +267,44 @@ export function deleteTaskList(mailboxId: string, listId: string): void {
 
 /**
  * Retrieves all tasks for a mailbox.
+ * Decrypts AES-GCM encrypted titles and descriptions when the active mailbox key is available,
+ * falling back to legacy plaintext titles/descriptions seamlessly.
  */
-export function getTasks(mailboxId: string): TaskItem[] {
+export function getTasks(mailboxId: string, mailboxKey?: Uint8Array | null): TaskItem[] {
   if (!mailboxId) return [];
+  const activeKey = resolveTaskMailboxKey(mailboxId, mailboxKey);
   try {
     const raw = typeof window !== "undefined" ? localStorage.getItem(getTasksKey(mailboxId)) : null;
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed;
+        return parsed.map((t: TaskItem) => {
+          let resolvedTitle = t.title;
+          let resolvedDescription = t.description;
+
+          if (t.encryptedTitle) {
+            if (activeKey) {
+              const dec = decryptTaskText(activeKey, mailboxId, t.encryptedTitle);
+              if (dec !== null) resolvedTitle = dec;
+            } else {
+              resolvedTitle = "(Encrypted Task - Key Required)";
+            }
+          }
+          if (t.encryptedDescription) {
+            if (activeKey) {
+              const dec = decryptTaskText(activeKey, mailboxId, t.encryptedDescription);
+              if (dec !== null) resolvedDescription = dec;
+            } else {
+              resolvedDescription = undefined;
+            }
+          }
+
+          return {
+            ...t,
+            title: resolvedTitle,
+            description: resolvedDescription,
+          };
+        });
       }
     }
   } catch (err) {
@@ -216,10 +315,13 @@ export function getTasks(mailboxId: string): TaskItem[] {
 
 /**
  * Saves a new task or updates an existing task.
+ * Automatically encrypts title and description with AES-GCM when the mailbox key is available,
+ * falling back to plaintext storage when no key is present.
  */
 export function saveTask(
   mailboxId: string,
-  taskData: Omit<TaskItem, "id" | "mailboxId" | "createdAt" | "updatedAt"> & { id?: string }
+  taskData: Omit<TaskItem, "id" | "mailboxId" | "createdAt" | "updatedAt"> & { id?: string },
+  mailboxKey?: Uint8Array | null
 ): TaskItem {
   if (!mailboxId) throw new Error("Mailbox ID required to save task");
   if (!taskData.title || !taskData.title.trim()) {
@@ -230,7 +332,24 @@ export function saveTask(
   const cleanDescription = taskData.description ? taskData.description.slice(0, MAX_DESCRIPTION_LENGTH) : undefined;
   const cleanTags = taskData.tags ? taskData.tags.slice(0, MAX_TAGS_COUNT) : undefined;
 
-  const current = getTasks(mailboxId);
+  const activeKey = resolveTaskMailboxKey(mailboxId, mailboxKey);
+  let encryptedTitle: string | undefined;
+  let encryptedDescription: string | undefined;
+
+  if (activeKey) {
+    const encT = encryptTaskText(activeKey, mailboxId, cleanTitle);
+    if (encT) {
+      encryptedTitle = encT;
+    }
+    if (cleanDescription) {
+      const encD = encryptTaskText(activeKey, mailboxId, cleanDescription);
+      if (encD) {
+        encryptedDescription = encD;
+      }
+    }
+  }
+
+  const current = getTasks(mailboxId, mailboxKey);
   const now = new Date().toISOString();
 
   let savedTask: TaskItem;
@@ -248,6 +367,8 @@ export function saveTask(
       title: cleanTitle,
       description: cleanDescription,
       tags: cleanTags,
+      encryptedTitle: encryptedTitle !== undefined ? encryptedTitle : (activeKey ? undefined : current[idx].encryptedTitle),
+      encryptedDescription: encryptedDescription !== undefined ? encryptedDescription : (activeKey ? undefined : current[idx].encryptedDescription),
       updatedAt: now,
     };
     current[idx] = savedTask;
@@ -261,6 +382,8 @@ export function saveTask(
       description: cleanDescription,
       tags: cleanTags,
       completed: false,
+      encryptedTitle,
+      encryptedDescription,
       createdAt: now,
       updatedAt: now,
     };
@@ -277,8 +400,9 @@ export function saveTask(
  * If the task is repeating and is being marked completed, automatically spawns
  * the next recurrence task according to its rrule.
  */
-export function toggleTaskComplete(mailboxId: string, taskId: string): TaskItem {
-  const current = getTasks(mailboxId);
+export function toggleTaskComplete(mailboxId: string, taskId: string, mailboxKey?: Uint8Array | null): TaskItem {
+  const activeKey = resolveTaskMailboxKey(mailboxId, mailboxKey);
+  const current = getTasks(mailboxId, mailboxKey);
   const idx = current.findIndex((t) => t.id === taskId);
   if (idx === -1) {
     throw new Error(`Task not found: ${taskId}`);
@@ -300,6 +424,12 @@ export function toggleTaskComplete(mailboxId: string, taskId: string): TaskItem 
   if (nextCompleted && target.rrule && target.dueDate) {
     const nextDueDate = computeNextTaskDueDate(target.dueDate, target.rrule);
     if (nextDueDate) {
+      let nextEncTitle = target.encryptedTitle;
+      let nextEncDesc = target.encryptedDescription;
+      if (activeKey) {
+        nextEncTitle = encryptTaskText(activeKey, mailboxId, target.title) || undefined;
+        nextEncDesc = target.description ? (encryptTaskText(activeKey, mailboxId, target.description) || undefined) : undefined;
+      }
       const nextTask: TaskItem = {
         ...target,
         id: `task-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -307,6 +437,8 @@ export function toggleTaskComplete(mailboxId: string, taskId: string): TaskItem 
         completedAt: undefined,
         dueDate: nextDueDate,
         scheduledDate: target.scheduledDate ? (computeNextTaskDueDate(target.scheduledDate, target.rrule) ?? undefined) : undefined,
+        encryptedTitle: nextEncTitle,
+        encryptedDescription: nextEncDesc,
         createdAt: nowIso,
         updatedAt: nowIso,
       };
@@ -322,8 +454,8 @@ export function toggleTaskComplete(mailboxId: string, taskId: string): TaskItem 
 /**
  * Deletes a task by id.
  */
-export function deleteTask(mailboxId: string, taskId: string): void {
-  const current = getTasks(mailboxId);
+export function deleteTask(mailboxId: string, taskId: string, mailboxKey?: Uint8Array | null): void {
+  const current = getTasks(mailboxId, mailboxKey);
   const remaining = current.filter((t) => t.id !== taskId);
   persistTasks(mailboxId, remaining);
   dispatchTasksUpdated();

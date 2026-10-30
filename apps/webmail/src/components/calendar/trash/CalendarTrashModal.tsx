@@ -10,6 +10,7 @@ import {
 interface CalendarTrashModalProps {
   isOpen: boolean;
   mailboxId: string;
+  mailboxKey?: Uint8Array | null;
   onClose: () => void;
   onRestore: (event: TrashEventRecord) => Promise<void> | void;
 }
@@ -20,7 +21,7 @@ export const CalendarTrashModal: Component<CalendarTrashModalProps> = (props) =>
 
   function refreshItems() {
     if (props.mailboxId) {
-      setItems(getTrashEvents(props.mailboxId));
+      setItems(getTrashEvents(props.mailboxId, props.mailboxKey));
     }
   }
 
@@ -43,7 +44,7 @@ export const CalendarTrashModal: Component<CalendarTrashModalProps> = (props) =>
   async function handleRestore(item: TrashEventRecord) {
     try {
       setActionLoading(item.trashId);
-      const restored = restoreEventFromTrash(props.mailboxId, item.trashId);
+      const restored = restoreEventFromTrash(props.mailboxId, item.trashId, props.mailboxKey);
       if (restored) {
         await props.onRestore(restored);
       }

@@ -1,4 +1,4 @@
-import { UserCalendar } from "../../../api";
+import { UserCalendar, apiBase } from "../../../api";
 import { DecryptedEventRecord } from "../CalendarSidebar";
 import { parseIcs, ParsedIcsEvent } from "../../../utils/calendarIcs";
 import { expandEventOccurrences } from "../../../utils/calendarRrule";
@@ -103,34 +103,72 @@ export async function fetchAndParseUrlFeed(
   url: string
 ): Promise<{ title?: string; events: CachedUrlEvent[] }> {
   const normalized = normalizeCalendarUrl(url);
-  let resp: Response;
+  let icsText: string | null = null;
+
+  // 1. Attempt to fetch through authenticated feed-proxy endpoint
   try {
-    resp = await fetch(normalized, {
-      method: "GET",
-      headers: {
-        Accept: "text/calendar, text/plain, */*",
-      },
-    });
-  } catch (err: any) {
-    const isCorsOrNetwork =
-      err instanceof TypeError ||
-      err?.name === "TypeError" ||
-      err?.message?.includes("Failed to fetch") ||
-      err?.message?.includes("NetworkError") ||
-      err?.message?.includes("CORS");
-    if (isCorsOrNetwork) {
-      throw new Error(
-        `Unable to fetch calendar feed due to cross-origin restriction (CORS) or network error: ${err.message}. To import external feeds that block direct browser requests, download the .ics file and use Calendar Settings -> Import ICS.`
-      );
+    const base = apiBase();
+    const proxyUrl = `${base}/v1/calendar/feed-proxy?url=${encodeURIComponent(normalized)}`;
+    const impersonationToken =
+      typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
+    const activeToken =
+      typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null;
+    const authHeaders: Record<string, string> = {
+      Accept: "text/calendar, text/plain, */*",
+    };
+    if (activeToken) {
+      authHeaders["Authorization"] = `Bearer ${activeToken}`;
+    } else if (impersonationToken) {
+      authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
     }
-    throw new Error(`Failed to connect to calendar feed: ${err?.message || String(err)}`);
+
+    const proxyResp = await fetch(proxyUrl, {
+      method: "GET",
+      credentials: "include",
+      headers: authHeaders,
+    });
+
+    if (proxyResp.ok) {
+      icsText = await proxyResp.text();
+    } else {
+      console.warn(`[urlCalendarStore] Proxy fetch returned HTTP ${proxyResp.status}, falling back to direct fetch`);
+    }
+  } catch (proxyErr) {
+    console.warn("[urlCalendarStore] Proxy fetch failed, falling back to direct fetch:", proxyErr);
   }
 
-  if (!resp.ok) {
-    throw new Error(`Failed to fetch calendar feed: HTTP ${resp.status} ${resp.statusText}`);
+  // 2. Fallback to direct fetch if proxy was not successful
+  if (icsText === null) {
+    let resp: Response;
+    try {
+      resp = await fetch(normalized, {
+        method: "GET",
+        headers: {
+          Accept: "text/calendar, text/plain, */*",
+        },
+      });
+    } catch (err: any) {
+      const isCorsOrNetwork =
+        err instanceof TypeError ||
+        err?.name === "TypeError" ||
+        err?.message?.includes("Failed to fetch") ||
+        err?.message?.includes("NetworkError") ||
+        err?.message?.includes("CORS");
+      if (isCorsOrNetwork) {
+        throw new Error(
+          `Unable to fetch calendar feed due to cross-origin restriction (CORS) or network error: ${err.message}. To import external feeds that block direct browser requests, download the .ics file and use Calendar Settings -> Import ICS.`
+        );
+      }
+      throw new Error(`Failed to connect to calendar feed: ${err?.message || String(err)}`);
+    }
+
+    if (!resp.ok) {
+      throw new Error(`Failed to fetch calendar feed: HTTP ${resp.status} ${resp.statusText}`);
+    }
+
+    icsText = await resp.text();
   }
 
-  const icsText = await resp.text();
   const parsed = parseIcs(icsText);
 
   // Derive title from X-WR-CALNAME or URL hostname if not in ICS

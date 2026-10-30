@@ -458,6 +458,7 @@ func main() {
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendar-events/{event_id}/rollback-migration", withSecurityHeaders(withCORS(calendarEventRollbackMigrationHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendar-events/{event_id}/exceptions", withSecurityHeaders(withCORS(calendarEventExceptionsHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendar-events/{event_id}/exceptions/{exception_id}", withSecurityHeaders(withCORS(calendarEventExceptionsHandler)))
+	http.HandleFunc("/v1/calendar/feed-proxy", withSecurityHeaders(withCORS(calendarFeedProxyHandler)))
 
 	// CalDAV Synchronization Subsystem (RFC 4791, RFC 4918, RFC 6764, RFC 6578)
 	http.HandleFunc("/.well-known/caldav", withSecurityHeaders(calDavWellKnownHandler))

@@ -265,13 +265,13 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
 
   function loadTasks() {
     if (props.mailboxId) {
-      setTasks(getTasks(props.mailboxId));
+      setTasks(getTasks(props.mailboxId, props.mailboxKey));
     }
   }
 
   function handleToggleTaskComplete(taskId: string) {
     if (props.mailboxId) {
-      toggleTaskComplete(props.mailboxId, taskId);
+      toggleTaskComplete(props.mailboxId, taskId, props.mailboxKey);
       loadTasks();
     }
   }
@@ -1053,7 +1053,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
     status?: string;
     sendInvitations?: boolean;
     details: CalendarEventPlaintext;
-    editScope?: "occurrence" | "series";
+    editScope?: "occurrence" | "series" | "this";
     targetEvent?: DecryptedEventRecord | null;
   }) {
     if (!props.mailboxId) return;
@@ -1101,30 +1101,107 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
       const isRecurring = Boolean(ev.rrule || ev.isOccurrence);
       const scope = payload.editScope || "series";
 
-      if (isRecurring && scope === "occurrence") {
+      if (isRecurring && (scope === "occurrence" || (scope as string) === "this")) {
         const baseId = ev.baseEventId || ev.id.split("_")[0];
         const recurrenceId = ev.recurrenceId || ev.startTime.toISOString();
 
-        if (ev.isException && ev.exceptionId) {
-          await updateCalendarEventException(props.mailboxId, baseId, ev.exceptionId, {
-            start_time: payload.startTime.toISOString(),
-            end_time: payload.endTime.toISOString(),
-            is_all_day: payload.isAllDay,
-            status: payload.status,
-            encrypted_payload: encryptedPayload,
-          });
+        if (!isOnline()) {
+          if (ev.isException && ev.exceptionId) {
+            enqueueOfflineAction(props.mailboxId, {
+              actionType: "update_exception",
+              calendarId: payload.calendarId,
+              eventId: baseId,
+              exceptionId: ev.exceptionId,
+              payload: {
+                exceptionId: ev.exceptionId,
+                start_time: payload.startTime.toISOString(),
+                end_time: payload.endTime.toISOString(),
+                is_all_day: payload.isAllDay,
+                status: payload.status,
+                encrypted_payload: encryptedPayload,
+              },
+            });
+          } else {
+            enqueueOfflineAction(props.mailboxId, {
+              actionType: "create_exception",
+              calendarId: payload.calendarId,
+              eventId: baseId,
+              payload: {
+                recurrence_id: recurrenceId,
+                is_cancelled: false,
+                start_time: payload.startTime.toISOString(),
+                end_time: payload.endTime.toISOString(),
+                is_all_day: payload.isAllDay,
+                status: payload.status,
+                encrypted_payload: encryptedPayload,
+              },
+            });
+          }
+          setOfflineQueueCount(getOfflineQueue(props.mailboxId).length);
+          setRawEvents((prev) =>
+            prev.map((e) => {
+              if (e.id === baseId) {
+                const existingExceptions = e.exceptions ? [...e.exceptions] : [];
+                if (ev.isException && ev.exceptionId) {
+                  return {
+                    ...e,
+                    exceptions: existingExceptions.map((ex) =>
+                      ex.id === ev.exceptionId
+                        ? {
+                            ...ex,
+                            start_time: payload.startTime.toISOString(),
+                            end_time: payload.endTime.toISOString(),
+                            is_all_day: Boolean(payload.isAllDay),
+                            status: payload.status || "busy",
+                            encrypted_payload: encryptedPayload,
+                          }
+                        : ex
+                    ),
+                  };
+                } else {
+                  const newEx = {
+                    id: `offline-ex-${Date.now()}`,
+                    parent_event_id: baseId,
+                    mailbox_id: props.mailboxId,
+                    calendar_id: payload.calendarId,
+                    recurrence_id: recurrenceId,
+                    is_cancelled: false,
+                    start_time: payload.startTime.toISOString(),
+                    end_time: payload.endTime.toISOString(),
+                    is_all_day: Boolean(payload.isAllDay),
+                    status: payload.status || "busy",
+                    encrypted_payload: encryptedPayload,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                  };
+                  return { ...e, exceptions: [...existingExceptions, newEx] };
+                }
+              }
+              return e;
+            })
+          );
         } else {
-          await createCalendarEventException(props.mailboxId, baseId, {
-            recurrence_id: recurrenceId,
-            is_cancelled: false,
-            start_time: payload.startTime.toISOString(),
-            end_time: payload.endTime.toISOString(),
-            is_all_day: payload.isAllDay,
-            status: payload.status,
-            encrypted_payload: encryptedPayload,
-          });
+          if (ev.isException && ev.exceptionId) {
+            await updateCalendarEventException(props.mailboxId, baseId, ev.exceptionId, {
+              start_time: payload.startTime.toISOString(),
+              end_time: payload.endTime.toISOString(),
+              is_all_day: payload.isAllDay,
+              status: payload.status,
+              encrypted_payload: encryptedPayload,
+            });
+          } else {
+            await createCalendarEventException(props.mailboxId, baseId, {
+              recurrence_id: recurrenceId,
+              is_cancelled: false,
+              start_time: payload.startTime.toISOString(),
+              end_time: payload.endTime.toISOString(),
+              is_all_day: payload.isAllDay,
+              status: payload.status,
+              encrypted_payload: encryptedPayload,
+            });
+          }
+          await loadEvents();
         }
-        await loadEvents();
       } else {
         const targetId = ev.baseEventId || ev.id.split("_")[0];
         if (!isOnline()) {
@@ -1264,7 +1341,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
   }
 
   // Delete Event handler
-  async function handleDeleteEvent(eventId: string, deleteScope?: "occurrence" | "series") {
+  async function handleDeleteEvent(eventId: string, deleteScope?: "occurrence" | "series" | "this") {
     if (!props.mailboxId || !props.mailboxKey) return;
 
     const ev = eventToEdit();
@@ -1278,9 +1355,84 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
     const scope = deleteScope || "series";
 
     // 1. Occurrence cancellation
-    if (ev && isRecurring && scope === "occurrence") {
+    if (ev && isRecurring && (scope === "occurrence" || (scope as string) === "this")) {
       const baseId = ev.baseEventId || ev.id.split("_")[0];
       const recurrenceId = ev.recurrenceId || ev.startTime.toISOString();
+
+      let encPayload = "";
+      try {
+        encPayload = encryptCalendarEventPayload(
+          WasmCore,
+          props.mailboxKey,
+          props.mailboxId,
+          {
+            ...ev.details,
+            sequence: ((ev.details.sequence as number) || 0) + 1,
+          }
+        );
+      } catch (encErr) {
+        console.warn("[CalendarView] Failed to encrypt cancellation payload:", encErr);
+      }
+
+      if (!isOnline()) {
+        if (ev.isException && ev.exceptionId) {
+          enqueueOfflineAction(props.mailboxId, {
+            actionType: "delete_exception",
+            calendarId: ev.calendarId,
+            eventId: baseId,
+            exceptionId: ev.exceptionId,
+            payload: { exceptionId: ev.exceptionId },
+          });
+        } else {
+          enqueueOfflineAction(props.mailboxId, {
+            actionType: "create_exception",
+            calendarId: ev.calendarId,
+            eventId: baseId,
+            payload: {
+              recurrence_id: recurrenceId,
+              is_cancelled: true,
+              start_time: ev.startTime.toISOString(),
+              end_time: ev.endTime.toISOString(),
+              is_all_day: ev.isAllDay,
+              status: "free",
+              encrypted_payload: encPayload,
+            },
+          });
+        }
+        setOfflineQueueCount(getOfflineQueue(props.mailboxId).length);
+        setRawEvents((prev) =>
+          prev.map((e) => {
+            if (e.id === baseId) {
+              const existingExceptions = e.exceptions ? [...e.exceptions] : [];
+              if (ev.isException && ev.exceptionId) {
+                return {
+                  ...e,
+                  exceptions: existingExceptions.filter((ex) => ex.id !== ev.exceptionId),
+                };
+              } else {
+                const cancelEx = {
+                  id: `offline-ex-cancel-${Date.now()}`,
+                  parent_event_id: baseId,
+                  mailbox_id: props.mailboxId,
+                  calendar_id: ev.calendarId,
+                  recurrence_id: recurrenceId,
+                  is_cancelled: true,
+                  start_time: ev.startTime.toISOString(),
+                  end_time: ev.endTime.toISOString(),
+                  is_all_day: ev.isAllDay,
+                  status: "free",
+                  encrypted_payload: encPayload,
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                };
+                return { ...e, exceptions: [...existingExceptions, cancelEx] };
+              }
+            }
+            return e;
+          })
+        );
+        return;
+      }
 
       await createCalendarEventException(props.mailboxId, baseId, {
         recurrence_id: recurrenceId,
@@ -1289,15 +1441,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
         end_time: ev.endTime.toISOString(),
         is_all_day: ev.isAllDay,
         status: "free",
-        encrypted_payload: encryptCalendarEventPayload(
-          WasmCore,
-          props.mailboxKey,
-          props.mailboxId,
-          {
-            ...ev.details,
-            sequence: ((ev.details.sequence as number) || 0) + 1,
-          }
-        ),
+        encrypted_payload: encPayload,
       });
 
       if (
@@ -2290,6 +2434,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
       <CalendarTrashModal
         isOpen={isTrashModalOpen()}
         mailboxId={props.mailboxId || ""}
+        mailboxKey={props.mailboxKey}
         onClose={() => setIsTrashModalOpen(false)}
         onRestore={handleRestoreFromTrash}
       />

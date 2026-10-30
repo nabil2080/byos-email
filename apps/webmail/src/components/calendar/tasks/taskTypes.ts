@@ -29,6 +29,8 @@ export interface TaskItem {
   tags?: string[];
   createdAt: string;
   updatedAt: string;
+  encryptedTitle?: string;
+  encryptedDescription?: string;
 }
 
 export interface TaskFilterOptions {
