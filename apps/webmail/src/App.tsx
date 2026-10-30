@@ -161,7 +161,7 @@ import { TopFixedBar, AppModule } from "./components/TopFixedBar";
 import { NotesView } from "./components/notes/NotesView";
 import { Sidebar } from "./components/Sidebar";
 import { MessageList } from "./components/MessageList";
-import { CalendarView } from "./components/calendar/CalendarView";
+import { CalendarView, CalendarViewMode } from "./components/calendar/CalendarView";
 import { ReadingPane } from "./components/ReadingPane";
 import {
   savePersistentSession,
@@ -598,6 +598,7 @@ const App: Component = () => {
   const [isMobile, setIsMobile] = createSignal(typeof window !== "undefined" ? window.innerWidth < 768 : false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = createSignal(false);
   const [activeModule, setActiveModule] = createSignal<AppModule>("mail");
+  const [calendarViewMode, setCalendarViewMode] = createSignal<CalendarViewMode>("year");
 
   onMount(() => {
     const handleResize = () => {
@@ -7844,6 +7845,8 @@ const App: Component = () => {
                 onToggleCustomizer={() => setRightCustomizerOpen(!rightCustomizerOpen())}
                 theme={theme()}
                 onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
+                savedViewMode={calendarViewMode()}
+                onViewModeChange={setCalendarViewMode}
               />
             </div>
           </Show>

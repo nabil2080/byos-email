@@ -42,6 +42,8 @@ import { expandEventOccurrences, EventExceptionInput } from "../../utils/calenda
 import { generateIcs } from "../../utils/calendarIcs";
 import { CalendarSidebar, DecryptedEventRecord } from "./CalendarSidebar";
 import { CalendarToolbar, CalendarViewMode } from "./CalendarToolbar";
+
+export type { CalendarViewMode };
 import { TopFixedBar, AppModule } from "../TopFixedBar";
 import { WeekView } from "./WeekView";
 import { DayView } from "./DayView";
@@ -147,11 +149,17 @@ interface CalendarViewProps {
   onToggleCustomizer?: () => void;
   theme?: string;
   onToggleTheme?: () => void;
+  savedViewMode?: CalendarViewMode;
+  onViewModeChange?: (mode: CalendarViewMode) => void;
 }
 
 export const CalendarView: Component<CalendarViewProps> = (props) => {
   const [currentDate, setCurrentDate] = createSignal(new Date());
-  const [viewMode, setViewMode] = createSignal<CalendarViewMode>("week");
+  const [viewMode, setViewMode] = createSignal<CalendarViewMode>(props.savedViewMode || "year");
+  const changeViewMode = (mode: CalendarViewMode) => {
+    setViewMode(mode);
+    props.onViewModeChange?.(mode);
+  };
   const [searchQuery, setSearchQuery] = createSignal("");
   createEffect(() => {
     if (props.externalSearchQuery !== undefined) {
@@ -181,9 +189,10 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
   });
 
   onMount(() => {
-    const pref = calendarSettings.settings().defaultView;
-    if (pref && ["day", "week", "month", "year", "agenda"].includes(pref)) {
-      setViewMode(pref as CalendarViewMode);
+    if (props.savedViewMode) {
+      setViewMode(props.savedViewMode);
+    } else {
+      setViewMode("year");
     }
 
     const updateOnline = () => {
@@ -951,31 +960,31 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
 
     if (e.key === "1" || e.key === "d") {
       e.preventDefault();
-      setViewMode("day");
+      changeViewMode("day");
       setScreenReaderAnnouncement("Switched to Day view");
       return;
     }
     if (e.key === "2" || e.key === "w") {
       e.preventDefault();
-      setViewMode("week");
+      changeViewMode("week");
       setScreenReaderAnnouncement("Switched to Week view");
       return;
     }
     if (e.key === "3" || e.key === "m") {
       e.preventDefault();
-      setViewMode("month");
+      changeViewMode("month");
       setScreenReaderAnnouncement("Switched to Month view");
       return;
     }
     if (e.key === "4" || e.key === "y") {
       e.preventDefault();
-      setViewMode("year");
+      changeViewMode("year");
       setScreenReaderAnnouncement("Switched to Year view");
       return;
     }
     if (e.key === "5" || e.key === "a") {
       e.preventDefault();
-      setViewMode("agenda");
+      changeViewMode("agenda");
       setScreenReaderAnnouncement("Switched to Agenda view");
       return;
     }
@@ -1816,7 +1825,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
         <CalendarToolbar
           hideRedundantTopBarItems={true}
           viewMode={viewMode()}
-          onChangeViewMode={setViewMode}
+          onChangeViewMode={changeViewMode}
           periodTitle={periodTitle()}
           onToday={handleToday}
           onPrev={handlePrev}
@@ -2031,7 +2040,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
                 onSelectEvent={handleSelectEvent}
                 onSelectDate={(d) => {
                   setCurrentDate(d);
-                  setViewMode("day");
+                  changeViewMode("day");
                 }}
                 onSlotClick={handleSlotClick}
                 weekStart={calendarSettings.settings().weekStart}
@@ -2054,11 +2063,11 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
                 onSelectEvent={handleSelectEvent}
                 onSelectDate={(d) => {
                   setCurrentDate(d);
-                  setViewMode("day");
+                  changeViewMode("day");
                 }}
                 onSelectMonth={(monthIndex, year) => {
                   setCurrentDate(new Date(year, monthIndex, 1));
-                  setViewMode("month");
+                  changeViewMode("month");
                 }}
                 onSlotClick={handleSlotClick}
                 weekStart={calendarSettings.settings().weekStart}

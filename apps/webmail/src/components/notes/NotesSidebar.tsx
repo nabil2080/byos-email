@@ -136,7 +136,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
       <div class="flex-1 min-h-0 overflow-y-auto px-2 py-1 space-y-1 custom-scrollbar relative">
         {/* Morphing Sliding Highlight Pill */}
         <div
-          class="absolute left-2 right-2 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] border-l-2 border-l-[#A27561] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
+          class="absolute left-2 right-2 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
           style={{
             top: `${navPillStyle().top}px`,
             height: `${navPillStyle().height}px`,

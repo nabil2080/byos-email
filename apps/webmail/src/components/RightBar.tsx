@@ -16,11 +16,11 @@ export const RightBar: Component<RightBarProps> = (props) => {
       data-testid="right-utility-bar"
       class="hidden md:flex w-12 h-full flex-col items-center py-3 bg-white dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2A2D35] rounded-2xl shadow-2xs z-30 flex-shrink-0 select-none transition-colors"
     >
-      {/* ── Primary Module Switchers (Email, Calendar, Notes, Contacts) with Morphing Indicator ── */}
+      {/* ── Primary Module Switchers (Email, Calendar, Notes) with Morphing Indicator ── */}
       <div class="relative flex flex-col items-center gap-1.5 w-full">
-        {/* Morphing Sliding Highlight Pill */}
+        {/* Morphing Sliding Highlight Pill (left-1.5 perfectly centers 36px pill in 48px bar) */}
         <div
-          class="absolute left-1/2 -translate-x-1/2 w-9 h-9 rounded-xl bg-[#F3ECE8] dark:bg-[#2D2522] border border-[#9E725F]/30 shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
+          class="absolute left-1.5 w-9 h-9 rounded-xl bg-[#F3ECE8] dark:bg-[#2D2522] border border-[#9E725F]/30 shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
           style={{
             top:
               props.activeModule === "mail"
@@ -31,7 +31,7 @@ export const RightBar: Component<RightBarProps> = (props) => {
                 ? "84px"
                 : "0px",
             opacity: props.activeModule ? "1" : "0",
-            transform: `translateX(-50%) ${props.activeModule ? "scale(1)" : "scale(0.95)"}`,
+            transform: props.activeModule ? "scale(1)" : "scale(0.95)",
           }}
         />
 
@@ -104,27 +104,6 @@ export const RightBar: Component<RightBarProps> = (props) => {
               <polyline points="10 9 9 9 8 9" />
             </svg>
           </span>
-        </button>
-
-        {/* Subtle 1px structural container divider */}
-        <div class="w-5 h-px bg-[#E2DFD8] dark:bg-[#2A2D35] my-0.5" />
-
-        {/* Contacts Modal Trigger Button */}
-        <button
-          type="button"
-          onClick={() => props.onOpenContacts?.()}
-          data-testid="contacts-nav-btn"
-          data-testid-secondary="right-bar-contacts-btn"
-          aria-label="Open Contacts"
-          title="Contacts"
-          class="w-9 h-9 rounded-xl flex items-center justify-center text-[#6E7075] dark:text-[#A1A1AA] hover:bg-[#F0EEE9] dark:hover:bg-[#252830] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] transition-all duration-150 ease-out cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/40 active:scale-95 border border-transparent"
-        >
-          <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
-            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-            <circle cx="9" cy="7" r="4" />
-            <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-          </svg>
         </button>
       </div>
     </aside>

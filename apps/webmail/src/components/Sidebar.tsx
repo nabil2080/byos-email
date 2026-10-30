@@ -386,7 +386,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
         <nav data-testid="sidebar-folders-nav" class="space-y-0.5 relative">
           {/* Morphing Sliding Highlight Pill */}
           <div
-            class="absolute left-0 right-0 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] border-l-2 border-l-[#A27561] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
+            class="absolute left-0 right-0 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
             style={{
               top: `${navPillStyle().top}px`,
               height: `${navPillStyle().height}px`,
@@ -586,7 +586,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           <div class="space-y-0.5 mt-0.5 relative">
             {/* Morphing Sliding Highlight Pill */}
             <div
-              class="absolute left-0 right-0 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] border-l-2 border-l-[#A27561] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
+              class="absolute left-0 right-0 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
               style={{
                 top: `${customFolderPillStyle().top}px`,
                 height: `${customFolderPillStyle().height}px`,
@@ -717,7 +717,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           <div class="space-y-0.5 mt-0.5 relative" role="tree" aria-label="Labels">
             {/* Morphing Sliding Highlight Pill */}
             <div
-              class="absolute left-0 right-0 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] border-l-2 border-l-[#A27561] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
+              class="absolute left-0 right-0 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
               style={{
                 top: `${labelPillStyle().top}px`,
                 height: `${labelPillStyle().height}px`,

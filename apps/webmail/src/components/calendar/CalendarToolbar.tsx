@@ -44,6 +44,7 @@ export const CalendarToolbar: Component<CalendarToolbarProps> = (props) => {
     width: 0,
     opacity: 0,
   });
+  const [isReady, setIsReady] = createSignal(false);
   const buttonRefs = new Map<CalendarViewMode, HTMLButtonElement>();
 
   createEffect(() => {
@@ -55,6 +56,9 @@ export const CalendarToolbar: Component<CalendarToolbarProps> = (props) => {
         width: btn.offsetWidth,
         opacity: 1,
       });
+      if (!isReady()) {
+        requestAnimationFrame(() => setIsReady(true));
+      }
     } else {
       setIndicatorStyle((prev) => ({ ...prev, opacity: 0 }));
     }
@@ -227,7 +231,9 @@ export const CalendarToolbar: Component<CalendarToolbarProps> = (props) => {
         >
           {/* Morphing Sliding Highlight Pill */}
           <div
-            class="absolute top-0.5 bottom-0.5 rounded-lg bg-white dark:bg-[#1E1F23] shadow-xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
+            class={`absolute top-0.5 bottom-0.5 rounded-lg bg-white dark:bg-[#1E1F23] shadow-xs pointer-events-none z-0 ${
+              isReady() ? "transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)]" : "transition-none"
+            }`}
             style={{
               left: `${indicatorStyle().left}px`,
               width: `${indicatorStyle().width}px`,

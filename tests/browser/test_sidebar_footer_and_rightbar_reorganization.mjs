@@ -280,13 +280,13 @@ async function run() {
     assert(rightBarCheck.hasEmailsBtn, "RightBar includes Emails button");
     assert(rightBarCheck.hasCalendarBtn, "RightBar includes Calendar button");
     assert(rightBarCheck.hasNotesBtn, "RightBar includes Notes button");
-    assert(rightBarCheck.hasContactsBtn, "RightBar includes Contacts button");
+    assert(!rightBarCheck.hasContactsBtn, "RightBar does NOT have Contacts button (removed from RightBar)");
     assert(!rightBarCheck.hasCustomizerBtn, "RightBar does NOT have Customizer button (removed from RightBar)");
     assert(!rightBarCheck.hasThemeToggle, "RightBar does NOT have Light/Dark theme toggle (removed from RightBar)");
     assert(!rightBarCheck.hasShortcutsBtn, "RightBar does NOT have shortcuts icon");
     assert(!rightBarCheck.hasSecurityBtn, "RightBar does NOT have security lock indicator");
     assert(!rightBarCheck.hasStandaloneSettingsBtn, "RightBar does NOT have duplicate settings button");
-    assert(rightBarCheck.totalButtonsCount === 4, `RightBar has exactly 4 module buttons (got ${rightBarCheck.totalButtonsCount})`);
+    assert(rightBarCheck.totalButtonsCount === 3, `RightBar has exactly 3 module buttons (got ${rightBarCheck.totalButtonsCount})`);
 
     const rightBarScreenshot = path.join(artifactsDir, "rightbar_module_switchers_only.png");
     await page.screenshot({ path: rightBarScreenshot });
