@@ -6,6 +6,7 @@
  */
 
 import { apiBase } from "./api";
+import { setAccountKeys } from "./session_isolation";
 
 export const DEVICE_KEYSTORE_DB = "byos_device_keystore";
 export const DEVICE_KEYSTORE_VERSION = 1;
@@ -267,17 +268,23 @@ export async function restorePersistentSession(): Promise<UnsealedSessionPayload
       }
     }
 
+    if (unsealed.mailboxId) {
+      setAccountKeys(unsealed.mailboxId, {
+        mailboxSk: unsealed.mailboxSkHex || null,
+        signingSeed: unsealed.signingSeedHex || null,
+        xwingSeed: unsealed.xwingSeedHex || null,
+      });
+    }
+
     if (typeof sessionStorage !== "undefined") {
       sessionStorage.setItem("byos_active_session_token", token);
-      if (unsealed.mailboxId && unsealed.mailboxSkHex) {
-        sessionStorage.setItem("byos_mailbox_sk_" + unsealed.mailboxId, unsealed.mailboxSkHex);
-        sessionStorage.setItem("byos_mailbox_skey_" + unsealed.mailboxId, unsealed.searchKeyHex || "");
-      }
-      if (unsealed.mailboxId && unsealed.signingSeedHex) {
-        sessionStorage.setItem("byos_signing_seed_" + unsealed.mailboxId, unsealed.signingSeedHex);
-      }
-      if (unsealed.mailboxId && unsealed.xwingSeedHex) {
-        sessionStorage.setItem("byos_xwing_seed_" + unsealed.mailboxId, unsealed.xwingSeedHex);
+      if (unsealed.mailboxId) {
+        sessionStorage.removeItem("byos_mailbox_sk_" + unsealed.mailboxId);
+        sessionStorage.removeItem("byos_signing_seed_" + unsealed.mailboxId);
+        sessionStorage.removeItem("byos_xwing_seed_" + unsealed.mailboxId);
+        if (unsealed.searchKeyHex) {
+          sessionStorage.setItem("byos_mailbox_skey_" + unsealed.mailboxId, unsealed.searchKeyHex);
+        }
       }
     }
 

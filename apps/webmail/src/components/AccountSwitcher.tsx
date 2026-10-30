@@ -1,6 +1,7 @@
 import { Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { ConnectedAccount, getAccountColor } from "../api";
 import { ProfileAvatar } from "./ProfileAvatar";
+import { getMailboxKeyFor, getXWingSeedFor } from "../session_isolation";
 
 export interface AccountSwitcherProps {
   currentEmail: string;
@@ -48,10 +49,10 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
     if (typeof window === "undefined" || !id) return false;
     if (id === "__all__") {
       return (props.connectedAccounts || []).some(
-        (a) => !sessionStorage.getItem("byos_mailbox_sk_" + a.id) && !sessionStorage.getItem("byos_xwing_seed_" + a.id)
+        (a) => !getMailboxKeyFor(a.id) && !getXWingSeedFor(a.id)
       );
     }
-    return !sessionStorage.getItem("byos_mailbox_sk_" + id) && !sessionStorage.getItem("byos_xwing_seed_" + id);
+    return !getMailboxKeyFor(id) && !getXWingSeedFor(id);
   };
 
   function handleClickOutside(e: MouseEvent) {

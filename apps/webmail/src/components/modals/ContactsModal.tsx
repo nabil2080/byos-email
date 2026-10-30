@@ -8,9 +8,12 @@ import {
   importContacts,
   getExportContactsUrl,
 } from "../../api";
+import { encryptContactEnvelope, decryptContactEnvelope } from "../../message_crypto";
+import { getMailboxKeyFor } from "../../session_isolation";
 
 interface ContactsModalProps {
   mailboxId: string;
+  mailboxKey?: Uint8Array | null;
   onClose: () => void;
   onComposeTo?: (email: string) => void;
   onContactsUpdated?: (contacts: ContactItem[]) => void;
@@ -46,7 +49,32 @@ export function ContactsModal(props: ContactsModalProps) {
     setLoading(true);
     setError(null);
     try {
-      const items = await fetchContacts(props.mailboxId, query, group);
+      let items = await fetchContacts(props.mailboxId, query, group);
+      const key = props.mailboxKey || getMailboxKeyFor(props.mailboxId);
+      if (key) {
+        try {
+          const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
+          items = items.map((c) => {
+            if (c.encrypted_envelope) {
+              try {
+                const dec = decryptContactEnvelope(wasm, key, props.mailboxId, c.encrypted_envelope);
+                return {
+                  ...c,
+                  name: dec.name || c.name,
+                  email: dec.email || c.email,
+                  notes: dec.notes || c.notes,
+                  group_name: dec.group || dec.group_name || c.group_name,
+                };
+              } catch {
+                return c;
+              }
+            }
+            return c;
+          });
+        } catch (err) {
+          console.warn("WASM unavailable for contact envelope decryption:", err);
+        }
+      }
       setContacts(items);
       props.onContactsUpdated?.(items);
 
@@ -155,23 +183,35 @@ export function ContactsModal(props: ContactsModalProps) {
     setSaving(true);
     setFormError(null);
     try {
+      const key = props.mailboxKey || getMailboxKeyFor(props.mailboxId);
+      if (!key) {
+        setFormError("Active mailbox key is required to save encrypted contacts. Please unlock your mailbox.");
+        setSaving(false);
+        return;
+      }
+
+      const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
+      const envelope = encryptContactEnvelope(wasm, key, props.mailboxId, {
+        name,
+        email,
+        notes,
+        group: groupName,
+      });
+      const payload = {
+        encrypted_envelope: envelope,
+      };
+
       if (isCreating()) {
-        const created = await createContact(props.mailboxId, {
-          name,
-          email,
-          notes,
-          group_name: groupName,
-        });
+        const created = await createContact(props.mailboxId, payload);
         await loadContacts(searchQuery().trim(), selectedGroup());
         setSelectedContactId(created.id);
         setIsCreating(false);
       } else if (isEditing() && selectedContactId()) {
         const contactId = selectedContactId()!;
+        const currentContact = selectedContact();
         await updateContact(props.mailboxId, contactId, {
-          name,
-          email,
-          notes,
-          group_name: groupName,
+          ...payload,
+          version: currentContact?.version ?? 1,
         });
         await loadContacts(searchQuery().trim(), selectedGroup());
         setIsEditing(false);

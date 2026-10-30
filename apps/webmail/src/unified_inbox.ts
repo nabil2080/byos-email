@@ -1,4 +1,5 @@
 import { ConnectedAccount, MessageMetadata, AttachmentItem, getAccountColor } from "./api";
+import { getMailboxKeyFor, getXWingSeedFor } from "./session_isolation";
 import { formatMessageDate } from "./utils/dateTime";
 import { FocusedCategory } from "./focused_inbox";
 
@@ -392,6 +393,15 @@ export function getMailboxKeyForMessage(
     const entry = (keyMap as Record<string, MailboxKeyMaterial>)[boxId];
     if (entry && (entry.xwingSeedHex || entry.mailboxSkHex)) return entry;
     return null;
+  }
+
+  const memSk = getMailboxKeyFor(boxId);
+  const memXwing = getXWingSeedFor(boxId);
+  if (memSk || memXwing) {
+    return {
+      mailboxSkHex: memSk ? Array.from(memSk, (b) => b.toString(16).padStart(2, "0")).join("") : "",
+      xwingSeedHex: memXwing ? Array.from(memXwing, (b) => b.toString(16).padStart(2, "0")).join("") : "",
+    };
   }
 
   if (typeof sessionStorage !== "undefined") {

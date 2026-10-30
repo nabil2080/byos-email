@@ -24,6 +24,7 @@ import {
   saveCalendarOverrides,
 } from "./calendarSettingsStore";
 import { UserCalendar } from "../../../api";
+import { getMailboxKeyFor } from "../../../session_isolation";
 import {
   getHolidaySubscriptions,
   subscribeHolidayFeed,
@@ -482,13 +483,7 @@ export const CalendarSettingsPanel: Component<CalendarSettingsPanelProps> = (pro
       return;
     }
 
-    let key = props.mailboxKey;
-    if (!key && typeof window !== "undefined") {
-      const hex = sessionStorage.getItem("byos_mailbox_sk_" + props.mailboxId);
-      if (hex) {
-        key = new Uint8Array(hex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-      }
-    }
+    let key = props.mailboxKey || (props.mailboxId ? getMailboxKeyFor(props.mailboxId) : null);
     if (!key) {
       setImportError("Mailbox encryption key is not available. Please unlock your mailbox.");
       return;

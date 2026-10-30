@@ -1,7 +1,7 @@
 import { Component, createSignal, Show, For } from "solid-js";
 import { ConnectedAccount, login, verifyLogin2FA, sendLogin2FACode, LoginResponse, apiBase } from "../api";
 import { autoUnwrapMailboxKey, autoUnwrapKeys } from "../message_crypto";
-import { unsealAccountKeys, persistAccountListForDisplay } from "../session_isolation";
+import { unsealAccountKeys, persistAccountListForDisplay, setAccountKeys, sanitizeConnectedAccounts } from "../session_isolation";
 
 interface AddMailboxModalProps {
   isOpen: boolean;
@@ -139,7 +139,7 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
         (a) => a.id !== newAccount.id && a.email.toLowerCase() !== newAccount.email.toLowerCase()
       );
       accounts.push(newAccount);
-      sessionStorage.setItem("byos_connected_accounts", JSON.stringify(accounts));
+      sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(accounts)));
     } catch (e) {
       console.warn("Failed saving connected accounts to sessionStorage:", e);
     }
@@ -156,16 +156,19 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
       console.warn("Failed saving connected accounts to localStorage:", e);
     }
 
-    // Save key material in sessionStorage for immediate inbox unlocking
-    if (mailboxId && skHex) {
-      sessionStorage.setItem("byos_mailbox_sk_" + mailboxId, skHex);
-      sessionStorage.setItem("byos_mailbox_skey_" + mailboxId, searchKeyHex);
-    }
-    if (mailboxId && xwingSeedHex) {
-      sessionStorage.setItem("byos_xwing_seed_" + mailboxId, xwingSeedHex);
-    }
-    if (mailboxId && signingSeedHex) {
-      sessionStorage.setItem("byos_signing_seed_" + mailboxId, signingSeedHex);
+    // Save key material strictly in-memory for immediate inbox unlocking
+    if (mailboxId) {
+      setAccountKeys(mailboxId, {
+        mailboxSk: skHex || null,
+        signingSeed: signingSeedHex || null,
+        xwingSeed: xwingSeedHex || null,
+      });
+      sessionStorage.removeItem("byos_mailbox_sk_" + mailboxId);
+      sessionStorage.removeItem("byos_signing_seed_" + mailboxId);
+      sessionStorage.removeItem("byos_xwing_seed_" + mailboxId);
+      if (searchKeyHex) {
+        sessionStorage.setItem("byos_mailbox_skey_" + mailboxId, searchKeyHex);
+      }
     }
     if (newAccount.sessionToken && !sessionStorage.getItem("byos_active_session_token")) {
       sessionStorage.setItem("byos_active_session_token", newAccount.sessionToken);

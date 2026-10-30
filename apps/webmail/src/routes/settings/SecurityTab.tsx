@@ -41,6 +41,12 @@ import {
   wrapMailboxKeyWithPassphrase,
 } from "../../message_crypto";
 import { generateQRCodeSVG } from "../../utils/qr";
+import {
+  setMailboxKeyFor,
+  getMailboxKeyFor,
+  getSigningSeedFor,
+  getXWingSeedFor,
+} from "../../session_isolation";
 
 interface SecurityTabProps {
   mailbox: Mailbox;
@@ -314,8 +320,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
         }
       );
 
-      const skHex = Array.from(stagedResult.unwrappedMailboxSk, (b) => b.toString(16).padStart(2, "0")).join("");
-      sessionStorage.setItem("byos_mailbox_sk_" + props.mailbox.id, skHex);
+      setMailboxKeyFor(props.mailbox.id, stagedResult.unwrappedMailboxSk);
 
       if (props.onReactivateSuccess) {
         props.onReactivateSuccess(stagedResult.unwrappedMailboxSk);
@@ -418,26 +423,17 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
       // 2. Resolve in-memory keys
       let mbKeyBytes: Uint8Array | null = props.mailboxKey || null;
       if (!mbKeyBytes && props.mailbox?.id) {
-        const savedHex = sessionStorage.getItem("byos_mailbox_sk_" + props.mailbox.id);
-        if (savedHex) {
-          mbKeyBytes = new Uint8Array(savedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-        }
+        mbKeyBytes = getMailboxKeyFor(props.mailbox.id);
       }
 
       let signSeedBytes: Uint8Array | null = props.signingSeed || null;
       if (!signSeedBytes && props.mailbox?.id) {
-        const savedHex = sessionStorage.getItem("byos_signing_seed_" + props.mailbox.id);
-        if (savedHex) {
-          signSeedBytes = new Uint8Array(savedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-        }
+        signSeedBytes = getSigningSeedFor(props.mailbox.id);
       }
 
       let xwingSeedBytes: Uint8Array | null = props.xwingSeed || null;
       if (!xwingSeedBytes && props.mailbox?.id) {
-        const savedHex = sessionStorage.getItem("byos_xwing_seed_" + props.mailbox.id);
-        if (savedHex) {
-          xwingSeedBytes = new Uint8Array(savedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-        }
+        xwingSeedBytes = getXWingSeedFor(props.mailbox.id);
       }
 
       let newWrappedPayload: string | undefined = undefined;
@@ -701,26 +697,17 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
       // 1. Resolve in-memory keys to re-wrap if unsealed
       let mbKeyBytes: Uint8Array | null = props.mailboxKey || null;
       if (!mbKeyBytes && props.mailbox?.id) {
-        const savedHex = sessionStorage.getItem("byos_mailbox_sk_" + props.mailbox.id);
-        if (savedHex) {
-          mbKeyBytes = new Uint8Array(savedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-        }
+        mbKeyBytes = getMailboxKeyFor(props.mailbox.id);
       }
 
       let signSeedBytes: Uint8Array | null = props.signingSeed || null;
       if (!signSeedBytes && props.mailbox?.id) {
-        const savedHex = sessionStorage.getItem("byos_signing_seed_" + props.mailbox.id);
-        if (savedHex) {
-          signSeedBytes = new Uint8Array(savedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-        }
+        signSeedBytes = getSigningSeedFor(props.mailbox.id);
       }
 
       let xwingSeedBytes: Uint8Array | null = props.xwingSeed || null;
       if (!xwingSeedBytes && props.mailbox?.id) {
-        const savedHex = sessionStorage.getItem("byos_xwing_seed_" + props.mailbox.id);
-        if (savedHex) {
-          xwingSeedBytes = new Uint8Array(savedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-        }
+        xwingSeedBytes = getXWingSeedFor(props.mailbox.id);
       }
 
       let newWrappedPayload: string | undefined = undefined;
@@ -915,8 +902,9 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
         throw new Error(verifyRes.error || "Incorrect password.");
       }
 
-      // Check sessionStorage for cached secret key first
-      let skHex = sessionStorage.getItem("byos_mailbox_sk_" + props.mailbox.id);
+      // Check in-memory key custody for cached secret key first
+      const memSk = getMailboxKeyFor(props.mailbox.id);
+      let skHex = memSk ? Array.from(memSk, (b) => b.toString(16).padStart(2, "0")).join("") : "";
 
       // If not in session, unwrap from wrapped key via WASM
       if (!skHex) {

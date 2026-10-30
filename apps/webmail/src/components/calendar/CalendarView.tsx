@@ -41,6 +41,7 @@ import {
 import { expandEventOccurrences, EventExceptionInput } from "../../utils/calendarRrule";
 import { generateIcs } from "../../utils/calendarIcs";
 import { CalendarSidebar, DecryptedEventRecord } from "./CalendarSidebar";
+import { getMailboxKeyFor } from "../../session_isolation";
 import { CalendarToolbar, CalendarViewMode } from "./CalendarToolbar";
 
 export type { CalendarViewMode };
@@ -419,13 +420,8 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
     const eventsToMigrate = legacyEvents();
     if (eventsToMigrate.length === 0) return;
     let key = props.mailboxKey;
-    if (!key && props.mailboxId && typeof window !== "undefined") {
-      const savedSk = sessionStorage.getItem("byos_mailbox_sk_" + props.mailboxId);
-      if (savedSk) {
-        try {
-          key = new Uint8Array(savedSk.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-        } catch {}
-      }
+    if (!key && props.mailboxId) {
+      key = getMailboxKeyFor(props.mailboxId);
     }
     if (!key) {
       setMigrationError("Mailbox key not available. Please unlock mailbox.");

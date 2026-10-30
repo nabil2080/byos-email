@@ -3,7 +3,7 @@ import { verifyInvitation, claimInvitation, VerifyInvitationResponse, updateMail
 import { mailboxIdHex, hexToBase64 } from "../message_crypto";
 import { generateQRCodeSVG } from "../utils/qr";
 import { generateTOTPSecret, formatTOTPSecret, verifyTOTPClient } from "../utils/totp";
-import { persistAccountListForDisplay } from "../session_isolation";
+import { persistAccountListForDisplay, setAccountKeys, sanitizeConnectedAccounts } from "../session_isolation";
 
 export const SetupAccount: Component = () => {
   const [loading, setLoading] = createSignal(true);
@@ -396,22 +396,23 @@ export const SetupAccount: Component = () => {
         totp_secret: totpSecret(),
       });
 
-      // Populate sessionStorage immediately with keys & session token so the user lands unlocked in the inbox!
+      // Populate in-memory key store strictly; never write raw private keys to sessionStorage
       const mailboxSk = rawMailboxSkHex();
+      const signingSeed = rawSigningSeedHex();
+      const xwingSeed = rawXWingSeedHex();
       let sKeyHex = "";
       if (mailboxSk) {
         const wasm = await import("../generated/crypto-core/byos_crypto_core.js");
         sKeyHex = wasm.wasm_derive_search_key(mailboxSk);
-        sessionStorage.setItem("byos_mailbox_sk_" + data.mailbox_id, mailboxSk);
+        setAccountKeys(data.mailbox_id, {
+          mailboxSk,
+          signingSeed,
+          xwingSeed,
+        });
         sessionStorage.setItem("byos_mailbox_skey_" + data.mailbox_id, sKeyHex);
-        const signingSeed = rawSigningSeedHex();
-        if (signingSeed) {
-          sessionStorage.setItem("byos_signing_seed_" + data.mailbox_id, signingSeed);
-        }
-        const xwingSeed = rawXWingSeedHex();
-        if (xwingSeed) {
-          sessionStorage.setItem("byos_xwing_seed_" + data.mailbox_id, xwingSeed);
-        }
+        sessionStorage.removeItem("byos_mailbox_sk_" + data.mailbox_id);
+        sessionStorage.removeItem("byos_signing_seed_" + data.mailbox_id);
+        sessionStorage.removeItem("byos_xwing_seed_" + data.mailbox_id);
       }
       if (claimRes.token) {
         sessionStorage.setItem("byos_active_session_token", claimRes.token);
@@ -425,11 +426,10 @@ export const SetupAccount: Component = () => {
         role: "member",
         privacyMode: data.privacy_mode || "private",
         sessionToken: claimRes.token || "",
-        mailboxSkHex: mailboxSk || "",
         searchKeyHex: sKeyHex,
       };
 
-      // 1. Persist to sessionStorage with in-memory secret key
+      // 1. Persist to sessionStorage with sanitized accounts (no raw private keys)
       try {
         const existingStr = sessionStorage.getItem("byos_connected_accounts");
         let accounts: any[] = [];
@@ -441,7 +441,7 @@ export const SetupAccount: Component = () => {
           (a) => a.id !== newAccount.id && a.email?.toLowerCase() !== newAccount.email.toLowerCase()
         );
         accounts.unshift(newAccount);
-        sessionStorage.setItem("byos_connected_accounts", JSON.stringify(accounts));
+        sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(accounts)));
       } catch (e) {
         console.warn("Failed saving connected accounts in sessionStorage:", e);
       }

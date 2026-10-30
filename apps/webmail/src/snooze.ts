@@ -84,3 +84,28 @@ export function formatSnoozeTime(date: Date, now: Date = new Date()): string {
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return `${months[date.getMonth()]} ${date.getDate()} at ${timeStr}`;
 }
+
+/**
+ * Returns true if the message is actively snoozed at reference timestamp `now`.
+ */
+export function isMessageSnoozed(snoozedUntil?: string | null, now: number = Date.now()): boolean {
+  if (!snoozedUntil) return false;
+  const time = new Date(snoozedUntil).getTime();
+  return !isNaN(time) && time > now;
+}
+
+/**
+ * Identify messages whose snooze window elapsed between `lastCheck` and `now`.
+ */
+export function checkSnoozeExpirations<T extends { id: string; snoozedUntil?: string }>(
+  messages: T[],
+  lastCheck: number,
+  now: number = Date.now()
+): T[] {
+  return messages.filter((m) => {
+    if (!m.snoozedUntil) return false;
+    const time = new Date(m.snoozedUntil).getTime();
+    return !isNaN(time) && time > lastCheck && time <= now;
+  });
+}
+

@@ -22,6 +22,7 @@ import {
   linkEmailToCalendarEvent,
   unlinkEmailEvent,
 } from "./calendar/integrations/calendarIntegrationsStore";
+import { buildEmlContent, downloadEmlFile } from "../utils/eml_export";
 
 export interface ReadingPaneProps {
   message: DisplayMessage;
@@ -62,6 +63,7 @@ export interface ReadingPaneProps {
   customFolders?: MailboxFolder[];
   labels?: MailboxLabel[];
   onToggleLabel?: (msg: DisplayMessage, labelId: string) => void;
+  onExportEml?: (msg: DisplayMessage) => Promise<void> | void;
   currentUserEmail?: string;
   currentUserPhotoUrl?: string | null;
   fontScale?: "default" | "large" | "xlarge";
@@ -758,17 +760,23 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     setMoreMenuOpen(false);
-                    const blob = new Blob([
-                      `From: ${props.message.sender}\nTo: ${props.message.recipient}\nSubject: ${props.message.subject}\nDate: ${props.message.date}\n\n${props.decryptedContent || props.message.snippet}`
-                    ], { type: "message/rfc822" });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `${(props.message.subject || "message").replace(/[^a-zA-Z0-9_-]/g, "_")}.eml`;
-                    a.click();
-                    URL.revokeObjectURL(url);
+                    if (props.onExportEml) {
+                      await props.onExportEml(props.message);
+                    } else {
+                      const eml = buildEmlContent({
+                        from: props.message.sender,
+                        to: props.message.recipient,
+                        subject: props.message.subject || "(no subject)",
+                        date: props.message.date,
+                        bodyPlain: props.decryptedContent || props.message.snippet,
+                      });
+                      downloadEmlFile(
+                        (props.message.subject || "message").replace(/[^a-zA-Z0-9_-]/g, "_"),
+                        eml
+                      );
+                    }
                   }}
                   class="w-full text-left px-3 py-2 hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
                 >

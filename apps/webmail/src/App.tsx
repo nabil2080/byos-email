@@ -180,7 +180,8 @@ import { RightBar } from "./components/RightBar";
 import { QuickSettingsPanel } from "./components/QuickSettingsPanel";
 import { ShortcutHandler, isTextInputElement, matchShortcut } from "./keyboard_shortcuts";
 import { formatMessageDate } from "./utils/dateTime";
-import { formatSnoozeTime } from "./snooze";
+import { formatSnoozeTime, checkSnoozeExpirations, isMessageSnoozed } from "./snooze";
+import { buildEmlContent, downloadEmlFile, type EmlAttachment } from "./utils/eml_export";
 import { getSubtreeLabelIds } from "./utils/nested_labels";
 import { GlobalErrorBanner } from "./components/GlobalErrorBanner";
 import { setGlobalError } from "./errors";
@@ -214,6 +215,12 @@ import {
   getMailboxKeyFor,
   getXWingSeedFor,
   unsealAccountKeys,
+  setAccountKeys,
+  setMailboxKeyFor,
+  setSigningSeedFor,
+  setXWingSeedFor,
+  zeroizeKeys,
+  sanitizeConnectedAccounts,
 } from "./session_isolation";
 import { OfflineBanner } from "./components/OfflineBanner";
 import {
@@ -742,6 +749,7 @@ const App: Component = () => {
     (window as any).__BYOS_TEST_LOCK_MAILBOX__ = (mbId: string) => {
       setMailboxKey(null);
       setUnlockedBoxId(null);
+      zeroizeKeys(mbId);
       sessionStorage.removeItem("byos_mailbox_sk_" + mbId);
       sessionStorage.removeItem("byos_xwing_seed_" + mbId);
       setConnectedAccounts((prev) =>
@@ -896,7 +904,32 @@ const App: Component = () => {
     }
     checkCalendarReminders();
     const calendarReminderInterval = setInterval(checkCalendarReminders, 15000);
-    onCleanup(() => clearInterval(calendarReminderInterval));
+
+    let lastSnoozeCheck = Date.now();
+    const snoozeTimer = setInterval(() => {
+      const now = Date.now();
+      const msgs = messages();
+      const hasAnySnoozed = msgs.some((m) => isMessageSnoozed(m.snoozedUntil, now));
+      if (hasAnySnoozed || msgs.some((m) => Boolean(m.snoozedUntil))) {
+        setSnoozeClock(now);
+        const expired = checkSnoozeExpirations(msgs, lastSnoozeCheck, now);
+        if (expired.length > 0) {
+          const expiredIds = new Set(expired.map((e) => e.id));
+          setMessages((prev) =>
+            prev.map((m) => (expiredIds.has(m.id) ? { ...m, snoozedUntil: undefined, read: false } : m))
+          );
+          for (const exp of expired) {
+            showToast(`Snooze expired: ${exp.subject || "Message"}`);
+          }
+        }
+      }
+      lastSnoozeCheck = now;
+    }, 2000);
+
+    onCleanup(() => {
+      clearInterval(calendarReminderInterval);
+      clearInterval(snoozeTimer);
+    });
   });
 
   createEffect(() => {
@@ -940,6 +973,11 @@ const App: Component = () => {
   const [composeAttachments, setComposeAttachments] = createSignal<AttachmentItem[]>([]);
   // When set, saving updates this draft (optimistic version) instead of creating.
   const [editingDraft, setEditingDraft] = createSignal<{ id: string; version: number } | null>(null);
+  const [draftDirty, setDraftDirty] = createSignal(false);
+  const [lastSavedDraftSnapshot, setLastSavedDraftSnapshot] = createSignal("");
+  const [isAutoSaving, setIsAutoSaving] = createSignal(false);
+  const [snoozeClock, setSnoozeClock] = createSignal(Date.now());
+  let autoSaveDebounceTimer: any = null;
   // When set, user is editing a pending scheduled message non-destructively.
   const [editingScheduledId, setEditingScheduledId] = createSignal<string | null>(null);
   const [pendingSend, setPendingSend] = createSignal<PendingSend | null>(null);
@@ -2401,40 +2439,33 @@ const App: Component = () => {
           console.warn("Auto-unwrap of mailbox key failed:", err);
         }
       } else if (!password) {
-        // Restore from sessionStorage if user refreshed during an active session
-        const savedSk = sessionStorage.getItem("byos_mailbox_sk_" + targetBox.id);
+        // Restore from in-memory key custody or legacy sessionStorage
+        const memSk = getMailboxKeyFor(targetBox.id);
+        const memSigning = getSigningSeedFor(targetBox.id);
+        const memXwing = getXWingSeedFor(targetBox.id);
         const savedSKey = sessionStorage.getItem("byos_mailbox_skey_" + targetBox.id);
-        const savedSigningSeed = sessionStorage.getItem("byos_signing_seed_" + targetBox.id);
-        const savedXWingSeed = sessionStorage.getItem("byos_xwing_seed_" + targetBox.id);
-        if (savedSk) {
+        if (memSk) {
           try {
-            const bytes = new Uint8Array(savedSk.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)));
-            setMailboxKey(bytes);
+            setMailboxKey(memSk);
             if (savedSKey) setSearchKey(savedSKey);
             setUnlockedBoxId(targetBox.id);
-            currentSkHex = savedSk;
+            currentSkHex = bytesToHex(memSk);
             currentSKey = savedSKey || "";
 
-            let restoredSigningSeed: Uint8Array | null = null;
-            if (savedSigningSeed) {
-              const seedBytes = new Uint8Array(savedSigningSeed.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)));
-              setSigningSeed(seedBytes);
-              restoredSigningSeed = seedBytes;
+            if (memSigning) {
+              setSigningSeed(memSigning);
             } else {
               setSigningSeed(null);
             }
 
-            let restoredXWingSeed: Uint8Array | null = null;
-            if (savedXWingSeed) {
-              const seedBytes = new Uint8Array(savedXWingSeed.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)));
-              setXwingSeed(seedBytes);
-              restoredXWingSeed = seedBytes;
+            if (memXwing) {
+              setXwingSeed(memXwing);
             } else {
               setXwingSeed(null);
             }
 
-            if (restoredSigningSeed && restoredXWingSeed) {
-              publishKeysOnce(targetBox.id, restoredSigningSeed, restoredXWingSeed);
+            if (memSigning && memXwing) {
+              publishKeysOnce(targetBox.id, memSigning, memXwing);
             }
           } catch {
             sessionStorage.removeItem("byos_mailbox_sk_" + targetBox.id);
@@ -2482,7 +2513,7 @@ const App: Component = () => {
       );
       list.unshift(activeAcc);
       try {
-        sessionStorage.setItem("byos_connected_accounts", JSON.stringify(list));
+        sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(list)));
       } catch {}
       // Rule 4: localStorage stores ONLY stripped metadata (no tokens, no keys).
       persistAccountListForDisplay(list);
@@ -2534,9 +2565,10 @@ const App: Component = () => {
       const skHex = bytesToHex(targetKey);
       const searchKeyHex = account.searchKeyHex || sessionStorage.getItem("byos_mailbox_skey_" + account.id) || "";
       setMailboxKey(targetKey);
+      setMailboxKeyFor(account.id, targetKey);
       setSearchKey(searchKeyHex);
       setUnlockedBoxId(account.id);
-      sessionStorage.setItem("byos_mailbox_sk_" + account.id, skHex);
+      sessionStorage.removeItem("byos_mailbox_sk_" + account.id);
       if (searchKeyHex) {
         sessionStorage.setItem("byos_mailbox_skey_" + account.id, searchKeyHex);
       }
@@ -2582,7 +2614,7 @@ const App: Component = () => {
         );
         const updated = [{ ...account, isLocked: false }, ...remaining];
         try {
-          sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+          sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(updated)));
         } catch {}
         // Rule 4: localStorage stores ONLY stripped metadata (no tokens, no keys).
         persistAccountListForDisplay(updated);
@@ -2626,7 +2658,7 @@ const App: Component = () => {
       );
       const updated = [account, ...filtered];
       try {
-        sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+        sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(updated)));
       } catch {}
       // Rule 4: localStorage stores ONLY stripped metadata (no tokens, no keys).
       persistAccountListForDisplay(updated);
@@ -2911,14 +2943,20 @@ const App: Component = () => {
           const offlineDrafts = await getOfflineDrafts();
           for (const d of offlineDrafts) {
             try {
-              const dKey = getMailboxKeyFor(d.mailbox_id);
+              const dKey = getMailboxKeyFor(d.mailbox_id) || mailboxKey();
               if (!dKey) continue;
               const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
               const richContent = d.bodyHtml || d.body;
-              const env = d.encrypted_envelope || encryptDraftEnvelope(wasm, dKey, d.mailbox_id, richContent);
+              const draftPayload = JSON.stringify({
+                subject: d.subject || "",
+                recipient: d.recipient || "",
+                to: d.recipient || "",
+                body: richContent,
+              });
+              const env = d.encrypted_envelope || encryptDraftEnvelope(wasm, dKey, d.mailbox_id, draftPayload);
               await createDraft(d.mailbox_id, {
-                recipient: d.recipient,
-                subject: d.subject || "Untitled Draft",
+                recipient: "",
+                subject: "",
                 encrypted_envelope: env,
               });
               await removeOfflineDraft(d.id);
@@ -3003,7 +3041,7 @@ const App: Component = () => {
           // Show the list immediately so the sidebar is not empty while
           // we validate. Tokens marked as stale will be removed below.
           setConnectedAccounts(rawList);
-          sessionStorage.setItem("byos_connected_accounts", JSON.stringify(rawList));
+          sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(rawList)));
           if (!sessionStorage.getItem("byos_active_session_token") && rawList[0].sessionToken) {
             sessionStorage.setItem("byos_active_session_token", rawList[0].sessionToken);
           }
@@ -3042,7 +3080,7 @@ const App: Component = () => {
             }
             // Update sidebar to reflect only validated accounts
             setConnectedAccounts(validated);
-            sessionStorage.setItem("byos_connected_accounts", JSON.stringify(validated));
+            sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(validated)));
             persistAccountListForDisplay(validated);
           }
         }
@@ -3701,9 +3739,10 @@ const App: Component = () => {
       const currentSkHex = Array.from(skBytes, (b) => b.toString(16).padStart(2, "0")).join("");
       const currentSKey = wasm.wasm_derive_search_key(currentSkHex);
       setMailboxKey(skBytes);
+      setMailboxKeyFor(box.id, skBytes);
       setSearchKey(currentSKey);
       setUnlockedBoxId(box.id);
-      sessionStorage.setItem("byos_mailbox_sk_" + box.id, currentSkHex);
+      sessionStorage.removeItem("byos_mailbox_sk_" + box.id);
       sessionStorage.setItem("byos_mailbox_skey_" + box.id, currentSKey);
 
       const words = phrase.trim();
@@ -3716,7 +3755,8 @@ const App: Component = () => {
         const seedHex = wasm.wasm_derive_signing_seed(rootHex, boxIdHex, 1);
         const seedBytes = new Uint8Array(seedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
         setSigningSeed(seedBytes);
-        sessionStorage.setItem("byos_signing_seed_" + box.id, seedHex);
+        setSigningSeedFor(box.id, seedBytes);
+        sessionStorage.removeItem("byos_signing_seed_" + box.id);
         recoveredSigningSeed = seedBytes;
       } catch (seedErr) {
         console.warn("Failed deriving signing seed from recovery root:", seedErr);
@@ -3728,7 +3768,8 @@ const App: Component = () => {
         const xwingSeedHex = wasm.wasm_derive_xwing_seed(rootHex, boxIdHex, 1);
         const xwingSeedBytes = new Uint8Array(xwingSeedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
         setXwingSeed(xwingSeedBytes);
-        sessionStorage.setItem("byos_xwing_seed_" + box.id, xwingSeedHex);
+        setXWingSeedFor(box.id, xwingSeedBytes);
+        sessionStorage.removeItem("byos_xwing_seed_" + box.id);
         recoveredXWingSeed = xwingSeedBytes;
       } catch (seedErr) {
         console.warn("Failed deriving X-Wing seed from recovery root:", seedErr);
@@ -3817,7 +3858,7 @@ const App: Component = () => {
     // 3. Filter target out of connected accounts and persist remaining
     const remaining = accounts.filter((a) => a.id !== targetId);
     setConnectedAccounts(remaining);
-    sessionStorage.setItem("byos_connected_accounts", JSON.stringify(remaining));
+    sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(remaining)));
     // Rule 4: localStorage stores ONLY stripped metadata (no tokens, no keys).
     persistAccountListForDisplay(remaining);
 
@@ -4012,10 +4053,27 @@ const App: Component = () => {
       });
       const draftMessages: DisplayMessage[] = draftsList.map((d: DraftMessage) => {
         let snippet = "Encrypted draft — unlock mailbox to preview.";
+        let draftSubject = d.subject || "(no subject)";
+        let draftRecipient = d.recipient || "(no recipient)";
+        let draftBody = "";
         if (key && wasm && keyBoxId === mailboxId && d.encrypted_envelope) {
           try {
             const text = decryptDraftEnvelope(wasm, key, mailboxId, d.encrypted_envelope);
             snippet = text.slice(0, 80) + (text.length > 80 ? "…" : "");
+            try {
+              const parsed = JSON.parse(text);
+              if (parsed && typeof parsed === "object") {
+                if (parsed.subject) draftSubject = parsed.subject;
+                if (parsed.recipient) draftRecipient = parsed.recipient;
+                else if (parsed.to) draftRecipient = Array.isArray(parsed.to) ? parsed.to.join(", ") : parsed.to;
+                if (parsed.body) {
+                  draftBody = parsed.body;
+                  snippet = parsed.body.replace(/<[^>]+>/g, "").slice(0, 80) + (parsed.body.length > 80 ? "…" : "");
+                }
+              }
+            } catch {
+              draftBody = text;
+            }
           } catch {
             snippet = "Encrypted draft (decryption failed).";
           }
@@ -4027,10 +4085,12 @@ const App: Component = () => {
           version: d.version,
           folder: "drafts",
           sender: currentUser()?.email || "me@byos.local",
-          recipient: d.recipient || "(no recipient)",
-          recipients: d.recipient ? d.recipient.split(",").map((s) => s.trim()).filter(Boolean) : [],
-          subject: d.subject || "(no subject)",
+          recipient: draftRecipient,
+          recipients: draftRecipient && draftRecipient !== "(no recipient)" ? draftRecipient.split(",").map((s) => s.trim()).filter(Boolean) : [],
+          subject: draftSubject,
           snippet,
+          bodyPlaintext: draftBody,
+          bodyHtml: draftBody,
           encryptedBody: d.encrypted_envelope || "Encrypted draft envelope",
           date: formatMessageDate(d.created_at, timeFormat(), language()),
           read: true,
@@ -4296,7 +4356,7 @@ const App: Component = () => {
             sessionToken: sessionStorage.getItem("byos_active_session_token") || "",
             role: "owner",
             privacyMode: "standard",
-            mailboxSkHex: sessionStorage.getItem("byos_mailbox_sk_" + box.id) || "",
+            mailboxSkHex: getMailboxKeyFor(box.id) ? bytesToHex(getMailboxKeyFor(box.id)!) : "",
             searchKeyHex: sessionStorage.getItem("byos_mailbox_skey_" + box.id) || "",
           }];
         }
@@ -4351,22 +4411,15 @@ const App: Component = () => {
             if (!accId) continue;
             const acc = accounts.find((a) => a.id === accId);
             const token = acc?.sessionToken;
-            const savedSk = sessionStorage.getItem("byos_mailbox_sk_" + accId) || acc?.mailboxSkHex;
-            if (!savedSk) continue;
-            let key: Uint8Array | null = null;
-            try {
-              key = new Uint8Array(savedSk.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-            } catch {
-              continue;
-            }
+            const key = getMailboxKeyFor(accId) || (acc?.mailboxSkHex ? new Uint8Array(acc.mailboxSkHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16))) : null);
+            if (!key) continue;
 
             try {
               const body = await fetchMessageBody(accId, m.id, token);
               let plaintext = "";
               if (body.xwing_envelope_json && body.xwing_envelope_json.trim()) {
-                const savedXWing = sessionStorage.getItem("byos_xwing_seed_" + accId);
-                if (savedXWing) {
-                  const seed = new Uint8Array(savedXWing.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+                const seed = getXWingSeedFor(accId) || (acc?.xwingSeedHex ? new Uint8Array(acc.xwingSeedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16))) : null);
+                if (seed) {
                   const res = await decryptPathAEnvelope(body.xwing_envelope_json, m.sender, seed);
                   plaintext = res.plaintext;
                 }
@@ -4433,6 +4486,7 @@ const App: Component = () => {
   }
 
   function lockMailbox() {
+    zeroizeKeys();
     setMailboxKey(null);
     setSigningSeed(null);
     setXwingSeed(null);
@@ -4464,7 +4518,7 @@ const App: Component = () => {
   const filteredMessages = () => {
     const q = searchQuery().toLowerCase().trim();
     const matchedIds = new Set(serverMatchedMsgIds());
-    const now = Date.now();
+    const now = snoozeClock();
     return messages().filter((m) => {
       const isSnoozed = Boolean(m.snoozedUntil && new Date(m.snoozedUntil).getTime() > now);
       const cur = currentFolder();
@@ -4555,7 +4609,7 @@ const App: Component = () => {
     const activeCust = activeCustomFolder();
     const activeLbl = activeLabel();
     const q = searchQuery().toLowerCase().trim();
-    const now = Date.now();
+    const now = snoozeClock();
     const allMsgs = messages();
 
     return threads().filter((t) => {
@@ -4601,7 +4655,7 @@ const App: Component = () => {
 
   const categoryCounts = () => {
     const allMsgs = messages();
-    const now = Date.now();
+    const now = snoozeClock();
     const counts: Record<FocusedCategory, { total: number; unread: number }> = {
       primary: { total: 0, unread: 0 },
       notifications: { total: 0, unread: 0 },
@@ -5382,15 +5436,16 @@ const App: Component = () => {
         return;
       }
 
-      sessionStorage.setItem("byos_mailbox_sk_" + target.mailboxId, currentSkHex);
+      setAccountKeys(target.mailboxId, {
+        mailboxSk: skBytes,
+        signingSeed: signingSeedHex || null,
+        xwingSeed: xwingSeedHex || null,
+      });
+      sessionStorage.removeItem("byos_mailbox_sk_" + target.mailboxId);
+      sessionStorage.removeItem("byos_signing_seed_" + target.mailboxId);
+      sessionStorage.removeItem("byos_xwing_seed_" + target.mailboxId);
       if (currentSKey) {
         sessionStorage.setItem("byos_mailbox_skey_" + target.mailboxId, currentSKey);
-      }
-      if (xwingSeedHex) {
-        sessionStorage.setItem("byos_xwing_seed_" + target.mailboxId, xwingSeedHex);
-      }
-      if (signingSeedHex) {
-        sessionStorage.setItem("byos_signing_seed_" + target.mailboxId, signingSeedHex);
       }
 
       if (selectedMailbox()?.id === target.mailboxId) {
@@ -5538,7 +5593,13 @@ const App: Component = () => {
     setComposeAccountId(null);
     setComposeFromAlias(null);
     setErrorMessage(null);
-    setComposeStatus(null);
+    if (autoSaveDebounceTimer) {
+      clearTimeout(autoSaveDebounceTimer);
+      autoSaveDebounceTimer = null;
+    }
+    setDraftDirty(false);
+    setLastSavedDraftSnapshot("");
+    setIsAutoSaving(false);
   }
 
   function startNewCompose() {
@@ -5568,13 +5629,25 @@ const App: Component = () => {
 
   function startEditDraft(msg: DisplayMessage, plaintext: string) {
     clearComposeForm();
-    setComposeTo(msg.recipient === "(no recipient)" ? "" : msg.recipient);
-    setComposeSubject(msg.subject === "(no subject)" ? "" : msg.subject);
-    setComposeBody(plaintext);
+    let toVal = msg.recipient === "(no recipient)" ? "" : msg.recipient;
+    let subVal = msg.subject === "(no subject)" ? "" : msg.subject;
+    let bodyVal = plaintext;
+    try {
+      const parsed = JSON.parse(plaintext);
+      if (parsed && typeof parsed === "object") {
+        if (parsed.body !== undefined) bodyVal = parsed.body;
+        if (parsed.subject !== undefined) subVal = parsed.subject;
+        if (parsed.recipient !== undefined) toVal = parsed.recipient;
+        else if (parsed.to !== undefined) toVal = Array.isArray(parsed.to) ? parsed.to.join(", ") : parsed.to;
+      }
+    } catch {}
+    setComposeTo(toVal);
+    setComposeSubject(subVal);
+    setComposeBody(bodyVal);
     if (msg.bodyHtml) {
       setComposeBodyHtml(msg.bodyHtml);
-    } else if (plaintext.includes("<") && plaintext.includes(">")) {
-      setComposeBodyHtml(plaintext);
+    } else if (bodyVal.includes("<") && bodyVal.includes(">")) {
+      setComposeBodyHtml(bodyVal);
     }
     setScheduledTime("");
     setComposeAttachments([]);
@@ -5582,8 +5655,12 @@ const App: Component = () => {
     const targetBoxId = msg.mailboxId || selectedMailbox()?.id;
     if (targetBoxId) setComposeAccountId(targetBoxId);
     const sigPlain = targetBoxId ? loadSignature(targetBoxId) : "";
-    const hasSig = sigPlain ? plaintext.includes(`-- \n${sigPlain}`) : false;
+    const hasSig = sigPlain ? bodyVal.includes(`-- \n${sigPlain}`) : false;
     setComposeSignatureApplied(hasSig);
+    setLastSavedDraftSnapshot(
+      JSON.stringify({ to: toVal.trim(), subject: subVal.trim(), richContent: msg.bodyHtml || bodyVal })
+    );
+    setDraftDirty(false);
     setComposeOpen(true);
   }
 
@@ -6282,6 +6359,10 @@ const App: Component = () => {
   }
 
   async function handleSaveDraft() {
+    if (autoSaveDebounceTimer) {
+      clearTimeout(autoSaveDebounceTimer);
+      autoSaveDebounceTimer = null;
+    }
     const to = composeTo().trim();
     const subject = composeSubject().trim();
     const body = composeBody();
@@ -6295,11 +6376,17 @@ const App: Component = () => {
     if (isOffline()) {
       const draftId = editingDraft()?.id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : "draft-" + Date.now());
       let envelope = "";
-      const key = getMailboxKeyFor(box.id);
+      const key = getMailboxKeyFor(box.id) || mailboxKey();
       if (key) {
         try {
           const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-          envelope = encryptDraftEnvelope(wasm, key, box.id, richContent);
+          const draftPayload = JSON.stringify({
+            subject: subject || "",
+            recipient: to || "",
+            to: to || "",
+            body: richContent,
+          });
+          envelope = encryptDraftEnvelope(wasm, key, box.id, draftPayload);
         } catch {}
       }
 
@@ -6342,7 +6429,7 @@ const App: Component = () => {
     // Draft bodies are ciphertext-only server-side. Refuse to submit anything
     // the client has not actually encrypted: no plaintext envelope may reach
     // the drafts API.
-    const key = getMailboxKeyFor(box.id);
+    const key = getMailboxKeyFor(box.id) || mailboxKey();
     if (!key) {
       setErrorMessage("Sign in again to save drafts.");
       setComposeStatus(null);
@@ -6352,13 +6439,19 @@ const App: Component = () => {
     setComposeStatus("Saving draft to mailbox storage…");
     try {
       const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-      const envelope = encryptDraftEnvelope(wasm, key, box.id, richContent);
+      const draftPayload = JSON.stringify({
+        subject: subject || "",
+        recipient: to || "",
+        to: to || "",
+        body: richContent,
+      });
+      const envelope = encryptDraftEnvelope(wasm, key, box.id, draftPayload);
       const editing = editingDraft();
       if (editing) {
         try {
           const updated = await updateDraft(box.id, editing.id, {
-            recipient: to,
-            subject: subject || "Untitled Draft",
+            recipient: "",
+            subject: "",
             encrypted_envelope: envelope,
             version: editing.version,
           });
@@ -6398,8 +6491,8 @@ const App: Component = () => {
         return;
       }
       const created = await createDraft(box.id, {
-        recipient: to,
-        subject: subject || "Untitled Draft",
+        recipient: "",
+        subject: "",
         encrypted_envelope: envelope,
       });
 
@@ -6427,6 +6520,208 @@ const App: Component = () => {
     } catch (err: any) {
       setErrorMessage("Failed to save draft: " + err.message);
       setComposeStatus(null);
+    }
+  }
+
+  async function performAutoSaveDraft() {
+    if (isAutoSaving() || !composeOpen()) return;
+    const box = selectedMailbox();
+    const key = (box && getMailboxKeyFor(box.id)) || mailboxKey();
+    if (!box || !key) return;
+
+    const to = composeTo().trim();
+    const subject = composeSubject().trim();
+    const body = composeBody();
+    const bodyHtml = composeBodyHtml();
+    const richContent = bodyHtml.trim() ? bodyHtml : body;
+
+    if (!to && !subject && !richContent.trim()) return;
+
+    const currentSnapshot = JSON.stringify({ to, subject, richContent });
+    if (currentSnapshot === lastSavedDraftSnapshot()) {
+      setDraftDirty(false);
+      return;
+    }
+
+    setIsAutoSaving(true);
+    setComposeStatus("Autosaving draft…");
+    try {
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      const draftPayload = JSON.stringify({
+        subject: subject || "",
+        recipient: to || "",
+        to: to || "",
+        body: richContent,
+      });
+      const envelope = encryptDraftEnvelope(wasm, key, box.id, draftPayload);
+      const editing = editingDraft();
+      if (editing) {
+        try {
+          const updated = await updateDraft(box.id, editing.id, {
+            recipient: "",
+            subject: "",
+            encrypted_envelope: envelope,
+            version: editing.version,
+          });
+          setEditingDraft({ id: editing.id, version: updated.version });
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === editing.id
+                ? {
+                    ...m,
+                    recipient: to || "(no recipient)",
+                    recipients: to ? to.split(",").map((s) => s.trim()).filter(Boolean) : [],
+                    subject: subject || "(no subject)",
+                    snippet: richContent.replace(/<[^>]+>/g, "").slice(0, 80) + (richContent.length > 80 ? "…" : ""),
+                    bodyPlaintext: body || richContent,
+                    bodyHtml: richContent,
+                    encryptedBody: envelope,
+                    version: updated.version,
+                    date: "Just now",
+                  }
+                : m
+            )
+          );
+          setLastSavedDraftSnapshot(currentSnapshot);
+          setDraftDirty(false);
+        } catch (err: any) {
+          if (err?.status === 409) {
+            console.warn("Autosave draft version conflict:", err);
+          }
+        }
+      } else {
+        const created = await createDraft(box.id, {
+          recipient: "",
+          subject: "",
+          encrypted_envelope: envelope,
+        });
+        setEditingDraft({ id: created.id, version: created.version });
+        const draftDisplay: DisplayMessage = {
+          id: created.id,
+          version: created.version,
+          folder: "drafts",
+          sender: currentUser()?.email || "me@byos.local",
+          recipient: to || "(no recipient)",
+          recipients: to ? to.split(",").map((s) => s.trim()).filter(Boolean) : [],
+          subject: subject || "Untitled Draft",
+          snippet: richContent.replace(/<[^>]+>/g, "").slice(0, 80) + (richContent.length > 80 ? "…" : ""),
+          bodyPlaintext: body || richContent,
+          bodyHtml: richContent,
+          encryptedBody: envelope,
+          date: "Just now",
+          read: true,
+          starred: false,
+          isRealApi: true,
+        };
+        setMessages((prev) => [draftDisplay, ...prev]);
+        setLastSavedDraftSnapshot(currentSnapshot);
+        setDraftDirty(false);
+      }
+      setComposeStatus("Draft autosaved");
+      setTimeout(() => {
+        if (composeStatus() === "Draft autosaved") {
+          setComposeStatus(null);
+        }
+      }, 1500);
+    } catch (err) {
+      console.error("Autosave draft error:", err);
+      setComposeStatus(null);
+    } finally {
+      setIsAutoSaving(false);
+    }
+  }
+
+  createEffect(() => {
+    if (!composeOpen()) {
+      if (autoSaveDebounceTimer) clearTimeout(autoSaveDebounceTimer);
+      return;
+    }
+    const to = composeTo();
+    const subject = composeSubject();
+    const body = composeBody();
+    const bodyHtml = composeBodyHtml();
+    const richContent = bodyHtml.trim() ? bodyHtml : body;
+
+    if (!to.trim() && !subject.trim() && !richContent.trim()) {
+      setDraftDirty(false);
+      return;
+    }
+
+    const currentSnapshot = JSON.stringify({ to: to.trim(), subject: subject.trim(), richContent });
+    if (currentSnapshot !== lastSavedDraftSnapshot()) {
+      setDraftDirty(true);
+      if (autoSaveDebounceTimer) clearTimeout(autoSaveDebounceTimer);
+      autoSaveDebounceTimer = setTimeout(() => {
+        performAutoSaveDraft();
+      }, 1500);
+    }
+  });
+
+  async function handleExportEml(msg: DisplayMessage) {
+    const targetBoxId = msg.mailboxId || selectedMailbox()?.id;
+    if (!targetBoxId) return;
+    const targetAcc = connectedAccounts().find((a) => a.id === targetBoxId);
+    const targetToken = targetAcc?.sessionToken || sessionStorage.getItem("byos_active_session_token") || undefined;
+    const keyMaterial = getMailboxKeyForMessage(msg);
+
+    try {
+      const exportedAttachments: EmlAttachment[] = [];
+      const currentAtts = messageAttachments();
+      for (const att of currentAtts) {
+        if (att.isPathA && att.envelope) {
+          if (keyMaterial?.xwingSeedHex) {
+            const chunkCount = att.envelope.chunk_count || att.envelope.chunks.length;
+            const chunks: Uint8Array[] = [];
+            for (let i = 0; i < chunkCount; i++) {
+              const chunkBytes = await fetchMessageAttachmentChunk(
+                targetBoxId,
+                msg.id,
+                att.envelope.attachment_id,
+                i,
+                targetToken
+              );
+              chunks.push(chunkBytes);
+            }
+            const res = await decryptPathAAttachment(
+              att.envelope,
+              chunks,
+              keyMaterial.xwingSeedHex,
+              targetBoxId
+            );
+            if (res.data) {
+              exportedAttachments.push({
+                filename: att.filename,
+                contentType: res.mimeType || att.content_type,
+                data: res.data,
+              });
+            }
+          }
+        } else if (keyMaterial?.mailboxSkHex) {
+          const key = new Uint8Array(keyMaterial.mailboxSkHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+          const decryptedBlob = await downloadAndDecryptAttachment(targetBoxId, att.id, key, targetToken);
+          const buf = await decryptedBlob.arrayBuffer();
+          exportedAttachments.push({
+            filename: att.filename,
+            contentType: att.content_type,
+            data: buf,
+          });
+        }
+      }
+
+      const emlStr = buildEmlContent({
+        from: msg.sender,
+        to: msg.recipients && msg.recipients.length > 0 ? msg.recipients : msg.recipient,
+        subject: msg.subject || "(no subject)",
+        date: msg.date,
+        bodyPlain: messagePlaintext() || decryptedContent() || msg.snippet,
+        bodyHtml: decryptedContent()?.includes("<") ? decryptedContent()! : undefined,
+        attachments: exportedAttachments.length > 0 ? exportedAttachments : undefined,
+      });
+
+      downloadEmlFile((msg.subject || "message").replace(/[^a-zA-Z0-9_-]/g, "_"), emlStr);
+    } catch (err) {
+      console.error("EML Export failed:", err);
+      showToast(`EML export failed: ${err instanceof Error ? err.message : "unknown error"}`);
     }
   }
 
@@ -6663,7 +6958,7 @@ const App: Component = () => {
       snoozed: 0,
       unified_inbox: 0,
     };
-    const now = Date.now();
+    const now = snoozeClock();
     for (const m of messages()) {
       if (m.folder === "scheduled") {
         counts.scheduled++;
@@ -8240,6 +8535,7 @@ const App: Component = () => {
                   }
                 }}
                 onDeleteDraft={handleDeleteMessage}
+                onExportEml={handleExportEml}
                 onCancelScheduled={(msg) => handleCancelScheduled(msg)}
                 onEditScheduled={(msg) => handleEditScheduled(msg)}
                 currentUserEmail={currentUser()?.email}
@@ -8494,6 +8790,7 @@ const App: Component = () => {
       <Show when={contactsOpen() && selectedMailbox()}>
         <ContactsModal
           mailboxId={selectedMailbox()!.id}
+          mailboxKey={getMailboxKeyFor(selectedMailbox()!.id) || mailboxKey()}
           onClose={() => setContactsOpen(false)}
           onContactsUpdated={setContacts}
           onComposeTo={(email) => {

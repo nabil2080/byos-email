@@ -301,6 +301,8 @@ export interface ContactPlaintext {
   name: string;
   email: string;
   notes: string;
+  group?: string;
+  group_name?: string;
 }
 
 /** Encrypt a contact record to the base64 envelope the contacts API stores opaquely. */
@@ -332,10 +334,13 @@ export function decryptContactEnvelope(
     envelopeAadHex(mailboxId, CONTACT_AAD_PREFIX)
   );
   const parsed = JSON.parse(new TextDecoder().decode(hexToBytes(plaintextHex))) as Partial<ContactPlaintext>;
+  const grp = typeof parsed.group === "string" ? parsed.group : (typeof parsed.group_name === "string" ? parsed.group_name : "");
   return {
     name: typeof parsed.name === "string" ? parsed.name : "",
     email: typeof parsed.email === "string" ? parsed.email : "",
     notes: typeof parsed.notes === "string" ? parsed.notes : "",
+    group: grp,
+    group_name: grp,
   };
 }
 
@@ -392,6 +397,7 @@ export interface PathADecryptResult {
 
 export interface PathAReadDeps {
   lookupMailboxKeys?: (email: string) => Promise<KeyDirectoryRecord>;
+  refreshMailboxKeys?: (email: string, epoch?: number) => Promise<KeyDirectoryRecord | null>;
   wasm?: typeof WasmCore;
 }
 
@@ -446,18 +452,17 @@ export async function decryptPathAEnvelope(
   try {
     const lookupFn = deps?.lookupMailboxKeys ?? lookupMailboxKeys;
     const cleanSender = extractCleanEmail(senderEmail);
-    const senderRecord = await lookupFn(cleanSender);
+    let senderRecord = await lookupFn(cleanSender);
 
-    if (!senderRecord || !senderRecord.ed25519_signing_public_key) {
-      senderVerifyError = "Sender has no published signing key";
+    const env = JSON.parse(envelopeJson);
+    if (!env.sig) {
+      senderVerifyError = "Envelope has no signature";
     } else {
-      const senderPkHex = bytesToHex(
-        base64ToBytes(senderRecord.ed25519_signing_public_key),
-      );
-      const env = JSON.parse(envelopeJson);
-      if (!env.sig) {
-        senderVerifyError = "Envelope has no signature";
-      } else {
+      const verifyWithRecord = (rec: KeyDirectoryRecord): boolean => {
+        if (!rec.ed25519_signing_public_key) return false;
+        const senderPkHex = bytesToHex(
+          base64ToBytes(rec.ed25519_signing_public_key),
+        );
         const encBytes = base64ToBytes(env.enc);
         const nonceBytes = base64ToBytes(env.nonce);
         const ctBytes = base64ToBytes(env.ciphertext);
@@ -472,16 +477,60 @@ export async function decryptPathAEnvelope(
           bytesToHex(nonceBytes),
         );
 
-        const verified = wasm.wasm_verify_signature(
+        return wasm.wasm_verify_signature(
           senderPkHex,
           aadHex,
           bytesToHex(ctBytes),
           bytesToHex(sigBytes),
         );
+      };
+
+      if (!senderRecord || !senderRecord.ed25519_signing_public_key) {
+        senderVerifyError = "Sender has no published signing key";
+      } else {
+        let verified = verifyWithRecord(senderRecord);
+
+        // Dynamic sender key epoch resolution:
+        // If envelope key_epoch does not match record key_epoch or initial verification failed,
+        // re-query or refresh the key directory
+        const epochMismatch =
+          env.key_epoch !== undefined &&
+          senderRecord.key_epoch !== undefined &&
+          senderRecord.key_epoch !== env.key_epoch;
+
+        if (!verified || epochMismatch) {
+          if (deps?.refreshMailboxKeys) {
+            try {
+              const refreshed = await deps.refreshMailboxKeys(cleanSender, env.key_epoch);
+              if (refreshed) {
+                senderRecord = refreshed;
+                verified = verifyWithRecord(senderRecord);
+              }
+            } catch {
+              // refresh failed
+            }
+          } else {
+            try {
+              const reQueried = await lookupFn(cleanSender);
+              if (reQueried) {
+                senderRecord = reQueried;
+                verified = verifyWithRecord(senderRecord);
+              }
+            } catch {}
+          }
+        }
 
         senderVerified = verified;
         if (!verified) {
-          senderVerifyError = "Signature does not match sender";
+          if (
+            env.key_epoch !== undefined &&
+            senderRecord?.key_epoch !== undefined &&
+            senderRecord.key_epoch !== env.key_epoch
+          ) {
+            senderVerifyError = `Signature does not match sender (key epoch mismatch: envelope epoch ${env.key_epoch}, directory epoch ${senderRecord.key_epoch})`;
+          } else {
+            senderVerifyError = "Signature does not match sender";
+          }
         }
       }
     }
