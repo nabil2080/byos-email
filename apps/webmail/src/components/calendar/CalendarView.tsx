@@ -1801,9 +1801,9 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
         </div>
       </Show>
 
-      {/* ── Main Workspace Card (Matching Email List Section Radius & Card Styling) ── */}
-      <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex flex-col min-w-0 h-full">
-        {/* Top Fixed Bar (Beside CalendarSidebar, not over it!) */}
+      {/* ── Right Content Column beside CalendarSidebar ── */}
+      <div class="flex-1 flex flex-col min-w-0 h-full overflow-hidden gap-1.5 sm:gap-2">
+        {/* Top Fixed Bar (Beside CalendarSidebar, not on top of it) */}
         <TopFixedBar
           activeModule="calendar"
           onSwitchModule={props.onSwitchModule || (() => {})}
@@ -1821,8 +1821,10 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
           onToggleTheme={props.onToggleTheme}
         />
 
-        {/* Toolbar (Directly below Top Fixed Bar) */}
-        <CalendarToolbar
+        {/* ── Main Workspace Card (Matching Email List Section Radius & Card Styling) ── */}
+        <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex flex-col min-w-0 h-full">
+          {/* Toolbar */}
+          <CalendarToolbar
           hideRedundantTopBarItems={true}
           viewMode={viewMode()}
           onChangeViewMode={changeViewMode}
@@ -2098,6 +2100,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
             primaryTimeZone={calendarSettings.settings().primaryTimeZone}
           />
         </div>
+      </div>
       </div>
 
       {/* ── Modals ── */}

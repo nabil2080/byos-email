@@ -7716,7 +7716,6 @@ const App: Component = () => {
           </div>
         </Show>
 
-        
         <main class="flex flex-1 overflow-hidden p-2 sm:p-3 gap-2.5 sm:gap-3 bg-[#F0EEE9] dark:bg-[#18191D]" data-testid="main-content">
           {/* ── Left Navigation Sidebar (Unified with Canvas #F0EEE9) ── */}
           <Sidebar
@@ -7892,10 +7891,26 @@ const App: Component = () => {
           </Show>
 
           <Show when={activeModule() === "mail"}>
-            {/* ── Mailbox Workspace Container (Beside Sidebar and Beside RightBar) ── */}
-            <div class="flex-1 min-w-0 h-full flex overflow-hidden gap-2.5 sm:gap-3">
-              {/* Email Workspace Card (Matching Calendar & Notes Card Radius & Styling) */}
-              <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex min-w-0 h-full">
+            <div class="flex-1 flex flex-col min-w-0 h-full overflow-hidden gap-1.5 sm:gap-2">
+              {/* ── Top Bar (Beside left sidebar, seamless background color) ── */}
+              <TopFixedBar
+                activeModule="mail"
+                onSwitchModule={setActiveModule}
+                searchQuery={searchQuery()}
+                onSearchChange={setSearchQuery}
+                onOpenContacts={openContacts}
+                onOpenMobileMenu={() => setMobileSidebarOpen(true)}
+                isOnline={!isOffline()}
+                isCustomizerOpen={rightCustomizerOpen()}
+                onToggleCustomizer={() => setRightCustomizerOpen(!rightCustomizerOpen())}
+                theme={theme()}
+                onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
+              />
+
+              {/* ── Mailbox Workspace Container (Beside Sidebar, No RightBar) ── */}
+              <div class="flex-1 min-w-0 h-full flex overflow-hidden gap-2.5 sm:gap-3">
+                {/* Email Workspace Card (Matching Calendar & Notes Card Radius & Styling) */}
+                <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex min-w-0 h-full">
                 {/* ── Message List Column (Dynamic Full-Width, 380px Split, or Hidden in Full Mode) ── */}
                 <div
                   class={`${
@@ -8052,6 +8067,7 @@ const App: Component = () => {
           </Show>
               </div>
             </div>
+            </div>
           </Show>
 
           {/* ── Desktop Docked Quick Settings Panel (Beside Workspace Card in All Modules) ── */}
@@ -8107,17 +8123,6 @@ const App: Component = () => {
               />
             </div>
           </Show>
-
-          {/* ── Right Utility Bar (Rail) - Stands Full-Height Beside Workspace Card across all modules ── */}
-          <RightBar
-            activeModule={activeModule()}
-            onSwitchModule={setActiveModule}
-            onOpenContacts={openContacts}
-            isCustomizerOpen={rightCustomizerOpen()}
-            onToggleCustomizer={() => setRightCustomizerOpen(!rightCustomizerOpen())}
-            theme={theme()}
-            onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
-          />
         </main>
 
         {/* ── Mobile Slide-Over Quick Settings Drawer ── */}

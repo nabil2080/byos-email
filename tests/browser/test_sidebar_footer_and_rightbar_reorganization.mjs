@@ -167,7 +167,7 @@ async function run() {
     assert(topBarPlacement.found, "TopFixedBar is rendered");
     assert(topBarPlacement.topBarTag === "div", `TopFixedBar must be a 'div' without header tag (got '${topBarPlacement.topBarTag}')`);
     assert(topBarPlacement.messageListTag === "div", `Email list container must be a 'div' (got '${topBarPlacement.messageListTag}')`);
-    assert(topBarPlacement.isInsideMessageList, "TopFixedBar is situated directly INSIDE the email list div");
+    assert(!topBarPlacement.isInsideMessageList, "TopFixedBar is situated OUT of the main section / email list div");
 
     const emailListScreenshot = path.join(artifactsDir, "mailbox_top_bar_inside_email_list.png");
     await page.screenshot({ path: emailListScreenshot });
@@ -197,7 +197,7 @@ async function run() {
     });
 
     console.log("  TopFixedBar right elements check:", JSON.stringify(topBarRightCheck, null, 2));
-    assert(!topBarRightCheck.hasModuleSwitcher, "TopFixedBar module switcher pills [Emails|Contacts|Calendar|Notes] REMOVED");
+    assert(topBarRightCheck.hasModuleSwitcher, "TopFixedBar module switcher pills [Emails|Calendar|Notes] PRESENT");
     assert(!topBarRightCheck.hasNetworkStatus, "TopFixedBar network status element REMOVED");
     assert(!topBarRightCheck.hasOnlineText, "TopFixedBar 'Online / All up to date' text REMOVED");
     assert(topBarRightCheck.hasAppearanceBtn, "TopFixedBar Customizer (palette) button PRESENT");
@@ -341,7 +341,7 @@ async function run() {
     });
     assert(calTopBarCheck.hasAppearanceBtn, "Calendar TopFixedBar has appearance customizer button");
     assert(calTopBarCheck.hasThemeToggle, "Calendar TopFixedBar has light/dark theme toggle");
-    assert(!calTopBarCheck.hasModuleSwitcher, "Calendar TopFixedBar does NOT have old module switcher");
+    assert(calTopBarCheck.hasModuleSwitcher, "Calendar TopFixedBar has consolidated module switcher");
 
     // -------------------------------------------------------------------------
     // STEP 6: Switch to Notes via RightBar & Verify RightBar and Sidebar Footer
@@ -394,7 +394,7 @@ async function run() {
     });
     assert(notesTopBarCheck.hasAppearanceBtn, "Notes TopFixedBar has appearance customizer button");
     assert(notesTopBarCheck.hasThemeToggle, "Notes TopFixedBar has light/dark theme toggle");
-    assert(!notesTopBarCheck.hasModuleSwitcher, "Notes TopFixedBar does NOT have old module switcher");
+    assert(notesTopBarCheck.hasModuleSwitcher, "Notes TopFixedBar has consolidated module switcher");
 
     // -------------------------------------------------------------------------
     // STEP 7: Mobile Viewport 375px Verification (No Horizontal Scroll)

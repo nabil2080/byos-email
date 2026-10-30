@@ -635,9 +635,9 @@ export const NotesView: Component<NotesViewProps> = (props) => {
         </div>
       </Show>
 
-      {/* ── 2. MAIN WORKSPACE CARD (Matches Email List Section Radius & Card Styling) ── */}
-      <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex flex-col min-w-0 h-full">
-        {/* Top Fixed Bar (Inside Workspace Card, Beside Sidebar) */}
+      {/* ── Right Content Column beside NotesSidebar ── */}
+      <div class="flex-1 flex flex-col min-w-0 h-full overflow-hidden gap-1.5 sm:gap-2">
+        {/* Top Fixed Bar (Beside NotesSidebar, not on top of it) */}
         <TopFixedBar
           activeModule={props.activeModule}
           onSwitchModule={props.onSwitchModule}
@@ -652,6 +652,8 @@ export const NotesView: Component<NotesViewProps> = (props) => {
           onToggleTheme={props.onToggleTheme}
         />
 
+        {/* ── 2. MAIN WORKSPACE CARD (Matches Email List Section Radius & Card Styling) ── */}
+        <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex flex-col min-w-0 h-full">
         {/* Notes Scrollable Body */}
         <div class="flex-1 min-h-0 overflow-y-auto px-4 sm:px-8 py-6">
           <div class="max-w-5xl mx-auto">
@@ -1452,6 +1454,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
             </Show>
           </div>
         </div>
+      </div>
       </div>
 
       {/* ── EDIT LABELS MODAL ── */}

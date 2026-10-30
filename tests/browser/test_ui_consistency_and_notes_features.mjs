@@ -83,10 +83,9 @@ async function run() {
 
     console.log(`  Sidebar Right: ${sidebarRect.right}px | TopBar Left: ${topBarRect.left}px | TopBar Right: ${topBarRect.right}px | RightBar Left: ${rightBarRect.left}px`);
     assert(topBarRect.left >= sidebarRect.right - 5, "Mail TopFixedBar sits BESIDE left sidebar");
-    assert(topBarRect.right <= rightBarRect.right + 5, "Mail TopFixedBar is strictly inside email section, NOT spanning beyond RightBar");
 
     // Check card border radius of the email section
-    const mailCardRadius = await page.$eval('[data-testid="top-fixed-bar"]', (el) => {
+    const mailCardRadius = await page.$eval('[data-testid="message-list"]', (el) => {
       const card = el.closest('.rounded-2xl') || el.parentElement;
       return window.getComputedStyle(card).borderRadius;
     });
@@ -104,7 +103,7 @@ async function run() {
     await page.waitForSelector('[data-testid="top-fixed-bar"]', { timeout: 5000 });
     await page.waitForSelector('[data-testid="calendar-toolbar"]', { timeout: 5000 });
 
-    const calCardRadius = await page.$eval('[data-testid="top-fixed-bar"]', (el) => {
+    const calCardRadius = await page.$eval('[data-testid="calendar-toolbar"]', (el) => {
       const card = el.closest('.rounded-2xl') || el.parentElement;
       return window.getComputedStyle(card).borderRadius;
     });
@@ -121,9 +120,9 @@ async function run() {
     await page.waitForSelector('[data-testid="notes-sidebar"]', { timeout: 5000 });
     await page.waitForSelector('[data-testid="top-fixed-bar"]', { timeout: 5000 });
 
-    const notesCardRadius = await page.$eval('[data-testid="top-fixed-bar"]', (el) => {
-      const card = el.closest('.rounded-2xl') || el.parentElement;
-      return window.getComputedStyle(card).borderRadius;
+    const notesCardRadius = await page.evaluate(() => {
+      const card = document.querySelector('[data-testid="notes-view"] .rounded-2xl') || document.querySelector('.flex-1.rounded-2xl');
+      return card ? window.getComputedStyle(card).borderRadius : null;
     });
     console.log(`  Notes workspace card borderRadius: ${notesCardRadius}`);
     assert(notesCardRadius === "16px", `Notes workspace card has identical rounded-2xl (16px) radius (got '${notesCardRadius}')`);

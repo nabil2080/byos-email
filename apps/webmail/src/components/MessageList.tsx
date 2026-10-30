@@ -5,7 +5,7 @@ import { MessageRow } from "./MessageRow";
 import { ThreadRow } from "./ThreadRow";
 import { MailboxFolder, MailboxLabel, ThreadSummary } from "../api";
 import { FocusedCategory } from "../focused_inbox";
-import { TopFixedBar, AppModule } from "./TopFixedBar";
+import { AppModule } from "./TopFixedBar";
 
 export interface DisplayMessage {
   id: string;
@@ -163,21 +163,6 @@ export const MessageList: Component<MessageListProps> = (props) => {
       data-testid="message-list"
       class="w-full bg-[#FAF9F6] dark:bg-[#1E2025] flex flex-col min-w-0 overflow-hidden h-full"
     >
-      {/* Top Fixed Bar (Inside Email List, switched to div with no header tag) */}
-      <TopFixedBar
-        activeModule={props.activeModule || "mail"}
-        onSwitchModule={props.onSwitchModule || (() => {})}
-        searchQuery={props.searchQuery || ""}
-        onSearchChange={props.onSearchChange || (() => {})}
-        onOpenContacts={props.onOpenContacts || (() => {})}
-        onOpenMobileMenu={props.onOpenMobileMenu}
-        isOnline={props.isOnline !== false}
-        isCustomizerOpen={props.isCustomizerOpen}
-        onToggleCustomizer={props.onToggleCustomizer}
-        theme={props.theme}
-        onToggleTheme={props.onToggleTheme}
-      />
-
       {/* Label Filter Chip Row */}
       <Show when={props.activeLabel}>
         <div class="px-3.5 py-2 bg-[#FAF9F6] dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between text-xs flex-shrink-0">

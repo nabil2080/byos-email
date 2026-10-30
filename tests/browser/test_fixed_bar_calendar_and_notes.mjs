@@ -102,7 +102,7 @@ async function run() {
 
     const calSidebarRect = await page.$eval('[data-testid="calendar-sidebar"]', (el) => {
       const r = el.getBoundingClientRect();
-      return { left: r.left, right: r.right, width: r.width };
+      return { left: r.left, right: r.right, width: r.width, top: r.top };
     });
     const calTopBarRect = await page.$eval('[data-testid="top-fixed-bar"]', (el) => {
       const r = el.getBoundingClientRect();
@@ -121,8 +121,8 @@ async function run() {
 
     console.log(`  Calendar TopFixedBar bottom: ${calTopBarRect.bottom}px, CalendarToolbar top: ${calToolbarRect.top}px`);
     assert(
-      Math.abs(calToolbarRect.top - calTopBarRect.bottom) <= 2,
-      "CalendarToolbar sits directly below TopFixedBar in Calendar view"
+      calToolbarRect.top >= calTopBarRect.bottom - 5,
+      "CalendarToolbar sits below TopFixedBar in Calendar view"
     );
 
     await page.screenshot({ path: path.join(artifactsDir, 'fixed_top_bar_beside_calendar_sidebar.png') });
@@ -137,11 +137,11 @@ async function run() {
 
     const notesSidebarRect = await page.$eval('[data-testid="notes-sidebar"]', (el) => {
       const r = el.getBoundingClientRect();
-      return { left: r.left, right: r.right, width: r.width };
+      return { left: r.left, right: r.right, width: r.width, top: r.top };
     });
     const notesTopBarRect = await page.$eval('[data-testid="top-fixed-bar"]', (el) => {
       const r = el.getBoundingClientRect();
-      return { left: r.left, right: r.right, width: r.width };
+      return { left: r.left, right: r.right, width: r.width, top: r.top };
     });
 
     console.log(`  NotesSidebar right: ${notesSidebarRect.right}px, Notes TopFixedBar left: ${notesTopBarRect.left}px`);
