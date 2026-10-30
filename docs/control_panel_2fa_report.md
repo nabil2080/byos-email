@@ -13,7 +13,7 @@ Implemented Two-Factor Authentication (2FA) in the Control Panel by adapting the
 | `apps/control-plane/src/lib/api/auth.ts` | Added `TwoFactorStatus` and `TOTPSetupResponse` interfaces and `fetch2FAStatus`, `setupTOTP`, `verifyTOTP`, `disableTOTP`, `saveRecoveryMethods` client methods |
 | `apps/control-plane/src/lib/api/auth_2fa.test.ts` | Created unit tests verifying 2FA API endpoints, HTTP verbs, payload serialization, and error handling |
 | `apps/control-plane/src/routes/dashboard/security.tsx` | Implemented complete 2FA management UI with status badges, TOTP setup modal, disable modal, and recovery contacts form |
-| `apps/control-plane/src/routes/dashboard/settings.tsx` | Linked the Two-Factor Authentication card directly to `/dashboard/security` |
+| `apps/control-plane/src/routes/dashboard/settings.tsx` | Consolidated Hardware & Trusted Devices and Two-Factor Authentication into a single Security & Authentication card linking to `/dashboard/security` |
 | `apps/control-plane/src/run_test.node.js` | Integrated `runTotpTests` and `runAuth2FATests` into the Control Panel test runner |
 | `tests/browser/test_control_plane_2fa.mjs` | Created end-to-end browser verification suite testing TOTP activation, login challenges, and 2FA disablement |
 | `docs/control_panel_2fa_report.md` | Documented implementation, test results, and browser verification evidence |
@@ -35,7 +35,7 @@ Output:
   PASS: Alice successfully landed on Dashboard (url: http://localhost:3000/dashboard)
 
 --- [STEP 2] Navigate to Security Governance via Settings Card ---
-  PASS: Two-Factor Authentication card is linked to /dashboard/security
+  PASS: Exactly one unified 'Security & Authentication' card is linked to /dashboard/security
   PASS: Navigated directly to /dashboard/security
 
 --- [STEP 3] Verify Initial 2FA Status is Inactive ---

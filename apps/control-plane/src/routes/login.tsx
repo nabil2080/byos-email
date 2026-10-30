@@ -105,11 +105,13 @@ const LoginPage: Component = () => {
         type: c.type as PublicKeyCredentialType,
       }));
 
+      const effectiveRpId = options.rpId || window.location.hostname;
+
       const credential = (await navigator.credentials.get({
         publicKey: {
           challenge: challengeBuf,
-          rpId: options.rpId || window.location.hostname,
-          userVerification: options.userVerification as UserVerificationRequirement,
+          rpId: effectiveRpId,
+          userVerification: (options.userVerification || "required") as UserVerificationRequirement,
           allowCredentials: allowCreds.length > 0 ? allowCreds : undefined,
           timeout: options.timeout || 60000,
         },
@@ -123,16 +125,22 @@ const LoginPage: Component = () => {
       const assertionResponse = credential.response as AuthenticatorAssertionResponse;
       const clientDataB64 = bufferToBase64URL(assertionResponse.clientDataJSON);
       const authDataB64 = bufferToBase64URL(assertionResponse.authenticatorData);
-      const sigHex = Array.from(new Uint8Array(assertionResponse.signature))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
+      const sigB64 = bufferToBase64URL(assertionResponse.signature);
+      const userHandleB64 = assertionResponse.userHandle ? bufferToBase64URL(assertionResponse.userHandle) : undefined;
 
-      const loginRes = await loginWithPasskey({
-        credential_id: rawIdB64,
-        challenge_token: options.challenge,
-        signature: sigHex,
-        client_data_json: clientDataB64,
-      });
+      const payload = {
+        id: credential.id,
+        rawId: rawIdB64,
+        type: credential.type,
+        response: {
+          clientDataJSON: clientDataB64,
+          authenticatorData: authDataB64,
+          signature: sigB64,
+          userHandle: userHandleB64,
+        },
+      };
+
+      const loginRes = await loginWithPasskey(payload);
 
       if (loginRes.role === "member") {
         const webmailUrl =
@@ -319,37 +327,76 @@ const LoginPage: Component = () => {
                     <div>
                       <h2 class="text-xs font-semibold text-[#3C3D3E]">2-Step Verification Active</h2>
                       <p class="text-[11px] text-[#6F7173]">
-                        {twoFactorChallenge()?.preferred_method === "totp"
+                        {selected2FAMethod() === "passkey"
+                          ? "Hardware Security Key / Passkey"
+                          : selected2FAMethod() === "totp"
                           ? "Authenticator App Code"
-                          : `Security code sent to ${twoFactorChallenge()?.destination_masked}`}
+                          : `Security code sent to ${twoFactorChallenge()?.destination_masked || "registered device"}`}
                       </p>
                     </div>
                   </div>
 
                   <form onSubmit={handleVerify2FA} class="space-y-4">
-                    <div>
-                      <label class="block text-xs font-semibold uppercase tracking-wider text-[#6F7173] mb-1.5">
-                        6-Digit Security Code
-                      </label>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        maxLength={6}
-                        required
-                        autofocus
-                        placeholder="123456"
-                        value={twoFactorCode()}
-                        onInput={(e) => setTwoFactorCode(e.currentTarget.value.replace(/[^0-9]/g, ""))}
-                        disabled={twoFactorBusy()}
-                        class="block w-full rounded-lg border border-[#E2DFD8] bg-white px-3.5 py-2.5 text-center font-mono text-lg tracking-widest text-[#3C3D3E] placeholder-[#6F7173]/40 focus:border-[#9E725F] focus:ring-2 focus:ring-[#9E725F]/20 focus:outline-none transition-all"
-                      />
-                    </div>
+                    <Show
+                      when={selected2FAMethod() === "passkey"}
+                      fallback={
+                        <div>
+                          <label class="block text-xs font-semibold uppercase tracking-wider text-[#6F7173] mb-1.5 text-center">
+                            6-Digit Security Code
+                          </label>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            maxLength={6}
+                            required
+                            autofocus
+                            placeholder="123456"
+                            value={twoFactorCode()}
+                            onInput={(e) => setTwoFactorCode(e.currentTarget.value.replace(/[^0-9]/g, ""))}
+                            disabled={twoFactorBusy()}
+                            class="block w-full rounded-lg border border-[#E2DFD8] bg-white px-3.5 py-2.5 text-center font-mono text-lg tracking-widest text-[#3C3D3E] placeholder-[#6F7173]/40 focus:border-[#9E725F] focus:ring-2 focus:ring-[#9E725F]/20 focus:outline-none transition-all"
+                          />
+                        </div>
+                      }
+                    >
+                      <button
+                        type="button"
+                        onClick={handlePasskeyLogin}
+                        disabled={twoFactorBusy() || passkeyLoading()}
+                        class="w-full inline-flex justify-center items-center gap-2 rounded-lg bg-[#9E725F] px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[#865E4D] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/30 disabled:opacity-50 transition-colors cursor-pointer"
+                      >
+                        <svg class="w-4 h-4 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                          <path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 00.528 2.86" />
+                        </svg>
+                        <span>{passkeyLoading() ? "Authenticating…" : "Verify with Passkey"}</span>
+                      </button>
+                    </Show>
 
                     <Show when={(twoFactorChallenge()?.methods?.length || 0) > 1}>
                       <div class="flex items-center justify-between text-xs text-[#6F7173] pt-1">
                         <span>Alternate method:</span>
                         <div class="flex items-center gap-2">
+                          <Show when={twoFactorChallenge()?.methods.includes("passkey") && selected2FAMethod() !== "passkey"}>
+                            <button
+                              type="button"
+                              onClick={() => { setSelected2FAMethod("passkey"); setError(null); }}
+                              disabled={twoFactorBusy()}
+                              class="text-[#9E725F] hover:underline cursor-pointer font-medium"
+                            >
+                              Use Passkey
+                            </button>
+                          </Show>
+                          <Show when={twoFactorChallenge()?.methods.includes("totp") && selected2FAMethod() !== "totp"}>
+                            <button
+                              type="button"
+                              onClick={() => { setSelected2FAMethod("totp"); setError(null); }}
+                              disabled={twoFactorBusy()}
+                              class="text-[#9E725F] hover:underline cursor-pointer font-medium"
+                            >
+                              Authenticator App
+                            </button>
+                          </Show>
                           <Show when={twoFactorChallenge()?.methods.includes("email") && selected2FAMethod() !== "email"}>
                             <button
                               type="button"
@@ -374,13 +421,15 @@ const LoginPage: Component = () => {
                       </div>
                     </Show>
 
-                    <button
-                      type="submit"
-                      disabled={twoFactorBusy() || twoFactorCode().length < 6}
-                      class="w-full inline-flex justify-center items-center rounded-lg bg-[#9E725F] px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[#865E4D] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/30 disabled:opacity-50 transition-colors cursor-pointer"
-                    >
-                      {twoFactorBusy() ? "Verifying Code…" : "Verify & Sign In"}
-                    </button>
+                    <Show when={selected2FAMethod() !== "passkey"}>
+                      <button
+                        type="submit"
+                        disabled={twoFactorBusy() || twoFactorCode().length < 6}
+                        class="w-full inline-flex justify-center items-center rounded-lg bg-[#9E725F] px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[#865E4D] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/30 disabled:opacity-50 transition-colors cursor-pointer"
+                      >
+                        {twoFactorBusy() ? "Verifying Code…" : "Verify & Sign In"}
+                      </button>
+                    </Show>
 
                     <button
                       type="button"
@@ -443,8 +492,8 @@ const LoginPage: Component = () => {
                   <div class="absolute inset-0 flex items-center">
                     <div class="w-full border-t border-[#E2DFD8]" />
                   </div>
-                  <div class="relative flex justify-center text-xs uppercase">
-                    <span class="bg-white px-2 text-[#6F7173]">Or continue with</span>
+                  <div class="relative flex justify-center text-xs">
+                    <span class="bg-white px-2 text-[#6F7173]">or</span>
                   </div>
                 </div>
 
@@ -452,12 +501,12 @@ const LoginPage: Component = () => {
                   type="button"
                   onClick={handlePasskeyLogin}
                   disabled={loading() || passkeyLoading()}
-                  class="w-full inline-flex justify-center items-center gap-2 rounded-lg border border-[#E2DFD8] bg-[#F7F5F0] px-4 py-2.5 text-sm font-semibold text-[#3C3D3E] hover:bg-[#EAE6DE] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/30 disabled:opacity-50 transition-colors"
+                  class="w-full h-10 px-4 rounded-lg border border-[#E2DFD8] bg-white text-xs font-semibold text-[#1A1B1E] hover:bg-[#FAF9F6] transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                 >
-                  <svg class="w-4 h-4 text-[#9E725F]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 00.528 2.86" />
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-2 text-[#9E725F]" viewBox="0 0 24 24">
+                    <path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 00.528 2.86" />
                   </svg>
-                  {passkeyLoading() ? "Verifying Passkey…" : "Sign In with Passkey / Biometrics"}
+                  <span>{passkeyLoading() ? "Authenticating…" : "Sign in with Passkey"}</span>
                 </button>
               </form>
             </Show>

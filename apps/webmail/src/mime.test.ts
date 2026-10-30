@@ -157,5 +157,85 @@ export function runMimeTests(): { passed: number; failed: number } {
     assert(parsed.textHtml!.includes("tok_pixel_12345"), "HTML should contain tracking token");
   });
 
+  // 8. Direct text/calendar MIME message
+  test("8. Direct text/calendar MIME message extracts calendarPart and method", () => {
+    const raw = [
+      "From: alice@byos.local",
+      "To: bob@byos.local",
+      "Subject: Invitation: Sync",
+      'Content-Type: text/calendar; method=REQUEST; charset="utf-8"',
+      "",
+      "BEGIN:VCALENDAR",
+      "METHOD:REQUEST",
+      "BEGIN:VEVENT",
+      "SUMMARY:Sync",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+
+    const parsed = parseMime(raw);
+    assert(parsed.calendarPart != null, "calendarPart should not be null");
+    assert(parsed.calendarPart!.method === "REQUEST", `Expected REQUEST, got: ${parsed.calendarPart!.method}`);
+    assert(parsed.calendarPart!.rawIcs.includes("BEGIN:VCALENDAR"), "rawIcs should contain calendar data");
+  });
+
+  // 9. multipart/alternative with plain, html, and calendar
+  test("9. multipart/alternative with plain, html, and calendar", () => {
+    const boundary = "----=_Part_alt_cal_456";
+    const raw = [
+      "To: bob@byos.local",
+      "Subject: Meeting Invitation",
+      "MIME-Version: 1.0",
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Please join our meeting.",
+      `--${boundary}`,
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      "<p>Please join our meeting.</p>",
+      `--${boundary}`,
+      'Content-Type: text/calendar; method=REQUEST; charset="utf-8"',
+      "",
+      "BEGIN:VCALENDAR",
+      "METHOD:REQUEST",
+      "BEGIN:VEVENT",
+      "UID:meet-1",
+      "SUMMARY:Project Review",
+      "END:VEVENT",
+      "END:VCALENDAR",
+      `--${boundary}--`,
+    ].join("\r\n");
+
+    const parsed = parseMime(raw);
+    assert(parsed.textPlain === "Please join our meeting.", "textPlain mismatch");
+    assert(parsed.textHtml === "<p>Please join our meeting.</p>", "textHtml mismatch");
+    assert(parsed.calendarPart != null, "calendarPart should not be null");
+    assert(parsed.calendarPart!.method === "REQUEST", "calendarPart method should be REQUEST");
+    assert(parsed.calendarPart!.rawIcs.includes("UID:meet-1"), "calendarPart should contain VEVENT");
+  });
+
+  // 10. Inline BEGIN:VCALENDAR fallback in plaintext
+  test("10. Inline BEGIN:VCALENDAR fallback in plaintext", () => {
+    const raw = [
+      "Subject: Calendar Invite",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Here is your invite:",
+      "BEGIN:VCALENDAR",
+      "METHOD:REQUEST",
+      "BEGIN:VEVENT",
+      "UID:inline-1",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+
+    const parsed = parseMime(raw);
+    assert(parsed.calendarPart != null, "Should detect inline calendarPart");
+    assert(parsed.calendarPart!.rawIcs.includes("UID:inline-1"), "Should extract inline VCALENDAR");
+  });
+
   return { passed, failed };
 }

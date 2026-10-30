@@ -175,6 +175,10 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
+		if !isAdmin(userID, orgID, conn) {
+			http.Error(w, "admin or owner role required to create mailboxes", http.StatusForbidden)
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		bodyBytes, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -387,6 +391,64 @@ func deleteMailbox(ctx context.Context, conn *pgx.Conn, orgID, mailboxID, actorU
 	newLocalPart := fmt.Sprintf("deleted_%s_%s", shortID, localPart)
 	if len(newLocalPart) > 100 {
 		newLocalPart = newLocalPart[:100]
+	}
+
+	// Check if calendar event migrations exist for this mailbox
+	var hasCalendarMigrations bool
+	_ = tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema='public' AND table_name='calendar_event_migrations'
+		)
+	`).Scan(&hasCalendarMigrations)
+	if hasCalendarMigrations {
+		type mbMigRow struct {
+			id        string
+			eventID   string
+			status    string
+			expiresAt time.Time
+			legacy    []byte
+		}
+		var mbMigList []mbMigRow
+		qRows, err := tx.Query(ctx, `
+			SELECT id::text, event_id::text, status, expires_at, legacy_payload
+			FROM calendar_event_migrations
+			WHERE mailbox_id=$1
+			FOR UPDATE
+		`, mailboxID)
+		if err == nil {
+			for qRows.Next() {
+				var r mbMigRow
+				if err := qRows.Scan(&r.id, &r.eventID, &r.status, &r.expiresAt, &r.legacy); err == nil {
+					mbMigList = append(mbMigList, r)
+				}
+			}
+			qRows.Close()
+		}
+
+		// Invariant: A mailbox with an active staged migration must not be deleted
+		for _, m := range mbMigList {
+			if m.status == "staged" {
+				if time.Now().Before(m.expiresAt) {
+					return "", fmt.Errorf("cannot delete mailbox with active calendar event migrations in progress")
+				}
+				// Expired staged migration: roll back legacy payload into calendar_events and mark rolled_back
+				if len(m.legacy) > 0 {
+					_, _ = tx.Exec(ctx, `UPDATE calendar_events SET encrypted_payload=$1, updated_at=now() WHERE id=$2`, m.legacy, m.eventID)
+				}
+				_, _ = tx.Exec(ctx, `UPDATE calendar_event_migrations SET status='rolled_back', legacy_payload=NULL, rolled_back_at=now(), rollback_reason='ttl_expired_on_mailbox_delete' WHERE id=$1`, m.id)
+			}
+		}
+
+		// Invariant: Terminal migration history must be removed transactionally so foreign key
+		// constraint (ON DELETE RESTRICT) does not block mailbox deletion or cleanup.
+		_, err = tx.Exec(ctx, `
+			DELETE FROM calendar_event_migrations
+			WHERE mailbox_id=$1 AND status IN ('finalized', 'rolled_back')
+		`, mailboxID)
+		if err != nil {
+			return "", fmt.Errorf("failed to clean up terminal calendar migration records: %w", err)
+		}
 	}
 
 	// 1. Soft-delete / deactivate the mailbox

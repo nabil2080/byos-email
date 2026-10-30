@@ -32,3 +32,16 @@ NEVER use generic AI-generated aesthetics like overused font families (Inter, Ro
 Interpret creatively and make unexpected choices that feel genuinely designed for the context. No design should be the same.
 
 **IMPORTANT**: Match implementation complexity to the aesthetic vision. Maximalist designs need elaborate code with extensive animations and effects. Minimalist or refined designs need restraint, precision, and careful attention to spacing, typography, and subtle details.
+
+## Companion Design & Crafting Skills
+
+- **`mengto-skills` (`.agents/skills/mengto-skills/`):**
+  - Design-first UI prompting (`ui/design-first-ui-prompting`)
+  - Passive anti-slop quality gates (`ui/no-ai-design-slop`)
+  - SaaS landing and pricing architectures (`web-design/landing-page`, `web-design/pricing-page`)
+  - Advanced CSS and Tailwind layout patterns (`web-design/tailwindcss`, `web-design/container-lines`, `web-design/progressive-blur`, etc.)
+  - 14 SVG spot illustration styles (`illustration/`)
+  - Three.js WebGL systems (`3d/`)
+  *Always adapt to `SolidJS + Vite + TailwindCSS` (Dashboard/Mailbox UI) or `Astro + SolidJS + TailwindCSS` (Public site).*
+- **`responsive-craft` (`.agents/skills/responsive-craft/`):** Viewport scaling down to 375px without horizontal scrolling.
+- **`motion-design` (`.agents/skills/motion-design/`):** Choreography rules adhering to the snappy infrastructure archetype.

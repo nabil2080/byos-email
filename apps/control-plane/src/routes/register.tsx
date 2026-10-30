@@ -14,6 +14,8 @@ const RegisterPage: Component = () => {
   const [password, setPassword] = createSignal("");
   const [confirmPassword, setConfirmPassword] = createSignal("");
   const [showPassword, setShowPassword] = createSignal(false);
+  const [recoveryEmail, setRecoveryEmail] = createSignal("");
+  const [recoveryPhone, setRecoveryPhone] = createSignal("");
 
   // Step 2 & 3 State
   const [generationProgress, setGenerationProgress] = createSignal(0);
@@ -170,12 +172,14 @@ const RegisterPage: Component = () => {
       const em = email().trim().toLowerCase();
       const currentParams = new URLSearchParams(window.location.search);
       const orgNameParam = currentParams.get("org_name") || currentParams.get("org") || (em.includes("acme") ? "Acme" : "");
-      // Transmit ONLY public key, PBKDF2 password verifier, and optional org name
+      // Transmit public key, PBKDF2 password verifier, optional org name, and owner recovery contacts
       const res = await register(
         em,
         data.passwordVerifier,
         data.publicKey,
-        orgNameParam || undefined
+        orgNameParam || undefined,
+        recoveryEmail().trim() || undefined,
+        recoveryPhone().trim() || undefined
       );
 
       // Successfully registered & session established. Route to Onboarding Pricing
@@ -439,6 +443,44 @@ const RegisterPage: Component = () => {
                   placeholder="••••••••••••••••"
                   class="block w-full rounded-lg border border-[#E2DFD8] bg-white px-3.5 py-2.5 text-sm text-[#3C3D3E] placeholder-[#6F7173]/50 focus:border-[#9E725F] focus:ring-2 focus:ring-[#9E725F]/20 focus:outline-none transition-all"
                 />
+              </div>
+
+              {/* Owner Recovery Contacts */}
+              <div class="pt-2 border-t border-[#E2DFD8] space-y-3">
+                <div>
+                  <label class="block text-xs font-semibold uppercase tracking-wider text-[#6F7173]">
+                    Owner Recovery Contacts (Optional)
+                  </label>
+                  <p class="text-[11px] text-[#6F7173] mt-0.5">
+                    Reserved exclusively for organization owner identity verification & password recovery.
+                  </p>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-[11px] font-medium text-[#6F7173] mb-1">
+                      Secondary Recovery Email
+                    </label>
+                    <input
+                      type="email"
+                      value={recoveryEmail()}
+                      onInput={(e) => setRecoveryEmail(e.currentTarget.value)}
+                      placeholder="backup.owner@gmail.com"
+                      class="block w-full rounded-lg border border-[#E2DFD8] bg-white px-3 py-2 text-xs sm:text-sm text-[#3C3D3E] placeholder-[#6F7173]/50 focus:border-[#9E725F] focus:ring-2 focus:ring-[#9E725F]/20 focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label class="block text-[11px] font-medium text-[#6F7173] mb-1">
+                      Recovery Phone (SMS)
+                    </label>
+                    <input
+                      type="tel"
+                      value={recoveryPhone()}
+                      onInput={(e) => setRecoveryPhone(e.currentTarget.value)}
+                      placeholder="+1 (555) 000-0000"
+                      class="block w-full rounded-lg border border-[#E2DFD8] bg-white px-3 py-2 text-xs sm:text-sm text-[#3C3D3E] placeholder-[#6F7173]/50 focus:border-[#9E725F] focus:ring-2 focus:ring-[#9E725F]/20 focus:outline-none transition-all"
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* Zero-Knowledge Guarantees Badge */}

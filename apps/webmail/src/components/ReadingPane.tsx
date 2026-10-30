@@ -10,14 +10,32 @@ import { sanitizeOnReceive } from "../composer_sanitizer";
 import { highlightCodeBlocks } from "../utils/code_highlight";
 import { getMailboxKeyFor } from "../session_isolation";
 import { formatAddress } from "./MessageRow";
+import { InvitationCard } from "./calendar/InvitationCard";
+import type { ParsedIcsEvent } from "../utils/calendarIcs";
+import { extractEventFromEmail, DetectedEmailEvent } from "../utils/calendarEmailExtractor";
+import { EmailEventSuggestionCard } from "./calendar/integrations/EmailEventSuggestionCard";
+import {
+  getIntegrationSettings,
+  getDismissedSuggestionIds,
+  dismissSuggestion,
+  getLinkedEmailEvents,
+  linkEmailToCalendarEvent,
+  unlinkEmailEvent,
+} from "./calendar/integrations/calendarIntegrationsStore";
 
 export interface ReadingPaneProps {
   message: DisplayMessage;
   isDecrypting: boolean;
   decryptedContent: string | null;
+  calendarIcs?: string | null;
+  onRsvpInvitation?: (status: "ACCEPTED" | "TENTATIVE" | "DECLINED", event: ParsedIcsEvent) => Promise<void>;
+  onOpenCalendarEvent?: (eventId: string) => void;
+  onAddSuggestedCalendarEvent?: (event: DetectedEmailEvent) => Promise<void>;
+  onRemoveSuggestedCalendarEvent?: (event: DetectedEmailEvent) => Promise<void>;
   mailboxKey?: Uint8Array | null;
-  lockedAccount?: { email: string; mailboxId: string } | null;
-  onUnlockAccount?: (account: { email: string; mailboxId: string }) => void;
+  lockedAccount?: { email: string; mailboxId: string; isHistorical?: boolean } | null;
+  hasHistoricalLocked?: boolean;
+  onUnlockAccount?: (account: { email: string; mailboxId: string; isHistorical?: boolean }) => void;
   senderVerification?: { verified: boolean; error?: string } | null;
   attachments: AttachmentItem[];
   downloadingAttachmentId: string | null;
@@ -46,6 +64,7 @@ export interface ReadingPaneProps {
   onToggleLabel?: (msg: DisplayMessage, labelId: string) => void;
   currentUserEmail?: string;
   currentUserPhotoUrl?: string | null;
+  fontScale?: "default" | "large" | "xlarge";
 }
 
 function getSenderInitials(sender: string): string {
@@ -229,10 +248,61 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
     }
   }
 
+  const mailboxId = () => props.message.mailboxId || (props.message as any).mailbox_id || "";
+  const [integrationsUpdated, setIntegrationsUpdated] = createSignal(0);
+
   onMount(() => {
     document.addEventListener("mousedown", handleClickOutside);
     document.addEventListener("keydown", handleKeyDown);
+    const handleIntegrationsUpdate = () => setIntegrationsUpdated((c) => c + 1);
+    window.addEventListener("byos_calendar_integrations_updated", handleIntegrationsUpdate);
+    onCleanup(() => {
+      window.removeEventListener("byos_calendar_integrations_updated", handleIntegrationsUpdate);
+    });
   });
+
+  const integrationSettings = () => {
+    integrationsUpdated();
+    return getIntegrationSettings(mailboxId());
+  };
+
+  const dismissedIds = () => {
+    integrationsUpdated();
+    return new Set(getDismissedSuggestionIds(mailboxId()));
+  };
+
+  const linkedEvents = () => {
+    integrationsUpdated();
+    return getLinkedEmailEvents(mailboxId());
+  };
+
+  const detectedEvent = () => {
+    if (props.isDecrypting || !props.decryptedContent) return null;
+    const settings = integrationSettings();
+    if (!settings.enabled || !settings.autoSuggestInReadingPane) return null;
+
+    const detected = extractEventFromEmail(
+      {
+        id: props.message.id,
+        subject: props.message.subject || "",
+        body: props.decryptedContent,
+      },
+      {
+        enabled: settings.enabled,
+        categories: settings.categories,
+      }
+    );
+
+    if (!detected) return null;
+    if (dismissedIds().has(detected.id)) return null;
+    return detected;
+  };
+
+  const isEventAdded = () => {
+    const ev = detectedEvent();
+    if (!ev) return false;
+    return Boolean(linkedEvents()[props.message.id]);
+  };
 
   onCleanup(() => {
     document.removeEventListener("mousedown", handleClickOutside);
@@ -291,11 +361,23 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
     return props.message.folder === "sent" ? "(no recipient)" : (props.message.accountEmail || "me");
   };
 
+  const isMessageLocked = () =>
+    Boolean(
+      props.lockedAccount ||
+      props.hasHistoricalLocked ||
+      (props.decryptedContent &&
+        (props.decryptedContent.includes("key is locked") ||
+         props.decryptedContent.includes("key unwrap") ||
+         props.decryptedContent.includes("Failed to decrypt") ||
+         props.decryptedContent.includes("Failed to open") ||
+         props.decryptedContent.includes("Historical Messages Locked")))
+    );
+
   const canReply = () =>
     props.message.folder !== "drafts" &&
     props.message.folder !== "scheduled" &&
     !props.isDecrypting &&
-    !props.lockedAccount &&
+    !isMessageLocked() &&
     props.decryptedContent !== null &&
     !props.decryptedContent.startsWith("Failed to open") &&
     !props.decryptedContent.startsWith("Mailbox is locked") &&
@@ -999,10 +1081,10 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                 </svg>
                 <span>Decrypting sovereign message…</span>
               </div>
-              <div class="h-3 bg-[#F0EEE9] dark:bg-[#26282E] rounded-md w-3/4" />
-              <div class="h-3 bg-[#F0EEE9] dark:bg-[#26282E] rounded-md w-full" />
-              <div class="h-3 bg-[#F0EEE9] dark:bg-[#26282E] rounded-md w-5/6" />
-              <div class="h-3 bg-[#F0EEE9] dark:bg-[#26282E] rounded-md w-2/3" />
+              <div class="h-3 skeleton rounded-md w-3/4" />
+              <div class="h-3 skeleton rounded-md w-full" />
+              <div class="h-3 skeleton rounded-md w-5/6" />
+              <div class="h-3 skeleton rounded-md w-2/3" />
             </div>
           </Show>
 
@@ -1026,8 +1108,8 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
             </div>
           </Show>
 
-          {/* Locked Account Placeholder & Unlock Button (Rule 2) */}
-          <Show when={props.lockedAccount}>
+          {/* Locked Account / Historical Messages Placeholder & Unlock Button */}
+          <Show when={isMessageLocked()}>
             <div
               data-testid="locked-account-placeholder"
               class="my-8 p-6 rounded-2xl bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] flex flex-col items-center justify-center text-center space-y-3"
@@ -1040,34 +1122,114 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               </div>
               <div class="space-y-1">
                 <p class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]" data-testid="locked-account-message">
-                  Unlock {props.lockedAccount?.email} to read this message.
+                  <Show
+                    when={props.lockedAccount?.isHistorical || props.hasHistoricalLocked}
+                    fallback={`Unlock ${props.lockedAccount?.email || props.message.recipient || props.message.sender} to read this message.`}
+                  >
+                    Historical Messages Locked: Unlock {props.lockedAccount?.email || props.message.recipient || props.message.sender} to read this message.
+                  </Show>
                 </p>
-                <p class="text-xs text-[#878A8E] dark:text-[#A1A1AA]">
-                  End-to-end encryption keys for {props.lockedAccount?.email} are not currently in memory.
+                <p class="text-xs text-[#878A8E] dark:text-[#A1A1AA] max-w-md">
+                  <Show
+                    when={props.lockedAccount?.isHistorical || props.hasHistoricalLocked}
+                    fallback={`End-to-end encryption keys for ${props.lockedAccount?.email || props.message.recipient || props.message.sender} are not currently in memory.`}
+                  >
+                    Your account password was recently reset. Your previous encrypted messages remain locked until you reactivate your historical keys with your 24-word recovery phrase or old password.
+                  </Show>
                 </p>
               </div>
               <button
                 type="button"
-                data-testid="unlock-account-btn"
-                onClick={() => props.lockedAccount && props.onUnlockAccount?.(props.lockedAccount)}
+                data-testid="unlock-mails-btn"
+                data-account-unlock-btn="true"
+                onClick={() => {
+                  const target = props.lockedAccount || {
+                    email: props.message.accountEmail || props.message.recipient || props.message.sender,
+                    mailboxId: props.message.mailboxId || (props.message as any).mailbox_id,
+                    isHistorical: Boolean(props.hasHistoricalLocked),
+                  };
+                  props.onUnlockAccount?.(target);
+                }}
                 class="mt-2 px-5 py-2.5 rounded-xl bg-[#A27561] text-white text-xs font-semibold hover:bg-[#8F6452] transition cursor-pointer shadow-xs"
               >
-                Unlock {props.lockedAccount?.email}
+                Unlock mails
               </button>
             </div>
           </Show>
 
-          <Show when={!props.lockedAccount && !props.isDecrypting && props.decryptedContent}>
+          {/* Email Event Suggestion Card (Category 13) */}
+          <Show when={!isMessageLocked() && !props.isDecrypting && detectedEvent()}>
+            <EmailEventSuggestionCard
+              event={detectedEvent()!}
+              isAdded={isEventAdded()}
+              onAdd={async (ev) => {
+                if (props.onAddSuggestedCalendarEvent) {
+                  await props.onAddSuggestedCalendarEvent(ev);
+                } else {
+                  linkEmailToCalendarEvent(mailboxId(), {
+                    messageId: props.message.id,
+                    eventId: `email_event_${props.message.id}`,
+                    calendarId: "primary",
+                    category: ev.category,
+                    confirmationCode: ev.confirmationCode,
+                    title: ev.title,
+                    addedAt: new Date().toISOString(),
+                  });
+                }
+              }}
+              onDismiss={(ev) => {
+                dismissSuggestion(mailboxId(), ev.id);
+              }}
+              onViewInCalendar={() => {
+                const linked = linkedEvents()[props.message.id];
+                if (props.onOpenCalendarEvent && linked) {
+                  props.onOpenCalendarEvent(linked.eventId);
+                } else if (typeof window !== "undefined") {
+                  window.dispatchEvent(
+                    new CustomEvent("byos_open_calendar_event", {
+                      detail: { eventId: linked?.eventId || `email_event_${props.message.id}` },
+                    })
+                  );
+                }
+              }}
+              onRemoveFromCalendar={async (ev) => {
+                if (props.onRemoveSuggestedCalendarEvent) {
+                  await props.onRemoveSuggestedCalendarEvent(ev);
+                } else {
+                  unlinkEmailEvent(mailboxId(), props.message.id);
+                }
+              }}
+            />
+          </Show>
+
+          {/* Calendar Invitation Card (Phase 5) */}
+          <Show when={!isMessageLocked() && !props.isDecrypting && props.calendarIcs}>
+            <InvitationCard
+              icsString={props.calendarIcs!}
+              currentUserEmail={props.currentUserEmail}
+              messageSender={props.message.sender}
+              mailboxId={props.message.mailboxId || (props.message as any).mailbox_id}
+              onRsvp={props.onRsvpInvitation}
+            />
+          </Show>
+
+          <Show when={!isMessageLocked() && !props.isDecrypting && props.decryptedContent}>
+            <div class="animate-fade-in">
             <Show
               when={/<[a-z][\s\S]*>/i.test(props.decryptedContent || "")}
-              fallback={props.decryptedContent}
+              fallback={
+                <div class={`whitespace-pre-wrap font-sans ${props.fontScale === "xlarge" ? "text-scale-xlarge" : props.fontScale === "large" ? "text-scale-large" : "text-scale-default"}`}>
+                  {props.decryptedContent}
+                </div>
+              }
             >
               <div
                 ref={readingContentRef}
-                class="reading-pane-content"
+                class={`reading-pane-content ${props.fontScale === "xlarge" ? "text-scale-xlarge" : props.fontScale === "large" ? "text-scale-large" : "text-scale-default"}`}
                 innerHTML={sanitizeResult().sanitized}
               />
             </Show>
+            </div>
           </Show>
 
           {/* Attachment Chips Section */}

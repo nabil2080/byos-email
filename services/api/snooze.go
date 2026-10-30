@@ -56,8 +56,9 @@ func messageSnoozeHandler(w http.ResponseWriter, r *http.Request) {
 	err = conn.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM mailboxes m
-			JOIN users u ON (u.id = m.user_id OR u.org_id = m.org_id)
+			JOIN users u ON u.org_id = m.org_id
 			WHERE m.id = $1 AND u.id = $2 AND m.is_active = true
+			  AND (m.user_id = u.id OR u.role IN ('admin', 'owner'))
 		)
 	`, mailboxID, userID).Scan(&owns)
 	if err != nil || !owns {

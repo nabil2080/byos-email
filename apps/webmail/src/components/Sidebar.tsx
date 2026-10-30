@@ -1,5 +1,4 @@
 import { Component, Show, For, createSignal, createEffect, onMount, onCleanup } from "solid-js";
-import { StorageStatusPill } from "./StorageStatusPill";
 import { UserMe, Mailbox, ConnectedAccount, MailboxFolder, MailboxLabel, getAccountColor } from "../api";
 import { AccountSwitcher } from "./AccountSwitcher";
 import {
@@ -19,6 +18,9 @@ interface SidebarProps {
   folderCounts: Record<Folder, number>;
   onCompose: () => void;
   onOpenContacts: () => void;
+  onOpenCalendar?: () => void;
+  activeModule?: "mail" | "calendar" | "notes";
+  onSwitchModule?: (mod: "mail" | "calendar" | "notes") => void;
   onOpenSettings: () => void;
   onOpenImport?: () => void;
   onLogout: (accountId?: string, logOutAll?: boolean) => void;
@@ -218,16 +220,16 @@ export const Sidebar: Component<SidebarProps> = (props) => {
     props.activeAccountId === "__all__" || props.currentFolder === "unified_inbox";
 
   return (
-    <aside class={`w-full md:w-64 flex-shrink-0 bg-[#F0EEE9] dark:bg-[#18191D] flex flex-col justify-between select-none h-full relative ${props.class || ""}`}>
+    <aside data-testid="sidebar" class={`w-full md:w-64 flex-shrink-0 bg-[#F0EEE9] dark:bg-[#18191D] flex flex-col justify-between select-none h-full relative ${props.class || ""}`}>
       {/* FIXED TOP: Brand Header & Mode Toggle, Account Switcher, Compose, Quick Actions */}
       <div class="p-2 pb-2 relative z-50 overflow-visible space-y-2 flex-shrink-0">
         {/* Top-Left App Brand Header */}
         <div class="flex items-center justify-between px-1.5 pt-0.5 pb-0.5">
           <div class="flex items-center gap-2">
-            <div class="w-6 h-6 rounded-lg bg-[#A27561] flex items-center justify-center text-white font-bold text-xs shadow-2xs tracking-wider">
+            <div class="w-6 h-6 rounded-xl bg-[#A27561] flex items-center justify-center text-white font-bold text-xs shadow-2xs tracking-wider ring-1 ring-[#A27561]/30">
               B
             </div>
-            <span class="text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight">BYOS Mail</span>
+            <span class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight">BYOS Mail</span>
           </div>
           <Show when={props.onCloseMobile}>
             <button
@@ -274,6 +276,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           photoUrls={props.photoUrls}
         />
 
+
+
         {/* Compose Pill & Quick Actions */}
         <div class="space-y-1.5">
           <button
@@ -282,7 +286,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               props.onCompose();
               props.onCloseMobile?.();
             }}
-            class="w-full bg-[#A27561] hover:bg-[#8F6452] dark:bg-[#A27561] dark:hover:bg-[#B2826F] text-white text-xs font-medium py-2.5 px-3.5 min-h-[40px] rounded-xl shadow-none transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-[0.99]"
+            class="w-full bg-[#A27561] hover:bg-[#8F6452] dark:bg-[#A27561] dark:hover:bg-[#B2826F] text-white text-[13px] tracking-wide font-semibold py-2.5 px-3.5 min-h-[40px] rounded-xl shadow-none transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]"
           >
             <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
               <line x1="12" y1="5" x2="12" y2="19" />
@@ -290,58 +294,6 @@ export const Sidebar: Component<SidebarProps> = (props) => {
             </svg>
             <span>New Message</span>
           </button>
-
-          {/* Sub-actions: Contacts, Import & Settings */}
-          <div class="grid grid-cols-3 gap-1 pt-0.5">
-            <button
-              onClick={() => {
-                props.onOpenContacts();
-                props.onCloseMobile?.();
-              }}
-              class="flex items-center justify-center gap-1 py-2 px-1.5 min-h-[36px] rounded-lg text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] transition-colors cursor-pointer"
-              title="Contacts"
-              data-testid="contacts-nav-btn"
-            >
-              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-              </svg>
-              <span>Contacts</span>
-            </button>
-
-            <button
-              onClick={() => {
-                props.onOpenImport?.();
-                props.onCloseMobile?.();
-              }}
-              data-testid="sidebar-import-btn"
-              class="flex items-center justify-center gap-1 py-2 px-1.5 min-h-[36px] rounded-lg text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] transition-colors cursor-pointer"
-              title="Import Emails (.eml / .mbox)"
-            >
-              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-              </svg>
-              <span>Import</span>
-            </button>
-
-            <button
-              onClick={() => {
-                props.onOpenSettings();
-                props.onCloseMobile?.();
-              }}
-              data-testid="sidebar-settings-btn"
-              class="flex items-center justify-center gap-1 py-2 px-1.5 min-h-[36px] rounded-lg text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] transition-colors cursor-pointer"
-              title="Settings"
-            >
-              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-              <span>Settings</span>
-            </button>
-          </div>
         </div>
       </div>
 
@@ -381,7 +333,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                   ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
                   : (isAllInboxes() ? props.currentFolder === "unified_inbox" : props.currentFolder === "inbox")
                   ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold"
-                  : "text-[#3C3D3E] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+                  : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium transition-colors"
               }`}
               data-testid={isAllInboxes() ? "unified-inbox-button" : "folder-inbox"}
             >
@@ -501,7 +453,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                     ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
                     : isActive()
                     ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold"
-                    : "text-[#3C3D3E] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+                    : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium transition-colors"
                 }`}
                 data-testid={`folder-${f}`}
               >
@@ -521,7 +473,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
         {/* Custom Folders Section */}
         <div class="px-2 pt-2 border-t border-[#E2DFD8]/50 dark:border-[#2E3138]">
-          <div class="flex items-center justify-between px-2 py-1 text-[11px] font-semibold text-[#878A8E] uppercase tracking-wider font-mono">
+          <div class="flex items-center justify-between px-2 py-1 text-[10px] font-semibold text-[#878A8E] uppercase tracking-widest font-mono">
             <span>Folders</span>
             <button
               onClick={() => props.onOpenCreateFolder?.()}
@@ -561,7 +513,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                         ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
                         : isActive()
                         ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold"
-                        : "text-[#3C3D3E] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+                        : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium transition-colors"
                     }`}
                   >
                     <div class="flex items-center gap-2 truncate min-w-0 flex-1">
@@ -642,7 +594,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
         {/* Labels Section */}
         <div class="px-2 pt-2 border-t border-[#E2DFD8]/50 dark:border-[#2E3138]">
-          <div class="flex items-center justify-between px-2 py-1 text-[11px] font-semibold text-[#878A8E] uppercase tracking-wider font-mono">
+          <div class="flex items-center justify-between px-2 py-1 text-[10px] font-semibold text-[#878A8E] uppercase tracking-widest font-mono">
             <span>Labels</span>
             <button
               onClick={() => props.onOpenCreateLabel?.()}
@@ -708,7 +660,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                         ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#9E725F] border-dashed rounded-xl scale-[1.02]"
                         : isActive()
                         ? "bg-[#F2E8E2] text-[#9E725F] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold"
-                        : "text-[#3C3D3E] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+                        : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium transition-colors"
                     }`}
                   >
                     <div class="flex items-center gap-1.5 truncate min-w-0 flex-1">
@@ -841,12 +793,46 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
       </div>
 
-      {/* FIXED BOTTOM: Ambient Storage Pill & Sign Out (z-40, overflow-visible) */}
-      <div class="p-2 border-t border-[#E2DFD8]/70 dark:border-[#333336] space-y-1 relative z-40 overflow-visible flex-shrink-0">
-        <StorageStatusPill
-          isUnlocked={Boolean(props.isUnlocked)}
-          storageError={props.storageError}
-        />
+      {/* FIXED BOTTOM: Contacts, Settings & Sign Out (z-40, overflow-visible) */}
+      <div class="p-2 border-t border-[#E2DFD8]/60 dark:border-[#333336] space-y-1.5 relative z-40 overflow-visible flex-shrink-0">
+        <div class="grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              props.onOpenContacts();
+              props.onCloseMobile?.();
+            }}
+            data-testid="sidebar-contacts-btn"
+            data-testid-secondary="contacts-nav-btn"
+            class="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] border border-[#E2DFD8]/80 dark:border-[#2E3138] transition-colors cursor-pointer select-none"
+            title="Contacts"
+          >
+            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+            <span>Contacts</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              props.onOpenSettings();
+              props.onCloseMobile?.();
+            }}
+            data-testid="sidebar-settings-btn"
+            class="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl text-xs font-medium text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#E8E5DF]/60 dark:hover:bg-[#2A2A2E] border border-[#E2DFD8]/80 dark:border-[#2E3138] transition-colors cursor-pointer select-none"
+            title="Settings"
+          >
+            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+            <span>Settings</span>
+          </button>
+        </div>
 
         <div class="flex items-center justify-between px-2 py-1 text-xs text-[#878A8E]">
           <span class="text-[11px] truncate max-w-[120px] font-mono">

@@ -198,9 +198,9 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
       onContextMenu={handleContextMenu}
       data-testid="message-row"
       data-message-id={props.message.id}
-      class={`group relative cursor-pointer border-b border-[#E2DFD8]/60 dark:border-[#2A2D35] transition-all select-none min-w-0 overflow-hidden ${densityPadding()} ${
+      class={`group relative cursor-pointer border-b border-[#E2DFD8]/60 dark:border-[#2A2D35] transition-colors duration-150 select-none min-w-0 overflow-hidden ${densityPadding()} ${
         props.isSelected
-          ? "bg-[#F3ECE8] dark:bg-[#2D2522] border-l-4 border-l-[#A27561]"
+          ? "bg-[#F3ECE8] dark:bg-[#2D2522] border-l-[3px] border-l-[#A27561]"
           : props.isChecked
           ? "bg-[#F8F5F2] dark:bg-[#26282E]"
           : props.message.read
@@ -284,7 +284,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                 testId="message-row-avatar"
               />
               <span
-                class={`truncate font-sans text-sm ${
+                class={`truncate font-sans text-sm tracking-tight ${
                   isUnread()
                     ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
                     : "font-normal text-[#878A8E] dark:text-[#8A8E94]"
@@ -359,7 +359,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
               </span>
 
               {/* Floating Hover Action Pill (Gmail style) */}
-              <div class="absolute right-0 hidden group-hover:flex items-center gap-1 bg-white/95 dark:bg-[#26282E]/95 px-1.5 py-0.5 rounded-xl border border-[#E2DFD8] dark:border-[#3A3D46] shadow-sm z-10">
+              <div class="absolute right-0 hidden group-hover:flex items-center gap-1 bg-white/95 dark:bg-[#26282E]/95 backdrop-blur-sm px-1.5 py-0.5 rounded-xl border border-[#E2DFD8] dark:border-[#3A3D46] shadow-sm z-10">
                 {/* Single Contextual Read/Unread Smart Toggle */}
                 <button
                   type="button"
@@ -448,7 +448,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
         }
       >
         {/* ── Split-Pane Mode: Stacked Compact Card Layout ── */}
-        <div class="flex flex-col gap-1 min-w-0 overflow-hidden text-xs">
+        <div class="flex flex-col gap-0.5 min-w-0 overflow-hidden text-xs">
           {/* Top Line: Checkbox, Star, Sender, and Date/Actions */}
           <div class="flex items-center justify-between min-w-0 gap-2">
             <div class="flex items-center gap-2 min-w-0 overflow-hidden">
@@ -544,7 +544,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
               </span>
 
               {/* Floating Hover Action Pill */}
-              <div class="absolute right-0 hidden group-hover:flex items-center gap-0.5 bg-white/95 dark:bg-[#26282E]/95 px-1 py-0.5 rounded-lg border border-[#E2DFD8] dark:border-[#3A3D46] shadow-sm z-10">
+              <div class="absolute right-0 hidden group-hover:flex items-center gap-0.5 bg-white/95 dark:bg-[#26282E]/95 backdrop-blur-sm px-1 py-0.5 rounded-lg border border-[#E2DFD8] dark:border-[#3A3D46] shadow-sm z-10">
                 <button
                   type="button"
                   onClick={(e) => {
@@ -673,7 +673,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
           </div>
 
           {/* Bottom Line: Snippet */}
-          <div class="text-xs text-[#4A4C50] dark:text-[#A1A1AA] font-normal truncate min-w-0 pl-7">
+          <div class="text-xs text-[#6E7075] dark:text-[#A1A1AA] font-normal truncate min-w-0 pl-7 leading-snug">
             {props.message.snippet || "Empty message body"}
           </div>
         </div>

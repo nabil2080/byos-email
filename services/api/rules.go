@@ -71,6 +71,7 @@ func verifyMailboxAccess(ctx context.Context, conn *pgx.Conn, mailboxID, userID 
 		FROM mailboxes m
 		JOIN users u ON u.org_id = m.org_id
 		WHERE m.id = $1 AND u.id = $2 AND u.is_active = true
+		  AND (m.user_id = u.id OR u.role IN ('admin', 'owner'))
 	`, mailboxID, userID).Scan(&orgID)
 	return orgID, err
 }

@@ -1,0 +1,42 @@
+From: "Bob Jones" <bob@byos.local>
+To: "Alice Smith" <alice@byos.local>
+Subject: Invitation: Architecture Sync
+Date: Tue, 20 Oct 2026 15:30:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="----=_Part_fixture_req_1001"
+
+------=_Part_fixture_req_1001
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+You have been invited to: Architecture Sync
+When: Wednesday, Oct 21, 2026 14:00 - 15:00 UTC
+Where: Room 402 / BYOS Executive
+Organizer: Bob Jones <bob@byos.local>
+
+Please respond via BYOS Webmail or your calendar client.
+------=_Part_fixture_req_1001
+Content-Type: text/calendar; method=REQUEST; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+BEGIN:VCALENDAR
+PRODID:-//BYOS//BYOS Webmail Calendar//EN
+VERSION:2.0
+CALSCALE:GREGORIAN
+METHOD:REQUEST
+BEGIN:VEVENT
+UID:meet-arch-sync-20261021-001
+SEQUENCE:0
+DTSTAMP:20261020T153000Z
+DTSTART:20261021T140000Z
+DTEND:20261021T150000Z
+SUMMARY:Architecture Sync
+DESCRIPTION:Discussion of Phase 5.1 interoperability and security controls.
+LOCATION:Room 402 / BYOS Executive
+URL:https://meet.byos.local/arch-sync
+ORGANIZER;CN="Bob Jones":mailto:bob@byos.local
+ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN="Alice Smith":mailto:alice@byos.local
+STATUS:CONFIRMED
+END:VEVENT
+END:VCALENDAR
+------=_Part_fixture_req_1001--

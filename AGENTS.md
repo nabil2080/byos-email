@@ -34,6 +34,11 @@ Frontend/UI tasks:
 * load `11-accessibility-a11y`
 * load `kylezantos/responsive-craft`
 * load `LottieFiles/motion-design-skill`
+* load `mengto/skills` (migrated to `.agents/skills/mengto-skills`)
+
+Core technology invariants for Frontend/UI tasks:
+- **Dashboard, Mailbox UI:** `SolidJS + Vite + TailwindCSS` (`apps/webmail/`, `apps/control-plane/`) | Authenticated web applications
+- **Public website:** `Astro + SolidJS + TailwindCSS` (`apps/public-site/`) | Marketing, docs, legal, SEO
 
 UI/Crypto Bridge tasks:
 

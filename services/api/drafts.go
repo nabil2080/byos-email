@@ -66,17 +66,21 @@ func resolveDraftMailbox(w http.ResponseWriter, r *http.Request, conn *pgx.Conn,
 		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
 		return "", "", "", "", false
 	}
-	err := conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)
+	var userRole string
+	err := conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole)
 	if err != nil {
 		http.Error(w, "not authorized", http.StatusForbidden)
 		return "", "", "", "", false
 	}
-	err = conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID)
+	var mailboxUserID *string
+	err = conn.QueryRow(ctx, `SELECT org_id::text, user_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID, &mailboxUserID)
 	if err != nil {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return "", "", "", "", false
 	}
-	if mailboxOrgID != userOrgID {
+	isOwner := mailboxUserID != nil && *mailboxUserID == userID
+	isAdminOrOwner := userRole == "admin" || userRole == "owner"
+	if mailboxOrgID != userOrgID || (!isOwner && !isAdminOrOwner) {
 		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
 		return "", "", "", "", false
 	}

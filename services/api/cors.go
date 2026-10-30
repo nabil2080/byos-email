@@ -49,6 +49,7 @@ func withCORS(h http.HandlerFunc) http.HandlerFunc {
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-User-Id, X-User-ID, Authorization, Cookie, X-BYOS-Client, x-byos-client, Accept, Origin, X-Requested-With")
+			w.Header().Set("Access-Control-Expose-Headers", "ETag, If-Match")
 			w.Header().Set("Access-Control-Max-Age", "86400")
 			w.Header().Set("Vary", "Origin")
 		}

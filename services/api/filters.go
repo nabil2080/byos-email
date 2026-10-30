@@ -64,16 +64,20 @@ func mailboxFiltersHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	// Auth check
-	var userOrgID, mailboxOrgID string
-	if err := conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID); err != nil {
+	var userOrgID, userRole string
+	if err := conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID); err != nil {
+	var mailboxOrgID string
+	var mailboxUserID *string
+	if err := conn.QueryRow(ctx, `SELECT org_id::text, user_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID, &mailboxUserID); err != nil {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	if userOrgID != mailboxOrgID {
+	isOwner := mailboxUserID != nil && *mailboxUserID == userID
+	isAdminOrOwner := userRole == "admin" || userRole == "owner"
+	if userOrgID != mailboxOrgID || (!isOwner && !isAdminOrOwner) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -190,16 +194,20 @@ func mailboxFilterItemHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	// Auth check
-	var userOrgID, mailboxOrgID string
-	if err := conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID); err != nil {
+	var userOrgID, userRole string
+	if err := conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID); err != nil {
+	var mailboxOrgID string
+	var mailboxUserID *string
+	if err := conn.QueryRow(ctx, `SELECT org_id::text, user_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID, &mailboxUserID); err != nil {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	if userOrgID != mailboxOrgID {
+	isOwner := mailboxUserID != nil && *mailboxUserID == userID
+	isAdminOrOwner := userRole == "admin" || userRole == "owner"
+	if userOrgID != mailboxOrgID || (!isOwner && !isAdminOrOwner) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -290,16 +298,20 @@ func mailboxAddressRulesHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	// Auth check
-	var userOrgID, mailboxOrgID string
-	if err := conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID); err != nil {
+	var userOrgID, userRole string
+	if err := conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID); err != nil {
+	var mailboxOrgID string
+	var mailboxUserID *string
+	if err := conn.QueryRow(ctx, `SELECT org_id::text, user_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID, &mailboxUserID); err != nil {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	if userOrgID != mailboxOrgID {
+	isOwner := mailboxUserID != nil && *mailboxUserID == userID
+	isAdminOrOwner := userRole == "admin" || userRole == "owner"
+	if userOrgID != mailboxOrgID || (!isOwner && !isAdminOrOwner) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -434,16 +446,20 @@ func mailboxAddressRuleItemHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	// Auth check
-	var userOrgID, mailboxOrgID string
-	if err := conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID); err != nil {
+	var userOrgID, userRole string
+	if err := conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID); err != nil {
+	var mailboxOrgID string
+	var mailboxUserID *string
+	if err := conn.QueryRow(ctx, `SELECT org_id::text, user_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID, &mailboxUserID); err != nil {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	if userOrgID != mailboxOrgID {
+	isOwner := mailboxUserID != nil && *mailboxUserID == userID
+	isAdminOrOwner := userRole == "admin" || userRole == "owner"
+	if userOrgID != mailboxOrgID || (!isOwner && !isAdminOrOwner) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}

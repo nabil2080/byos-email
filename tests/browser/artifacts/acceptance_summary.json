@@ -1,0 +1,103 @@
+{
+  "success": true,
+  "migrationApiCalls": [
+    {
+      "type": "request",
+      "method": "POST",
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/reactivate-keys",
+      "postData": "{\"wrapped_sk_user\":\"849d3074137b20df0985a535cbf0b8aa:0150f12e9b74e0bb8e547b68ac4bb80c4947455441c1c505c31b98d5cb325ca34a403bbb16c036c323185a1f0b3324490e016df4a8f0cf494a629086d4\"}"
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/reactivate-keys",
+      "body": "{\"mailbox_id\":\"c0000000-0000-0000-0000-000000000001\",\"message\":\"Historical key material successfully reactivated\",\"success\":true}\n"
+    },
+    {
+      "type": "request",
+      "method": "POST",
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/calendar-events/74b8ea49-47f1-4ed0-abfb-5fc563fbe04f/stage-migration",
+      "postData": "{\"staged_encrypted_payload\":\"AbnFEDy4+lUQkNutNW3/xkqEAuLyGFaIuDmEIo4QBR+kS1hIb1+z3HGI0bQSw5Ku6OK0cxJNdKneiYf6Q9sxAgRI1mpZ5hHhwG+KJwwyFPlCqlH4SeHSIImI13QwlOaYmXZByhWd9o7jPORhm5yN10ipwLOPkXz0gph3b4IIx6GBG+MmamhKIAyxLbLN1TZ8zYp+g/TmOfKxhHKB44Q3msqwfvEuCgfLjsC3OpNmm9cerb30iLvH/jnLgskyOFmq0Baffsl6tLM7lk3P/u7KwSPHl+hhq841FWaZ2AdkGth2VzOcCIbDag==\"}"
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/calendar-events/74b8ea49-47f1-4ed0-abfb-5fc563fbe04f/stage-migration",
+      "body": "{\"migration_id\":\"1ca223f2-a91d-474a-a89f-9efcafa0e7e9\",\"event_id\":\"74b8ea49-47f1-4ed0-abfb-5fc563fbe04f\",\"status\":\"staged\",\"expires_at\":\"2026-10-24T21:25:13+06:00\",\"updated_at\":\"2026-10-24T21:10:13+06:00\",\"etag\":\"\\\"e3b5cb72aee2024d17c68ff3e632caa536079fbfcfb6b80d1971e5ecadb1305d\\\"\"}\n"
+    },
+    {
+      "type": "request",
+      "method": "POST",
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/calendar-events/74b8ea49-47f1-4ed0-abfb-5fc563fbe04f/finalize-migration",
+      "postData": "{\"migration_id\":\"1ca223f2-a91d-474a-a89f-9efcafa0e7e9\"}"
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/calendar-events/74b8ea49-47f1-4ed0-abfb-5fc563fbe04f/finalize-migration",
+      "body": "{\"migration_id\":\"1ca223f2-a91d-474a-a89f-9efcafa0e7e9\",\"event_id\":\"74b8ea49-47f1-4ed0-abfb-5fc563fbe04f\",\"status\":\"finalized\",\"finalized_at\":\"2026-10-24T21:10:13+06:00\"}\n"
+    },
+    {
+      "type": "request",
+      "method": "POST",
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/calendar-events/6c75afcb-5d70-4f5c-b4ca-41bb010405ec/stage-migration",
+      "postData": "{\"staged_encrypted_payload\":\"AUND4US9o67078swikWMiDgARh+9FwZTkAbctjYcKFEpvK0oM5zrBSz+XeUrMQLsA+Xy/ehSLGm+SSnyjDz20OHwbGUd8vD1NGM5Ck1OKcZZX4ZRwC867qNMCncULXW2wpqrvYxQPtLWwsznhh0ZbUoIDAmRtXXbssrUcZ+nfXxJDn22m32QfFZgeNFcN5GIANbgKae7viUFmE4VSTQCskaFwKKYSkMH4Ym8ekzR30TxZAcvsVhm9LD7xtqQXz1CWNymN+oPu7FXeQn/FjjkwzgbZsL495GzQ2jcPQsldsRgLNTQ5ps2R4lZviwJFMqiYxCzifFZzaIQIgmvElkL8tHug5ysLsVmnerJ7234eo2CEjj6g4bJWhIl7gg=\"}"
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/calendar-events/6c75afcb-5d70-4f5c-b4ca-41bb010405ec/stage-migration",
+      "body": "{\"migration_id\":\"7b7a52e6-6ff8-48bf-9d21-37e605796348\",\"event_id\":\"6c75afcb-5d70-4f5c-b4ca-41bb010405ec\",\"status\":\"staged\",\"expires_at\":\"2026-10-24T21:25:14+06:00\",\"updated_at\":\"2026-10-24T21:10:14+06:00\",\"etag\":\"\\\"00d7937cd2f63305b7f491b6f2164d0d8da3d4bd904d12c69d3f0ad31c7ae5b1\\\"\"}\n"
+    },
+    {
+      "type": "request",
+      "method": "POST",
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/calendar-events/6c75afcb-5d70-4f5c-b4ca-41bb010405ec/finalize-migration",
+      "postData": "{\"migration_id\":\"7b7a52e6-6ff8-48bf-9d21-37e605796348\"}"
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/calendar-events/6c75afcb-5d70-4f5c-b4ca-41bb010405ec/finalize-migration",
+      "body": "{\"migration_id\":\"7b7a52e6-6ff8-48bf-9d21-37e605796348\",\"event_id\":\"6c75afcb-5d70-4f5c-b4ca-41bb010405ec\",\"status\":\"finalized\",\"finalized_at\":\"2026-10-24T21:10:14+06:00\"}\n"
+    },
+    {
+      "type": "request",
+      "method": "POST",
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/calendar-events/a4196298-d4e1-4921-8b26-0a2d470636f3/stage-migration",
+      "postData": "{\"staged_encrypted_payload\":\"Ac4c/3S0Shh34tiCidD0ntANMueSTEG3CruejphkipEhH13Fu6m435Ut2ZsTgST6Ez3Ar0MI1Xhn2MZRqXl3MopZKxSF2I14uHe1w1WHpDeL0ym9ZnKTID7ONcdsVLXFq4OP77xpMtpMbM+V0Lb7/chlJp8UP/BdSORN/79PbqhBrSTnwT1uQxrEG5prOjaAPUgxDp+NXxG+5jJpnpfzAfjs1j3uiFIzJWsTe90CYP6zQU+lnYyIYsWQ13a8ZJywrtvmxAYQYtEyLYeGMoen9vmnCExb0c8eVfY+c7UxQ5Q1/GTat+M3JDUzFzL17S4VErtNDY8PzSlfErlQVMgM5S0BbVkN0FRYQqmbf25ZATyrepgBOoFEjfMhTBw=\"}"
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/calendar-events/a4196298-d4e1-4921-8b26-0a2d470636f3/stage-migration",
+      "body": "{\"migration_id\":\"8ae2753b-826a-42aa-9913-ee29214ceb94\",\"event_id\":\"a4196298-d4e1-4921-8b26-0a2d470636f3\",\"status\":\"staged\",\"expires_at\":\"2026-10-24T21:25:14+06:00\",\"updated_at\":\"2026-10-24T21:10:14+06:00\",\"etag\":\"\\\"e0d9601c3d7566f5b126243d28691723071f0fedbd8560698856d36b1a0cc981\\\"\"}\n"
+    },
+    {
+      "type": "request",
+      "method": "POST",
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/calendar-events/a4196298-d4e1-4921-8b26-0a2d470636f3/finalize-migration",
+      "postData": "{\"migration_id\":\"8ae2753b-826a-42aa-9913-ee29214ceb94\"}"
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:3005/v1/mailboxes/c0000000-0000-0000-0000-000000000001/calendar-events/a4196298-d4e1-4921-8b26-0a2d470636f3/finalize-migration",
+      "body": "{\"migration_id\":\"8ae2753b-826a-42aa-9913-ee29214ceb94\",\"event_id\":\"a4196298-d4e1-4921-8b26-0a2d470636f3\",\"status\":\"finalized\",\"finalized_at\":\"2026-10-24T21:10:14+06:00\"}\n"
+    }
+  ],
+  "consoleLogs": [
+    "[BROWSER CONSOLE DEBUG] [vite] connecting...",
+    "[BROWSER CONSOLE DEBUG] [vite] connected.",
+    "[BROWSER CONSOLE DEBUG] [vite] connecting...",
+    "[BROWSER CONSOLE DEBUG] [vite] connected.",
+    "[BROWSER CONSOLE VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: \"new-password\"): (More info: https://goo.gl/9p2vKq) %o",
+    "[BROWSER CONSOLE WARN] [calendar_crypto] Refusing to interpret unencrypted or legacy JSON payload as decrypted ciphertext",
+    "[BROWSER CONSOLE WARN] [calendar_crypto] Refusing to interpret unencrypted or legacy JSON payload as decrypted ciphertext",
+    "[BROWSER CONSOLE WARN] [calendar_crypto] Refusing to interpret unencrypted or legacy JSON payload as decrypted ciphertext",
+    "[BROWSER CONSOLE DEBUG] [vite] connecting...",
+    "[BROWSER CONSOLE DEBUG] [vite] connected.",
+    "[BROWSER CONSOLE ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway)",
+    "[BROWSER CONSOLE ERROR] Preview decrypt error for msg 0cd89caf-1971-46e7-a0d1-9a600a6e2879: Error: failed to retrieve from storage"
+  ]
+}

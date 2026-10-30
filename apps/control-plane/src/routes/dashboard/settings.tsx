@@ -47,31 +47,7 @@ const SettingsPage: Component = () => {
 
         <A
           href="/dashboard/security"
-          class="flex items-start gap-4 rounded-2xl border border-[#E2DFD8] bg-white p-6 shadow-xs hover:border-[#9E725F] hover:shadow-sm transition-all group"
-        >
-          <div class="w-10 h-10 rounded-xl bg-[#F3ECE8] text-[#9E725F] flex items-center justify-center shrink-0 group-hover:bg-[#9E725F] group-hover:text-white transition-colors">
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
-              <line x1="12" y1="18" x2="12.01" y2="18" />
-            </svg>
-          </div>
-          <div>
-            <div class="flex items-center gap-2">
-              <span class="text-base font-bold text-[#3C3D3E] group-hover:text-[#9E725F] transition-colors">
-                Hardware & Trusted Devices
-              </span>
-              <span class="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-mono font-bold text-emerald-800 uppercase">
-                Active
-              </span>
-            </div>
-            <div class="mt-1 text-xs text-[#6F7173] leading-relaxed">
-              FIDO2 / WebAuthn biometric sensors (Touch ID, Windows Hello) and physical security keys (YubiKey).
-            </div>
-          </div>
-        </A>
-
-        <A
-          href="/dashboard/security"
+          data-testid="settings-security-card"
           class="flex items-start gap-4 rounded-2xl border border-[#E2DFD8] bg-white p-6 shadow-xs hover:border-[#9E725F] hover:shadow-sm transition-all group"
         >
           <div class="w-10 h-10 rounded-xl bg-[#F3ECE8] text-[#9E725F] flex items-center justify-center shrink-0 group-hover:bg-[#9E725F] group-hover:text-white transition-colors">
@@ -83,14 +59,14 @@ const SettingsPage: Component = () => {
           <div>
             <div class="flex items-center gap-2">
               <span class="text-base font-bold text-[#3C3D3E] group-hover:text-[#9E725F] transition-colors">
-                Two-Factor Authentication
+                Security & Authentication
               </span>
-              <span class="rounded bg-[#9E725F]/15 px-2 py-0.5 text-[10px] font-mono font-bold text-[#9E725F] uppercase">
+              <span class="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-mono font-bold text-emerald-800 uppercase">
                 Active
               </span>
             </div>
             <div class="mt-1 text-xs text-[#6F7173] leading-relaxed">
-              Configure time-based one-time passwords (TOTP), authenticator apps, and recovery verification contacts.
+              Manage Two-Factor Authentication (TOTP), recovery contacts, and FIDO2 / WebAuthn trusted hardware keys.
             </div>
           </div>
         </A>

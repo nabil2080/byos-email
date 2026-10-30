@@ -119,12 +119,12 @@ async function runControlPlane2FASuite() {
     // ── STEP 2: NAVIGATE TO SECURITY VIA SETTINGS ──
     console.log("\n--- [STEP 2] Navigate to Security Governance via Settings Card ---");
     await page.goto("http://localhost:3000/dashboard/settings", { waitUntil: "networkidle2" });
-    await page.waitForSelector('a[href="/dashboard/security"]', { timeout: 10000 });
+    await page.waitForSelector('[data-testid="settings-security-card"]', { timeout: 10000 });
 
-    // Click Two-Factor Authentication link/card
-    const tfaLinks = await page.$$('a[href="/dashboard/security"]');
-    assert(tfaLinks.length >= 1, "Two-Factor Authentication card is linked to /dashboard/security");
-    await tfaLinks[tfaLinks.length - 1].click();
+    // Verify consolidated Security & Authentication card
+    const secCards = await page.$$('a[href="/dashboard/security"]');
+    assert(secCards.length === 1, "Exactly one unified 'Security & Authentication' card is linked to /dashboard/security");
+    await secCards[0].click();
 
     await page.waitForFunction(() => window.location.pathname === "/dashboard/security", { timeout: 8000 });
     assert(page.url().includes("/dashboard/security"), "Navigated directly to /dashboard/security");

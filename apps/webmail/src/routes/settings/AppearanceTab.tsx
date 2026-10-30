@@ -21,6 +21,11 @@ interface AppearanceTabProps {
   onLanguageChange?: (lang: string) => void;
   currentWeekStart?: "sunday" | "monday" | "saturday";
   onWeekStartChange?: (ws: "sunday" | "monday" | "saturday") => void;
+  fontScale?: "default" | "large" | "xlarge";
+  onFontScaleChange?: (fs: "default" | "large" | "xlarge") => void;
+  highContrast?: boolean;
+  onHighContrastChange?: (hc: boolean) => void;
+  onOpenRightBar?: () => void;
 }
 
 export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
@@ -48,6 +53,12 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
     props.currentWeekStart || (typeof window !== "undefined" ? (localStorage.getItem("byos_week_start") as any) || "sunday" : "sunday")
   );
   const [focusedInboxEnabled, setFocusedInboxState] = createSignal<boolean>(getFocusedInboxEnabled());
+  const [fontScale, setFontScale] = createSignal<"default" | "large" | "xlarge">(
+    props.fontScale || (typeof window !== "undefined" ? (localStorage.getItem("byos_font_scale") as any) || "default" : "default")
+  );
+  const [highContrast, setHighContrast] = createSignal<boolean>(
+    props.highContrast !== undefined ? props.highContrast : (typeof window !== "undefined" ? localStorage.getItem("byos_high_contrast") === "true" : false)
+  );
 
   function handleToggleFocusedInbox(enabled: boolean) {
     setFocusedInboxState(enabled);
@@ -75,6 +86,12 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
   });
   createEffect(() => {
     if (props.currentWeekStart) setWeekStart(props.currentWeekStart);
+  });
+  createEffect(() => {
+    if (props.fontScale) setFontScale(props.fontScale);
+  });
+  createEffect(() => {
+    if (props.highContrast !== undefined) setHighContrast(props.highContrast);
   });
 
   onMount(async () => {
@@ -196,11 +213,45 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
 
   return (
     <div class="space-y-6">
-      <div>
-        <h3 class="text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Appearance & Layout</h3>
-        <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA] mt-1">
-          Customize spacing density, reading pane placement, and color palette.
-        </p>
+      <div class="flex items-center justify-between">
+        <div>
+          <h3 class="text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Appearance & Layout</h3>
+          <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA] mt-1">
+            Customize spacing density, reading pane placement, and color palette.
+          </p>
+        </div>
+
+        <Show when={props.onOpenRightBar}>
+          <button
+            type="button"
+            onClick={props.onOpenRightBar}
+            data-testid="appearance-open-rightbar-btn"
+            class="px-3.5 py-1.5 rounded-xl bg-[#F3ECE8] dark:bg-[#2D2522] text-[#9E725F] dark:text-[#D4A38F] hover:bg-[#EADED7] text-xs font-semibold border border-[#9E725F]/30 shadow-2xs transition flex items-center gap-1.5 cursor-pointer"
+          >
+            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+              <line x1="4" y1="21" x2="4" y2="14" />
+              <line x1="4" y1="10" x2="4" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12" y2="3" />
+              <line x1="20" y1="21" x2="20" y2="16" />
+              <line x1="20" y1="12" x2="20" y2="3" />
+            </svg>
+            <span>Open in Right Bar</span>
+          </button>
+        </Show>
+      </div>
+
+      {/* Quick Customizer callout */}
+      <div class="p-3.5 rounded-xl bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between gap-3 text-xs">
+        <div class="flex items-center gap-2.5">
+          <span class="text-base">⚡</span>
+          <div>
+            <span class="font-bold text-[#1A1B1E] dark:text-[#F3F4F6] block">Tweak on the fly?</span>
+            <p class="text-[11px] text-[#6E7075] dark:text-[#A1A1AA]">
+              Use the new Right Utility Bar on your inbox to tweak density, theme, layout, and font sizing without opening settings!
+            </p>
+          </div>
+        </div>
       </div>
 
       <Show when={error()}>
@@ -246,9 +297,9 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
                     setDensity(opt.id);
                     handleApply(opt.id, layoutMode(), theme());
                   }}
-                  class={`p-4 rounded-xl border text-left transition flex flex-col justify-between cursor-pointer ${
+                  class={`p-4 rounded-xl border text-left transition flex flex-col justify-between cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
                     isSelected()
-                      ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] dark:border-[#A27561] shadow-xs"
+                      ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] dark:border-[#A27561] shadow-xs ring-1 ring-[#A27561]"
                       : "border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] hover:bg-white dark:hover:bg-[#252830]"
                   }`}
                 >
@@ -306,9 +357,9 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
               setLayoutMode("split");
               handleApply(density(), "split", theme());
             }}
-            class={`p-4 rounded-xl border text-left transition flex items-start gap-3 cursor-pointer ${
+            class={`p-4 rounded-xl border text-left transition flex items-start gap-3 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
               layoutMode() === "split"
-                ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] dark:border-[#A27561] shadow-xs"
+                ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] dark:border-[#A27561] shadow-xs ring-1 ring-[#A27561]"
                 : "border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] hover:bg-white dark:hover:bg-[#252830]"
             }`}
           >
@@ -329,9 +380,9 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
               setLayoutMode("full");
               handleApply(density(), "full", theme());
             }}
-            class={`p-4 rounded-xl border text-left transition flex items-start gap-3 cursor-pointer ${
+            class={`p-4 rounded-xl border text-left transition flex items-start gap-3 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
               layoutMode() === "full"
-                ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] dark:border-[#A27561] shadow-xs"
+                ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] dark:border-[#A27561] shadow-xs ring-1 ring-[#A27561]"
                 : "border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] hover:bg-white dark:hover:bg-[#252830]"
             }`}
           >
@@ -366,9 +417,9 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
               setTheme("cloud_dancer");
               handleApply(density(), layoutMode(), "cloud_dancer");
             }}
-            class={`p-4 rounded-xl border text-left transition flex items-center gap-3 cursor-pointer ${
+            class={`p-4 rounded-xl border text-left transition flex items-center gap-3 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
               theme() === "cloud_dancer"
-                ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] dark:border-[#A27561] shadow-xs"
+                ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] dark:border-[#A27561] shadow-xs ring-1 ring-[#A27561]"
                 : "border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] hover:bg-white dark:hover:bg-[#252830]"
             }`}
           >
@@ -389,9 +440,9 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
               setTheme("dark");
               handleApply(density(), layoutMode(), "dark");
             }}
-            class={`p-4 rounded-xl border text-left transition flex items-center gap-3 cursor-pointer ${
+            class={`p-4 rounded-xl border text-left transition flex items-center gap-3 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
               theme() === "dark"
-                ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] dark:border-[#A27561] shadow-xs"
+                ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] dark:border-[#A27561] shadow-xs ring-1 ring-[#A27561]"
                 : "border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] hover:bg-white dark:hover:bg-[#252830]"
             }`}
           >
@@ -408,6 +459,71 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
         </div>
       </div>
 
+      {/* Reading Text Scale Section */}
+      <div class="bg-white dark:bg-[#1E2025] rounded-2xl p-6 border border-[#E2DFD8] dark:border-[#2E3138] shadow-xs space-y-4">
+        <div>
+          <h4 class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6] uppercase tracking-wider font-mono">
+            Reading Font Sizing
+          </h4>
+          <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA] mt-0.5">
+            Adjust the email reading pane text size for optimal comfort.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-3 gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              setFontScale("default");
+              props.onFontScaleChange?.("default");
+              if (typeof window !== "undefined") localStorage.setItem("byos_font_scale", "default");
+            }}
+            class={`py-3 px-3 rounded-xl border text-center transition cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
+              fontScale() === "default"
+                ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-bold ring-1 ring-[#A27561]"
+                : "border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-[#1A1B1E] dark:text-[#F3F4F6]"
+            }`}
+          >
+            <span class="text-xs block font-bold">Standard</span>
+            <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">100% (14px)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setFontScale("large");
+              props.onFontScaleChange?.("large");
+              if (typeof window !== "undefined") localStorage.setItem("byos_font_scale", "large");
+            }}
+            class={`py-3 px-3 rounded-xl border text-center transition cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
+              fontScale() === "large"
+                ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-bold ring-1 ring-[#A27561]"
+                : "border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-[#1A1B1E] dark:text-[#F3F4F6]"
+            }`}
+          >
+            <span class="text-sm block font-bold">Large</span>
+            <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">110% (16px)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setFontScale("xlarge");
+              props.onFontScaleChange?.("xlarge");
+              if (typeof window !== "undefined") localStorage.setItem("byos_font_scale", "xlarge");
+            }}
+            class={`py-3 px-3 rounded-xl border text-center transition cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
+              fontScale() === "xlarge"
+                ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-bold ring-1 ring-[#A27561]"
+                : "border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-[#1A1B1E] dark:text-[#F3F4F6]"
+            }`}
+          >
+            <span class="text-base block font-bold">Extra Large</span>
+            <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">120% (18px)</span>
+          </button>
+        </div>
+      </div>
+
       {/* Regional, Time Format & Week Start Section */}
       <div class="bg-white dark:bg-[#1E2025] rounded-2xl p-6 border border-[#E2DFD8] dark:border-[#2E3138] shadow-xs space-y-5">
         <div>
@@ -419,7 +535,7 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
           </p>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Language Selector */}
           <div class="p-4 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] space-y-2">
             <label class="block text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
@@ -456,9 +572,9 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
                   setTimeFormat("12h");
                   handleApply(density(), layoutMode(), theme(), language(), "12h", weekStart());
                 }}
-                class={`py-2 px-3 rounded-xl border text-xs font-medium text-center transition cursor-pointer ${
+                class={`py-2 px-3 rounded-xl border text-xs font-medium text-center transition cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
                   timeFormat() === "12h"
-                    ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-bold"
+                    ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-bold ring-1 ring-[#A27561]"
                     : "border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-[#1A1B1E] dark:text-[#F3F4F6]"
                 }`}
               >
@@ -470,9 +586,9 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
                   setTimeFormat("24h");
                   handleApply(density(), layoutMode(), theme(), language(), "24h", weekStart());
                 }}
-                class={`py-2 px-3 rounded-xl border text-xs font-medium text-center transition cursor-pointer ${
+                class={`py-2 px-3 rounded-xl border text-xs font-medium text-center transition cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
                   timeFormat() === "24h"
-                    ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-bold"
+                    ? "border-[#A27561] bg-[#F3ECE8] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-bold ring-1 ring-[#A27561]"
                     : "border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-[#1A1B1E] dark:text-[#F3F4F6]"
                 }`}
               >
@@ -484,28 +600,7 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
             </p>
           </div>
 
-          {/* Week Start Selector */}
-          <div class="p-4 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] space-y-2">
-            <label class="block text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
-              Week Starts On
-            </label>
-            <select
-              value={weekStart()}
-              onChange={(e) => {
-                const val = e.currentTarget.value as "sunday" | "monday" | "saturday";
-                setWeekStart(val);
-                handleApply(density(), layoutMode(), theme(), language(), timeFormat(), val);
-              }}
-              class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561] cursor-pointer"
-            >
-              <option value="sunday">Sunday</option>
-              <option value="monday">Monday</option>
-              <option value="saturday">Saturday</option>
-            </select>
-            <p class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">
-              Configures calendar schedules and date pickers.
-            </p>
-          </div>
+
         </div>
       </div>
 
@@ -560,7 +655,7 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
           type="button"
           disabled={saving()}
           onClick={() => handleApply(density(), layoutMode(), theme(), language(), timeFormat(), weekStart())}
-          class="px-5 py-2.5 rounded-xl bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold shadow-xs transition disabled:opacity-50 cursor-pointer flex items-center gap-2"
+          class="px-5 py-2.5 rounded-xl bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold shadow-xs transition disabled:opacity-50 cursor-pointer flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
         >
           <Show when={saving()}>
             <div class="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>

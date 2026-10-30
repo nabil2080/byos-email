@@ -381,10 +381,13 @@ func invitationClaimHandler(w http.ResponseWriter, r *http.Request) {
 		WrappedSkUser   string `json:"wrapped_sk_user"`
 		MailboxPk       string `json:"mailbox_pk"`
 		XWingPK         string `json:"xwing_pk,omitempty"`
-		TwoFactorMethod string `json:"two_factor_method"` // "totp", "phone", "email"
-		TOTPSecret      string `json:"totp_secret"`
-		RecoveryEmail   string `json:"recovery_email"`
-		RecoveryPhone   string `json:"recovery_phone"`
+		TwoFactorMethod  string `json:"two_factor_method"` // "totp", "passkey", "phone", "email"
+		TOTPSecret       string `json:"totp_secret"`
+		PasskeyCredID    string `json:"passkey_cred_id,omitempty"`
+		PasskeyPublicKey string `json:"passkey_public_key,omitempty"`
+		PasskeyDevice    string `json:"passkey_device,omitempty"`
+		RecoveryEmail    string `json:"recovery_email"`
+		RecoveryPhone    string `json:"recovery_phone"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -499,26 +502,49 @@ func invitationClaimHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update user: status 'active', set password_hash, and configure mandatory 2FA
-	twoFactorEnabled := req.TwoFactorMethod != "" || req.TOTPSecret != "" || req.RecoveryEmail != "" || req.RecoveryPhone != ""
+	// Update user: status 'active', set password_hash, and configure mandatory 2FA.
+	// Passkey enrollment during employee onboarding is temporarily paused while assertion verification is upgraded.
 	totpUpper := strings.ToUpper(strings.TrimSpace(req.TOTPSecret))
-	recEmail := strings.TrimSpace(req.RecoveryEmail)
-	recPhone := strings.TrimSpace(req.RecoveryPhone)
+	hasPasskeyEnroll := req.TwoFactorMethod == "passkey" || strings.TrimSpace(req.PasskeyCredID) != ""
+	if hasPasskeyEnroll && totpUpper == "" {
+		http.Error(w, "passkey enrollment is temporarily paused: authenticator app (TOTP) enrollment is required for employee onboarding", http.StatusBadRequest)
+		return
+	}
+	if req.TwoFactorMethod == "totp" && totpUpper == "" {
+		http.Error(w, "totp_secret required: authenticator app enrollment is mandatory", http.StatusBadRequest)
+		return
+	}
 
+	twoFactorEnabled := totpUpper != "" || req.TwoFactorMethod != ""
 	_, err = tx.Exec(ctx, `
 		UPDATE users
 		SET password_hash=$1, status='active', is_active=true,
 		    two_factor_enabled=CASE WHEN $3::boolean THEN true ELSE two_factor_enabled END,
 		    totp_secret=COALESCE(NULLIF($4::text, ''), totp_secret),
-		    recovery_email=COALESCE(NULLIF($5::text, ''), recovery_email),
-		    recovery_phone=COALESCE(NULLIF($6::text, ''), recovery_phone),
 		    updated_at=now()
 		WHERE id=$2
-	`, passwordHash, userID, twoFactorEnabled, totpUpper, recEmail, recPhone)
+	`, passwordHash, userID, twoFactorEnabled, totpUpper)
 	if err != nil {
 		log.Printf("failed to activate user: %v", err)
 		http.Error(w, "failed to activate user", http.StatusInternalServerError)
 		return
+	}
+
+	if hasPasskeyEnroll {
+		deviceName := strings.TrimSpace(req.PasskeyDevice)
+		if deviceName == "" {
+			deviceName = "Security Key"
+		}
+		_, err = tx.Exec(ctx, `
+			INSERT INTO user_passkeys (user_id, credential_id, public_key, device_name)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (credential_id) DO UPDATE SET device_name=EXCLUDED.device_name
+		`, userID, strings.TrimSpace(req.PasskeyCredID), strings.TrimSpace(req.PasskeyPublicKey), deviceName)
+		if err != nil {
+			log.Printf("failed to register employee passkey: %v", err)
+			http.Error(w, "failed to register passkey", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Update mailbox: status 'active', set mailbox_pk, wrapped_sk_user, and mailbox_xwing_pk
@@ -536,6 +562,18 @@ func invitationClaimHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("failed to activate mailbox: %v", err)
 		http.Error(w, "failed to activate mailbox", http.StatusInternalServerError)
+		return
+	}
+
+	// Canonical Lock Order: 2. Lock & invalidate any stale pending reactivations child rows SECOND
+	_, err = tx.Exec(ctx, `
+		UPDATE mailbox_key_reactivations
+		SET status = 'rolled_back', rolled_back_at = NOW(), rollback_reason = 'invitation_claimed_during_pending'
+		WHERE (user_id = $1 OR mailbox_id = $2) AND status = 'pending'
+	`, userID, mailboxID)
+	if err != nil {
+		log.Printf("failed to invalidate pending key reactivations on invitation claim: %v", err)
+		http.Error(w, "failed to invalidate pending key reactivations", http.StatusInternalServerError)
 		return
 	}
 

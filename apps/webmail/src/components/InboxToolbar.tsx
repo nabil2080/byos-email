@@ -38,8 +38,10 @@ interface InboxToolbarProps {
   onSetTheme?: (t: "cloud_dancer" | "dark") => void;
   onToggleTheme?: () => void;
   onOpenMobileMenu?: () => void;
+  onOpenCalendar?: () => void;
   viewMode?: "threads" | "flat";
   onToggleViewMode?: () => void;
+  hideSearchRow?: boolean;
 }
 
 export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
@@ -212,7 +214,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
           e.stopPropagation();
           toggleMenu("move");
         }}
-        class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+        class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
         title="Move to folder"
       >
         <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -323,7 +325,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
           e.stopPropagation();
           toggleMenu("label");
         }}
-        class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+        class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
         title="Label as"
       >
         <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -373,9 +375,10 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
   return (
     <div
       ref={toolbarRef}
-      class="px-3.5 pt-2.5 pb-2 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#18191D] flex flex-col gap-2 select-none relative z-20"
+      class="px-3.5 pt-2.5 pb-2 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#18191D] flex flex-col gap-2 select-none relative z-20 flex-shrink-0"
     >
-      {/* Top Header Row: Search Input + Light/Dark Mode Switch all the way to the right */}
+      <Show when={!props.hideSearchRow}>
+        {/* Top Header Row: Search Input + Light/Dark Mode Switch all the way to the right */}
       <div class="flex items-center justify-between gap-2 sm:gap-2.5 w-full">
         {/* Mobile Hamburger Navigation Button */}
         <Show when={props.onOpenMobileMenu}>
@@ -394,7 +397,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
           </button>
         </Show>
 
-        {/* Search Bar with mathematically centered icon */}
+        {/* Search Bar with mathematically centered icon (kept left as before) */}
         <div data-testid="search-bar" class="relative flex-1 min-w-0 max-w-[540px]">
           <input
             id="webmail-search-input"
@@ -402,7 +405,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
             placeholder="Search by sender, subject, or keywords…"
             value={props.searchQuery || ""}
             onInput={(e) => props.onSearchChange?.(e.currentTarget.value)}
-            class="w-full h-8.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] pl-9 pr-8 text-xs sm:text-sm text-[#1A1B1E] dark:text-[#F3F4F6] placeholder-[#6E7075] dark:placeholder-[#878A8E] shadow-2xs focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 transition-all leading-normal"
+            class="w-full h-8.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] pl-9 pr-8 text-xs sm:text-sm text-[#1A1B1E] dark:text-[#F3F4F6] placeholder-[#6E7075] dark:placeholder-[#878A8E] shadow-2xs focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/30 transition-all leading-normal"
           />
           <svg
             class="w-4 h-4 text-[#6E7075] dark:text-[#878A8E] absolute left-3 top-1/2 -translate-y-1/2 stroke-current fill-none stroke-[1.8] pointer-events-none"
@@ -426,50 +429,30 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
           </Show>
         </div>
 
-        {/* Light / Dark Mode Switch (All the way to the right) */}
-        <div class="flex items-center flex-shrink-0">
-          <div class="flex items-center p-0.5 bg-[#E8E5DF] dark:bg-[#26282E] rounded-lg border border-[#E2DFD8] dark:border-[#2E3138]">
-            <button
-              type="button"
-              onClick={() => props.onSetTheme ? props.onSetTheme("cloud_dancer") : props.onToggleTheme?.()}
-              class={`flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-md text-[11px] font-medium transition-all cursor-pointer ${
-                props.theme !== "dark"
-                  ? "bg-white text-[#1A1B1E] shadow-2xs font-semibold"
-                  : "text-[#6E7075] hover:text-[#1A1B1E] dark:text-[#A1A1AA] dark:hover:text-[#F3F4F6]"
-              }`}
-              title="Cloud Dancer (Light Mode)"
-            >
-              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
-                <circle cx="12" cy="12" r="5" />
-                <line x1="12" y1="1" x2="12" y2="3" />
-                <line x1="12" y1="21" x2="12" y2="23" />
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                <line x1="1" y1="12" x2="3" y2="12" />
-                <line x1="21" y1="12" x2="23" y2="12" />
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-              </svg>
-              <span class="hidden sm:inline">Light</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => props.onSetTheme ? props.onSetTheme("dark") : props.onToggleTheme?.()}
-              class={`flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-md text-[11px] font-medium transition-all cursor-pointer ${
-                props.theme === "dark"
-                  ? "bg-[#18191D] text-[#F3F4F6] shadow-2xs font-semibold"
-                  : "text-[#6E7075] hover:text-[#1A1B1E] dark:text-[#A1A1AA] dark:hover:text-[#F3F4F6]"
-              }`}
-              title="Dark Mode"
-            >
-              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-              </svg>
-              <span class="hidden sm:inline">Dark</span>
-            </button>
-          </div>
+        {/* Calendar Switcher Button (Top right of Search Bar) */}
+        <Show when={props.onOpenCalendar}>
+          <button
+            type="button"
+            onClick={props.onOpenCalendar}
+            data-testid="nav-calendar-tab"
+            data-testid-secondary="toolbar-calendar-btn"
+            data-testid-tertiary="sidebar-calendar-btn"
+            aria-label="Open Calendar"
+            title="Open Calendar"
+            class="flex items-center gap-1.5 h-8.5 px-3 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-[#55575B] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F5F3EF] dark:hover:bg-[#252830] transition cursor-pointer flex-shrink-0 shadow-2xs text-xs font-medium"
+          >
+            <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="3" y1="10" x2="21" y2="10" />
+            </svg>
+            <span class="hidden sm:inline font-medium">Calendar</span>
+          </button>
+        </Show>
+
         </div>
-      </div>
+      </Show>
 
       {/* Dual-State Action Bar */}
       <Show
@@ -493,7 +476,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                         props.onRefresh();
                         setTimeout(() => setIsSpinning(false), 800);
                       }}
-                      class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                      class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                       title="Refresh mail"
                     >
                       <svg
@@ -631,7 +614,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                   <button
                     type="button"
                     onClick={props.onBatchArchive}
-                    class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                    class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                     title="Archive selected"
                   >
                     <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -645,7 +628,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                   <button
                     type="button"
                     onClick={props.onBatchSpam}
-                    class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                    class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                     title="Report Spam"
                   >
                     <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -691,7 +674,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                   <button
                     type="button"
                     onClick={() => props.onBatchToggleRead(!props.isAllSelectedRead)}
-                    class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                    class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                     title={props.isAllSelectedRead ? "Mark as unread" : "Mark as read"}
                   >
                     <Show
@@ -714,7 +697,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                   <button
                     type="button"
                     onClick={() => props.onBatchToggleStarred(true)}
-                    class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-amber-500 hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                    class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-amber-500 hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                     title="Add star"
                   >
                     <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -786,7 +769,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
               <button
                 type="button"
                 onClick={props.onBatchArchive}
-                class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                 title="Archive selected"
               >
                 <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -828,7 +811,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
               <button
                 type="button"
                 onClick={() => props.onBatchToggleRead(!props.isAllSelectedRead)}
-                class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                 title={props.isAllSelectedRead ? "Mark as unread" : "Mark as read"}
               >
                 <Show
@@ -849,7 +832,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
               <button
                 type="button"
                 onClick={() => props.onBatchToggleStarred(true)}
-                class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-amber-500 hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-amber-500 hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                 title="Add star"
               >
                 <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">

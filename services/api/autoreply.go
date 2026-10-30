@@ -56,18 +56,22 @@ func autoReplyHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	// Authorize org membership
-	var userOrgID, mailboxOrgID string
-	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)
+	var userOrgID, userRole string
+	err = conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole)
 	if err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	err = conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID)
+	var mailboxOrgID string
+	var mailboxUserID *string
+	err = conn.QueryRow(ctx, `SELECT org_id::text, user_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID, &mailboxUserID)
 	if err != nil {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	if userOrgID != mailboxOrgID {
+	isOwner := mailboxUserID != nil && *mailboxUserID == userID
+	isAdminOrOwner := userRole == "admin" || userRole == "owner"
+	if userOrgID != mailboxOrgID || (!isOwner && !isAdminOrOwner) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}

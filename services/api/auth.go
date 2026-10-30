@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -56,16 +57,42 @@ func isLegacyAuthEnabled() bool {
 	return os.Getenv("BYOS_LEGACY_AUTH_ENABLED") == "true"
 }
 
+func parseIPHost(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return strings.Trim(host, "[]")
+	}
+	// Address has no port attached
+	return strings.Trim(addr, "[]")
+}
+
 func getClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
+	if r == nil {
+		return "127.0.0.1"
 	}
-	parts := strings.Split(r.RemoteAddr, ":")
-	if len(parts) > 0 {
-		return parts[0]
+	directHost := parseIPHost(r.RemoteAddr)
+
+	// Only trust X-Forwarded-For if explicitly configured via BYOS_TRUST_PROXY=true
+	// or if the request came from local loopback (127.0.0.1 / ::1) in dev/container mode.
+	trustProxy := os.Getenv("BYOS_TRUST_PROXY") == "true" || directHost == "127.0.0.1" || directHost == "::1" || directHost == "localhost"
+	if trustProxy {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			if len(parts) > 0 {
+				client := parseIPHost(parts[0])
+				if client != "" {
+					return client
+				}
+			}
+		}
 	}
-	return r.RemoteAddr
+	if directHost != "" {
+		return directHost
+	}
+	return "127.0.0.1"
 }
 
 func hashPassword(password string) (string, error) {
@@ -316,6 +343,8 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		Name                 string `json:"name"`
 		Email                string `json:"email"`
 		Password             string `json:"password"`
+		RecoveryEmail        string `json:"recovery_email"`
+		RecoveryPhone        string `json:"recovery_phone"`
 		OrgRecoveryPK        string `json:"org_recovery_pk"`
 		WrappedOrgRecoverySK string `json:"wrapped_org_recovery_sk"`
 		RecoverySalt         string `json:"recovery_salt"`
@@ -334,6 +363,12 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "password must be 8-128 characters", http.StatusBadRequest)
 		return
 	}
+	recEmail := strings.TrimSpace(strings.ToLower(req.RecoveryEmail))
+	if recEmail != "" && recEmail == email {
+		http.Error(w, "recovery email must be distinct from primary account email", http.StatusBadRequest)
+		return
+	}
+	recPhone := strings.TrimSpace(req.RecoveryPhone)
 	// Deprecated recovery fields in req (org_recovery_pk, wrapped_org_recovery_sk, recovery_salt)
 	// are intentionally ignored and never treated as active cryptographic material.
 	// In post-migration 058 architecture, all organizations store org_recovery_pk = NULL.
@@ -384,7 +419,11 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	if displayName == "" {
 		displayName = strings.Split(email, "@")[0]
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO users (id, org_id, email, password_hash, display_name, is_active, role) VALUES ($1, $2, $3, $4, $5, true, 'owner') RETURNING id::text`, userID, orgID, email, hash, displayName).Scan(&userID)
+	err = tx.QueryRow(ctx, `
+		INSERT INTO users (id, org_id, email, password_hash, display_name, is_active, role, recovery_email, recovery_phone) 
+		VALUES ($1, $2, $3, $4, $5, true, 'owner', NULLIF($6, ''), NULLIF($7, '')) 
+		RETURNING id::text
+	`, userID, orgID, email, hash, displayName, recEmail, recPhone).Scan(&userID)
 	if err != nil {
 		http.Error(w, "failed to create user", http.StatusInternalServerError)
 		return
@@ -415,11 +454,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Rate limiting: per-IP and per-email, 5/min
-	ip := r.RemoteAddr
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		ip = strings.Split(fwd, ",")[0]
-	}
-	ip = strings.TrimSpace(strings.Split(ip, ":")[0])
+	ip := getClientIP(r)
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req struct {
 		Email    string `json:"email"`
@@ -478,7 +513,6 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		WHERE LOWER(u.email) = $1 
 		   OR LOWER(m.local_part || '@' || d.name) = $1
 		   OR LOWER(a.local_part || '@' || ad.name) = $1
-		   OR ($1 = 'admin@testorg.byos' AND LOWER(u.email) = 'admin@demo.local')
 		ORDER BY (LOWER(u.email) = $1) DESC
 		LIMIT 1`, email).Scan(&userID, &orgID, &hash, &isActive, &userEmail)
 	if err != nil || !isActive || !verifyPassword(hash, password) {
@@ -494,25 +528,26 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if two-factor authentication is active on this account
+	// Check if multi-factor authentication is active on this account
 	var twoFactorEnabled bool
 	var totpSecret, recEmail, recPhone *string
+	var role string
+	var passkeyCount int
 	_ = conn.QueryRow(ctx, `
-		SELECT two_factor_enabled, totp_secret, recovery_email, recovery_phone
-		FROM users WHERE id=$1
-	`, userID).Scan(&twoFactorEnabled, &totpSecret, &recEmail, &recPhone)
+		SELECT u.two_factor_enabled, u.totp_secret, u.recovery_email, u.recovery_phone, u.role,
+		       (SELECT COUNT(*) FROM user_passkeys pk WHERE pk.user_id = u.id)
+		FROM users u WHERE u.id=$1
+	`, userID).Scan(&twoFactorEnabled, &totpSecret, &recEmail, &recPhone, &role, &passkeyCount)
 
-	if twoFactorEnabled {
-		challengeToken, err := generateRandomBase64URL(32)
-		if err != nil {
-			http.Error(w, "failed to create 2fa challenge", http.StatusInternalServerError)
-			return
-		}
+	hasEnrolledFactor := (totpSecret != nil && *totpSecret != "") || passkeyCount > 0
+	hasMFA := twoFactorEnabled && hasEnrolledFactor
 
+	if hasMFA {
 		methods := []string{}
 		preferredMethod := ""
 		destinationMasked := ""
 		verificationCode := ""
+		challengeToken := ""
 
 		if totpSecret != nil && *totpSecret != "" {
 			methods = append(methods, "totp")
@@ -521,30 +556,38 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 				destinationMasked = "Authenticator App"
 			}
 		}
-		if recPhone != nil && *recPhone != "" {
-			methods = append(methods, "phone")
+		if passkeyCount > 0 {
+			methods = append(methods, "passkey")
 			if preferredMethod == "" {
-				preferredMethod = "phone"
-				destinationMasked = maskRecoveryDestination(*recPhone, "phone")
+				preferredMethod = "passkey"
+				destinationMasked = "Hardware Security Key / Passkey"
 			}
 		}
-		if recEmail != nil && *recEmail != "" {
-			methods = append(methods, "email")
-			if preferredMethod == "" {
+		// Recovery verification contacts belong exclusively to organization owners
+		if role == "owner" {
+			if recPhone != nil && *recPhone != "" {
+				methods = append(methods, "phone")
+				if preferredMethod == "" {
+					preferredMethod = "phone"
+					destinationMasked = maskRecoveryDestination(*recPhone, "phone")
+				}
+			}
+			if recEmail != nil && *recEmail != "" {
+				methods = append(methods, "email")
+				if preferredMethod == "" {
+					preferredMethod = "email"
+					destinationMasked = maskRecoveryDestination(*recEmail, "email")
+				}
+			}
+			if len(methods) == 0 {
+				methods = append(methods, "email")
 				preferredMethod = "email"
-				destinationMasked = maskRecoveryDestination(*recEmail, "email")
+				destinationMasked = maskRecoveryDestination(userEmail, "email")
 			}
-		}
-		if len(methods) == 0 {
-			methods = append(methods, "email")
-			preferredMethod = "email"
-			destinationMasked = maskRecoveryDestination(userEmail, "email")
 		}
 
-		if preferredMethod == "email" || preferredMethod == "phone" {
-			otp, err := generate6DigitOTP()
-			if err == nil {
-				verificationCode = otp
+		if len(methods) > 0 {
+			if preferredMethod == "email" || preferredMethod == "phone" {
 				dest := ""
 				if preferredMethod == "phone" && recPhone != nil {
 					dest = *recPhone
@@ -553,28 +596,56 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 				} else {
 					dest = userEmail
 				}
-				log.Printf("[LOGIN 2FA OTP] Code for user %s (%s): %s", userEmail, maskRecoveryDestination(dest, preferredMethod), otp)
+				tok, masked, dbg, err := DispatchOTP(ctx, conn, userID, dest, preferredMethod, "login_2fa", ip)
+				if err != nil {
+					log.Printf("[LOGIN 2FA] Dispatch failed: %v", err)
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				challengeToken = tok
+				destinationMasked = masked
+				verificationCode = dbg
+			} else {
+				tok, err := generateRandomBase64URL(32)
+				if err != nil {
+					http.Error(w, "failed to create 2fa challenge", http.StatusInternalServerError)
+					return
+				}
+				challengeToken = tok
+				expiresAt := time.Now().Add(5 * time.Minute)
+				_, err = conn.Exec(ctx, `
+					INSERT INTO auth_challenges (user_id, challenge_type, challenge_token, destination, expires_at)
+					VALUES ($1, 'login_2fa', $2, $3, $4)
+				`, userID, challengeToken, destinationMasked, expiresAt)
+				if err != nil {
+					http.Error(w, "failed to record challenge", http.StatusInternalServerError)
+					return
+				}
 			}
-		}
 
-		expiresAt := time.Now().Add(5 * time.Minute)
-		_, err = conn.Exec(ctx, `
-			INSERT INTO auth_challenges (user_id, challenge_type, challenge_token, verification_code, destination, expires_at)
-			VALUES ($1, 'login_2fa', $2, NULLIF($3, ''), $4, $5)
-		`, userID, challengeToken, verificationCode, destinationMasked, expiresAt)
-		if err != nil {
-			http.Error(w, "failed to record challenge", http.StatusInternalServerError)
+			respMap := map[string]interface{}{
+				"two_factor_required": true,
+				"challenge_token":     challengeToken,
+				"methods":             methods,
+				"preferred_method":    preferredMethod,
+				"destination_masked":  destinationMasked,
+			}
+			if verificationCode != "" {
+				respMap["debug_code"] = verificationCode
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(respMap)
 			return
 		}
 
+		// Account requires MFA, but only has passkey enrolled while assertion verification is paused.
+		// Password-only authentication exceptions are strictly forbidden.
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"two_factor_required": true,
-			"challenge_token":     challengeToken,
-			"methods":             methods,
-			"preferred_method":    preferredMethod,
-			"destination_masked":  destinationMasked,
-			"debug_code":          verificationCode,
+			"error":   "mfa_factor_unavailable",
+			"message": "Two-factor authentication is required, but your enrolled passkey cannot be verified while assertion verification is paused. Please use an existing session to enroll an authenticator app (TOTP) in Settings, or use account recovery.",
 		})
 		return
 	}
@@ -589,7 +660,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	auditLog(ctx, conn, orgID, userID, "login", "user", userID, map[string]interface{}{"email": email})
-	var role, subscriptionStatus string
+	var subscriptionStatus string
 	var seatCount int
 	_ = conn.QueryRow(ctx, `
 		SELECT COALESCE(u.role, 'member'), COALESCE(o.seat_count, 1), COALESCE(o.subscription_status, 'active')

@@ -8,6 +8,7 @@ import { runTourRunnerTests } from "./tours/runner.test.ts";
 import { runSearchTests } from "./lib/api/search.test.ts";
 import { runTotpTests } from "./utils/totp.test.ts";
 import { runAuth2FATests } from "./lib/api/auth_2fa.test.ts";
+import { runAuthSessionsAndPwdTests } from "./lib/api/auth_sessions_pwd.test.ts";
 
 async function main() {
   let totalFailed = 0;
@@ -61,6 +62,11 @@ async function main() {
   const auth2faRes = await runAuth2FATests();
   console.log(`2FA API TESTS: ${auth2faRes.passed} passed, ${auth2faRes.failed} failed\n`);
   totalFailed += auth2faRes.failed;
+
+  console.log("Running Active Sessions & Password Recovery API Tests...");
+  const authPwdRes = await runAuthSessionsAndPwdTests();
+  console.log(`SESSIONS & PWD RECOVERY TESTS: ${authPwdRes.passed} passed, ${authPwdRes.failed} failed\n`);
+  totalFailed += authPwdRes.failed;
 
   if (totalFailed > 0) process.exit(1);
 }

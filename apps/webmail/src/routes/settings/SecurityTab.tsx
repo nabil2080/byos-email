@@ -19,11 +19,22 @@ import {
   changeAccountPassword,
   fetchPasskeyRegisterOptions,
   registerPasskey,
+  fetchPasskeyStepUpOptions,
+  verifyPasskeyStepUp,
   listPasskeys,
   deletePasskey,
   reactivateHistoricalKeys,
+  prepareHistoricalKeyReactivation,
+  fetchPendingHistoricalKeyReactivation,
+  finalizeHistoricalKeyReactivation,
+  rollbackHistoricalKeyReactivation,
   fetchMailboxDetail,
+  fetchRecoveryOptions,
+  requestRecoveryChallenge,
+  resetPasswordWithRecovery,
+  RecoveryMethodOption,
 } from "../../api";
+import { executeHistoricalKeyPreflight, executeStagedHistoricalKeyReactivation } from "../../historical_key_reactivation";
 import {
   unwrapMailboxKeyWithRecoveryPhrase,
   autoUnwrapMailboxKey,
@@ -37,7 +48,7 @@ interface SecurityTabProps {
   mailboxKey?: Uint8Array | null;
   signingSeed?: Uint8Array | null;
   xwingSeed?: Uint8Array | null;
-  onReactivateSuccess?: () => void;
+  onReactivateSuccess?: (key?: Uint8Array) => void;
 }
 
 export const SecurityTab: Component<SecurityTabProps> = (props) => {
@@ -53,8 +64,19 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
   const [currentPasswordInput, setCurrentPasswordInput] = createSignal("");
   const [newPasswordInput, setNewPasswordInput] = createSignal("");
   const [confirmPasswordInput, setConfirmPasswordInput] = createSignal("");
+  const [mfaCodeInput, setMfaCodeInput] = createSignal("");
   const [changingPassword, setChangingPassword] = createSignal(false);
   const [changePasswordError, setChangePasswordError] = createSignal<string | null>(null);
+  const [passwordChangeMode, setPasswordChangeMode] = createSignal<"standard" | "forgot">("standard");
+  const [recoveryOptions, setRecoveryOptions] = createSignal<RecoveryMethodOption[]>([]);
+  const [loadingRecoveryOptions, setLoadingRecoveryOptions] = createSignal(false);
+  const [selectedRecoveryMethod, setSelectedRecoveryMethod] = createSignal<"email" | "phone" | "totp" | "passkey">("email");
+  const [recoveryChallengeToken, setRecoveryChallengeToken] = createSignal<string | null>(null);
+  const [recoveryDestinationMasked, setRecoveryDestinationMasked] = createSignal<string | null>(null);
+  const [recoveryOtpCode, setRecoveryOtpCode] = createSignal("");
+  const [recoveryStep, setRecoveryStep] = createSignal<1 | 2>(1);
+  const [sendingRecovery, setSendingRecovery] = createSignal(false);
+  const [resettingPassword, setResettingPassword] = createSignal(false);
 
   // 2FA Setup state
   const [totpModalOpen, setTotpModalOpen] = createSignal(false);
@@ -69,10 +91,6 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
   const [disablingTotp, setDisablingTotp] = createSignal(false);
   const [disableTotpError, setDisableTotpError] = createSignal<string | null>(null);
 
-  // Recovery email & phone state
-  const [recoveryEmailInput, setRecoveryEmailInput] = createSignal("");
-  const [recoveryPhoneInput, setRecoveryPhoneInput] = createSignal("");
-  const [savingRecovery, setSavingRecovery] = createSignal(false);
 
   // Key Export state
   const [exportPublicKeyModalOpen, setExportPublicKeyModalOpen] = createSignal(false);
@@ -104,6 +122,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
   const [reactivateModalOpen, setReactivateModalOpen] = createSignal(false);
   const [reactivateSecretInput, setReactivateSecretInput] = createSignal("");
   const [newPassForReactivate, setNewPassForReactivate] = createSignal("");
+  const [confirmPassForReactivate, setConfirmPassForReactivate] = createSignal("");
   const [reactivating, setReactivating] = createSignal(false);
   const [reactivateError, setReactivateError] = createSignal<string | null>(null);
 
@@ -130,6 +149,15 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
   async function loadPasskeys() {
     try {
       setLoadingPasskeys(true);
+      // Security Remediation: Purge legacy plaintext passkey vaults from localStorage
+      if (typeof window !== "undefined" && window.localStorage) {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith("byos_passkey_vault_")) {
+            localStorage.removeItem(k);
+          }
+        }
+      }
       const list = await listPasskeys();
       setPasskeys(list);
     } catch {
@@ -145,15 +173,16 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
       setPasskeyError("WebAuthn / Passkeys are not supported by this browser.");
       return;
     }
+    if (window.location.hostname === "127.0.0.1") {
+      setPasskeyError("WebAuthn requires accessing Webmail via 'http://localhost:3001' rather than '127.0.0.1'. W3C WebAuthn standards forbid IP addresses as Relying Party domains.");
+      return;
+    }
     setAddingPasskey(true);
     setPasskeyError(null);
     try {
       const opts = await fetchPasskeyRegisterOptions();
 
-      const effectiveRpId =
-        window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-          ? window.location.hostname
-          : (opts.rp?.id || window.location.hostname);
+      const effectiveRpId = opts.rp?.id || window.location.hostname;
 
       const cred = (await navigator.credentials.create({
         publicKey: {
@@ -179,34 +208,38 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
 
       const rawId = bufferToBase64URL(cred.rawId);
       const resp = cred.response as AuthenticatorAttestationResponse;
-      const attestationHex = Array.from(new Uint8Array(resp.attestationObject), (b) =>
-        b.toString(16).padStart(2, "0")
-      ).join("");
+      const clientDataB64 = bufferToBase64URL(resp.clientDataJSON);
+      const attestationB64 = bufferToBase64URL(resp.attestationObject);
+      const transports = typeof resp.getTransports === "function" ? resp.getTransports() : [];
 
       await registerPasskey({
-        credential_id: rawId,
-        public_key: attestationHex,
+        id: cred.id,
+        rawId: rawId,
+        type: cred.type,
+        response: {
+          clientDataJSON: clientDataB64,
+          attestationObject: attestationB64,
+          transports: transports,
+        },
         device_name: newPasskeyName().trim() || "Touch ID / Windows Hello",
-        challenge_token: opts.challenge,
+        credential_id: cred.id,
+        challenge_token: opts.challenge || (opts as any).challenge_token,
       });
 
-      // Store device-bound mailbox key in local vault for 1-touch automatic unlock
-      if (typeof window !== "undefined") {
-        const boxId = props.mailbox?.id || props.currentUser?.mailbox_id || "";
-        const skHex = boxId ? sessionStorage.getItem("byos_mailbox_sk_" + boxId) : null;
-        const sKeyHex = boxId ? sessionStorage.getItem("byos_mailbox_skey_" + boxId) : null;
-        if (boxId && skHex) {
-          localStorage.setItem(`byos_passkey_vault_${rawId}`, JSON.stringify({
-            mailbox_id: boxId,
-            mailbox_sk_hex: skHex,
-            search_key_hex: sKeyHex || "",
-          }));
+      // Security Remediation: Never persist unencrypted mailbox private keys in localStorage.
+      // Purge any legacy plaintext passkey vaults from localStorage.
+      if (typeof window !== "undefined" && window.localStorage) {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith("byos_passkey_vault_")) {
+            localStorage.removeItem(k);
+          }
         }
       }
 
       setAddPasskeyModalOpen(false);
       setNewPasskeyName("");
-      showSuccess("Passkey registered! You can now log in with 1-touch authentication.");
+      showSuccess("Passkey registered successfully.");
       await loadPasskeys();
     } catch (err: any) {
       if (err?.name === "NotAllowedError" || err?.message?.includes("cancelled")) {
@@ -230,6 +263,10 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
       await deletePasskey(id);
       showSuccess("Passkey removed.");
       await loadPasskeys();
+      const tfa = await fetch2FAStatus().catch(() => null);
+      if (tfa) {
+        setTwoFactor(tfa);
+      }
     } catch (err: any) {
       setError(err?.message || "Failed to remove passkey.");
     } finally {
@@ -239,10 +276,13 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
 
   async function handleReactivateKeys(e: Event) {
     e.preventDefault();
+    if (reactivating()) return;
+
     const secret = reactivateSecretInput().trim();
-    const currentPass = newPassForReactivate().trim();
-    if (!secret || !currentPass) {
-      setReactivateError("Please provide both the secret and your current login password.");
+    const currentPass = newPassForReactivate();
+    const confirmPass = confirmPassForReactivate();
+    if (!secret || !currentPass || !confirmPass) {
+      setReactivateError("Please provide the recovery secret, current password, and confirmation.");
       return;
     }
 
@@ -256,31 +296,35 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
     setReactivateError(null);
     try {
       const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
-      let mailboxSk: Uint8Array | null = null;
 
-      if (secret.split(/\s+/).length >= 12) {
-        mailboxSk = unwrapMailboxKeyWithRecoveryPhrase(wasm, secret, props.mailbox.id, prevWrapped);
-      } else {
-        mailboxSk = autoUnwrapMailboxKey(wasm, secret, prevWrapped);
-      }
+      const stagedResult = await executeStagedHistoricalKeyReactivation(
+        wasm,
+        {
+          secret,
+          newPassword: currentPass,
+          confirmPassword: confirmPass,
+          mailboxId: props.mailbox.id,
+          previousWrappedSk: prevWrapped,
+        },
+        {
+          prepare: prepareHistoricalKeyReactivation,
+          fetchPending: fetchPendingHistoricalKeyReactivation,
+          finalize: finalizeHistoricalKeyReactivation,
+          rollback: rollbackHistoricalKeyReactivation,
+        }
+      );
 
-      if (!mailboxSk || mailboxSk.length !== 32) {
-        throw new Error("Unable to decrypt historical key with provided credentials.");
-      }
-
-      const newWrappedSk = wrapMailboxKeyWithPassphrase(wasm, currentPass, mailboxSk);
-      await reactivateHistoricalKeys(props.mailbox.id, newWrappedSk);
-
-      const skHex = Array.from(mailboxSk, (b) => b.toString(16).padStart(2, "0")).join("");
+      const skHex = Array.from(stagedResult.unwrappedMailboxSk, (b) => b.toString(16).padStart(2, "0")).join("");
       sessionStorage.setItem("byos_mailbox_sk_" + props.mailbox.id, skHex);
 
       if (props.onReactivateSuccess) {
-        props.onReactivateSuccess();
+        props.onReactivateSuccess(stagedResult.unwrappedMailboxSk);
       }
 
       setReactivateModalOpen(false);
       setReactivateSecretInput("");
       setNewPassForReactivate("");
+      setConfirmPassForReactivate("");
       showSuccess("Historical key material successfully reactivated! Old messages are unlocked.");
       await loadData();
     } catch (err: any) {
@@ -305,8 +349,6 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
       setSessions(sessList);
       if (tfa) {
         setTwoFactor(tfa);
-        setRecoveryEmailInput(tfa.recovery_email || "");
-        setRecoveryPhoneInput(tfa.recovery_phone || "");
       }
       await loadPasskeys();
     } catch (err: any) {
@@ -417,15 +459,26 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
         let rootWrapped = "";
         let signingRootWrapped = "";
         let xwingRootWrapped = "";
+        let hadXWing = false;
+        let hadSigning = false;
         if (existingWrapped && existingWrapped.startsWith("{")) {
           try {
             const parsed = JSON.parse(existingWrapped);
             rootWrapped = parsed.root_wrapped || "";
             signingRootWrapped = parsed.signing_root_wrapped || "";
             xwingRootWrapped = parsed.xwing_root_wrapped || "";
+            if (parsed.xwing_envelope || parsed.xwing_root_wrapped) hadXWing = true;
+            if (parsed.signing_envelope || parsed.signing_root_wrapped) hadSigning = true;
           } catch (parseErr) {
             console.warn("Could not parse existing wrapped_sk_user:", parseErr);
           }
+        }
+
+        if (hadXWing && !xwingSeedBytes) {
+          throw new Error("Mailbox quantum encryption keys are locked. Please unlock your mailbox before changing your password so your encryption keys can be preserved.");
+        }
+        if (hadSigning && !signSeedBytes) {
+          throw new Error("Mailbox signing keys are locked. Please unlock your mailbox before changing your password so your signing keys can be preserved.");
         }
 
         try {
@@ -483,12 +536,12 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
           console.error("Failed to re-wrap keys under new password:", rewrapErr);
           throw new Error("Failed to re-wrap mailbox encryption keys under the new password. Password was not changed.");
         }
-      } else {
-        console.warn("Mailbox key not available in memory; skipping key re-wrap during password change.");
+      } else if (props.mailbox && props.mailbox.wrapped_sk_user) {
+        throw new Error("Mailbox is currently locked. Please unlock your mailbox before changing your password so your encryption keys can be preserved.");
       }
 
-      // 3. Submit new password (with re-wrapped key material if available)
-      await changeAccountPassword(next, newWrappedPayload);
+      // 3. Submit new password (with re-wrapped key material, current password proof, and MFA step-up)
+      await changeAccountPassword(next, newWrappedPayload, curr, mfaCodeInput().trim() || undefined, props.mailbox?.id);
       if (props.mailbox && newWrappedPayload) {
         props.mailbox.wrapped_sk_user = newWrappedPayload;
       }
@@ -496,11 +549,268 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
       setCurrentPasswordInput("");
       setNewPasswordInput("");
       setConfirmPasswordInput("");
+      setMfaCodeInput("");
       showSuccess("Account password successfully changed. Other active sessions were rotated.");
     } catch (err: any) {
       setChangePasswordError(err?.message || "Failed to change password.");
     } finally {
       setChangingPassword(false);
+    }
+  }
+
+  // ── Forgot Password / Identity Recovery Handlers ──
+  async function handleSwitchToForgotPassword() {
+    setPasswordChangeMode("forgot");
+    setChangePasswordError(null);
+    setRecoveryStep(1);
+    setRecoveryChallengeToken(null);
+    setRecoveryDestinationMasked(null);
+    setRecoveryOtpCode("");
+    setNewPasswordInput("");
+    setConfirmPasswordInput("");
+
+    const em = props.currentUser?.email || (props.mailbox as any).email || "";
+    if (em) {
+      setLoadingRecoveryOptions(true);
+      try {
+        const resp = await fetchRecoveryOptions(em);
+        setRecoveryOptions(resp.methods || []);
+        if (resp.methods && resp.methods.length > 0) {
+          setSelectedRecoveryMethod(resp.methods[0].type);
+        }
+      } catch (err) {
+        console.warn("Could not fetch recovery options:", err);
+      } finally {
+        setLoadingRecoveryOptions(false);
+      }
+    }
+  }
+
+  async function handleSendRecoveryChallenge(e: Event) {
+    e.preventDefault();
+    setChangePasswordError(null);
+    const em = props.currentUser?.email || (props.mailbox as any).email || "";
+    if (!em) {
+      setChangePasswordError("Account email could not be determined.");
+      return;
+    }
+    const method = selectedRecoveryMethod();
+    setSendingRecovery(true);
+    try {
+      const resp = await requestRecoveryChallenge(em, method);
+      setRecoveryChallengeToken(resp.challenge_token);
+      setRecoveryDestinationMasked(resp.destination_masked);
+
+      if (method === "passkey") {
+        if (typeof window !== "undefined" && window.PublicKeyCredential) {
+          try {
+            const opts = await fetchPasskeyStepUpOptions();
+            const effectiveRpId =
+              opts.rpId || (window.location.hostname === "127.0.0.1" ? "localhost" : window.location.hostname);
+            const allowCreds = opts.allowCredentials?.map((c) => ({
+              id: base64URLToBuffer(c.id),
+              type: "public-key" as const,
+            }));
+
+            const assertion = (await navigator.credentials.get({
+              publicKey: {
+                challenge: base64URLToBuffer(opts.challenge),
+                rpId: effectiveRpId,
+                userVerification: (opts.userVerification || "required") as any,
+                timeout: opts.timeout || 60000,
+                allowCredentials: allowCreds && allowCreds.length > 0 ? allowCreds : undefined,
+              },
+            })) as PublicKeyCredential;
+
+            if (!assertion) {
+              throw new Error("Passkey step-up was cancelled.");
+            }
+
+            const rawId = bufferToBase64URL(assertion.rawId);
+            const resp2 = assertion.response as AuthenticatorAssertionResponse;
+            const clientDataB64 = bufferToBase64URL(resp2.clientDataJSON);
+            const authDataB64 = bufferToBase64URL(resp2.authenticatorData);
+            const sigB64 = bufferToBase64URL(resp2.signature);
+            const userHandleB64 = resp2.userHandle ? bufferToBase64URL(resp2.userHandle) : undefined;
+
+            const payload = {
+              id: assertion.id,
+              rawId: rawId,
+              type: assertion.type,
+              response: {
+                clientDataJSON: clientDataB64,
+                authenticatorData: authDataB64,
+                signature: sigB64,
+                userHandle: userHandleB64,
+              },
+            };
+
+            const verifyRes = await verifyPasskeyStepUp(payload);
+            if (verifyRes.step_up_token) {
+              setRecoveryOtpCode(verifyRes.step_up_token);
+              setRecoveryStep(2);
+              showSuccess("Passkey verified. Enter your new password below.");
+              return;
+            }
+          } catch (pkErr: any) {
+            console.warn("Passkey assertion error:", pkErr);
+            setChangePasswordError(pkErr?.message || "Passkey verification failed.");
+            return;
+          }
+        }
+      }
+
+      setRecoveryStep(2);
+      if (resp.debug_code) {
+        setRecoveryOtpCode(resp.debug_code);
+      }
+    } catch (err: any) {
+      setChangePasswordError(err?.message || "Failed to send verification code.");
+    } finally {
+      setSendingRecovery(false);
+    }
+  }
+
+  async function handleResetPasswordWithRecovery(e: Event) {
+    e.preventDefault();
+    setChangePasswordError(null);
+    const token = recoveryChallengeToken();
+    const code = recoveryOtpCode().trim();
+    const next = newPasswordInput().trim();
+    const conf = confirmPasswordInput().trim();
+
+    if (!token) {
+      setChangePasswordError("Recovery session expired. Please start over.");
+      return;
+    }
+    if (!code) {
+      setChangePasswordError("Verification code is required.");
+      return;
+    }
+    if (next.length < 8) {
+      setChangePasswordError("New password must be at least 8 characters long.");
+      return;
+    }
+    if (next !== conf) {
+      setChangePasswordError("New password and confirmation do not match.");
+      return;
+    }
+
+    setResettingPassword(true);
+    try {
+      // 1. Resolve in-memory keys to re-wrap if unsealed
+      let mbKeyBytes: Uint8Array | null = props.mailboxKey || null;
+      if (!mbKeyBytes && props.mailbox?.id) {
+        const savedHex = sessionStorage.getItem("byos_mailbox_sk_" + props.mailbox.id);
+        if (savedHex) {
+          mbKeyBytes = new Uint8Array(savedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+        }
+      }
+
+      let signSeedBytes: Uint8Array | null = props.signingSeed || null;
+      if (!signSeedBytes && props.mailbox?.id) {
+        const savedHex = sessionStorage.getItem("byos_signing_seed_" + props.mailbox.id);
+        if (savedHex) {
+          signSeedBytes = new Uint8Array(savedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+        }
+      }
+
+      let xwingSeedBytes: Uint8Array | null = props.xwingSeed || null;
+      if (!xwingSeedBytes && props.mailbox?.id) {
+        const savedHex = sessionStorage.getItem("byos_xwing_seed_" + props.mailbox.id);
+        if (savedHex) {
+          xwingSeedBytes = new Uint8Array(savedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+        }
+      }
+
+      let newWrappedPayload: string | undefined = undefined;
+
+      if (mbKeyBytes) {
+        let existingWrapped = props.mailbox?.wrapped_sk_user || props.currentUser?.wrapped_sk_user || "";
+        let rootWrapped = "";
+        let signingRootWrapped = "";
+        let xwingRootWrapped = "";
+        if (existingWrapped && existingWrapped.startsWith("{")) {
+          try {
+            const parsed = JSON.parse(existingWrapped);
+            rootWrapped = parsed.root_wrapped || "";
+            signingRootWrapped = parsed.signing_root_wrapped || "";
+            xwingRootWrapped = parsed.xwing_root_wrapped || "";
+          } catch {}
+        }
+
+        try {
+          const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
+          const mbSalt = new Uint8Array(16);
+          crypto.getRandomValues(mbSalt);
+          const mbSaltHex = Array.from(mbSalt).map((b) => b.toString(16).padStart(2, "0")).join("");
+          const mbSkHex = Array.from(mbKeyBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+          const mbEnvelope = wasm.wasm_passphrase_wrap_key(next, mbSaltHex, mbSkHex);
+
+          let signingSaltHex = "";
+          let signingEnvelope = "";
+          if (signSeedBytes) {
+            const sSalt = new Uint8Array(16);
+            crypto.getRandomValues(sSalt);
+            signingSaltHex = Array.from(sSalt).map((b) => b.toString(16).padStart(2, "0")).join("");
+            const seedHex = Array.from(signSeedBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+            signingEnvelope = wasm.wasm_passphrase_wrap_key(next, signingSaltHex, seedHex);
+          }
+
+          let xwingSaltHex = "";
+          let xwingEnvelope = "";
+          if (xwingSeedBytes) {
+            const xSalt = new Uint8Array(16);
+            crypto.getRandomValues(xSalt);
+            xwingSaltHex = Array.from(xSalt).map((b) => b.toString(16).padStart(2, "0")).join("");
+            const seedHex = Array.from(xwingSeedBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+            xwingEnvelope = wasm.wasm_passphrase_wrap_key(next, xwingSaltHex, seedHex);
+          }
+
+          const payloadObj: Record<string, string> = {
+            salt: mbSaltHex,
+            envelope: mbEnvelope,
+            root_wrapped: rootWrapped,
+          };
+          if (signingSaltHex && signingEnvelope) {
+            payloadObj.signing_salt = signingSaltHex;
+            payloadObj.signing_envelope = signingEnvelope;
+          }
+          if (signingRootWrapped) {
+            payloadObj.signing_root_wrapped = signingRootWrapped;
+          }
+          if (xwingSaltHex && xwingEnvelope) {
+            payloadObj.xwing_salt = xwingSaltHex;
+            payloadObj.xwing_envelope = xwingEnvelope;
+          }
+          if (xwingRootWrapped) {
+            payloadObj.xwing_root_wrapped = xwingRootWrapped;
+          }
+
+          newWrappedPayload = JSON.stringify(payloadObj);
+        } catch (rewrapErr) {
+          console.warn("Could not re-wrap keys under reset password:", rewrapErr);
+        }
+      }
+
+      await resetPasswordWithRecovery(token, code, next, undefined, newWrappedPayload);
+      if (props.mailbox && newWrappedPayload) {
+        props.mailbox.wrapped_sk_user = newWrappedPayload;
+      }
+
+      setChangePasswordModalOpen(false);
+      setPasswordChangeMode("standard");
+      setCurrentPasswordInput("");
+      setNewPasswordInput("");
+      setConfirmPasswordInput("");
+      setRecoveryOtpCode("");
+      setRecoveryChallengeToken(null);
+      showSuccess("Account password successfully reset! Other active sessions were rotated.");
+      await loadData();
+    } catch (err: any) {
+      setChangePasswordError(err?.message || "Failed to reset password.");
+    } finally {
+      setResettingPassword(false);
     }
   }
 
@@ -549,8 +859,17 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
       }
       setDisableTotpModalOpen(false);
       setDisableTotpPassword("");
-      setTwoFactor((prev) => (prev ? { ...prev, two_factor_enabled: false, has_totp: false } : null));
-      showSuccess("Two-factor authentication has been disabled.");
+      const tfa = await fetch2FAStatus().catch(() => null);
+      if (tfa) {
+        setTwoFactor(tfa);
+      } else {
+        setTwoFactor((prev) => (prev ? { ...prev, two_factor_enabled: passkeys().length > 0, has_totp: false } : null));
+      }
+      if (passkeys().length > 0) {
+        showSuccess("Authenticator app removed. Note: 2-Step Verification remains active because you have registered passkeys.");
+      } else {
+        showSuccess("Two-factor authentication has been disabled.");
+      }
     } catch (err: any) {
       setDisableTotpError(err?.message || "Failed to disable 2FA.");
     } finally {
@@ -558,28 +877,6 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
     }
   }
 
-  // ── Recovery Methods Save ──
-  async function handleSaveRecoveryMethods(e: Event) {
-    e.preventDefault();
-    setSavingRecovery(true);
-    try {
-      await saveRecoveryMethods(recoveryEmailInput().trim(), recoveryPhoneInput().trim());
-      setTwoFactor((prev) =>
-        prev
-          ? {
-              ...prev,
-              recovery_email: recoveryEmailInput().trim(),
-              recovery_phone: recoveryPhoneInput().trim(),
-            }
-          : null
-      );
-      showSuccess("Recovery email & phone updated successfully.");
-    } catch (err: any) {
-      setError(err?.message || "Failed to save recovery methods.");
-    } finally {
-      setSavingRecovery(false);
-    }
-  }
 
   // ── Key Exports ──
   function getArmoredPublicKey(): string {
@@ -802,6 +1099,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
                   setChangePasswordModalOpen(true);
                 }}
                 class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+                data-testid="webmail-change-password-btn"
               >
                 <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
                   <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
@@ -852,7 +1150,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
               </div>
 
               <Show
-                when={twoFactor()?.two_factor_enabled}
+                when={twoFactor()?.has_totp}
                 fallback={
                   <button
                     type="button"
@@ -877,47 +1175,6 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
               </Show>
             </div>
 
-            {/* Recovery Email & Phone Form */}
-            <form onSubmit={handleSaveRecoveryMethods} class="space-y-3 pt-1">
-              <div class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
-                Recovery Verification Contacts
-              </div>
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label class="block text-[11px] font-medium text-[#6E7075] dark:text-[#A1A1AA] mb-1">
-                    Recovery Email Address
-                  </label>
-                  <input
-                    type="email"
-                    placeholder="backup@example.com"
-                    value={recoveryEmailInput()}
-                    onInput={(e) => setRecoveryEmailInput(e.currentTarget.value)}
-                    class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
-                  />
-                </div>
-                <div>
-                  <label class="block text-[11px] font-medium text-[#6E7075] dark:text-[#A1A1AA] mb-1">
-                    Recovery Phone (SMS)
-                  </label>
-                  <input
-                    type="tel"
-                    placeholder="+1 (555) 000-0000"
-                    value={recoveryPhoneInput()}
-                    onInput={(e) => setRecoveryPhoneInput(e.currentTarget.value)}
-                    class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
-                  />
-                </div>
-              </div>
-              <div class="flex justify-end pt-1">
-                <button
-                  type="submit"
-                  disabled={savingRecovery()}
-                  class="px-4 py-2 border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561] text-xs font-medium text-[#1A1B1E] dark:text-[#F3F4F6] rounded-xl hover:bg-[#F3ECE8] dark:hover:bg-[#252830] transition cursor-pointer disabled:opacity-50"
-                >
-                  {savingRecovery() ? "Saving Contacts…" : "Save Recovery Contacts"}
-                </button>
-              </div>
-            </form>
           </div>
 
           {/* 3. Passkeys & Biometric Authentication Card (WebAuthn / FIDO2) */}
@@ -928,16 +1185,12 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
                   Biometrics & Hardware Keys (Passkeys)
                 </h4>
                 <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA] mt-0.5">
-                  Log in instantly with Touch ID, Face ID, Windows Hello, or FIDO2 security keys (YubiKey).
+                  FIDO2 / WebAuthn biometric sensors (Touch ID, Face ID, Windows Hello) and security keys.
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setPasskeyError(null);
-                  setNewPasskeyName("");
-                  setAddPasskeyModalOpen(true);
-                }}
+                onClick={() => setAddPasskeyModalOpen(true)}
                 class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer"
               >
                 <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
@@ -1177,92 +1430,306 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
 
       {/* ── MODALS ── */}
 
-      {/* 1. Change Password Modal */}
+      {/* 1. Change Password Modal (2 Ways: Standard & Forgot/Recovery) */}
       <Show when={changePasswordModalOpen()}>
         <div class="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div class="bg-white dark:bg-[#1E2025] rounded-2xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-xl max-w-md w-full p-6 space-y-4">
-            <div class="flex items-center justify-between">
+            <div class="flex items-center justify-between pb-3 border-b border-[#E2DFD8] dark:border-[#2E3138]">
               <h3 class="text-sm font-bold text-[#1A1B1E] dark:text-[#F3F4F6] flex items-center gap-2">
                 <svg class="w-4 h-4 stroke-[#A27561] fill-none stroke-2" viewBox="0 0 24 24">
                   <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                   <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                 </svg>
-                <span>Change Password</span>
+                <span>
+                  {passwordChangeMode() === "standard"
+                    ? "Change Password"
+                    : "Reset Password via Identity Verification"}
+                </span>
               </h3>
               <button
+                type="button"
                 onClick={() => setChangePasswordModalOpen(false)}
-                class="text-[#6E7075] hover:text-[#1A1B1E] p-1 rounded-lg cursor-pointer"
+                class="text-[#6E7075] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] p-1 rounded-lg cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleChangePassword} class="space-y-3.5">
-              <Show when={changePasswordError()}>
-                <div class="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 text-rose-700 dark:text-rose-300 text-xs rounded-xl">
-                  {changePasswordError()}
+            <Show when={changePasswordError()}>
+              <div class="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 text-rose-700 dark:text-rose-300 text-xs rounded-xl">
+                {changePasswordError()}
+              </div>
+            </Show>
+
+            {/* WAY 1: STANDARD PASSWORD CHANGE */}
+            <Show when={passwordChangeMode() === "standard"}>
+              <form onSubmit={handleChangePassword} class="space-y-3.5">
+                <div>
+                  <div class="flex items-center justify-between mb-1">
+                    <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">
+                      Current Password
+                    </label>
+                    <button
+                      type="button"
+                      data-testid="forgot-password-trigger"
+                      onClick={handleSwitchToForgotPassword}
+                      class="text-xs text-[#A27561] hover:underline font-semibold cursor-pointer"
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Enter current password"
+                    value={currentPasswordInput()}
+                    onInput={(e) => setCurrentPasswordInput(e.currentTarget.value)}
+                    class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
+                    autofocus
+                  />
                 </div>
-              </Show>
 
-              <div>
-                <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
-                  Current Password
-                </label>
-                <input
-                  type="password"
-                  required
-                  placeholder="Enter current password"
-                  value={currentPasswordInput()}
-                  onInput={(e) => setCurrentPasswordInput(e.currentTarget.value)}
-                  class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
-                />
-              </div>
+                <div>
+                  <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
+                    New Password (min 8 chars)
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Enter new password"
+                    value={newPasswordInput()}
+                    onInput={(e) => setNewPasswordInput(e.currentTarget.value)}
+                    class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
+                  />
+                </div>
 
-              <div>
-                <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
-                  New Password (min 8 chars)
-                </label>
-                <input
-                  type="password"
-                  required
-                  placeholder="Enter new password"
-                  value={newPasswordInput()}
-                  onInput={(e) => setNewPasswordInput(e.currentTarget.value)}
-                  class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
-                />
-              </div>
+                <div>
+                  <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Confirm new password"
+                    value={confirmPasswordInput()}
+                    onInput={(e) => setConfirmPasswordInput(e.currentTarget.value)}
+                    class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
+                  />
+                </div>
 
-              <div>
-                <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
-                  Confirm New Password
-                </label>
-                <input
-                  type="password"
-                  required
-                  placeholder="Confirm new password"
-                  value={confirmPasswordInput()}
-                  onInput={(e) => setConfirmPasswordInput(e.currentTarget.value)}
-                  class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
-                />
-              </div>
+                <Show when={twoFactor()?.has_totp || passkeys().length > 0}>
+                  <div>
+                    <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
+                      Two-Factor Authenticator Code (MFA)
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="6-digit authenticator code"
+                      value={mfaCodeInput()}
+                      onInput={(e) => setMfaCodeInput(e.currentTarget.value.replace(/\D/g, ""))}
+                      class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs font-mono text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
+                    />
+                  </div>
+                </Show>
 
-              <div class="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setChangePasswordModalOpen(false)}
-                  class="px-4 py-2 rounded-xl border border-[#E2DFD8] text-xs text-[#464748] dark:text-[#E2DFD8] hover:bg-[#F0EEE9] cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={changingPassword()}
-                  class="px-5 py-2 rounded-xl bg-[#A27561] text-white text-xs font-semibold hover:bg-[#8F6452] transition disabled:opacity-50 cursor-pointer"
-                >
-                  {changingPassword() ? "Changing Password…" : "Update Password"}
-                </button>
+                <div class="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setChangePasswordModalOpen(false)}
+                    class="px-4 py-2 rounded-xl border border-[#E2DFD8] text-xs text-[#464748] dark:text-[#E2DFD8] hover:bg-[#F0EEE9] dark:hover:bg-[#2E3138] cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={changingPassword()}
+                    class="px-5 py-2 rounded-xl bg-[#A27561] text-white text-xs font-semibold hover:bg-[#8F6452] transition disabled:opacity-50 cursor-pointer"
+                  >
+                    {changingPassword() ? "Changing Password…" : "Update Password"}
+                  </button>
+                </div>
+              </form>
+            </Show>
+
+            {/* WAY 2: FORGOT PASSWORD (OTP & CONNECTED IDENTITY VERIFICATION) */}
+            <Show when={passwordChangeMode() === "forgot"}>
+              <div class="space-y-4">
+                {/* STEP 1: CHOOSE CONNECTED VERIFICATION METHOD */}
+                <Show when={recoveryStep() === 1}>
+                  <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA]">
+                    Choose a connected method to verify your account identity:
+                  </p>
+
+                  <Show
+                    when={!loadingRecoveryOptions()}
+                    fallback={<div class="py-4 text-xs text-[#6E7075] dark:text-[#A1A1AA]">Loading verification methods…</div>}
+                  >
+                    <div class="space-y-2">
+                      <For each={recoveryOptions()}>
+                        {(opt) => {
+                          const isSelected = selectedRecoveryMethod() === opt.type;
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedRecoveryMethod(opt.type)}
+                              class={`w-full p-3 rounded-xl border text-left flex items-center justify-between transition-all cursor-pointer ${
+                                isSelected
+                                  ? "border-[#A27561] bg-[#F8F7F4] dark:bg-[#25282E] ring-2 ring-[#A27561]/20"
+                                  : "border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] hover:border-[#A27561]/50"
+                              }`}
+                            >
+                              <div class="flex items-center gap-3">
+                                <div class="w-8 h-8 rounded-lg bg-[#FAF8F5] dark:bg-[#25282E] text-[#A27561] flex items-center justify-center shrink-0">
+                                  <Show when={opt.type === "email"}>
+                                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                      <rect x="2" y="4" width="20" height="16" rx="2" />
+                                      <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+                                    </svg>
+                                  </Show>
+                                  <Show when={opt.type === "phone"}>
+                                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                      <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+                                      <line x1="12" y1="18" x2="12.01" y2="18" />
+                                    </svg>
+                                  </Show>
+                                  <Show when={opt.type === "totp"}>
+                                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                      <circle cx="12" cy="12" r="10" />
+                                      <polyline points="12 6 12 12 16 14" />
+                                    </svg>
+                                  </Show>
+                                  <Show when={opt.type === "passkey"}>
+                                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                                      <path d="m9 12 2 2 4-4" />
+                                    </svg>
+                                  </Show>
+                                </div>
+                                <div>
+                                  <div class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
+                                    {opt.type === "email" && "Recovery Email OTP"}
+                                    {opt.type === "phone" && "Phone / SMS OTP"}
+                                    {opt.type === "totp" && "Authenticator App (TOTP)"}
+                                    {opt.type === "passkey" && "Hardware Security Key / Passkey"}
+                                  </div>
+                                  <div class="text-[11px] text-[#6E7075] dark:text-[#A1A1AA] font-mono">
+                                    {opt.destination_masked}
+                                  </div>
+                                </div>
+                              </div>
+                              <div class={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                                isSelected ? "border-[#A27561] bg-[#A27561]" : "border-[#E2DFD8] dark:border-[#2E3138]"
+                              }`}>
+                                <Show when={isSelected}>
+                                  <div class="w-1.5 h-1.5 rounded-full bg-white" />
+                                </Show>
+                              </div>
+                            </button>
+                          );
+                        }}
+                      </For>
+                    </div>
+
+                    <div class="flex items-center justify-between pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPasswordChangeMode("standard");
+                          setChangePasswordError(null);
+                        }}
+                        class="text-xs font-semibold text-[#A27561] hover:underline cursor-pointer"
+                      >
+                        ← Back to standard
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={sendingRecovery() || recoveryOptions().length === 0}
+                        onClick={handleSendRecoveryChallenge}
+                        class="rounded-xl bg-[#A27561] px-5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-[#8F6452] transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        {sendingRecovery() ? "Sending…" : "Send Verification Code"}
+                      </button>
+                    </div>
+                  </Show>
+                </Show>
+
+                {/* STEP 2: VERIFY CODE & SET NEW PASSWORD */}
+                <Show when={recoveryStep() === 2}>
+                  <form onSubmit={handleResetPasswordWithRecovery} class="space-y-3.5">
+                    <div class="p-3 bg-[#F8F7F4] dark:bg-[#18191D] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs text-[#6E7075] dark:text-[#A1A1AA]">
+                      <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">Target: </span>
+                      <span class="font-mono text-[#A27561]">{recoveryDestinationMasked()}</span>
+                    </div>
+
+                    <div>
+                      <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
+                        {selectedRecoveryMethod() === "passkey" ? "Security Key Credential" : "6-Digit Verification Code"}
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder={selectedRecoveryMethod() === "passkey" ? "Passkey Credential ID" : "e.g. 123456"}
+                        value={recoveryOtpCode()}
+                        onInput={(e) => setRecoveryOtpCode(e.currentTarget.value)}
+                        class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs font-mono text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
+                        autofocus
+                      />
+                    </div>
+
+                    <div>
+                      <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
+                        New Password (min 8 chars)
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        placeholder="Enter new strong password"
+                        value={newPasswordInput()}
+                        onInput={(e) => setNewPasswordInput(e.currentTarget.value)}
+                        class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
+                      />
+                    </div>
+
+                    <div>
+                      <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
+                        Confirm New Password
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        placeholder="Repeat new password"
+                        value={confirmPasswordInput()}
+                        onInput={(e) => setConfirmPasswordInput(e.currentTarget.value)}
+                        class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
+                      />
+                    </div>
+
+                    <div class="flex items-center justify-between pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRecoveryStep(1);
+                          setChangePasswordError(null);
+                        }}
+                        class="text-xs font-semibold text-[#A27561] hover:underline cursor-pointer"
+                      >
+                        ← Back
+                      </button>
+
+                      <button
+                        type="submit"
+                        disabled={resettingPassword()}
+                        class="rounded-xl bg-[#A27561] px-5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-[#8F6452] transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        {resettingPassword() ? "Resetting…" : "Reset & Set Password"}
+                      </button>
+                    </div>
+                  </form>
+                </Show>
               </div>
-            </form>
+            </Show>
           </div>
         </div>
       </Show>
@@ -1342,10 +1809,12 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
         <div class="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div class="bg-white dark:bg-[#1E2025] rounded-2xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-xl max-w-md w-full p-6 space-y-4">
             <h3 class="text-sm font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
-              Disable Two-Factor Authentication
+              Remove Authenticator App
             </h3>
             <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA]">
-              To disable 2FA, please re-enter your account password.
+              {passkeys().length > 0
+                ? "Removing your authenticator app will remove TOTP verification. Note that 2-Step Verification will remain active until you also remove your registered passkeys below. Please enter your account password to confirm."
+                : "To remove your authenticator app and disable 2FA, please enter your account password."}
             </p>
 
             <Show when={disableTotpError()}>
@@ -1689,7 +2158,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
                   disabled={addingPasskey()}
                   class="px-5 py-2 rounded-xl bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold shadow-xs disabled:opacity-50 cursor-pointer"
                 >
-                  {addingPasskey() ? "Authenticating…" : "Activate Passkey"}
+                  {addingPasskey() ? "Verifying with Windows Hello…" : "Create Passkey"}
                 </button>
               </div>
             </form>
@@ -1719,7 +2188,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
             </p>
 
             <Show when={reactivateError()}>
-              <div class="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl">
+              <div data-testid="reactivate-error" class="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl">
                 {reactivateError()}
               </div>
             </Show>
@@ -1732,10 +2201,12 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
                 <textarea
                   required
                   rows={3}
+                  data-testid="reactivate-secret-input"
                   placeholder="Enter 24 words separated by spaces, or previous password"
                   value={reactivateSecretInput()}
                   onInput={(e) => setReactivateSecretInput(e.currentTarget.value)}
-                  class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] font-mono focus:outline-none focus:ring-2 focus:ring-[#A27561]"
+                  disabled={reactivating()}
+                  class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] font-mono focus:outline-none focus:ring-2 focus:ring-[#A27561] disabled:opacity-50"
                 />
               </div>
 
@@ -1746,27 +2217,48 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
                 <input
                   type="password"
                   required
+                  data-testid="reactivate-password-input"
                   placeholder="Enter your current password"
                   value={newPassForReactivate()}
                   onInput={(e) => setNewPassForReactivate(e.currentTarget.value)}
-                  class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
+                  disabled={reactivating()}
+                  class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561] disabled:opacity-50"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
+                  Confirm Current Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  data-testid="reactivate-confirm-password-input"
+                  placeholder="Re-enter your current password"
+                  value={confirmPassForReactivate()}
+                  onInput={(e) => setConfirmPassForReactivate(e.currentTarget.value)}
+                  disabled={reactivating()}
+                  class="w-full px-3 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561] disabled:opacity-50"
                 />
               </div>
 
               <div class="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
+                  data-testid="reactivate-cancel-btn"
                   onClick={() => setReactivateModalOpen(false)}
-                  class="px-4 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs cursor-pointer"
+                  disabled={reactivating()}
+                  class="px-4 py-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={reactivating() || !reactivateSecretInput() || !newPassForReactivate()}
+                  data-testid="reactivate-submit-btn"
+                  disabled={reactivating() || !reactivateSecretInput() || !newPassForReactivate() || !confirmPassForReactivate()}
                   class="px-5 py-2 rounded-xl bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold shadow-xs disabled:opacity-50 cursor-pointer"
                 >
-                  {reactivating() ? "Unsealing & Re-wrapping…" : "Unlock Historical Messages"}
+                  {reactivating() ? "Staging & Verifying…" : "Unlock Historical Messages"}
                 </button>
               </div>
             </form>

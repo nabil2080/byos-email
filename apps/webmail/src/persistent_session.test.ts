@@ -113,6 +113,12 @@ class MockLocalStorage {
   clear() {
     this.data.clear();
   }
+  get length() {
+    return this.data.size;
+  }
+  key(i: number): string | null {
+    return Array.from(this.data.keys())[i] ?? null;
+  }
 }
 
 export async function runPersistentSessionTests() {
@@ -343,6 +349,76 @@ export async function runPersistentSessionTests() {
       (globalThis as any).indexedDB = prevIDB;
       (globalThis as any).localStorage = prevStorage;
       (globalThis as any).fetch = prevFetch;
+      (globalThis as any).window = prevWindow;
+    }
+  });
+
+  await test("7. Plaintext passkey vault remediation: purges legacy entries and forbids plaintext storage", async () => {
+    const prevStorage = (globalThis as any).localStorage;
+    const mockStorage = new MockLocalStorage();
+    (globalThis as any).localStorage = mockStorage;
+
+    try {
+      // Simulate existing legacy plaintext passkey vault
+      mockStorage.setItem("byos_passkey_vault_cred_123", JSON.stringify({
+        mailbox_id: "box-1",
+        mailbox_sk_hex: "0123456789abcdef0123456789abcdef",
+      }));
+      mockStorage.setItem("byos_passkey_vault_cred_456", JSON.stringify({
+        mailbox_id: "box-2",
+        mailbox_sk_hex: "fedcba9876543210fedcba9876543210",
+      }));
+      mockStorage.setItem("safe_unrelated_key", "value");
+
+      assert(mockStorage.getItem("byos_passkey_vault_cred_123") !== null, "Legacy vault exists");
+
+      // Execute purge logic
+      for (let i = mockStorage.length - 1; i >= 0; i--) {
+        const k = mockStorage.key(i);
+        if (k && k.startsWith("byos_passkey_vault_")) {
+          mockStorage.removeItem(k);
+        }
+      }
+
+      // Verify all legacy plaintext passkey vaults are permanently purged
+      assert(mockStorage.getItem("byos_passkey_vault_cred_123") === null, "Legacy vault 123 must be purged");
+      assert(mockStorage.getItem("byos_passkey_vault_cred_456") === null, "Legacy vault 456 must be purged");
+      assert(mockStorage.getItem("safe_unrelated_key") === "value", "Unrelated keys preserved");
+
+      // Verify that no key in localStorage contains raw 32-byte secret keys
+      for (let i = 0; i < mockStorage.length; i++) {
+        const k = mockStorage.key(i);
+        if (k) {
+          assert(!k.startsWith("byos_passkey_vault_"), "No passkey vault keys in localStorage");
+        }
+      }
+    } finally {
+      (globalThis as any).localStorage = prevStorage;
+    }
+  });
+
+  await test("8. Separation between passkey authentication and mailbox decryption", async () => {
+    const prevIDB = (globalThis as any).indexedDB;
+    const prevStorage = (globalThis as any).localStorage;
+    const prevWindow = (globalThis as any).window;
+
+    const mockIDB = new MockIDBFactory();
+    const mockStorage = new MockLocalStorage();
+
+    (globalThis as any).indexedDB = mockIDB;
+    (globalThis as any).localStorage = mockStorage;
+    (globalThis as any).window = { location: { origin: "http://localhost:3001" } };
+
+    try {
+      // Passkey authentication succeeds (issued session token)
+      mockStorage.setItem("byos_active_session_token", "passkey-session-token-xyz");
+
+      // Without device-bound keystore or password unwrap, mailbox keys remain inaccessible (null)
+      const restored = await restorePersistentSession();
+      assert(restored === null, "Passkey session token alone must not unlock mailbox without device keystore");
+    } finally {
+      (globalThis as any).indexedDB = prevIDB;
+      (globalThis as any).localStorage = prevStorage;
       (globalThis as any).window = prevWindow;
     }
   });

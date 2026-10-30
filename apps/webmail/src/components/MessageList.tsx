@@ -5,6 +5,7 @@ import { MessageRow } from "./MessageRow";
 import { ThreadRow } from "./ThreadRow";
 import { MailboxFolder, MailboxLabel, ThreadSummary } from "../api";
 import { FocusedCategory } from "../focused_inbox";
+import { TopFixedBar, AppModule } from "./TopFixedBar";
 
 export interface DisplayMessage {
   id: string;
@@ -95,6 +96,7 @@ interface MessageListProps {
   onSelectThread?: (threadId: string) => void;
   expandedThreadId?: string | null;
   onOpenMobileMenu?: () => void;
+  onOpenCalendar?: () => void;
   onToggleViewMode?: () => void;
   onToggleThreadCheck?: (threadId: string, checked: boolean) => void;
   focusedCategory?: FocusedCategory;
@@ -104,6 +106,15 @@ interface MessageListProps {
   onMoveToCategory?: (msg: DisplayMessage, category: FocusedCategory) => void;
   currentUserEmail?: string;
   currentUserPhotoUrl?: string | null;
+  activeModule?: AppModule;
+  onSwitchModule?: (mod: AppModule) => void;
+  onOpenContacts?: () => void;
+  isOnline?: boolean;
+  isCustomizerOpen?: boolean;
+  onToggleCustomizer?: () => void;
+  activeLabel?: MailboxLabel | null;
+  onClearActiveLabel?: () => void;
+  getSubtreeLabelIds?: (id: string, labels: MailboxLabel[]) => string[];
 }
 
 export const MessageList: Component<MessageListProps> = (props) => {
@@ -126,7 +137,50 @@ export const MessageList: Component<MessageListProps> = (props) => {
   };
 
   return (
-    <section data-testid="message-list" class="w-full bg-[#FAF9F6] dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2A2D35] rounded-2xl flex flex-col min-w-0 overflow-hidden shadow-2xs h-full">
+    <div
+      data-testid="message-list"
+      class="w-full bg-[#FAF9F6] dark:bg-[#1E2025] flex flex-col min-w-0 overflow-hidden h-full"
+    >
+      {/* Top Fixed Bar (Inside Email List, switched to div with no header tag) */}
+      <TopFixedBar
+        activeModule={props.activeModule || "mail"}
+        onSwitchModule={props.onSwitchModule || (() => {})}
+        searchQuery={props.searchQuery || ""}
+        onSearchChange={props.onSearchChange || (() => {})}
+        onOpenContacts={props.onOpenContacts || (() => {})}
+        onOpenMobileMenu={props.onOpenMobileMenu}
+        isOnline={props.isOnline !== false}
+        isCustomizerOpen={props.isCustomizerOpen}
+        onToggleCustomizer={props.onToggleCustomizer}
+        theme={props.theme}
+        onToggleTheme={props.onToggleTheme}
+      />
+
+      {/* Label Filter Chip Row */}
+      <Show when={props.activeLabel}>
+        <div class="px-3.5 py-2 bg-[#FAF9F6] dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between text-xs flex-shrink-0">
+          <div class="flex items-center gap-2 truncate min-w-0">
+            <span class="text-[#6F7173] dark:text-[#878A8E] text-[11px] font-medium flex-shrink-0">Label filter:</span>
+            <span
+              class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-white text-[11px] font-medium shadow-2xs truncate max-w-[280px]"
+              style={{ "background-color": props.activeLabel!.color }}
+              title={props.activeLabel!.path || props.activeLabel!.name}
+            >
+              <span class="truncate">{props.activeLabel!.path || props.activeLabel!.name}</span>
+              <Show when={props.getSubtreeLabelIds && props.labels && props.getSubtreeLabelIds(props.activeLabel!.id, props.labels).length > 1}>
+                <span class="text-[9px] opacity-80 flex-shrink-0">(or descendants)</span>
+              </Show>
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => props.onClearActiveLabel?.()}
+            class="text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] text-xs hover:underline cursor-pointer flex-shrink-0 ml-2"
+          >
+            Clear filter
+          </button>
+        </div>
+      </Show>
       {/* Storage Outage / Disconnected Banner (Section 11) */}
       <Show when={props.storageError}>
         <div role="alert" class="p-3 bg-amber-50/90 border-b border-amber-200/80 text-xs text-amber-900 flex items-start justify-between gap-2 flex-shrink-0">
@@ -153,6 +207,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
 
       {/* Embedded Dual-State Dual-State Inbox Toolbar */}
       <InboxToolbar
+        hideSearchRow={true}
         selectedCount={props.selectedIds.size}
         totalVisibleCount={props.messages.length}
         totalCount={props.totalCount}
@@ -184,6 +239,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
         onSetTheme={props.onSetTheme}
         onToggleTheme={props.onToggleTheme}
         onOpenMobileMenu={props.onOpenMobileMenu}
+        onOpenCalendar={props.onOpenCalendar}
         viewMode={props.viewMode}
         onToggleViewMode={props.onToggleViewMode}
       />
@@ -306,10 +362,13 @@ export const MessageList: Component<MessageListProps> = (props) => {
       </Show>
 
       {/* Messages Scroll Area */}
-      <div class="flex-1 overflow-y-auto min-w-0 overflow-x-hidden">
+      <div class="flex-1 overflow-y-auto min-w-0 overflow-x-hidden custom-scrollbar">
         <Show when={props.isLoading}>
-          <div class="p-8 text-center text-xs text-[#6E7075] dark:text-[#878A8E] font-mono animate-pulse">
-            Syncing sovereign mailbox…
+          <div class="p-4 space-y-2">
+            <div class="h-12 rounded-lg bg-[#E2DFD8]/50 dark:bg-[#2A2D35]/50 animate-pulse" />
+            <div class="h-12 rounded-lg bg-[#E2DFD8]/40 dark:bg-[#2A2D35]/40 animate-pulse" style="animation-delay: 0.1s" />
+            <div class="h-12 rounded-lg bg-[#E2DFD8]/30 dark:bg-[#2A2D35]/30 animate-pulse" style="animation-delay: 0.2s" />
+            <div class="h-12 rounded-lg bg-[#E2DFD8]/20 dark:bg-[#2A2D35]/20 animate-pulse" style="animation-delay: 0.3s" />
           </div>
         </Show>
 
@@ -391,15 +450,15 @@ export const MessageList: Component<MessageListProps> = (props) => {
               : props.messages.length === 0)
           }
         >
-          <div class="p-12 text-center text-xs text-[#878A8E] flex flex-col items-center justify-center gap-2 select-none">
-            <svg class="w-8 h-8 stroke-current fill-none stroke-[1.2] text-[#878A8E]/50" viewBox="0 0 24 24">
+          <div class="py-16 px-8 text-center text-sm text-[#878A8E] flex flex-col items-center justify-center gap-3 select-none">
+            <svg class="w-10 h-10 stroke-current fill-none stroke-[1] text-[#878A8E]/50" viewBox="0 0 24 24">
               <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
               <polyline points="22,6 12,13 2,6" />
             </svg>
-            <span>No messages in {folderNames[props.currentFolder]}.</span>
+            <div class="flex flex-col items-center gap-1"><span>No messages in {folderNames[props.currentFolder]}.</span><span class="text-xs text-[#878A8E]/60">Your messages will appear here</span></div>
           </div>
         </Show>
       </div>
-    </section>
+    </div>
   );
 };

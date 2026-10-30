@@ -7,6 +7,7 @@ import (
 	"encoding/base32"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,8 +22,10 @@ import (
 type TwoFactorStatusResponse struct {
 	TwoFactorEnabled bool   `json:"two_factor_enabled"`
 	HasTOTP          bool   `json:"has_totp"`
-	RecoveryEmail    string `json:"recovery_email"`
-	RecoveryPhone    string `json:"recovery_phone"`
+	HasPasskey       bool   `json:"has_passkey"`
+	RecoveryEmail    string `json:"recovery_email,omitempty"`
+	RecoveryPhone    string `json:"recovery_phone,omitempty"`
+	IsOwner          bool   `json:"is_owner"`
 }
 
 type TOTPSetupResponse struct {
@@ -36,8 +39,10 @@ type TOTPVerifyRequest struct {
 }
 
 type RecoveryMethodsRequest struct {
-	RecoveryEmail string `json:"recovery_email"`
-	RecoveryPhone string `json:"recovery_phone"`
+	RecoveryEmail    string `json:"recovery_email"`
+	RecoveryPhone    string `json:"recovery_phone"`
+	ChallengeToken   string `json:"challenge_token,omitempty"`
+	VerificationCode string `json:"verification_code,omitempty"`
 }
 
 // generateTOTPSecret creates a 20-byte cryptographically secure random base32 string (no padding).
@@ -125,24 +130,43 @@ func twoFactorStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 	var twoFactorEnabled bool
 	var totpSecret, recEmail, recPhone *string
+	var role string
+	var passkeyCount int
 	err = conn.QueryRow(ctx, `
-		SELECT two_factor_enabled, totp_secret, recovery_email, recovery_phone
-		FROM users WHERE id=$1 AND is_active=true
-	`, userID).Scan(&twoFactorEnabled, &totpSecret, &recEmail, &recPhone)
+		SELECT u.two_factor_enabled, u.totp_secret, u.recovery_email, u.recovery_phone, u.role,
+		       (SELECT COUNT(*) FROM user_passkeys pk WHERE pk.user_id = u.id)
+		FROM users u WHERE u.id=$1 AND u.is_active=true
+	`, userID).Scan(&twoFactorEnabled, &totpSecret, &recEmail, &recPhone, &role, &passkeyCount)
 	if err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
 
+	hasTOTP := totpSecret != nil && *totpSecret != ""
+	hasPasskey := passkeyCount > 0
+	isOwner := role == "owner"
+
+	// Canonical rule: 2-step verification is active if and only if at least one factor (TOTP or passkey) is enrolled.
+	effective2FA := hasTOTP || hasPasskey
+	if twoFactorEnabled && !effective2FA {
+		_, _ = conn.Exec(ctx, `UPDATE users SET two_factor_enabled=false, updated_at=NOW() WHERE id=$1`, userID)
+		twoFactorEnabled = false
+	}
+
 	res := TwoFactorStatusResponse{
-		TwoFactorEnabled: twoFactorEnabled,
-		HasTOTP:          totpSecret != nil && *totpSecret != "",
+		TwoFactorEnabled: effective2FA,
+		HasTOTP:          hasTOTP,
+		HasPasskey:       hasPasskey,
+		IsOwner:          isOwner,
 	}
-	if recEmail != nil {
-		res.RecoveryEmail = *recEmail
-	}
-	if recPhone != nil {
-		res.RecoveryPhone = *recPhone
+	// Recovery Verification Contacts belong strictly to organization owners
+	if isOwner {
+		if recEmail != nil {
+			res.RecoveryEmail = *recEmail
+		}
+		if recPhone != nil {
+			res.RecoveryPhone = *recPhone
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -318,7 +342,9 @@ func totpDisableHandler(w http.ResponseWriter, r *http.Request) {
 
 	_, err = conn.Exec(ctx, `
 		UPDATE users
-		SET totp_secret=NULL, two_factor_enabled=false, updated_at=NOW()
+		SET totp_secret=NULL,
+		    two_factor_enabled=((SELECT COUNT(*) FROM user_passkeys WHERE user_id=$1) > 0),
+		    updated_at=NOW()
 		WHERE id=$1 AND is_active=true
 	`, userID)
 	if err != nil {
@@ -355,6 +381,17 @@ func recoveryMethodsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
+	var role, userEmail string
+	err = conn.QueryRow(ctx, `SELECT role, email FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&role, &userEmail)
+	if err != nil {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+	if role != "owner" {
+		http.Error(w, "forbidden: recovery verification contacts belong exclusively to organization owners", http.StatusForbidden)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		var recEmail, recPhone *string
@@ -383,19 +420,42 @@ func recoveryMethodsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		newEmail := strings.TrimSpace(req.RecoveryEmail)
+		newPhone := strings.TrimSpace(req.RecoveryPhone)
+
+		if newEmail != "" && strings.EqualFold(newEmail, userEmail) {
+			http.Error(w, "recovery email must be distinct from primary account email", http.StatusBadRequest)
+			return
+		}
+
+		// If verification code is provided, verify it before activating
+		if req.VerificationCode != "" && req.ChallengeToken != "" {
+			var challengeID string
+			err = conn.QueryRow(ctx, `
+				SELECT id::text FROM auth_challenges
+				WHERE user_id=$1 AND challenge_token=$2 AND verification_code=$3
+				  AND challenge_type='verify_recovery_contact' AND expires_at > NOW()
+			`, userID, strings.TrimSpace(req.ChallengeToken), strings.TrimSpace(req.VerificationCode)).Scan(&challengeID)
+			if err != nil {
+				http.Error(w, "invalid or expired verification code", http.StatusUnauthorized)
+				return
+			}
+			_, _ = conn.Exec(ctx, `DELETE FROM auth_challenges WHERE id=$1`, challengeID)
+		}
+
 		_, err = conn.Exec(ctx, `
 			UPDATE users
-			SET recovery_email=$1, recovery_phone=$2, updated_at=NOW()
+			SET recovery_email=NULLIF($1, ''), recovery_phone=NULLIF($2, ''), updated_at=NOW()
 			WHERE id=$3 AND is_active=true
-		`, strings.TrimSpace(req.RecoveryEmail), strings.TrimSpace(req.RecoveryPhone), userID)
+		`, newEmail, newPhone, userID)
 		if err != nil {
 			http.Error(w, "failed to update recovery methods", http.StatusInternalServerError)
 			return
 		}
 
 		auditLog(ctx, conn, "", userID, "update_recovery_methods", "user", userID, map[string]interface{}{
-			"has_email": req.RecoveryEmail != "",
-			"has_phone": req.RecoveryPhone != "",
+			"has_email": newEmail != "",
+			"has_phone": newPhone != "",
 		})
 
 		w.Header().Set("Content-Type", "application/json")
@@ -407,6 +467,157 @@ func recoveryMethodsHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// recoveryContactSendCodeHandler sends a 6-digit verification code to a candidate recovery contact for owner verification.
+func recoveryContactSendCodeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	var role, userEmail string
+	err = conn.QueryRow(ctx, `SELECT role, email FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&role, &userEmail)
+	if err != nil {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+	if role != "owner" {
+		http.Error(w, "forbidden: recovery verification contacts belong exclusively to organization owners", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		Type        string `json:"type"` // "email" or "phone"
+		Destination string `json:"destination"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	destination := strings.TrimSpace(req.Destination)
+	if destination == "" {
+		http.Error(w, "destination is required", http.StatusBadRequest)
+		return
+	}
+	if req.Type == "email" && strings.EqualFold(destination, userEmail) {
+		http.Error(w, "recovery email must be distinct from primary account email", http.StatusBadRequest)
+		return
+	}
+
+	clientIP := getClientIP(r)
+	tok, masked, dbg, err := DispatchOTP(ctx, conn, userID, destination, req.Type, "verify_recovery_contact", clientIP)
+	if err != nil {
+		log.Printf("[RECOVERY CONTACT] Dispatch failed: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	respMap := map[string]interface{}{
+		"success":            true,
+		"challenge_token":    tok,
+		"destination_masked": masked,
+	}
+	if dbg != "" {
+		respMap["debug_code"] = dbg
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(respMap)
+}
+
+// recoveryContactConfirmHandler verifies the OTP and activates the recovery contact on the owner account.
+func recoveryContactConfirmHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	var role string
+	err = conn.QueryRow(ctx, `SELECT role FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&role)
+	if err != nil {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+	if role != "owner" {
+		http.Error(w, "forbidden: recovery verification contacts belong exclusively to organization owners", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		Type           string `json:"type"` // "email" or "phone"
+		ChallengeToken string `json:"challenge_token"`
+		Code           string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	_, _, dest, err := VerifyChallengeOTP(ctx, conn, req.ChallengeToken, req.Code, "verify_recovery_contact")
+	if err != nil {
+		if errors.Is(err, ErrMaxAttemptsExceeded) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": err.Error(),
+			})
+			return
+		}
+		http.Error(w, "invalid or expired verification code", http.StatusUnauthorized)
+		return
+	}
+
+	if req.Type == "phone" {
+		_, err = conn.Exec(ctx, `UPDATE users SET recovery_phone=$1, updated_at=NOW() WHERE id=$2`, dest, userID)
+	} else {
+		_, err = conn.Exec(ctx, `UPDATE users SET recovery_email=$1, updated_at=NOW() WHERE id=$2`, dest, userID)
+	}
+	if err != nil {
+		http.Error(w, "failed to update recovery contact", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Recovery contact successfully verified and activated.",
+	})
 }
 
 // login2FAVerifyHandler handles POST /v1/auth/2fa/verify-login
@@ -464,6 +675,19 @@ func login2FAVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 1. Check attempt counter
+	_, exceeded, _ := CheckAndIncrementOTPAttempts(ctx, challengeToken)
+	if exceeded {
+		_, _ = conn.Exec(ctx, `DELETE FROM auth_challenges WHERE challenge_token=$1`, challengeToken)
+		ClearOTPAttempts(ctx, challengeToken)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "Maximum verification attempts exceeded. Please request a new verification code.",
+		})
+		return
+	}
+
 	// Fetch user details & credentials
 	var userEmail, orgID, displayName, role, subscriptionStatus string
 	var seatCount int
@@ -487,9 +711,10 @@ func login2FAVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If not matched via TOTP, check OTP verification_code
+	// If not matched via TOTP, check OTP verification_code using HMAC
+	cfg := getOTPDeliveryConfig()
 	if !valid && verificationCode != nil && *verificationCode != "" {
-		if strings.TrimSpace(*verificationCode) == code {
+		if VerifyOTPHMAC(cfg.HMACSecret, challengeToken, *verificationCode, code) {
 			valid = true
 		}
 	}
@@ -503,7 +728,8 @@ func login2FAVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete used challenge
+	// Clear attempts & Delete used challenge atomically
+	ClearOTPAttempts(ctx, challengeToken)
 	_, _ = conn.Exec(ctx, `DELETE FROM auth_challenges WHERE id=$1`, challengeID)
 
 	// Issue session
@@ -637,33 +863,90 @@ func login2FASendCodeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	otp, err := generate6DigitOTP()
+	clientIP := getClientIP(r)
+	cfg := getOTPDeliveryConfig()
+
+	// 1. Rate Limiting
+	if err := CheckOTPRateLimits(ctx, clientIP, destination, userID); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	// 2. Resend Cooldown (60 seconds)
+	cooldownActive, remainingSecs, _ := CheckOTPCooldown(ctx, "login_2fa", destination)
+	if cooldownActive {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":               fmt.Sprintf("Please wait %d seconds before requesting another verification code.", remainingSecs),
+			"retry_after_seconds": remainingSecs,
+		})
+		return
+	}
+
+	// 3. Normalization & Dev allowlist check
+	isPhone := method == "phone"
+	normalizedDest := destination
+	if isPhone {
+		normalizedDest, err = NormalizeE164(destination)
+		if err != nil {
+			http.Error(w, "invalid phone number format", http.StatusBadRequest)
+			return
+		}
+	} else {
+		normalizedDest = strings.ToLower(strings.TrimSpace(destination))
+	}
+	if err := cfg.ValidateRecipient(normalizedDest, isPhone); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	otp, err := generateCryptographicOTP()
 	if err != nil {
 		http.Error(w, "failed to generate code", http.StatusInternalServerError)
 		return
 	}
 
-	masked := maskRecoveryDestination(destination, method)
+	masked := maskRecoveryDestination(normalizedDest, method)
 	expiresAt := time.Now().Add(5 * time.Minute)
+	hmacDigest := ComputeOTPHMAC(cfg.HMACSecret, challengeToken, otp)
 
 	_, err = conn.Exec(ctx, `
 		UPDATE auth_challenges
 		SET verification_code=$1, destination=$2, expires_at=$3
 		WHERE id=$4
-	`, otp, masked, expiresAt, challengeID)
+	`, hmacDigest, normalizedDest, expiresAt, challengeID)
 	if err != nil {
 		http.Error(w, "failed to update challenge", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("[LOGIN 2FA RESEND] %s code for %s (%s): %s", method, userEmail, masked, otp)
+	if isPhone {
+		_, err = SendSMSOTP(ctx, cfg, activeSMSProvider, normalizedDest, otp, "login_2fa")
+	} else {
+		err = SendEmailOTP(ctx, cfg, normalizedDest, otp, "login_2fa")
+	}
+	if err != nil {
+		http.Error(w, fmt.Sprintf("delivery failed: %v", err), http.StatusInternalServerError)
+		return
+	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	RecordOTPCooldown(ctx, "login_2fa", normalizedDest)
+
+	respMap := map[string]interface{}{
 		"success":            true,
 		"method":             method,
 		"destination_masked": masked,
-		"debug_code":         otp,
-	})
+	}
+	if isMockOTPDelivery() {
+		respMap["debug_code"] = otp
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(respMap)
 }
 

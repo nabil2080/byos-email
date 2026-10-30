@@ -1,0 +1,35 @@
+From: "Alice Smith" <alice@byos.local>
+To: "Bob Jones" <bob@byos.local>
+Subject: Accepted: Architecture Sync
+Date: Tue, 20 Oct 2026 15:35:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="----=_Part_fixture_rep_1002"
+
+------=_Part_fixture_rep_1002
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Alice Smith has accepted the invitation for "Architecture Sync".
+When: 2026-10-21T14:00:00.000Z
+------=_Part_fixture_rep_1002
+Content-Type: text/calendar; method=REPLY; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+BEGIN:VCALENDAR
+PRODID:-//BYOS//BYOS Webmail Calendar//EN
+VERSION:2.0
+CALSCALE:GREGORIAN
+METHOD:REPLY
+BEGIN:VEVENT
+UID:meet-arch-sync-20261021-001
+SEQUENCE:0
+DTSTAMP:20261020T153500Z
+DTSTART:20261021T140000Z
+DTEND:20261021T150000Z
+SUMMARY:Architecture Sync
+ORGANIZER;CN="Bob Jones":mailto:bob@byos.local
+ATTENDEE;CN="Alice Smith";PARTSTAT=ACCEPTED:mailto:alice@byos.local
+STATUS:CONFIRMED
+END:VEVENT
+END:VCALENDAR
+------=_Part_fixture_rep_1002--

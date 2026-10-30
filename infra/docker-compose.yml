@@ -143,6 +143,25 @@ services:
       STORAGE_HEALTH_INTERVAL: "${STORAGE_HEALTH_INTERVAL:-300}"
       STORAGE_WORKER_INTERNAL_KEY_FILE: /run/secrets/storage_worker_internal_key
       INTERNAL_API_KEY_FILE: /run/secrets/internal_api_key
+      OTP_DELIVERY_MODE: "${OTP_DELIVERY_MODE:-mock}"
+      OTP_DEV_ALLOWED_EMAILS: "${OTP_DEV_ALLOWED_EMAILS:-abdullahrawha30@gmail.com}"
+      OTP_DEV_ALLOWED_PHONE_NUMBERS: "${OTP_DEV_ALLOWED_PHONE_NUMBERS:-+8801617856836}"
+      OTP_HMAC_SECRET: "${OTP_HMAC_SECRET}"
+      SMTP_HOST: "${SMTP_HOST}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USERNAME: "${SMTP_USERNAME}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD}"
+      SMTP_FROM_ADDRESS: "${SMTP_FROM_ADDRESS:-security@byos.local}"
+      SMTP_FROM_NAME: "${SMTP_FROM_NAME:-BYOS Security}"
+      SMTP_ENCRYPTION: "${SMTP_ENCRYPTION:-starttls}"
+      OTP_SMS_PROVIDER: "${OTP_SMS_PROVIDER:-mock}"
+      TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID}"
+      TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN}"
+      TWILIO_FROM_NUMBER: "${TWILIO_FROM_NUMBER}"
+      GREENWEB_TOKEN: "${GREENWEB_TOKEN}"
+      SMS_GATEWAY_URL: "${SMS_GATEWAY_URL}"
+      SMS_GATEWAY_KEY: "${SMS_GATEWAY_KEY}"
+      SMS_SENDER_ID: "${SMS_SENDER_ID:-BYOS}"
     secrets:
       - outbound_delivery_pk
       - storage_worker_internal_key

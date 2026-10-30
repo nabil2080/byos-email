@@ -1,0 +1,50 @@
+{
+  "success": true,
+  "checks": [
+    "Password confirmation mismatch blocked preflight and prevented API call",
+    "Password policy (<8 chars) blocked preflight and prevented API call",
+    "Incorrect historical secret blocked preflight and prevented API call",
+    "Valid credentials passed preflight and dispatched reactivation API",
+    "Reactivation API returned HTTP 200 and closed modal",
+    "Mailbox secret stored in sessionStorage only (forbidden in localStorage)",
+    "Logout successfully purged sensitive keys from sessionStorage",
+    "Zero passwords or secret keys leaked in logs"
+  ],
+  "apiCalls": [
+    {
+      "type": "request",
+      "method": "POST",
+      "url": "http://127.0.0.1:3008/v1/mailboxes/c0000000-0000-0000-0000-000000000001/reactivate-keys/prepare",
+      "postData": "{\"wrapped_sk_user\":\"{\\\"salt\\\":\\\"8f36e8e53b93262a1e1e82c3be5077dd\\\",\\\"envelope\\\":\\\"01d842ba3d75b69632ef6c70fd9b1922f71b2e92a8013ff67630cd7af99fd0b3d500b2ce48b721b888a81ee67c0551c5fefc87662d57b867412912afeb\\\",\\\"root_wrapped\\\":\\\"dummy_root_wrapped_test_marker\\\"}\"}"
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:3008/v1/mailboxes/c0000000-0000-0000-0000-000000000001/reactivate-keys/7ec61f68-ae61-45a7-89e8-d8b8907dcaa5"
+    },
+    {
+      "type": "response",
+      "status": 201,
+      "url": "http://127.0.0.1:3008/v1/mailboxes/c0000000-0000-0000-0000-000000000001/reactivate-keys/prepare",
+      "body": "{\"expires_at\":\"2026-10-25T11:40:10+06:00\",\"mailbox_id\":\"c0000000-0000-0000-0000-000000000001\",\"migration_id\":\"7ec61f68-ae61-45a7-89e8-d8b8907dcaa5\",\"status\":\"pending\"}\n"
+    },
+    {
+      "type": "request",
+      "method": "POST",
+      "url": "http://127.0.0.1:3008/v1/mailboxes/c0000000-0000-0000-0000-000000000001/reactivate-keys/finalize",
+      "postData": "{\"migration_id\":\"7ec61f68-ae61-45a7-89e8-d8b8907dcaa5\"}"
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:3008/v1/mailboxes/c0000000-0000-0000-0000-000000000001/reactivate-keys/7ec61f68-ae61-45a7-89e8-d8b8907dcaa5",
+      "body": "{\"candidate_mailbox_pk\":\"\",\"candidate_wrapped_sk\":\"{\\\"salt\\\":\\\"8f36e8e53b93262a1e1e82c3be5077dd\\\",\\\"envelope\\\":\\\"01d842ba3d75b69632ef6c70fd9b1922f71b2e92a8013ff67630cd7af99fd0b3d500b2ce48b721b888a81ee67c0551c5fefc87662d57b867412912afeb\\\",\\\"root_wrapped\\\":\\\"dummy_root_wrapped_test_marker\\\"}\",\"expires_at\":\"2026-10-25T11:40:10+06:00\",\"mailbox_id\":\"c0000000-0000-0000-0000-000000000001\",\"migration_id\":\"7ec61f68-ae61-45a7-89e8-d8b8907dcaa5\",\"status\":\"pending\"}\n"
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:3008/v1/mailboxes/c0000000-0000-0000-0000-000000000001/reactivate-keys/finalize",
+      "body": "{\"mailbox_id\":\"c0000000-0000-0000-0000-000000000001\",\"message\":\"Historical key material successfully reactivated\",\"migration_id\":\"7ec61f68-ae61-45a7-89e8-d8b8907dcaa5\",\"status\":\"finalized\",\"success\":true}\n"
+    }
+  ]
+}

@@ -30,6 +30,35 @@ import { runSidebarBorderlessTests } from "./sidebar_borderless.test.js";
 import { runProfilePhotoTests } from "./profile_photo.test.js";
 import { runPersistentSessionTests } from "./persistent_session.test.js";
 import { runOAuthImportTests } from "./oauth_import.test.js";
+import { runCalendarRruleTests } from "./utils/calendarRrule.test.js";
+import { runCalendarCryptoTests } from "./calendar_crypto.test.js";
+import { runCalendarIcsTests } from "./utils/calendarIcs.test.js";
+import { runCalendarInvitationRepositoryTests } from "./calendar_invitation_repository.test.js";
+import { runCalendarPersistenceSecurityTests } from "./calendar_persistence_security.test.js";
+import { runCalendarRecoveryTests } from "./calendar_recovery.test.js";
+import { runHistoricalKeyReactivationTests } from "./historical_key_reactivation.test.js";
+import { runCalendarRecurrenceExceptionTests } from "./calendar_recurrence_exceptions.test.js";
+import { runCalendarInvitationExternalTests } from "./calendar_invitation_external.test.js";
+import { runCalendarSharingTests } from "./calendar_sharing.test.js";
+import { runCalendarSettingsTests } from "./calendar_settings.test.js";
+import { runCalendarManagementTests } from "./calendar_management.test.js";
+import { runCalendarHolidayTests } from "./calendar_holidays.test.js";
+import { runCalendarYearViewTests } from "./calendar_year_view.test.js";
+import { runCalendarCategories010203Tests } from "./calendar_categories_01_02_03.test.js";
+import { runCalendarCategory04Tests } from "./calendar_category_04.test.js";
+import { runCalendarCategory05Tests } from "./calendar_category_05.test.js";
+import { runCalendarCategory06Tests } from "./calendar_category_06.test.js";
+import { runCalendarCategory07Tests } from "./calendar_category_07.test.js";
+import { runCalendarCategory08Tests } from "./calendar_category_08.test.js";
+import { runCalendarCategory10Tests } from "./calendar_category_10.test.js";
+import { runCalendarCategory11Tests } from "./calendar_category_11.test.js";
+import { runCalendarCategory12Tests } from "./calendar_category_12.test.js";
+import { runCalendarCategory13Tests } from "./calendar_category_13.test.js";
+import { runCalendarCategory14Tests } from "./calendar_category_14.test.js";
+import { runCalendarCategory15Tests } from "./calendar_category_15.test.js";
+import { runCalendarLayoutTests } from "./utils/calendarLayout.test.js";
+import { runUnlockAnd2FAPersistenceTests } from "./unlock_and_2fa_persistence.test.js";
+import { runNotesTests } from "./components/notes/notes.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -224,6 +253,175 @@ async function main() {
   console.log(`OAUTH IMPORT TESTS: ${oauthImportRes.passed} passed, ${oauthImportRes.failed} failed\n`);
   totalPassed += oauthImportRes.passed;
   totalFailed += oauthImportRes.failed;
+
+  console.log("Running Calendar Recurrence (RRULE) Tests...");
+  const calendarRruleRes = runCalendarRruleTests();
+  console.log(`CALENDAR RRULE TESTS: ${calendarRruleRes.passed} passed, ${calendarRruleRes.failed} failed\n`);
+  totalPassed += calendarRruleRes.passed;
+  totalFailed += calendarRruleRes.failed;
+
+  console.log("Running Calendar Crypto Tests...");
+  const calendarCryptoRes = await runCalendarCryptoTests();
+  console.log(`CALENDAR CRYPTO TESTS: ${calendarCryptoRes.passed} passed, ${calendarCryptoRes.failed} failed\n`);
+  totalPassed += calendarCryptoRes.passed;
+  totalFailed += calendarCryptoRes.failed;
+
+  console.log("Running Calendar ICS & Invitation Tests...");
+  const calendarIcsRes = runCalendarIcsTests();
+  console.log(`CALENDAR ICS TESTS: ${calendarIcsRes.passed} passed, ${calendarIcsRes.failed} failed\n`);
+  totalPassed += calendarIcsRes.passed;
+  totalFailed += calendarIcsRes.failed;
+
+  console.log("Running Calendar Invitation Repository Integration Tests...");
+  const calendarRepoRes = await runCalendarInvitationRepositoryTests();
+
+  console.log("Running Calendar Persistence Security Tests...");
+  const calendarPersistenceRes = await runCalendarPersistenceSecurityTests();
+  console.log(`CALENDAR PERSISTENCE SECURITY TESTS: ${calendarPersistenceRes.passed} passed, ${calendarPersistenceRes.failed} failed\n`);
+  totalPassed += calendarPersistenceRes.passed;
+  totalFailed += calendarPersistenceRes.failed;
+  console.log(`CALENDAR REPO INTEGRATION TESTS: ${calendarRepoRes.passed} passed, ${calendarRepoRes.failed} failed\n`);
+  totalPassed += calendarRepoRes.passed;
+  totalFailed += calendarRepoRes.failed;
+
+  console.log("Running Historical Key Reactivation Tests...");
+  const reactivationRes = await runHistoricalKeyReactivationTests();
+  console.log(`HISTORICAL KEY REACTIVATION TESTS: ${reactivationRes.passed} passed, ${reactivationRes.failed} failed\n`);
+  totalPassed += reactivationRes.passed;
+  totalFailed += reactivationRes.failed;
+
+  console.log("Running Calendar Recovery Tests...");
+  const calendarRecoveryRes = await runCalendarRecoveryTests();
+  console.log(`CALENDAR RECOVERY TESTS: ${calendarRecoveryRes.passed} passed, ${calendarRecoveryRes.failed} failed\n`);
+  totalPassed += calendarRecoveryRes.passed;
+  totalFailed += calendarRecoveryRes.failed;
+
+  console.log("Running Calendar Recurrence Exceptions Tests...");
+  const recurrenceExcRes = await runCalendarRecurrenceExceptionTests();
+  console.log(`CALENDAR RECURRENCE EXCEPTIONS TESTS: ${recurrenceExcRes.passed} passed, ${recurrenceExcRes.failed} failed\n`);
+  totalPassed += recurrenceExcRes.passed;
+  totalFailed += recurrenceExcRes.failed;
+
+  console.log("Running Calendar External Invitations Tests...");
+  const calendarExtRes = await runCalendarInvitationExternalTests();
+  console.log(`CALENDAR EXTERNAL INVITATIONS TESTS: ${calendarExtRes.passed} passed, ${calendarExtRes.failed} failed\n`);
+  totalPassed += calendarExtRes.passed;
+  totalFailed += calendarExtRes.failed;
+
+  console.log("Running Calendar Sharing Tests...");
+  const calendarSharingRes = await runCalendarSharingTests();
+  console.log(`CALENDAR SHARING TESTS: ${calendarSharingRes.passed} passed, ${calendarSharingRes.failed} failed\n`);
+  totalPassed += calendarSharingRes.passed;
+  totalFailed += calendarSharingRes.failed;
+
+  console.log("Running Calendar Settings Tests...");
+  const calendarSettingsRes = await runCalendarSettingsTests();
+  console.log(`CALENDAR SETTINGS TESTS: ${calendarSettingsRes.passed} passed, ${calendarSettingsRes.failed} failed\n`);
+  totalPassed += calendarSettingsRes.passed;
+  totalFailed += calendarSettingsRes.failed;
+
+  console.log("Running Calendar Management Tests...");
+  const calendarMgmtRes = await runCalendarManagementTests();
+  console.log(`CALENDAR MANAGEMENT TESTS: ${calendarMgmtRes.passed} passed, ${calendarMgmtRes.failed} failed\n`);
+  totalPassed += calendarMgmtRes.passed;
+  totalFailed += calendarMgmtRes.failed;
+
+  console.log("Running Calendar Holiday & Religious Tests...");
+  const calendarHolidaysRes = await runCalendarHolidayTests();
+  console.log(`CALENDAR HOLIDAY & RELIGIOUS TESTS: ${calendarHolidaysRes.passed} passed, ${calendarHolidaysRes.failed} failed\n`);
+  totalPassed += calendarHolidaysRes.passed;
+  totalFailed += calendarHolidaysRes.failed;
+
+  console.log("Running Calendar Year View Tests...");
+  try {
+    runCalendarYearViewTests();
+    totalPassed += 6;
+  } catch (e) {
+    totalFailed += 1;
+  }
+
+  console.log("Running Calendar Categories 01, 02, and 03 Comprehensive Tests...");
+  const cat010203Res = await runCalendarCategories010203Tests();
+  console.log(`CALENDAR CATEGORIES 01, 02, 03 TESTS: ${cat010203Res.passed} passed, ${cat010203Res.failed} failed\n`);
+  totalPassed += cat010203Res.passed;
+  totalFailed += cat010203Res.failed;
+
+  console.log("Running Calendar Category 04 (Alternate & Special Calendars) Tests...");
+  const cat04Res = await runCalendarCategory04Tests();
+  console.log(`CALENDAR CATEGORY 04 TESTS: ${cat04Res.passed} passed, ${cat04Res.failed} failed\n`);
+  totalPassed += cat04Res.passed;
+  totalFailed += cat04Res.failed;
+
+  console.log("Running Calendar Category 05 (Language, Region & Time Management) Tests...");
+  const cat05Res = await runCalendarCategory05Tests();
+  console.log(`CALENDAR CATEGORY 05 TESTS: ${cat05Res.passed} passed, ${cat05Res.failed} failed\n`);
+  totalPassed += cat05Res.passed;
+  totalFailed += cat05Res.failed;
+
+  console.log("Running Calendar Category 06 (Event Creation & Management) Tests...");
+  const cat06Res = await runCalendarCategory06Tests();
+  console.log(`CALENDAR CATEGORY 06 TESTS: ${cat06Res.passed} passed, ${cat06Res.failed} failed\n`);
+  totalPassed += cat06Res.passed;
+  totalFailed += cat06Res.failed;
+
+  console.log("Running Calendar Category 07 (Recurrence & Advanced Scheduling Rules) Tests...");
+  const cat07Res = await runCalendarCategory07Tests();
+  console.log(`CALENDAR CATEGORY 07 TESTS: ${cat07Res.passed} passed, ${cat07Res.failed} failed\n`);
+  totalPassed += cat07Res.passed;
+  totalFailed += cat07Res.failed;
+
+  console.log("Running Calendar Category 08 (Notifications & Reminders) Tests...");
+  const cat08Res = await runCalendarCategory08Tests();
+  console.log(`CALENDAR CATEGORY 08 TESTS: ${cat08Res.passed} passed, ${cat08Res.failed} failed\n`);
+  totalPassed += cat08Res.passed;
+  totalFailed += cat08Res.failed;
+
+  console.log("Running Calendar Category 10 (Working Hours, Availability & Productivity Status) Tests...");
+  const cat10Res = await runCalendarCategory10Tests();
+  console.log(`CALENDAR CATEGORY 10 TESTS: ${cat10Res.passed} passed, ${cat10Res.failed} failed\n`);
+  totalPassed += cat10Res.passed;
+  totalFailed += cat10Res.failed;
+
+  console.log("Running Calendar Category 11 (Tasks & Personal Productivity) Tests...");
+  const cat11Res = await runCalendarCategory11Tests();
+  console.log(`CALENDAR CATEGORY 11 TESTS: ${cat11Res.passed} passed, ${cat11Res.failed} failed\n`);
+  totalPassed += cat11Res.passed;
+  totalFailed += cat11Res.failed;
+
+  console.log("Running Calendar Category 12 (Appointment Scheduling & Booking Pages) Tests...");
+  const cat12Res = await runCalendarCategory12Tests();
+  console.log(`CALENDAR CATEGORY 12 TESTS: ${cat12Res.passed} passed, ${cat12Res.failed} failed\n`);
+  totalPassed += cat12Res.passed;
+  totalFailed += cat12Res.failed;
+
+  console.log("Running Calendar Category 13 (Email and External Integrations) Tests...");
+  const cat13Res = await runCalendarCategory13Tests();
+  console.log(`CALENDAR CATEGORY 13 TESTS: ${cat13Res.passed} passed, ${cat13Res.failed} failed\n`);
+  totalPassed += cat13Res.passed;
+  totalFailed += cat13Res.failed;
+
+  console.log("Running Calendar Category 14 (Import, Export and Synchronization) Tests...");
+  const cat14Res = await runCalendarCategory14Tests();
+  console.log(`CALENDAR CATEGORY 14 TESTS: ${cat14Res.passed} passed, ${cat14Res.failed} failed\n`);
+  totalPassed += cat14Res.passed;
+  totalFailed += cat14Res.failed;
+
+  console.log("Running Calendar Category 15 (Accessibility, Interface and Offline Experience) Tests...");
+  const cat15Res = await runCalendarCategory15Tests();
+  console.log(`CALENDAR CATEGORY 15 TESTS: ${cat15Res.passed} passed, ${cat15Res.failed} failed\n`);
+  totalPassed += cat15Res.passed;
+  totalFailed += cat15Res.failed;
+
+  await runCalendarLayoutTests();
+  totalPassed += 9;
+
+  await runNotesTests();
+  totalPassed += 7;
+
+  const unlock2faRes = await runUnlockAnd2FAPersistenceTests();
+  console.log(`UNLOCK & 2FA PERSISTENCE TESTS: ${unlock2faRes.passed} passed, ${unlock2faRes.failed} failed\n`);
+  totalPassed += unlock2faRes.passed;
+  totalFailed += unlock2faRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

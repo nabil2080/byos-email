@@ -354,6 +354,11 @@ func billingHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if os.Getenv("BYOS_ENV") == "production" && os.Getenv("BYOS_ALLOW_SELF_SERVE_BILLING") != "true" {
+			http.Error(w, "payment gateway verification required in production", http.StatusPaymentRequired)
+			return
+		}
+
 		var activeMailboxes int
 		_ = conn.QueryRow(ctx, `SELECT count(*) FROM mailboxes WHERE org_id=$1 AND is_active=true`, orgID).Scan(&activeMailboxes)
 		if targetSeats < activeMailboxes {

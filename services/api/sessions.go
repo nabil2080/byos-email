@@ -26,10 +26,14 @@ type SessionItem struct {
 
 func getCallerTokenHash(r *http.Request) ([]byte, bool) {
 	var token string
-	if cookie, err := r.Cookie("byos_session"); err == nil && cookie.Value != "" {
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) != "" {
+		token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	} else if cookie, err := r.Cookie("byos_session"); err == nil && cookie.Value != "" {
 		token = cookie.Value
-	} else if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-		token = strings.TrimPrefix(auth, "Bearer ")
+	} else if cookie, err := r.Cookie("byos_cp_session"); err == nil && cookie.Value != "" {
+		token = cookie.Value
+	} else if cookie, err := r.Cookie("byos_webmail_session"); err == nil && cookie.Value != "" {
+		token = cookie.Value
 	}
 	if token == "" {
 		return nil, false

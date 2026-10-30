@@ -80,6 +80,21 @@ func runJanitorPurge() {
 	if challenges+sessions > 0 {
 		log.Printf("credential janitor purged %d challenges, %d sessions", challenges, sessions)
 	}
+
+	var tableExists bool
+	_ = conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema='public' AND table_name='calendar_event_migrations'
+		)`).Scan(&tableExists)
+	if tableExists {
+		reconciled, err := ReconcileRestoredMigrations(ctx, conn)
+		if err != nil {
+			log.Printf("janitor calendar migration reconciliation failed: %v", err)
+		} else if reconciled > 0 {
+			log.Printf("janitor reconciled %d expired calendar migration(s)", reconciled)
+		}
+	}
 }
 
 // purgeExpiredChallenges deletes challenges that expired unspent plus

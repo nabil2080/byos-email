@@ -118,7 +118,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
         }}
       >
         {/* Drawer Title Bar / Controls */}
-        <header class="h-12 bg-[#3C3D3E] dark:bg-[#18191D] text-white px-4 flex items-center justify-between flex-shrink-0 select-none cursor-default border-b dark:border-[#2E3138]">
+        <header class="h-12 bg-[#2B2C2D] dark:bg-[#18191D] text-white px-4 flex items-center justify-between flex-shrink-0 select-none cursor-default border-b border-[#1E1F20] dark:border-[#2E3138]">
           <div class="flex items-center gap-2 min-w-0">
             <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
             <span class="text-xs font-semibold tracking-wide truncate">
@@ -436,14 +436,14 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
             />
 
             {/* Bottom Action Footer */}
-            <footer class="h-14 border-t border-[#E2DFD8] dark:border-[#2E3138] px-4 bg-[#FAF9F7] dark:bg-[#18191D] flex items-center justify-between flex-shrink-0">
+            <footer class="h-14 border-t border-[#E2DFD8] dark:border-[#2E3138] px-4 bg-[#FAF9F6] dark:bg-[#18191D] flex items-center justify-between flex-shrink-0">
               <div class="flex items-center gap-2">
                 {/* Send Button Group */}
                 <button
                   type="submit"
                   data-testid="compose-send-btn"
                   disabled={Boolean(props.status)}
-                  class="px-4 py-2 rounded-xl bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold transition flex items-center gap-2 shadow-xs disabled:opacity-50 cursor-pointer"
+                  class="px-4 py-2.5 rounded-xl bg-[#A27561] hover:bg-[#8F6452] text-white text-[13px] font-semibold tracking-wide transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50 cursor-pointer active:scale-[0.98]"
                 >
                   <Show when={props.status}>
                     <div class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>

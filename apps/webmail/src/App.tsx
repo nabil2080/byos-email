@@ -36,6 +36,8 @@ import {
   fetchOutboundPubkey,
   prepareOutbound,
   sendOutbound,
+  PrepareResponse,
+  SendPayload,
   scheduleOutbound,
   schedulePathA,
   cancelScheduledMessage,
@@ -68,6 +70,8 @@ import {
   requestRecoveryChallenge,
   resetPasswordWithRecovery,
   reactivateHistoricalKeys,
+  requestExceptionalRecovery,
+  resetPasswordWithExceptionalApproval,
   apiRequest,
   RecoveryOptionItem,
   publishMailboxKeys,
@@ -88,7 +92,29 @@ import {
   MaskedAliasItem,
   getProfilePhoto,
   deleteProfilePhoto,
+  fetchCalendars,
+  fetchCalendarEvents,
+  createCalendarEvent,
+  updateCalendarEvent,
+  deleteCalendarEvent,
+  prepareHistoricalKeyReactivation,
+  fetchPendingHistoricalKeyReactivation,
+  finalizeHistoricalKeyReactivation,
+  rollbackHistoricalKeyReactivation,
 } from "./api";
+import { executeStagedHistoricalKeyReactivation } from "./historical_key_reactivation";
+import { generateRsvpReplyIcs, generateIcs, verifyInvitationAuthenticity, type ParsedIcsEvent } from "./utils/calendarIcs";
+import {
+  encryptCalendarEventPayload,
+  decryptCalendarEventPayload,
+  type CalendarEventPlaintext,
+} from "./calendar_crypto";
+import { type DetectedEmailEvent } from "./utils/calendarEmailExtractor";
+import {
+  linkEmailToCalendarEvent,
+  unlinkEmailEvent,
+  getLinkedEmailEvents,
+} from "./components/calendar/integrations/calendarIntegrationsStore";
 import {
   preparePathAAttachment,
   decryptPathAAttachment,
@@ -123,7 +149,6 @@ import { SettingsLayout, SettingsTabId } from "./routes/settings/SettingsLayout"
 import { AccountTab } from "./routes/settings/AccountTab";
 import { SignaturesTab } from "./routes/settings/SignaturesTab";
 import { BridgeTab } from "./routes/settings/BridgeTab";
-import { AppearanceTab } from "./routes/settings/AppearanceTab";
 import { AutoReplyTab } from "./routes/settings/AutoReplyTab";
 import { SecurityTab } from "./routes/settings/SecurityTab";
 import { FiltersTab } from "./routes/settings/FiltersTab";
@@ -132,8 +157,11 @@ import { ImportTab } from "./routes/settings/ImportTab";
 import { OAuthCallback } from "./routes/import/OAuthCallback";
 import { ComposeDrawer } from "./components/ComposeDrawer";
 import { StorageStatusPill } from "./components/StorageStatusPill";
+import { TopFixedBar, AppModule } from "./components/TopFixedBar";
+import { NotesView } from "./components/notes/NotesView";
 import { Sidebar } from "./components/Sidebar";
 import { MessageList } from "./components/MessageList";
+import { CalendarView } from "./components/calendar/CalendarView";
 import { ReadingPane } from "./components/ReadingPane";
 import {
   savePersistentSession,
@@ -148,6 +176,8 @@ import { CreateFolderModal } from "./components/modals/CreateFolderModal";
 import { ImportEmailsModal } from "./components/modals/ImportEmailsModal";
 import { ContactsModal } from "./components/modals/ContactsModal";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
+import { RightBar } from "./components/RightBar";
+import { QuickSettingsPanel } from "./components/QuickSettingsPanel";
 import { ShortcutHandler, isTextInputElement, matchShortcut } from "./keyboard_shortcuts";
 import { formatMessageDate } from "./utils/dateTime";
 import { formatSnoozeTime } from "./snooze";
@@ -468,9 +498,106 @@ export async function tryPathASend(
   }
 }
 
+export interface SendMimeFallbackDeps {
+  tryPathASend?: typeof tryPathASend;
+  fetchOutboundPubkey?: (token?: string) => Promise<string>;
+  prepareOutbound?: (mailboxId: string, token?: string) => Promise<PrepareResponse>;
+  sendOutbound?: (payload: SendPayload, token?: string) => Promise<{ delivery_id: string; status: string }>;
+  sealOutbound?: (
+    pubkey: string,
+    mailboxIdHex: string,
+    outboxSeq: bigint,
+    plaintextB64: string,
+  ) => Promise<{ ciphertext: string; send_token_wrapped: string; iv: string }> | { ciphertext: string; send_token_wrapped: string; iv: string };
+}
+
+export interface SendMimeResult {
+  kind: "sent" | "failed";
+  transport: "path_a" | "path_b";
+  deliveryId?: string;
+  error?: string;
+}
+
+export async function sendMimeWithFallback(
+  params: {
+    recipient: string;
+    senderMailboxId: string;
+    mimeMessage: string;
+    signingSeed: Uint8Array;
+    senderXwingSeed?: Uint8Array;
+    token?: string;
+  },
+  deps?: SendMimeFallbackDeps,
+): Promise<SendMimeResult> {
+  const trySendFn = deps?.tryPathASend ?? tryPathASend;
+  const fetchPkFn = deps?.fetchOutboundPubkey ?? fetchOutboundPubkey;
+  const prepFn = deps?.prepareOutbound ?? prepareOutbound;
+  const sendOutFn = deps?.sendOutbound ?? sendOutbound;
+
+  // 1. Attempt internal Path A (zero-knowledge end-to-end encrypted)
+  const pathARes = await trySendFn({
+    recipient: params.recipient,
+    senderMailboxId: params.senderMailboxId,
+    mimeMessage: params.mimeMessage,
+    signingSeed: params.signingSeed,
+    senderXwingSeed: params.senderXwingSeed,
+    token: params.token,
+  });
+
+  if (pathARes.kind === "sent") {
+    return { kind: "sent", transport: "path_a", deliveryId: pathARes.messageId };
+  }
+
+  if (pathARes.kind === "failed") {
+    return { kind: "failed", transport: "path_a", error: pathARes.error };
+  }
+
+  // 2. Fallback to Path B (external delivery via server HPKE + Postfix/Mailpit)
+  try {
+    const [pubkey, reservation] = await Promise.all([
+      fetchPkFn(params.token),
+      prepFn(params.senderMailboxId, params.token),
+    ]);
+
+    const mailboxIdHex = params.senderMailboxId.replace(/-/g, "");
+    const plaintextB64 = bytesToBase64(new TextEncoder().encode(params.mimeMessage));
+
+    let encrypted: { ciphertext: string; send_token_wrapped: string; iv: string };
+    if (deps?.sealOutbound) {
+      encrypted = await deps.sealOutbound(pubkey, mailboxIdHex, BigInt(reservation.outbox_seq), plaintextB64);
+    } else {
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      encrypted = JSON.parse(
+        wasm.wasm_encrypt_outbound(pubkey, mailboxIdHex, BigInt(reservation.outbox_seq), plaintextB64),
+      );
+    }
+
+    if (!encrypted.ciphertext || !encrypted.send_token_wrapped || !encrypted.iv) {
+      return { kind: "failed", transport: "path_b", error: "Crypto core returned incomplete outbound envelope" };
+    }
+
+    const outResp = await sendOutFn({
+      reservation_id: reservation.reservation_id,
+      mailbox_id: params.senderMailboxId,
+      recipient: params.recipient,
+      encrypted_message: encrypted.ciphertext,
+      send_token_wrapped: encrypted.send_token_wrapped,
+      outbox_seq: reservation.outbox_seq,
+      encryption_version: reservation.encryption_version,
+      aad_version: reservation.aad_version,
+      encryption_iv: encrypted.iv,
+    }, params.token);
+
+    return { kind: "sent", transport: "path_b", deliveryId: outResp.delivery_id };
+  } catch (err: any) {
+    return { kind: "failed", transport: "path_b", error: err?.message || "Path B delivery failed" };
+  }
+}
+
 const App: Component = () => {
   const [isMobile, setIsMobile] = createSignal(typeof window !== "undefined" ? window.innerWidth < 768 : false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = createSignal(false);
+  const [activeModule, setActiveModule] = createSignal<AppModule>("mail");
 
   onMount(() => {
     const handleResize = () => {
@@ -584,6 +711,38 @@ const App: Component = () => {
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = createSignal(false);
   const [isDecrypting, setIsDecrypting] = createSignal(false);
   const [decryptedContent, setDecryptedContent] = createSignal<string | null>(null);
+  const [decryptedCalendarIcs, setDecryptedCalendarIcs] = createSignal<string | null>(null);
+  // Test-only hooks — exposed only in development/test builds (import.meta.env.DEV is true
+  // during `vite dev` and `vite build --mode development`; it is statically replaced with
+  // false in production builds and the entire block is tree-shaken by the bundler).
+  if (import.meta.env.DEV && typeof window !== "undefined") {
+    (window as any).__BYOS_TEST_SET_CALENDAR_ICS__ = setDecryptedCalendarIcs;
+    (window as any).__BYOS_TEST_SELECT_MSG__ = setSelectedMsg;
+    (window as any).__BYOS_TEST_SET_DECRYPTED_CONTENT__ = setDecryptedContent;
+    (window as any).__BYOS_TEST_UNLOCK_ACCOUNT__ = () => setLockedReadingAccount(null);
+    (window as any).__BYOS_TEST_LOCK_MAILBOX__ = (mbId: string) => {
+      setMailboxKey(null);
+      setUnlockedBoxId(null);
+      sessionStorage.removeItem("byos_mailbox_sk_" + mbId);
+      sessionStorage.removeItem("byos_xwing_seed_" + mbId);
+      setConnectedAccounts((prev) =>
+        prev.map((a) => (a.id === mbId ? { ...a, mailboxSkHex: undefined, searchKeyHex: undefined } : a))
+      );
+    };
+    (window as any).__BYOS_TEST_TRIGGER_UNLOCK_MODAL__ = (target: { mailboxId: string; email: string }) => {
+      setUnlockAccountTarget(target);
+      setUnlockAccountPassword("");
+      setUnlockAccountError(null);
+    };
+    (window as any).__BYOS_TEST_SET_IS_DECRYPTING__ = setIsDecrypting;
+    (window as any).__BYOS_TEST_GET_STATE__ = () => ({
+      selectedMsg: selectedMsg(),
+      isDecrypting: isDecrypting(),
+      lockedReadingAccount: lockedReadingAccount(),
+      decryptedCalendarIcs: decryptedCalendarIcs(),
+      decryptedContent: decryptedContent(),
+    });
+  }
   // Plaintext available for editing. Set ONLY on successful decrypt — the
   // Edit action must never load a locked/error placeholder into compose.
   const [editablePlaintext, setEditablePlaintext] = createSignal<string | null>(null);
@@ -613,8 +772,9 @@ const App: Component = () => {
   const [isSearchingTokens, setIsSearchingTokens] = createSignal(false);
   const [unlockedBoxId, setUnlockedBoxId] = createSignal<string | null>(null);
   const [storageErrorBanner, setStorageErrorBanner] = createSignal<string | null>(null);
-  const [lockedReadingAccount, setLockedReadingAccount] = createSignal<{ mailboxId: string; email: string } | null>(null);
-  const [unlockAccountTarget, setUnlockAccountTarget] = createSignal<{ mailboxId: string; email: string } | null>(null);
+  const [lockedReadingAccount, setLockedReadingAccount] = createSignal<{ mailboxId: string; email: string; isHistorical?: boolean } | null>(null);
+  const [unlockAccountTarget, setUnlockAccountTarget] = createSignal<{ mailboxId: string; email: string; isHistorical?: boolean } | null>(null);
+  const [unlockSecretInput, setUnlockSecretInput] = createSignal("");
   const [unlockAccountPassword, setUnlockAccountPassword] = createSignal("");
   const [unlockAccountError, setUnlockAccountError] = createSignal<string | null>(null);
   const [unlockAccountBusy, setUnlockAccountBusy] = createSignal(false);
@@ -751,6 +911,38 @@ const App: Component = () => {
     }
   }
 
+  const [rightCustomizerOpen, setRightCustomizerOpen] = createSignal<boolean>(false);
+  const [fontScale, setFontScale] = createSignal<"default" | "large" | "xlarge">(
+    (typeof window !== "undefined" && (localStorage.getItem("byos_font_scale") as any)) || "default"
+  );
+  const [highContrast, setHighContrast] = createSignal<boolean>(
+    (typeof window !== "undefined" && localStorage.getItem("byos_high_contrast") === "true") || false
+  );
+
+  function cycleDensity() {
+    const cur = density();
+    const next = cur === "compact" ? "cozy" : cur === "cozy" ? "comfortable" : "compact";
+    handleSetDensity(next, true);
+    showToast(`Density: ${next.charAt(0).toUpperCase() + next.slice(1)}`);
+  }
+
+  function toggleLayoutMode() {
+    const cur = layoutMode();
+    const next = cur === "split" ? "full" : "split";
+    handleSetLayoutMode(next, true);
+    showToast(`Layout: ${next === "split" ? "Split Columns" : "Full Width"}`);
+  }
+
+  createEffect(() => {
+    if (typeof window !== "undefined") {
+      if (highContrast()) {
+        document.documentElement.classList.add("high-contrast");
+      } else {
+        document.documentElement.classList.remove("high-contrast");
+      }
+    }
+  });
+
   createEffect(() => {
     const currentTheme = theme();
     if (typeof window !== "undefined") {
@@ -884,6 +1076,338 @@ const App: Component = () => {
       setMessageRead(target.mailboxId, msg.id, newRead, target.token).catch((err) => {
         console.error("Failed to persist read state:", err);
       });
+    }
+  }
+
+  async function handleRsvpInvitation(
+    rsvpStatus: "ACCEPTED" | "TENTATIVE" | "DECLINED",
+    ev: ParsedIcsEvent
+  ) {
+    const currentBox = selectedMailbox();
+    if (!currentBox) return;
+
+    // Pre-check: run authenticity validation on the raw incoming event first.
+    // This catches obviously invalid requests (negative SEQUENCE, missing UID) before
+    // we require the mailbox key, and throws early so callers get an actionable message.
+    // Note: isInvalidInput covers BYOS policy rejections (e.g. negative SEQUENCE);
+    // isStale covers genuine older-revision detection (requires existing event context).
+    const preCheck = verifyInvitationAuthenticity(ev, null, rsvpStatus);
+    if (!preCheck.valid) {
+      console.warn(`[handleRsvpInvitation] Pre-check failed: ${preCheck.reason}`);
+      showToast(`Invitation rejected: ${preCheck.reason}`);
+      throw new Error(preCheck.reason || "Invitation authenticity check failed");
+    }
+
+    const mKey = getMailboxKeyFor(currentBox.id) || mailboxKey();
+    if (!mKey) {
+      showToast("Mailbox is locked. Unlock to RSVP.");
+      return;
+    }
+
+    try {
+      const calendars = await fetchCalendars(currentBox.id);
+      const defaultCal = calendars.find((c) => c.is_default) || calendars[0];
+      if (!defaultCal) {
+        showToast("No calendar available.");
+        return;
+      }
+
+      // Query events in time window around event
+      const startWindow = new Date(ev.startTime.getTime() - 24 * 60 * 60 * 1000).toISOString();
+      const endWindow = new Date(ev.endTime.getTime() + 24 * 60 * 60 * 1000).toISOString();
+      const existingEvents = await fetchCalendarEvents(currentBox.id, startWindow, endWindow);
+
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      let matchedExisting: any = null;
+      let matchedExistingDetails: CalendarEventPlaintext | null = null;
+      for (const raw of existingEvents) {
+        const details = decryptCalendarEventPayload(wasm, mKey, currentBox.id, raw.encrypted_payload);
+        if (details.uid && details.uid === ev.uid) {
+          matchedExisting = raw;
+          matchedExistingDetails = details;
+          break;
+        }
+      }
+
+      // Security & Authenticity Verification (Phase 5.1)
+      const authCheck = verifyInvitationAuthenticity(ev, matchedExistingDetails, rsvpStatus);
+      if (!authCheck.valid) {
+        console.warn(`[handleRsvpInvitation] Authenticity check failed: ${authCheck.reason}`);
+        showToast(`Invitation rejected: ${authCheck.reason}`);
+        throw new Error(authCheck.reason || "Invitation authenticity check failed");
+      }
+      if (authCheck.isDuplicate) {
+        showToast(`You have already responded '${rsvpStatus.toLowerCase()}' to this event.`);
+        return;
+      }
+
+      const updatedDetails: CalendarEventPlaintext = {
+        title: ev.summary || "(Untitled Event)",
+        description: ev.description || "",
+        location: ev.location || "",
+        meetingUrl: ev.url || "",
+        attendees: ev.attendees.map((a) => ({
+          name: a.name,
+          email: a.email,
+          status:
+            a.email.toLowerCase() === currentUser()?.email?.toLowerCase()
+              ? (rsvpStatus.toLowerCase() as any)
+              : (a.partstat?.toLowerCase() as any),
+        })),
+        reminders: [],
+        timezone: ev.timezone || "UTC",
+        uid: ev.uid,
+        sequence: ev.sequence,
+        organizer: ev.organizer,
+        myRsvpStatus: rsvpStatus.toLowerCase() as any,
+      };
+
+      const encryptedPayload = encryptCalendarEventPayload(
+        wasm,
+        mKey,
+        currentBox.id,
+        updatedDetails
+      );
+
+      if (matchedExisting) {
+        await updateCalendarEvent(currentBox.id, matchedExisting.id, {
+          calendar_id: matchedExisting.calendar_id,
+          start_time: ev.startTime.toISOString(),
+          end_time: ev.endTime.toISOString(),
+          is_all_day: ev.isAllDay,
+          rrule: ev.rrule,
+          status: rsvpStatus === "DECLINED" ? "free" : "busy",
+          encrypted_payload: encryptedPayload,
+        });
+      } else {
+        await createCalendarEvent(currentBox.id, {
+          calendar_id: defaultCal.id,
+          start_time: ev.startTime.toISOString(),
+          end_time: ev.endTime.toISOString(),
+          is_all_day: ev.isAllDay,
+          rrule: ev.rrule,
+          status: rsvpStatus === "DECLINED" ? "free" : "busy",
+          encrypted_payload: encryptedPayload,
+        });
+      }
+
+      // Send RSVP reply email if organizer exists
+      const senderEmail = currentUser()?.email || (currentBox.local_part ? `${currentBox.local_part}@byos.local` : "");
+      if (ev.organizer?.email && senderEmail) {
+        const replyIcs = generateRsvpReplyIcs({
+          uid: ev.uid,
+          sequence: ev.sequence,
+          title: ev.summary,
+          startTime: ev.startTime,
+          endTime: ev.endTime,
+          isAllDay: ev.isAllDay,
+          organizer: ev.organizer,
+          responder: {
+            name: currentUser()?.display_name || undefined,
+            email: senderEmail,
+            status: rsvpStatus,
+          },
+        });
+
+        const boundary = "----=_Part_rsvp_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+        const replySubject = `${rsvpStatus === "ACCEPTED" ? "Accepted" : rsvpStatus === "TENTATIVE" ? "Tentative" : "Declined"}: ${ev.summary}`;
+        const replyText = `${currentUser()?.display_name || senderEmail} has ${rsvpStatus.toLowerCase()} the invitation for "${ev.summary}".\nWhen: ${ev.startTime.toISOString()}`;
+        const mimeReply = [
+          `From: ${senderEmail}`,
+          `To: ${ev.organizer.email}`,
+          `Subject: ${replySubject}`,
+          "MIME-Version: 1.0",
+          `Content-Type: multipart/alternative; boundary="${boundary}"`,
+          "",
+          `--${boundary}`,
+          "Content-Type: text/plain; charset=utf-8",
+          "Content-Transfer-Encoding: 8bit",
+          "",
+          replyText,
+          `--${boundary}`,
+          'Content-Type: text/calendar; method=REPLY; charset="utf-8"',
+          "Content-Transfer-Encoding: 8bit",
+          "",
+          replyIcs.trim(),
+          `--${boundary}--`,
+        ].join("\r\n");
+
+        const senderSeed = getSigningSeedFor(currentBox.id) || signingSeed();
+        const senderXwing = getXWingSeedFor(currentBox.id) || xwingSeed();
+        const senderAccount = connectedAccounts().find((a) => a.id === currentBox.id);
+        const sendToken = senderAccount?.sessionToken || sessionStorage.getItem("byos_active_session_token") || undefined;
+        const effectiveSeed = senderSeed || new Uint8Array(32);
+        console.log(`[handleRsvpInvitation] Dispatching RSVP reply (${rsvpStatus}) to ${ev.organizer.email}`);
+        const res = await sendMimeWithFallback({
+          recipient: ev.organizer.email,
+          senderMailboxId: currentBox.id,
+          mimeMessage: mimeReply,
+          signingSeed: effectiveSeed,
+          senderXwingSeed: senderXwing || undefined,
+          token: sendToken,
+        });
+        if (res.kind === "failed") {
+          console.warn(`[handleRsvpInvitation] Failed to dispatch RSVP reply to ${ev.organizer.email}:`, res.error);
+        } else {
+          console.log(`[handleRsvpInvitation] RSVP reply dispatched via ${res.transport} (id: ${res.deliveryId})`);
+        }
+      }
+
+      showToast(`RSVP sent: ${rsvpStatus.toLowerCase()}`);
+    } catch (err: any) {
+      console.error("[handleRsvpInvitation] Failed:", err);
+      showToast(`Failed to update RSVP: ${err?.message || "Unknown error"}`);
+      throw err;
+    }
+  }
+
+  async function handleAddSuggestedCalendarEvent(ev: DetectedEmailEvent) {
+    const currentBox = selectedMailbox();
+    if (!currentBox) return;
+    const mKey = getMailboxKeyFor(currentBox.id) || mailboxKey();
+    if (!mKey) {
+      showToast("Mailbox is locked. Unlock to add event to calendar.");
+      return;
+    }
+
+    try {
+      const calendars = await fetchCalendars(currentBox.id);
+      const defaultCal = calendars.find((c) => c.is_default) || calendars[0];
+      if (!defaultCal) {
+        showToast("No calendar available.");
+        return;
+      }
+
+      const eventPayload: CalendarEventPlaintext = {
+        title: ev.title,
+        description: ev.description,
+        location: ev.location || "",
+        meetingUrl: ev.meetingUrl || "",
+        sourceEmailId: ev.messageId,
+        sourceMessageSubject: ev.messageSubject,
+        sourceCategory: ev.category,
+        sourceConfirmationCode: ev.confirmationCode,
+        sourceProvider: ev.provider,
+        eventType: "default",
+        visibility: "default",
+      };
+
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      const encryptedPayload = encryptCalendarEventPayload(
+        wasm,
+        mKey,
+        currentBox.id,
+        eventPayload
+      );
+
+      const created = await createCalendarEvent(currentBox.id, {
+        calendar_id: defaultCal.id,
+        start_time: ev.startTime,
+        end_time: ev.endTime,
+        is_all_day: ev.allDay,
+        status: "confirmed",
+        encrypted_payload: encryptedPayload,
+      });
+
+      linkEmailToCalendarEvent(currentBox.id, {
+        messageId: ev.messageId,
+        eventId: created.id,
+        calendarId: defaultCal.id,
+        category: ev.category,
+        confirmationCode: ev.confirmationCode,
+        title: ev.title,
+        addedAt: new Date().toISOString(),
+      });
+
+      showToast(`Added to Calendar: ${ev.title}`);
+    } catch (err: any) {
+      console.error("[handleAddSuggestedCalendarEvent] Failed:", err);
+      showToast(`Failed to add event: ${err?.message || "Unknown error"}`);
+      throw err;
+    }
+  }
+
+  async function handleRemoveSuggestedCalendarEvent(ev: DetectedEmailEvent) {
+    const currentBox = selectedMailbox();
+    if (!currentBox) return;
+    try {
+      const links = getLinkedEmailEvents(currentBox.id);
+      const record = links[ev.messageId];
+      if (record && record.eventId) {
+        await deleteCalendarEvent(currentBox.id, record.eventId);
+      }
+      unlinkEmailEvent(currentBox.id, ev.messageId);
+      showToast(`Removed from Calendar: ${ev.title}`);
+    } catch (err: any) {
+      console.error("[handleRemoveSuggestedCalendarEvent] Failed:", err);
+      showToast(`Failed to remove event: ${err?.message || "Unknown error"}`);
+    }
+  }
+
+  // Test-only hooks — gated to DEV builds only (tree-shaken from production bundles).
+  // Must be declared after handleRsvpInvitation is in scope.
+  if (import.meta.env.DEV && typeof window !== "undefined") {
+    (window as any).__BYOS_TEST_HANDLE_RSVP__ = handleRsvpInvitation;
+    // Exposes verifyInvitationAuthenticity directly so browser tests can exercise
+    // organizer-mismatch rejection with synthetic existing-event state, supplementing
+    // (not replacing) the full application-path integration tests.
+    (window as any).__BYOS_TEST_VERIFY_AUTHENTICITY__ = verifyInvitationAuthenticity;
+    (window as any).__BYOS_TEST_SEND_INVITATION__ = handleSendInvitationEmail;
+    (window as any).__BYOS_TEST_SEND_MIME_WITH_FALLBACK__ = sendMimeWithFallback;
+  }
+
+  async function handleSendInvitationEmail(
+    attendeeEmail: string,
+    icsContent: string,
+    subject: string
+  ) {
+    const currentBox = selectedMailbox();
+    const senderEmail = currentUser()?.email || (currentBox?.local_part ? `${currentBox.local_part}@byos.local` : "");
+    if (!currentBox || !senderEmail) return;
+
+    const senderSeed = getSigningSeedFor(currentBox.id) || signingSeed();
+    const senderXwing = getXWingSeedFor(currentBox.id) || xwingSeed();
+    const senderAccount = connectedAccounts().find((a) => a.id === currentBox.id);
+    const sendToken = senderAccount?.sessionToken || sessionStorage.getItem("byos_active_session_token") || undefined;
+    const effectiveSeed = senderSeed || new Uint8Array(32);
+
+    const icsMethodMatch = /METHOD:([A-Z]+)/i.exec(icsContent);
+    const method = icsMethodMatch ? icsMethodMatch[1].toUpperCase() : "REQUEST";
+    const boundary = "----=_Part_inv_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+    const mimeInvite = [
+      `From: ${senderEmail}`,
+      `To: ${attendeeEmail}`,
+      `Subject: ${subject}`,
+      "MIME-Version: 1.0",
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      "Content-Type: text/plain; charset=utf-8",
+      "Content-Transfer-Encoding: 8bit",
+      "",
+      `You have been invited to an event: ${subject}\r\nPlease check your calendar or open this email in BYOS Webmail to respond.`,
+      `--${boundary}`,
+      `Content-Type: text/calendar; method=${method}; charset="utf-8"`,
+      "Content-Transfer-Encoding: 8bit",
+      "",
+      icsContent.trim(),
+      `--${boundary}--`,
+    ].join("\r\n");
+
+    console.log(`[handleSendInvitationEmail] Dispatching invitation to ${attendeeEmail} (Method: ${method})`);
+    const result = await sendMimeWithFallback({
+      recipient: attendeeEmail,
+      senderMailboxId: currentBox.id,
+      mimeMessage: mimeInvite,
+      signingSeed: effectiveSeed,
+      senderXwingSeed: senderXwing || undefined,
+      token: sendToken,
+    });
+
+    if (result.kind === "failed") {
+      console.warn(`[handleSendInvitationEmail] Failed to dispatch invitation to ${attendeeEmail}:`, result.error);
+    } else {
+      console.log(`[handleSendInvitationEmail] Invitation dispatched via ${result.transport} (id: ${result.deliveryId})`);
     }
   }
 
@@ -1351,6 +1875,15 @@ const App: Component = () => {
   const [forgotOldWrappedSk, setForgotOldWrappedSk] = createSignal("");
   const [forgotRecoveryPhrase, setForgotRecoveryPhrase] = createSignal("");
   const [showPhraseInput, setShowPhraseInput] = createSignal(false);
+
+  // Exceptional Employee Recovery state (Finding F-08)
+  const [exceptionalRecoveryOpen, setExceptionalRecoveryOpen] = createSignal(false);
+  const [exceptionalOrgId, setExceptionalOrgId] = createSignal("");
+  const [exceptionalChallengeToken, setExceptionalChallengeToken] = createSignal("");
+  const [exceptionalNewPassword, setExceptionalNewPassword] = createSignal("");
+  const [exceptionalConfirmPassword, setExceptionalConfirmPassword] = createSignal("");
+  const [exceptionalStep, setExceptionalStep] = createSignal<1 | 2>(1);
+  const [exceptionalSuccessMsg, setExceptionalSuccessMsg] = createSignal<string | null>(null);
 
   // Contacts manager state.
   const [contactsOpen, setContactsOpen] = createSignal(false);
@@ -2299,6 +2832,11 @@ const App: Component = () => {
       if (token) {
         sessionStorage.setItem("byos_impersonation_token", token);
       }
+      // Sanitize URL immediately to avoid leaking sensitive session token in address bar, history, or Referer headers
+      urlParams.delete("session_token");
+      const cleanSearch = urlParams.toString();
+      const cleanUrl = window.location.pathname + (cleanSearch ? `?${cleanSearch}` : "") + window.location.hash;
+      window.history.replaceState({}, document.title, cleanUrl);
     }
 
     // Rule 2: Session-generation-gated account restoration.
@@ -2620,8 +3158,73 @@ const App: Component = () => {
     setForgotOldWrappedSk("");
     setForgotRecoveryPhrase("");
     setShowPhraseInput(false);
+    setExceptionalRecoveryOpen(false);
+    setExceptionalOrgId("");
+    setExceptionalChallengeToken("");
+    setExceptionalNewPassword("");
+    setExceptionalConfirmPassword("");
+    setExceptionalStep(1);
+    setExceptionalSuccessMsg(null);
     setForgotError(null);
     setForgotPasswordModalOpen(true);
+  }
+
+  async function handleRequestExceptionalRecovery(e: Event) {
+    e.preventDefault();
+    const email = forgotEmail().trim().toLowerCase();
+    const orgId = exceptionalOrgId().trim();
+    if (!email || !orgId) {
+      setForgotError("Organization ID and email are required to request administrator approval.");
+      return;
+    }
+    setForgotBusy(true);
+    setForgotError(null);
+    setExceptionalSuccessMsg(null);
+    try {
+      const resp = await requestExceptionalRecovery(orgId, email);
+      setExceptionalChallengeToken(resp.challenge_token);
+      setExceptionalSuccessMsg("Emergency recovery request submitted! Your challenge token has been generated. Please notify your organization administrator to approve your request in the Control Panel.");
+      setExceptionalStep(2);
+    } catch (err: any) {
+      setForgotError(err?.message || "Failed to submit exceptional recovery request.");
+    } finally {
+      setForgotBusy(false);
+    }
+  }
+
+  async function handleResetExceptionalPassword(e: Event) {
+    e.preventDefault();
+    const token = exceptionalChallengeToken().trim();
+    const newPass = exceptionalNewPassword().trim();
+    const conf = exceptionalConfirmPassword().trim();
+    if (!token) {
+      setForgotError("Challenge token is required.");
+      return;
+    }
+    if (newPass.length < 8) {
+      setForgotError("New password must be at least 8 characters.");
+      return;
+    }
+    if (newPass !== conf) {
+      setForgotError("Passwords do not match.");
+      return;
+    }
+    setForgotBusy(true);
+    setForgotError(null);
+    try {
+      await resetPasswordWithExceptionalApproval(token, newPass);
+      setExceptionalSuccessMsg("Password successfully reset! You can now log into your account. Old mailbox keys remain encrypted until you enter your 24-word recovery phrase.");
+      setLoginEmail(forgotEmail().trim());
+      setLoginPassword(newPass);
+      setTimeout(() => {
+        setForgotPasswordModalOpen(false);
+        setExceptionalRecoveryOpen(false);
+      }, 3000);
+    } catch (err: any) {
+      setForgotError(err?.message || "Failed to reset password. Ensure your organization administrator has approved your request.");
+    } finally {
+      setForgotBusy(false);
+    }
   }
 
   async function handleFindRecoveryMethods(e: Event) {
@@ -2786,10 +3389,7 @@ const App: Component = () => {
       const email = loginEmail().trim() || undefined;
       const opts = await fetchPasskeyLoginOptions(email);
 
-      const effectiveRpId =
-        window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-          ? window.location.hostname
-          : (opts.rpId || window.location.hostname);
+      const effectiveRpId = opts.rpId || window.location.hostname;
 
       const allowCreds = opts.allowCredentials?.map((c) => ({
         id: base64URLToBuffer(c.id),
@@ -2800,8 +3400,8 @@ const App: Component = () => {
         publicKey: {
           challenge: base64URLToBuffer(opts.challenge),
           rpId: effectiveRpId,
-          userVerification: opts.userVerification as any,
-          timeout: opts.timeout,
+          userVerification: (opts.userVerification || "required") as any,
+          timeout: opts.timeout || 60000,
           allowCredentials: allowCreds && allowCreds.length > 0 ? allowCreds : undefined,
         },
       })) as PublicKeyCredential;
@@ -2810,72 +3410,54 @@ const App: Component = () => {
         throw new Error("Passkey login was cancelled.");
       }
 
-      const credId = bufferToBase64URL(assertion.rawId);
+      const rawId = bufferToBase64URL(assertion.rawId);
       const resp = assertion.response as AuthenticatorAssertionResponse;
-      const sigHex = Array.from(new Uint8Array(resp.signature), (b) => b.toString(16).padStart(2, "0")).join("");
       const clientDataB64 = bufferToBase64URL(resp.clientDataJSON);
+      const authDataB64 = bufferToBase64URL(resp.authenticatorData);
+      const sigB64 = bufferToBase64URL(resp.signature);
+      const userHandleB64 = resp.userHandle ? bufferToBase64URL(resp.userHandle) : undefined;
 
-      const loginRes = await loginWithPasskey({
-        credential_id: credId,
-        challenge_token: opts.challenge,
-        signature: sigHex,
-        client_data_json: clientDataB64,
-      });
+      const payload = {
+        id: assertion.id,
+        rawId: rawId,
+        type: assertion.type,
+        response: {
+          clientDataJSON: clientDataB64,
+          authenticatorData: authDataB64,
+          signature: sigB64,
+          userHandle: userHandleB64,
+        },
+      };
+
+      const loginRes = await loginWithPasskey(payload);
 
       setIsLoading(true);
       if (loginRes.token) {
         sessionStorage.setItem("byos_active_session_token", loginRes.token);
       }
 
-      // Check local device vault for this passkey's unsealed mailbox key for 1-touch unlock
-      let vaultData: { mailbox_id: string; mailbox_sk_hex: string; search_key_hex?: string } | null = null;
-      if (typeof window !== "undefined") {
-        const rawVault = localStorage.getItem(`byos_passkey_vault_${credId}`);
-        if (rawVault) {
-          try {
-            vaultData = JSON.parse(rawVault);
-          } catch {}
+      // Security Remediation: Never read or persist unencrypted mailbox private keys in localStorage.
+      // Purge any legacy plaintext passkey vaults from localStorage.
+      if (typeof window !== "undefined" && window.localStorage) {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith("byos_passkey_vault_")) {
+            localStorage.removeItem(k);
+          }
         }
       }
 
-      if (vaultData && vaultData.mailbox_sk_hex) {
-        try {
-          const skBytes = new Uint8Array(vaultData.mailbox_sk_hex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+      // Check authorized device-bound keystore (IndexedDB with non-extractable key) for unsealed keys
+      try {
+        const restored = await restorePersistentSession();
+        if (restored && restored.mailboxId && restored.mailboxSkHex) {
+          const skBytes = new Uint8Array(restored.mailboxSkHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
           setMailboxKey(skBytes);
-          if (vaultData.search_key_hex) setSearchKey(vaultData.search_key_hex);
-          setUnlockedBoxId(vaultData.mailbox_id);
-          sessionStorage.setItem("byos_mailbox_sk_" + vaultData.mailbox_id, vaultData.mailbox_sk_hex);
-          if (vaultData.search_key_hex) {
-            sessionStorage.setItem("byos_mailbox_skey_" + vaultData.mailbox_id, vaultData.search_key_hex);
-          }
-          let passkeySigningSeed: Uint8Array | null = null;
-          const savedSigningSeed = (vaultData as any).signing_seed_hex || sessionStorage.getItem("byos_signing_seed_" + vaultData.mailbox_id);
-          if (savedSigningSeed) {
-            const seedBytes = new Uint8Array(savedSigningSeed.match(/.{1,2}/g)!.map((b: string) => parseInt(b, 16)));
-            setSigningSeed(seedBytes);
-            sessionStorage.setItem("byos_signing_seed_" + vaultData.mailbox_id, savedSigningSeed);
-            passkeySigningSeed = seedBytes;
-          } else {
-            setSigningSeed(null);
-          }
-
-          let passkeyXWingSeed: Uint8Array | null = null;
-          const savedXWingSeed = (vaultData as any).xwing_seed_hex || sessionStorage.getItem("byos_xwing_seed_" + vaultData.mailbox_id);
-          if (savedXWingSeed) {
-            const seedBytes = new Uint8Array(savedXWingSeed.match(/.{1,2}/g)!.map((b: string) => parseInt(b, 16)));
-            setXwingSeed(seedBytes);
-            sessionStorage.setItem("byos_xwing_seed_" + vaultData.mailbox_id, savedXWingSeed);
-            passkeyXWingSeed = seedBytes;
-          } else {
-            setXwingSeed(null);
-          }
-
-          if (passkeySigningSeed && passkeyXWingSeed) {
-            publishKeysOnce(vaultData.mailbox_id, passkeySigningSeed, passkeyXWingSeed);
-          }
-        } catch (vaultErr) {
-          console.warn("Failed restoring mailbox key from passkey vault:", vaultErr);
+          if (restored.searchKeyHex) setSearchKey(restored.searchKeyHex);
+          setUnlockedBoxId(restored.mailboxId);
         }
+      } catch (vaultErr) {
+        console.warn("Could not restore keys from device store:", vaultErr);
       }
 
       const user = await fetchCurrentUser();
@@ -3402,7 +3984,7 @@ const App: Component = () => {
                 );
               }
             } catch (err) {
-              console.error("Preview decrypt error for msg " + m.id + ":", err);
+              console.warn("Preview decrypt warning for msg " + m.id + ":", err);
             }
           }
         })();
@@ -3728,6 +4310,7 @@ const App: Component = () => {
     setCurrentPage(1);
     setSelectedMsg(null);
     setDecryptedContent(null);
+    setDecryptedCalendarIcs(null);
     setEditablePlaintext(null);
     setMessagePlaintext(null);
     setEditingDraft(null);
@@ -4110,6 +4693,7 @@ const App: Component = () => {
     setSelectedMsg(msg);
     setIsDecrypting(true);
     setDecryptedContent(null);
+    setDecryptedCalendarIcs(null);
     setEditablePlaintext(null);
     setMessagePlaintext(null);
     setMessageAttachments([]);
@@ -4284,9 +4868,16 @@ const App: Component = () => {
       let plaintext: string;
       if (body.xwing_envelope_json && body.xwing_envelope_json.trim()) {
         if (!keyMaterial.xwingSeedHex) {
-          throw new Error(
-            `Failed to decrypt end-to-end message: key unwrap: Mailbox ${targetEmail} X-Wing private key is locked. Unlock ${targetEmail} to read this message.`
-          );
+          if (seq === currentDecryptSeq) {
+            setDecryptedContent(null);
+            setLockedReadingAccount({
+              mailboxId: targetBoxId,
+              email: targetEmail,
+              isHistorical: Boolean(selectedMailbox()?.previous_wrapped_sk_user || currentUser()?.previous_wrapped_sk_user),
+            });
+            setIsDecrypting(false);
+          }
+          return;
         }
         const seed = new Uint8Array(keyMaterial.xwingSeedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
         const result = await decryptPathAEnvelope(
@@ -4306,8 +4897,12 @@ const App: Component = () => {
         // leave the browser; failures show a generic message, never key material.
         if (!keyMaterial.mailboxSkHex || msg.messageSeq === undefined) {
           if (seq === currentDecryptSeq) {
-            setDecryptedContent(`Mailbox ${targetEmail} secret key is locked. Unlock ${targetEmail} to read this message.`);
-            setLockedReadingAccount({ mailboxId: targetBoxId, email: targetEmail });
+            setDecryptedContent(null);
+            setLockedReadingAccount({
+              mailboxId: targetBoxId,
+              email: targetEmail,
+              isHistorical: Boolean(selectedMailbox()?.previous_wrapped_sk_user || currentUser()?.previous_wrapped_sk_user),
+            });
             setIsDecrypting(false);
           }
           return;
@@ -4375,6 +4970,7 @@ const App: Component = () => {
           prev.map((m) => (m.id === msg.id ? updatedMsg : m))
         );
         setDecryptedContent(displayContent);
+        setDecryptedCalendarIcs(parsed.calendarPart?.rawIcs || null);
         setMessagePlaintext(quoteContent);
         setIsDecrypting(false);
       }
@@ -4403,9 +4999,27 @@ const App: Component = () => {
       if (msgStr.includes("503") || msgStr.includes("storage_disconnected") || msgStr.includes("storage disconnected")) {
         setStorageErrorBanner("Mailbox storage is currently disconnected or unreachable. Inbound emails are held safely at the mail transfer agent and will deliver automatically once storage is reconnected.");
       }
-      setDecryptedContent(
-        `Failed to open message: ${err instanceof Error ? err.message : "unknown error"}`
-      );
+
+      const isLockedOrDecryptionFailure =
+        msgStr.includes("key is locked") ||
+        msgStr.includes("locked") ||
+        msgStr.includes("decryption failed") ||
+        msgStr.includes("content decrypt") ||
+        msgStr.includes("key unwrap") ||
+        Boolean(selectedMailbox()?.previous_wrapped_sk_user || currentUser()?.previous_wrapped_sk_user);
+
+      if (isLockedOrDecryptionFailure) {
+        setLockedReadingAccount({
+          mailboxId: targetBoxId,
+          email: targetEmail,
+          isHistorical: Boolean(selectedMailbox()?.previous_wrapped_sk_user || currentUser()?.previous_wrapped_sk_user) || msgStr.includes("decryption failed"),
+        });
+        setDecryptedContent(null);
+      } else {
+        setDecryptedContent(
+          `Failed to open message: ${err instanceof Error ? err.message : "unknown error"}`
+        );
+      }
       setIsDecrypting(false);
     }
   }
@@ -4413,8 +5027,13 @@ const App: Component = () => {
   async function handlePerformUnlockAccount(e?: Event) {
     if (e) e.preventDefault();
     const target = unlockAccountTarget();
-    const password = unlockAccountPassword();
-    if (!target || !password) return;
+    const secret = (unlockSecretInput() || "").trim();
+    const currentPass = (unlockAccountPassword() || "").trim();
+    if (!target) return;
+    if (!secret && !currentPass) {
+      setUnlockAccountError("Please provide your 24-word recovery phrase, previous password, or account password.");
+      return;
+    }
 
     setUnlockAccountBusy(true);
     setUnlockAccountError(null);
@@ -4422,8 +5041,10 @@ const App: Component = () => {
       let wrappedSk = "";
       let sessionToken = "";
 
+      const primaryPass = currentPass || secret;
+
       try {
-        const loginRes = await login(target.email, password);
+        const loginRes = await login(target.email, primaryPass);
         wrappedSk = loginRes.wrapped_sk_user || "";
         sessionToken = loginRes.token || "";
       } catch (loginErr) {
@@ -4432,32 +5053,163 @@ const App: Component = () => {
         } else if (selectedMailbox()?.id === target.mailboxId && selectedMailbox()?.wrapped_sk_user) {
           wrappedSk = selectedMailbox()!.wrapped_sk_user!;
         } else {
-          throw loginErr;
+          const mb = mailboxes().find((m) => m.id === target.mailboxId);
+          if (mb?.wrapped_sk_user) {
+            wrappedSk = mb.wrapped_sk_user;
+          }
         }
       }
 
       if (!wrappedSk) {
-        throw new Error("No wrapped encryption keys found for this account.");
+        if (currentUser()?.email.toLowerCase() === target.email.toLowerCase() && currentUser()?.wrapped_sk_user) {
+          wrappedSk = currentUser()!.wrapped_sk_user!;
+        } else if (selectedMailbox()?.id === target.mailboxId && selectedMailbox()?.wrapped_sk_user) {
+          wrappedSk = selectedMailbox()!.wrapped_sk_user!;
+        } else {
+          const mb = mailboxes().find((m) => m.id === target.mailboxId);
+          if (mb?.wrapped_sk_user) {
+            wrappedSk = mb.wrapped_sk_user;
+          }
+        }
       }
 
-      // Rule 3: Single shared unseal function
-      const unwrapped = await unsealAccountKeys(target.mailboxId, password, wrappedSk);
-      const skBytes = unwrapped.mailboxSk;
-      const currentSkHex = bytesToHex(skBytes);
-      const currentSKey = unwrapped.searchKeyHex;
+      if (!wrappedSk && target.mailboxId) {
+        try {
+          const detail = await fetchMailboxDetail(target.mailboxId, sessionToken || undefined);
+          if (detail?.wrapped_sk_user) {
+            wrappedSk = detail.wrapped_sk_user;
+          }
+        } catch (detailErr) {
+          console.warn("fetchMailboxDetail during unlock failed:", detailErr);
+        }
+      }
 
+      const prevWrapped =
+        selectedMailbox()?.previous_wrapped_sk_user ||
+        currentUser()?.previous_wrapped_sk_user ||
+        mailboxes().find((m) => m.id === target.mailboxId)?.previous_wrapped_sk_user;
+
+      let skBytes: Uint8Array;
+      let currentSkHex: string;
+      let currentSKey = "";
       let xwingSeedHex = "";
-      if (unwrapped.xwingSeed) {
-        xwingSeedHex = bytesToHex(unwrapped.xwingSeed);
-      }
-
       let signingSeedHex = "";
-      if (unwrapped.signingSeed) {
-        signingSeedHex = bytesToHex(unwrapped.signingSeed);
-      }
 
-      if (unwrapped.signingSeed && unwrapped.xwingSeed) {
-        publishKeysOnce(target.mailboxId, unwrapped.signingSeed, unwrapped.xwingSeed);
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+
+      // Historical Reactivation Branch: If historical wrapped material exists and recovery phrase or previous password entered
+      if (prevWrapped && secret) {
+        const newPasswordToUse = currentPass || secret;
+        const stagedResult = await executeStagedHistoricalKeyReactivation(
+          wasm,
+          {
+            secret: secret,
+            newPassword: newPasswordToUse,
+            confirmPassword: newPasswordToUse,
+            mailboxId: target.mailboxId,
+            previousWrappedSk: prevWrapped,
+          },
+          {
+            prepare: prepareHistoricalKeyReactivation,
+            fetchPending: fetchPendingHistoricalKeyReactivation,
+            finalize: finalizeHistoricalKeyReactivation,
+            rollback: rollbackHistoricalKeyReactivation,
+          }
+        );
+        skBytes = stagedResult.unwrappedMailboxSk;
+        currentSkHex = bytesToHex(skBytes);
+        currentSKey = wasm.wasm_derive_search_key(currentSkHex);
+
+        if (stagedResult.unwrappedXWingSeed) {
+          xwingSeedHex = bytesToHex(stagedResult.unwrappedXWingSeed);
+        } else {
+          try {
+            const unsealedHistorical = autoUnwrapKeys(wasm, secret, prevWrapped);
+            if (unsealedHistorical.xwingSeed) {
+              xwingSeedHex = bytesToHex(unsealedHistorical.xwingSeed);
+            }
+          } catch {}
+        }
+        if (stagedResult.unwrappedSigningSeed) {
+          signingSeedHex = bytesToHex(stagedResult.unwrappedSigningSeed);
+        } else {
+          try {
+            const unsealedHistorical = autoUnwrapKeys(wasm, secret, prevWrapped);
+            if (unsealedHistorical.signingSeed) {
+              signingSeedHex = bytesToHex(unsealedHistorical.signingSeed);
+            }
+          } catch {}
+        }
+
+        setSelectedMailbox((prev) => (prev ? { ...prev, previous_wrapped_sk_user: undefined } : null));
+        setCurrentUser((prev) => (prev ? { ...prev, previous_wrapped_sk_user: undefined } : null));
+        setMailboxes((prev) =>
+          prev.map((m) => (m.id === target.mailboxId ? { ...m, previous_wrapped_sk_user: undefined } : m))
+        );
+      } else {
+        // Standard unseal or direct unwrap with recovery phrase / password
+        if (!wrappedSk) {
+          throw new Error("No wrapped encryption keys found for this account.");
+        }
+
+        let unwrapped: {
+          mailboxSk: Uint8Array;
+          signingSeed: Uint8Array | null;
+          xwingSeed: Uint8Array | null;
+          searchKeyHex: string;
+        };
+
+        const credToTry = secret || currentPass;
+
+        if (secret && secret.split(/\s+/).length >= 12) {
+          const unwrappedSk = unwrapMailboxKeyWithRecoveryPhrase(wasm, secret, target.mailboxId, wrappedSk);
+          const sKeyHex = wasm.wasm_derive_search_key(bytesToHex(unwrappedSk));
+          let recSigningSeed: Uint8Array | null = null;
+          let recXwingSeed: Uint8Array | null = null;
+          try {
+            const rootHex = wasm.wasm_recover_root_secret(secret.trim());
+            const boxIdHex = target.mailboxId.replace(/-/g, "");
+            if (wrappedSk.startsWith("{")) {
+              const parsed = JSON.parse(wrappedSk);
+              if (parsed.signing_root_wrapped) {
+                const sHex = wasm.wasm_unwrap_signing_seed(rootHex, parsed.signing_root_wrapped, boxIdHex);
+                recSigningSeed = new Uint8Array(sHex.match(/.{1,2}/g)!.map((b: string) => parseInt(b, 16)));
+              }
+              if (parsed.xwing_root_wrapped) {
+                const xHex = wasm.wasm_unwrap_xwing_seed(rootHex, parsed.xwing_root_wrapped, boxIdHex);
+                recXwingSeed = new Uint8Array(xHex.match(/.{1,2}/g)!.map((b: string) => parseInt(b, 16)));
+              }
+            }
+          } catch (e) {
+            console.warn("Failed unsealing secondary seeds via recovery phrase:", e);
+          }
+          unwrapped = {
+            mailboxSk: unwrappedSk,
+            signingSeed: recSigningSeed,
+            xwingSeed: recXwingSeed,
+            searchKeyHex: sKeyHex,
+          };
+        } else {
+          try {
+            unwrapped = await unsealAccountKeys(target.mailboxId, credToTry, wrappedSk);
+          } catch (firstErr) {
+            if (currentPass && secret && currentPass !== secret) {
+              unwrapped = await unsealAccountKeys(target.mailboxId, currentPass, wrappedSk);
+            } else {
+              throw firstErr;
+            }
+          }
+        }
+
+        skBytes = unwrapped.mailboxSk;
+        currentSkHex = bytesToHex(skBytes);
+        currentSKey = unwrapped.searchKeyHex;
+        if (unwrapped.xwingSeed) xwingSeedHex = bytesToHex(unwrapped.xwingSeed);
+        if (unwrapped.signingSeed) signingSeedHex = bytesToHex(unwrapped.signingSeed);
+
+        if (unwrapped.signingSeed && unwrapped.xwingSeed) {
+          publishKeysOnce(target.mailboxId, unwrapped.signingSeed, unwrapped.xwingSeed);
+        }
       }
 
       setConnectedAccounts((prev) =>
@@ -4482,6 +5234,7 @@ const App: Component = () => {
       if (pending && (pending.id === target.mailboxId || pending.email.toLowerCase() === target.email.toLowerCase())) {
         setPendingSwitchAccount(null);
         setUnlockAccountTarget(null);
+        setUnlockSecretInput("");
         setUnlockAccountPassword("");
         showToast(`Unlocked ${target.email}`);
         await handleSwitchAccount({
@@ -4496,18 +5249,36 @@ const App: Component = () => {
         return;
       }
 
+      sessionStorage.setItem("byos_mailbox_sk_" + target.mailboxId, currentSkHex);
+      if (currentSKey) {
+        sessionStorage.setItem("byos_mailbox_skey_" + target.mailboxId, currentSKey);
+      }
+      if (xwingSeedHex) {
+        sessionStorage.setItem("byos_xwing_seed_" + target.mailboxId, xwingSeedHex);
+      }
+      if (signingSeedHex) {
+        sessionStorage.setItem("byos_signing_seed_" + target.mailboxId, signingSeedHex);
+      }
+
       if (selectedMailbox()?.id === target.mailboxId) {
         setMailboxKey(skBytes);
         setSearchKey(currentSKey);
         setUnlockedBoxId(target.mailboxId);
-        if (unwrapped.xwingSeed) setXwingSeed(unwrapped.xwingSeed);
-        if (unwrapped.signingSeed) setSigningSeed(unwrapped.signingSeed);
+        if (xwingSeedHex) {
+          const xBytes = new Uint8Array(xwingSeedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+          setXwingSeed(xBytes);
+        }
+        if (signingSeedHex) {
+          const sBytes = new Uint8Array(signingSeedHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+          setSigningSeed(sBytes);
+        }
       }
 
       if (lockedReadingAccount()?.mailboxId === target.mailboxId) {
         setLockedReadingAccount(null);
       }
       setUnlockAccountTarget(null);
+      setUnlockSecretInput("");
       setUnlockAccountPassword("");
       showToast(`Unlocked ${target.email}`);
 
@@ -5922,21 +6693,24 @@ const App: Component = () => {
                             >
                               {loginBusy() ? "Signing in…" : "Sign in"}
                             </button>
-                            <div class="relative flex py-1 items-center">
-                              <div class="flex-grow border-t border-[#E2DFD8] dark:border-[#2E3138]"></div>
-                              <span class="flex-shrink mx-3 text-[10px] uppercase tracking-wider text-[#878A8E] dark:text-[#6E7075] font-medium">or</span>
-                              <div class="flex-grow border-t border-[#E2DFD8] dark:border-[#2E3138]"></div>
+                            <div class="relative my-3">
+                              <div class="absolute inset-0 flex items-center">
+                                <div class="w-full border-t border-[#E2DFD8] dark:border-[#2E3138]" />
+                              </div>
+                              <div class="relative flex justify-center text-xs">
+                                <span class="bg-[#FAF9F6] dark:bg-[#1A1C20] px-2 text-[#8C8E90] dark:text-[#A1A1AA]">or</span>
+                              </div>
                             </div>
                             <button
                               type="button"
                               onClick={handlePasskeyLogin}
                               disabled={loginBusy()}
-                              class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561] dark:hover:border-[#A27561] bg-white dark:bg-[#18191D] hover:bg-[#FAF9F6] dark:hover:bg-[#23262D] px-4 py-2 text-xs font-medium text-[#2B2C2D] dark:text-[#F3F4F6] transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+                              class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1C1E24] px-4 py-2.5 text-xs font-semibold text-[#2B2C2D] dark:text-[#F3F4F6] hover:bg-[#FAF9F6] dark:hover:bg-[#252830] transition disabled:opacity-50 cursor-pointer shadow-2xs flex items-center justify-center gap-2"
                             >
                               <svg class="w-4 h-4 stroke-current fill-none stroke-2 text-[#A27561]" viewBox="0 0 24 24">
                                 <path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 001.99 5.334" />
                               </svg>
-                              Sign in with Passkey / Biometrics
+                              <span>{loginBusy() ? "Authenticating…" : "Sign in with Passkey"}</span>
                             </button>
                           </form>
                         </div>
@@ -5958,7 +6732,9 @@ const App: Component = () => {
                         </div>
 
                         <p class="mt-3 text-xs text-[#6F7173] dark:text-[#A1A1AA] leading-relaxed">
-                          {twoFactorChallenge()?.preferred_method === "totp"
+                          {twoFactorChallenge()?.preferred_method === "passkey"
+                            ? "Authenticate with your enrolled Hardware Security Key or Passkey to complete sign-in."
+                            : twoFactorChallenge()?.preferred_method === "totp"
                             ? "Enter the 6-digit code from your authenticator app to complete sign in."
                             : `Enter the 6-digit security code sent to ${twoFactorChallenge()?.destination_masked}.`}
                         </p>
@@ -5969,70 +6745,152 @@ const App: Component = () => {
                           </div>
                         </Show>
 
-                        <form onSubmit={handleVerifyLogin2FA} class="mt-4 space-y-3">
-                          <div>
-                            <label class="block text-[11px] font-medium text-[#6F7173] dark:text-[#A1A1AA] mb-1">
-                              Verification Code
-                            </label>
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              maxlength="6"
-                              placeholder="123456"
-                              value={twoFactorCodeInput()}
-                              onInput={(e) => setTwoFactorCodeInput(e.currentTarget.value.replace(/[^0-9]/g, ""))}
-                              disabled={twoFactorBusy()}
-                              autofocus
-                              class="w-full tracking-widest text-center font-mono rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3 py-2 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6] dark:bg-[#18191D] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50"
-                            />
-                          </div>
-
-                          <Show when={(twoFactorChallenge()?.methods?.length || 0) > 1}>
-                            <div class="flex items-center justify-between text-[11px] text-[#6F7173] dark:text-[#A1A1AA] pt-1">
-                              <span>Try another method:</span>
-                              <div class="flex items-center gap-1.5">
-                                <Show when={twoFactorChallenge()?.methods.includes("email") && twoFactorChallenge()?.preferred_method !== "email"}>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSwitchLogin2FAMethod("email")}
-                                    disabled={twoFactorBusy()}
-                                    class="text-[#A27561] hover:underline cursor-pointer"
-                                  >
-                                    Email OTP
-                                  </button>
-                                </Show>
-                                <Show when={twoFactorChallenge()?.methods.includes("phone") && twoFactorChallenge()?.preferred_method !== "phone"}>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSwitchLogin2FAMethod("phone")}
-                                    disabled={twoFactorBusy()}
-                                    class="text-[#A27561] hover:underline cursor-pointer"
-                                  >
-                                    SMS Code
-                                  </button>
-                                </Show>
+                        <Show
+                          when={twoFactorChallenge()?.preferred_method === "passkey"}
+                          fallback={
+                            <form onSubmit={handleVerifyLogin2FA} class="mt-4 space-y-3">
+                              <div>
+                                <label class="block text-[11px] font-medium text-[#6F7173] dark:text-[#A1A1AA] mb-1">
+                                  Verification Code
+                                </label>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  pattern="[0-9]*"
+                                  maxlength="6"
+                                  placeholder="123456"
+                                  value={twoFactorCodeInput()}
+                                  onInput={(e) => setTwoFactorCodeInput(e.currentTarget.value.replace(/[^0-9]/g, ""))}
+                                  disabled={twoFactorBusy()}
+                                  autofocus
+                                  class="w-full tracking-widest text-center font-mono rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] px-3 py-2 text-sm text-[#2B2C2D] dark:text-[#F3F4F6] focus:outline-none focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 bg-[#FAF9F6] dark:bg-[#18191D] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50"
+                                />
                               </div>
-                            </div>
-                          </Show>
 
-                          <button
-                            type="submit"
-                            disabled={twoFactorBusy() || twoFactorCodeInput().trim().length !== 6}
-                            class="w-full rounded-xl bg-[#A27561] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#8F6452] transition disabled:opacity-50 cursor-pointer shadow-2xs"
-                          >
-                            {twoFactorBusy() ? "Verifying…" : "Verify & Sign In"}
-                          </button>
+                              <Show when={(twoFactorChallenge()?.methods?.length || 0) > 1}>
+                                <div class="flex items-center justify-between text-[11px] text-[#6F7173] dark:text-[#A1A1AA] pt-1">
+                                  <span>Try another method:</span>
+                                  <div class="flex items-center gap-1.5">
+                                    <Show when={twoFactorChallenge()?.methods.includes("passkey") && twoFactorChallenge()?.preferred_method !== "passkey"}>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setTwoFactorChallenge((prev) => prev ? { ...prev, preferred_method: "passkey", destination_masked: "Hardware Security Key / Passkey" } : null);
+                                        }}
+                                        disabled={twoFactorBusy()}
+                                        class="text-[#A27561] hover:underline cursor-pointer"
+                                      >
+                                        Passkey
+                                      </button>
+                                    </Show>
+                                    <Show when={twoFactorChallenge()?.methods.includes("email") && twoFactorChallenge()?.preferred_method !== "email"}>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSwitchLogin2FAMethod("email")}
+                                        disabled={twoFactorBusy()}
+                                        class="text-[#A27561] hover:underline cursor-pointer"
+                                      >
+                                        Email OTP
+                                      </button>
+                                    </Show>
+                                    <Show when={twoFactorChallenge()?.methods.includes("phone") && twoFactorChallenge()?.preferred_method !== "phone"}>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSwitchLogin2FAMethod("phone")}
+                                        disabled={twoFactorBusy()}
+                                        class="text-[#A27561] hover:underline cursor-pointer"
+                                      >
+                                        SMS Code
+                                      </button>
+                                    </Show>
+                                  </div>
+                                </div>
+                              </Show>
 
-                          <button
-                            type="button"
-                            onClick={handleCancelLogin2FA}
-                            disabled={twoFactorBusy()}
-                            class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#18191D] hover:bg-[#FAF9F6] dark:hover:bg-[#23262D] px-4 py-2 text-xs font-medium text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#3C3D3E] dark:hover:text-[#F3F4F6] transition cursor-pointer"
-                          >
-                            Back to Sign In
-                          </button>
-                        </form>
+                              <button
+                                type="submit"
+                                disabled={twoFactorBusy() || twoFactorCodeInput().trim().length !== 6}
+                                class="w-full rounded-xl bg-[#A27561] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#8F6452] transition disabled:opacity-50 cursor-pointer shadow-2xs"
+                              >
+                                {twoFactorBusy() ? "Verifying…" : "Verify & Sign In"}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={handleCancelLogin2FA}
+                                disabled={twoFactorBusy()}
+                                class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#18191D] hover:bg-[#FAF9F6] dark:hover:bg-[#23262D] px-4 py-2 text-xs font-medium text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#3C3D3E] dark:hover:text-[#F3F4F6] transition cursor-pointer"
+                              >
+                                Back to Sign In
+                              </button>
+                            </form>
+                          }
+                        >
+                          {/* Passkey-specific 2FA Action View */}
+                          <div class="mt-4 space-y-3">
+                            <button
+                              type="button"
+                              data-testid="verify-passkey-2fa-btn"
+                              onClick={handlePasskeyLogin}
+                              disabled={twoFactorBusy() || loginBusy()}
+                              class="w-full rounded-xl bg-[#A27561] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#8F6452] transition disabled:opacity-50 cursor-pointer shadow-2xs flex items-center justify-center gap-2"
+                            >
+                              <svg class="w-4 h-4 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                                <path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 001.99 5.334" />
+                              </svg>
+                              <span>{twoFactorBusy() || loginBusy() ? "Authenticating…" : "Verify with Passkey"}</span>
+                            </button>
+
+                            <Show when={(twoFactorChallenge()?.methods?.length || 0) > 1}>
+                              <div class="flex items-center justify-between text-[11px] text-[#6F7173] dark:text-[#A1A1AA] pt-1">
+                                <span>Try another method:</span>
+                                <div class="flex items-center gap-1.5">
+                                  <Show when={twoFactorChallenge()?.methods.includes("totp")}>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setTwoFactorChallenge((prev) => prev ? { ...prev, preferred_method: "totp", destination_masked: "Authenticator App" } : null);
+                                      }}
+                                      disabled={twoFactorBusy()}
+                                      class="text-[#A27561] hover:underline cursor-pointer"
+                                    >
+                                      Authenticator App
+                                    </button>
+                                  </Show>
+                                  <Show when={twoFactorChallenge()?.methods.includes("email")}>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSwitchLogin2FAMethod("email")}
+                                      disabled={twoFactorBusy()}
+                                      class="text-[#A27561] hover:underline cursor-pointer"
+                                    >
+                                      Email OTP
+                                    </button>
+                                  </Show>
+                                  <Show when={twoFactorChallenge()?.methods.includes("phone")}>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSwitchLogin2FAMethod("phone")}
+                                      disabled={twoFactorBusy()}
+                                      class="text-[#A27561] hover:underline cursor-pointer"
+                                    >
+                                      SMS Code
+                                    </button>
+                                  </Show>
+                                </div>
+                              </div>
+                            </Show>
+
+                            <button
+                              type="button"
+                              onClick={handleCancelLogin2FA}
+                              disabled={twoFactorBusy()}
+                              class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#18191D] hover:bg-[#FAF9F6] dark:hover:bg-[#23262D] px-4 py-2 text-xs font-medium text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#3C3D3E] dark:hover:text-[#F3F4F6] transition cursor-pointer"
+                            >
+                              Back to Sign In
+                            </button>
+                          </div>
+                        </Show>
                       </div>
                     </Show>
                   </div>
@@ -6109,22 +6967,23 @@ const App: Component = () => {
                       >
                         {loginBusy() ? "Unlocking…" : "Unlock Mailbox"}
                       </button>
-                      <div class="relative flex py-1 items-center">
-                        <div class="flex-grow border-t border-[#E2DFD8] dark:border-[#2E3138]"></div>
-                        <span class="flex-shrink mx-3 text-[10px] uppercase tracking-wider text-[#878A8E] dark:text-[#6E7075] font-medium">or</span>
-                        <div class="flex-grow border-t border-[#E2DFD8] dark:border-[#2E3138]"></div>
+                      <div class="mt-3 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#FAF9F6] dark:bg-[#1C1E24] p-3 text-xs">
+                        <div class="flex items-start gap-2.5">
+                          <div class="w-5 h-5 rounded-md bg-[#A27561]/10 text-[#A27561] flex items-center justify-center flex-shrink-0 mt-0.5">
+                            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                              <path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 001.99 5.334" />
+                            </svg>
+                          </div>
+                          <div class="flex-1 space-y-1">
+                            <p class="font-medium text-[#2B2C2D] dark:text-[#F3F4F6] text-[11px] leading-tight">
+                              Passkey Unlock Temporarily Paused
+                            </p>
+                            <p class="text-[11px] text-[#6F7173] dark:text-[#A1A1AA] leading-relaxed">
+                              Passkey assertion verification is currently being upgraded. Please unlock using your password or 24-word recovery phrase.
+                            </p>
+                          </div>
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={handlePasskeyLogin}
-                        disabled={loginBusy()}
-                        class="w-full rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561] dark:hover:border-[#A27561] bg-white dark:bg-[#18191D] hover:bg-[#FAF9F6] dark:hover:bg-[#23262D] px-4 py-2 text-xs font-medium text-[#2B2C2D] dark:text-[#F3F4F6] transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
-                      >
-                        <svg class="w-4 h-4 stroke-current fill-none stroke-2 text-[#A27561]" viewBox="0 0 24 24">
-                          <path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 001.99 5.334" />
-                        </svg>
-                        Unlock with Passkey / Biometrics
-                      </button>
                       <div class="text-center pt-1">
                         <button
                           type="button"
@@ -6187,6 +7046,153 @@ const App: Component = () => {
                       </div>
                     </Show>
 
+                    {/* Exceptional Employee Recovery Flow (Finding F-08) */}
+                    <Show when={exceptionalRecoveryOpen()}>
+                      <div class="space-y-4">
+                        <div class="p-3 bg-amber-50 dark:bg-amber-950/40 rounded-xl border border-amber-200 dark:border-amber-900 text-amber-900 dark:text-amber-200 text-xs leading-relaxed space-y-1">
+                          <span class="font-bold block">Exceptional Employee Recovery (Owner Approval)</span>
+                          <span>
+                            If you lost your password, 2FA factors, and device access, your organization administrator can approve an emergency authentication reset.
+                          </span>
+                        </div>
+
+                        <Show when={exceptionalSuccessMsg()}>
+                          <div class="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300 text-xs rounded-xl">
+                            {exceptionalSuccessMsg()}
+                          </div>
+                        </Show>
+
+                        <Show when={exceptionalStep() === 1}>
+                          <form onSubmit={handleRequestExceptionalRecovery} class="space-y-3.5">
+                            <div>
+                              <label class="block text-xs font-medium text-[#3C3D3E] dark:text-[#D1D5DB] mb-1">
+                                Employee Email
+                              </label>
+                              <input
+                                type="email"
+                                value={forgotEmail()}
+                                onInput={(e) => setForgotEmail(e.currentTarget.value)}
+                                placeholder="you@company.com"
+                                required
+                                class="w-full bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] dark:text-[#F3F4F6] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50 outline-none"
+                              />
+                            </div>
+
+                            <div>
+                              <label class="block text-xs font-medium text-[#3C3D3E] dark:text-[#D1D5DB] mb-1">
+                                Organization ID (UUID)
+                              </label>
+                              <input
+                                type="text"
+                                value={exceptionalOrgId()}
+                                onInput={(e) => setExceptionalOrgId(e.currentTarget.value)}
+                                placeholder="e.g. 00000000-0000-0000-0000-000000000000"
+                                required
+                                class="w-full font-mono bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] dark:text-[#F3F4F6] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50 outline-none"
+                              />
+                            </div>
+
+                            <div class="flex items-center justify-between pt-2">
+                              <button
+                                type="button"
+                                onClick={() => setExceptionalRecoveryOpen(false)}
+                                class="text-xs text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#3C3D3E] dark:hover:text-[#F3F4F6] cursor-pointer"
+                              >
+                                ← Standard Recovery
+                              </button>
+                              <div class="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setExceptionalStep(2)}
+                                  class="text-xs text-[#A27561] hover:underline font-medium cursor-pointer"
+                                >
+                                  Have challenge token?
+                                </button>
+                                <button
+                                  type="submit"
+                                  disabled={forgotBusy() || !forgotEmail().trim() || !exceptionalOrgId().trim()}
+                                  class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] disabled:opacity-50 text-white text-xs font-medium rounded-xl transition cursor-pointer shadow-2xs"
+                                >
+                                  {forgotBusy() ? "Requesting…" : "Request Approval"}
+                                </button>
+                              </div>
+                            </div>
+                          </form>
+                        </Show>
+
+                        <Show when={exceptionalStep() === 2}>
+                          <form onSubmit={handleResetExceptionalPassword} class="space-y-3.5">
+                            <div>
+                              <label class="block text-xs font-medium text-[#3C3D3E] dark:text-[#D1D5DB] mb-1">
+                                Challenge Token (Issued upon request)
+                              </label>
+                              <input
+                                type="text"
+                                value={exceptionalChallengeToken()}
+                                onInput={(e) => setExceptionalChallengeToken(e.currentTarget.value)}
+                                placeholder="Challenge token string"
+                                required
+                                class="w-full font-mono text-xs bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-[#3C3D3E] dark:text-[#F3F4F6] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50 outline-none"
+                              />
+                            </div>
+
+                            <div>
+                              <label class="block text-xs font-medium text-[#3C3D3E] dark:text-[#D1D5DB] mb-1">
+                                New Password (min 8 chars)
+                              </label>
+                              <input
+                                type="password"
+                                value={exceptionalNewPassword()}
+                                onInput={(e) => setExceptionalNewPassword(e.currentTarget.value)}
+                                placeholder="Enter new strong password"
+                                required
+                                minlength="8"
+                                class="w-full bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] dark:text-[#F3F4F6] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50 outline-none"
+                              />
+                            </div>
+
+                            <div>
+                              <label class="block text-xs font-medium text-[#3C3D3E] dark:text-[#D1D5DB] mb-1">
+                                Confirm New Password
+                              </label>
+                              <input
+                                type="password"
+                                value={exceptionalConfirmPassword()}
+                                onInput={(e) => setExceptionalConfirmPassword(e.currentTarget.value)}
+                                placeholder="Re-enter new password"
+                                required
+                                minlength="8"
+                                class="w-full bg-[#FAF9F6] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561]/20 rounded-xl px-3 py-2 text-xs text-[#3C3D3E] dark:text-[#F3F4F6] placeholder:text-[#6F7173]/50 dark:placeholder:text-[#A1A1AA]/50 outline-none"
+                              />
+                            </div>
+
+                            <div class="p-3 bg-purple-50 dark:bg-purple-950/40 rounded-xl border border-purple-200 dark:border-purple-900 text-purple-900 dark:text-purple-200 text-[11px] leading-relaxed">
+                              <span class="font-semibold block mb-0.5">Zero-Knowledge Guarantee:</span>
+                              Administrator approval resets your login authentication only. Your mailbox encryption keys were NOT shared or replaced. Restore your mailbox messages anytime using your 24-word recovery phrase.
+                            </div>
+
+                            <div class="flex items-center justify-between pt-2">
+                              <button
+                                type="button"
+                                onClick={() => setExceptionalStep(1)}
+                                class="text-xs text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#3C3D3E] dark:hover:text-[#F3F4F6] cursor-pointer"
+                              >
+                                ← Back
+                              </button>
+                              <button
+                                type="submit"
+                                disabled={forgotBusy() || !exceptionalChallengeToken().trim() || exceptionalNewPassword().length < 8}
+                                class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] disabled:opacity-50 text-white text-xs font-medium rounded-xl transition cursor-pointer shadow-2xs"
+                              >
+                                {forgotBusy() ? "Resetting…" : "Reset Password"}
+                              </button>
+                            </div>
+                          </form>
+                        </Show>
+                      </div>
+                    </Show>
+
+                    <Show when={!exceptionalRecoveryOpen()}>
                     {/* Step 1: Find Account & Select Recovery Option */}
                     <Show when={forgotStep() === 1}>
                       <Show
@@ -6223,6 +7229,18 @@ const App: Component = () => {
                                 class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] disabled:opacity-50 text-white text-xs font-medium rounded-xl transition cursor-pointer shadow-2xs"
                               >
                                 {forgotBusy() ? "Finding methods…" : "Continue"}
+                              </button>
+                            </div>
+                            <div class="text-center pt-2 border-t border-[#E2DFD8] dark:border-[#2E3138]">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setExceptionalRecoveryOpen(true);
+                                  setForgotError(null);
+                                }}
+                                class="text-xs text-[#A27561] hover:underline font-medium cursor-pointer"
+                              >
+                                Lost access to 2FA & recovery methods? Request owner approval →
                               </button>
                             </div>
                           </form>
@@ -6421,6 +7439,7 @@ const App: Component = () => {
                         </div>
                       </div>
                     </Show>
+                    </Show>
                   </div>
                 </div>
               </div>
@@ -6446,7 +7465,8 @@ const App: Component = () => {
                 mailbox={selectedMailbox()!}
                 currentUser={currentUser()}
                 mailboxKey={mailboxKey()}
-                profilePhotoUrl={profilePhotoUrl()}
+
+              profilePhotoUrl={profilePhotoUrl()}
                 onPhotoUpdated={(newUrl, newRef) => {
                   if (profilePhotoUrl() && profilePhotoUrl() !== newUrl) {
                     URL.revokeObjectURL(profilePhotoUrl()!);
@@ -6478,32 +7498,6 @@ const App: Component = () => {
             <Show when={activeSettingsTab() === "bridge" && selectedMailbox()}>
               <BridgeTab mailbox={selectedMailbox()!} currentUser={currentUser()} />
             </Show>
-            <Show when={activeSettingsTab() === "appearance" && selectedMailbox()}>
-              <AppearanceTab
-                mailbox={selectedMailbox()!}
-                currentDensity={density()}
-                currentLayout={layoutMode()}
-                currentTheme={theme()}
-                currentTimeFormat={timeFormat()}
-                currentLanguage={language()}
-                currentWeekStart={weekStart()}
-                onDensityChange={handleSetDensity}
-                onLayoutChange={handleSetLayoutMode}
-                onThemeChange={(t) => handleSetTheme(t, false)}
-                onTimeFormatChange={(tf) => {
-                  setTimeFormat(tf);
-                  if (typeof window !== "undefined") localStorage.setItem("byos_time_format", tf);
-                }}
-                onLanguageChange={(l) => {
-                  setLanguage(l);
-                  if (typeof window !== "undefined") localStorage.setItem("byos_language", l);
-                }}
-                onWeekStartChange={(ws) => {
-                  setWeekStart(ws);
-                  if (typeof window !== "undefined") localStorage.setItem("byos_week_start", ws);
-                }}
-              />
-            </Show>
             <Show when={activeSettingsTab() === "autoreply" && selectedMailbox()}>
               <AutoReplyTab mailbox={selectedMailbox()!} />
             </Show>
@@ -6517,12 +7511,13 @@ const App: Component = () => {
                 mailboxKey={mailboxKey()}
                 signingSeed={signingSeed()}
                 xwingSeed={xwingSeed()}
-                onReactivateSuccess={() => {
+                onReactivateSuccess={(unwrappedKey?: Uint8Array) => {
                 const box = selectedMailbox();
                 if (box) {
                   const updatedBox = { ...box, previous_wrapped_sk_user: undefined };
                   setSelectedMailbox(updatedBox as any);
                   setMailboxes(mailboxes().map(m => m.id === box.id ? (updatedBox as any) : m));
+                  if (unwrappedKey) { setMailboxKey(unwrappedKey); setUnlockedBoxId(box.id); }
                 }
                 const user = currentUser();
                 if (user) {
@@ -6658,6 +7653,11 @@ const App: Component = () => {
                 setMobileSidebarOpen(false);
               }}
               onLogout={handleLogout}
+              activeModule={activeModule()}
+              onSwitchModule={(mod) => {
+                setActiveModule(mod);
+                setMobileSidebarOpen(false);
+              }}
               profilePhotoUrl={profilePhotoUrl()}
               isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
               storageError={storageErrorBanner()}
@@ -6715,10 +7715,11 @@ const App: Component = () => {
           </div>
         </Show>
 
-        <main class="flex flex-1 overflow-hidden gap-3 bg-[#F0EEE9] dark:bg-[#18191D]" data-testid="main-content">
+        
+        <main class="flex flex-1 overflow-hidden p-2 sm:p-3 gap-2.5 sm:gap-3 bg-[#F0EEE9] dark:bg-[#18191D]" data-testid="main-content">
           {/* ── Left Navigation Sidebar (Unified with Canvas #F0EEE9) ── */}
           <Sidebar
-            class="hidden md:flex"
+            class={activeModule() !== "mail" ? "hidden" : "hidden md:flex"}
             currentUser={currentUser()}
             selectedMailbox={selectedMailbox()}
             activeAccountId={currentFolder() === "unified_inbox" ? "__all__" : selectedMailbox()?.id || "__all__"}
@@ -6763,6 +7764,8 @@ const App: Component = () => {
               setActiveSettingsTab("account");
               setSettingsOpen(true);
             }}
+            activeModule={activeModule()}
+            onSwitchModule={setActiveModule}
             onLogout={handleLogout}
             profilePhotoUrl={profilePhotoUrl()}
             isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
@@ -6798,45 +7801,117 @@ const App: Component = () => {
             onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark")}
           />
 
-          {/* ── Message List Column (Dynamic Full-Width, 380px Split, or Hidden in Full Mode) ── */}
-          <div
-            class={`${
-              (layoutMode() === "full" && selectedMsg()) || (isMobile() && selectedMsg())
-                ? "hidden"
-                : selectedMsg()
-                ? "w-full md:w-[380px] md:min-w-[340px] md:max-w-[420px] md:flex-shrink-0"
-                : "w-full flex-1"
-            } transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] h-full overflow-hidden flex flex-col`}
-          >
-            {/* Label Filter Chip Row */}
-            <Show when={activeLabel()}>
-              <div class="px-3.5 py-2 bg-[#FAF9F6] dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between text-xs flex-shrink-0">
-                <div class="flex items-center gap-2 truncate min-w-0">
-                  <span class="text-[#6F7173] dark:text-[#878A8E] text-[11px] font-medium flex-shrink-0">Label filter:</span>
-                  <span
-                    class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-white text-[11px] font-medium shadow-2xs truncate max-w-[280px]"
-                    style={{ "background-color": activeLabel()!.color }}
-                    title={activeLabel()!.path || activeLabel()!.name}
-                  >
-                    <span class="truncate">{activeLabel()!.path || activeLabel()!.name}</span>
-                    <Show when={getSubtreeLabelIds(activeLabel()!.id, labels()).length > 1}>
-                      <span class="text-[9px] opacity-80 flex-shrink-0">(or descendants)</span>
-                    </Show>
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveLabel(null)}
-                  class="text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] text-xs hover:underline cursor-pointer flex-shrink-0 ml-2"
-                >
-                  Clear filter
-                </button>
-              </div>
-            </Show>
+          <Show when={activeModule() === "calendar"}>
+            <div class="flex-1 flex min-w-0 h-full overflow-hidden">
+              <CalendarView
+                currentUser={currentUser()}
+                selectedMailbox={selectedMailbox()}
+                connectedAccounts={connectedAccounts()}
+                activeAccountId={currentFolder() === "unified_inbox" ? "__all__" : selectedMailbox()?.id || "__all__"}
+                onSelectAccount={handleSwitchAccount}
+                onSelectAllInboxes={() => {
+                  setActiveModule("mail");
+                  setCurrentFolder("unified_inbox");
+                  loadUnifiedInboxMessages();
+                }}
+                onOpenAddMailbox={() => setAddMailboxModalOpen(true)}
+                onLogout={handleLogout}
+                profilePhotoUrl={profilePhotoUrl()}
+                photoUrls={undefined}
+                isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
+                storageError={storageErrorBanner()}
+                accountUnreadCounts={accountUnreadCounts()}
+                unifiedUnreadCount={unifiedUnreadCount()}
+                mailboxId={selectedMailbox()?.id || ""}
+                mailboxKey={mailboxKey()}
+                mailboxPk={selectedMailbox()?.public_key || null}
+                unlockedBoxId={unlockedBoxId()}
+                currentUserEmail={currentUser()?.email}
+                contacts={contacts()}
+                onSwitchToMail={() => setActiveModule("mail")}
+                onSendInvitation={handleSendInvitationEmail}
+                externalSearchQuery={searchQuery()}
+                onSearchChange={setSearchQuery}
+                activeModule={activeModule()}
+                onSwitchModule={setActiveModule}
+                onOpenContacts={openContacts}
+                onOpenSettings={() => {
+                  setActiveSettingsTab("account");
+                  setSettingsOpen(true);
+                }}
+                isOnline={!isOffline()}
+                isCustomizerOpen={rightCustomizerOpen()}
+                onToggleCustomizer={() => setRightCustomizerOpen(!rightCustomizerOpen())}
+                theme={theme()}
+                onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
+              />
+            </div>
+          </Show>
 
-            <div class="flex-1 min-h-0 overflow-hidden">
-            <MessageList
-              currentFolder={currentFolder()}
+          <Show when={activeModule() === "notes"}>
+            <div class="flex-1 flex min-w-0 h-full overflow-hidden">
+              <NotesView
+                currentUser={currentUser()}
+                selectedMailbox={selectedMailbox()}
+                connectedAccounts={connectedAccounts()}
+                activeAccountId={currentFolder() === "unified_inbox" ? "__all__" : selectedMailbox()?.id || "__all__"}
+                onSelectAccount={handleSwitchAccount}
+                onSelectAllInboxes={() => {
+                  setActiveModule("mail");
+                  setCurrentFolder("unified_inbox");
+                  loadUnifiedInboxMessages();
+                }}
+                onOpenAddMailbox={() => setAddMailboxModalOpen(true)}
+                onLogout={handleLogout}
+                profilePhotoUrl={profilePhotoUrl()}
+                photoUrls={undefined}
+                isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
+                storageError={storageErrorBanner()}
+                accountUnreadCounts={accountUnreadCounts()}
+                unifiedUnreadCount={unifiedUnreadCount()}
+                mailboxId={selectedMailbox()?.id}
+                searchQuery={searchQuery()}
+                onSearchChange={setSearchQuery}
+                activeModule={activeModule()}
+                onSwitchModule={setActiveModule}
+                onOpenContacts={openContacts}
+                onOpenSettings={() => {
+                  setActiveSettingsTab("account");
+                  setSettingsOpen(true);
+                }}
+                isOnline={!isOffline()}
+                isCustomizerOpen={rightCustomizerOpen()}
+                onToggleCustomizer={() => setRightCustomizerOpen(!rightCustomizerOpen())}
+                theme={theme()}
+                onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
+              />
+            </div>
+          </Show>
+
+          <Show when={activeModule() === "mail"}>
+            {/* ── Mailbox Workspace Container (Beside Sidebar and Beside RightBar) ── */}
+            <div class="flex-1 min-w-0 h-full flex overflow-hidden gap-2.5 sm:gap-3">
+              {/* Email Workspace Card (Matching Calendar & Notes Card Radius & Styling) */}
+              <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] shadow-2xs overflow-hidden flex min-w-0 h-full">
+                {/* ── Message List Column (Dynamic Full-Width, 380px Split, or Hidden in Full Mode) ── */}
+                <div
+                  class={`${
+                    (layoutMode() === "full" && selectedMsg()) || (isMobile() && selectedMsg())
+                      ? "hidden"
+                      : selectedMsg()
+                      ? "w-full md:w-[380px] md:min-w-[340px] md:max-w-[420px] md:flex-shrink-0 border-r border-[#E2DFD8] dark:border-[#2A2D35]"
+                      : "w-full flex-1"
+                  } transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] h-full overflow-hidden flex flex-col`}
+                >
+                  <MessageList
+                    activeModule="mail"
+                    onSwitchModule={setActiveModule}
+                    onOpenContacts={openContacts}
+                    isOnline={!isOffline()}
+                    activeLabel={activeLabel()}
+                    onClearActiveLabel={() => setActiveLabel(null)}
+                    getSubtreeLabelIds={getSubtreeLabelIds}
+                    currentFolder={currentFolder()}
               messages={paginatedMessages()}
               selectedMessage={selectedMsg()}
               selectedIds={selectedIds()}
@@ -6884,11 +7959,14 @@ const App: Component = () => {
               theme={theme()}
               onSetTheme={handleSetTheme}
               onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark")}
+              isCustomizerOpen={rightCustomizerOpen()}
+              onToggleCustomizer={() => setRightCustomizerOpen(!rightCustomizerOpen())}
               threads={filteredThreads()}
               viewMode={effectiveViewMode()}
               expandedThreadId={expandedThreadId()}
               onSelectThread={handleSelectThread}
               onOpenMobileMenu={() => setMobileSidebarOpen(true)}
+              onOpenCalendar={() => setActiveModule("calendar")}
               onToggleViewMode={() => setViewMode((prev) => (prev === "threads" ? "flat" : "threads"))}
               onToggleThreadCheck={handleToggleThreadCheck}
               focusedCategory={focusedCategory()}
@@ -6899,7 +7977,6 @@ const App: Component = () => {
               currentUserEmail={currentUser()?.email}
               currentUserPhotoUrl={profilePhotoUrl()}
             />
-            </div>
           </div>
 
           {/* ── Reading Pane (Only mounted when selectedMsg()) ── */}
@@ -6909,11 +7986,15 @@ const App: Component = () => {
                 message={selectedMsg()!}
                 isDecrypting={isDecrypting()}
                 decryptedContent={decryptedContent()}
+                calendarIcs={decryptedCalendarIcs()}
+                onRsvpInvitation={handleRsvpInvitation}
                 mailboxKey={mailboxKey()}
                 senderVerification={senderVerification()}
                 lockedAccount={lockedReadingAccount()}
+                hasHistoricalLocked={Boolean(selectedMailbox()?.previous_wrapped_sk_user || currentUser()?.previous_wrapped_sk_user)}
                 onUnlockAccount={(acc) => {
                   setUnlockAccountTarget(acc);
+                  setUnlockSecretInput("");
                   setUnlockAccountPassword("");
                   setUnlockAccountError(null);
                 }}
@@ -6952,10 +8033,146 @@ const App: Component = () => {
                 onEditScheduled={(msg) => handleEditScheduled(msg)}
                 currentUserEmail={currentUser()?.email}
                 currentUserPhotoUrl={profilePhotoUrl()}
+                onOpenCalendarEvent={(eventId) => {
+                  setActiveModule("calendar");
+                  setTimeout(() => {
+                    window.dispatchEvent(
+                      new CustomEvent("byos_open_calendar_event", { detail: { eventId } })
+                    );
+                  }, 150);
+                }}
+                onAddSuggestedCalendarEvent={handleAddSuggestedCalendarEvent}
+                onRemoveSuggestedCalendarEvent={handleRemoveSuggestedCalendarEvent}
+                fontScale={fontScale()}
               />
             </div>
           </Show>
+              </div>
+            </div>
+          </Show>
+
+          {/* ── Desktop Docked Quick Settings Panel (Beside Workspace Card in All Modules) ── */}
+          <Show when={rightCustomizerOpen()}>
+            <div class="hidden lg:flex h-full">
+              <QuickSettingsPanel
+                mailbox={selectedMailbox()}
+                currentDensity={density()}
+                currentLayout={layoutMode()}
+                currentTheme={theme()}
+                currentTimeFormat={timeFormat()}
+                currentLanguage={language()}
+                currentWeekStart={weekStart()}
+                focusedInboxEnabled={focusedInboxEnabled()}
+                viewMode={effectiveViewMode()}
+                fontScale={fontScale()}
+                highContrast={highContrast()}
+                onDensityChange={handleSetDensity}
+                onLayoutChange={handleSetLayoutMode}
+                onThemeChange={(t) => handleSetTheme(t, true)}
+                onTimeFormatChange={(tf) => {
+                  setTimeFormat(tf);
+                  if (typeof window !== "undefined") localStorage.setItem("byos_time_format", tf);
+                }}
+                onLanguageChange={(l) => {
+                  setLanguage(l);
+                  if (typeof window !== "undefined") localStorage.setItem("byos_language", l);
+                }}
+                onWeekStartChange={(ws) => {
+                  setWeekStart(ws);
+                  if (typeof window !== "undefined") localStorage.setItem("byos_week_start", ws);
+                }}
+                onToggleFocusedInbox={(enabled) => setFocusedInboxEnabledState(enabled)}
+                onToggleViewMode={() => setViewMode((prev) => (prev === "threads" ? "flat" : "threads"))}
+                onFontScaleChange={(scale) => setFontScale(scale)}
+                onHighContrastChange={(hc) => setHighContrast(hc)}
+                onResetDefaults={() => {
+                  handleSetTheme("cloud_dancer", true);
+                  handleSetLayoutMode("split", true);
+                  handleSetDensity("cozy", true);
+                  setFontScale("default");
+                  setHighContrast(false);
+                  setTimeFormat("12h");
+                  setWeekStart("sunday");
+                  setLanguage("en");
+                  showToast("Appearance reset to defaults");
+                }}
+                onClose={() => setRightCustomizerOpen(false)}
+                onOpenFullSettings={() => {
+                  setActiveSettingsTab("account");
+                  setSettingsOpen(true);
+                }}
+              />
+            </div>
+          </Show>
+
+          {/* ── Right Utility Bar (Rail) - Stands Full-Height Beside Workspace Card across all modules ── */}
+          <RightBar
+            activeModule={activeModule()}
+            onSwitchModule={setActiveModule}
+            onOpenContacts={openContacts}
+          />
         </main>
+
+        {/* ── Mobile Slide-Over Quick Settings Drawer ── */}
+        <Show when={rightCustomizerOpen()}>
+          <div class="lg:hidden">
+            <div
+              class="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 transition-opacity"
+              onClick={() => setRightCustomizerOpen(false)}
+              aria-hidden="true"
+            />
+            <div class="fixed inset-y-0 right-0 w-full sm:w-96 max-w-full z-50 shadow-2xl flex flex-col transition-transform duration-200">
+              <QuickSettingsPanel
+                mailbox={selectedMailbox()}
+                currentDensity={density()}
+                currentLayout={layoutMode()}
+                currentTheme={theme()}
+                currentTimeFormat={timeFormat()}
+                currentLanguage={language()}
+                currentWeekStart={weekStart()}
+                focusedInboxEnabled={focusedInboxEnabled()}
+                viewMode={effectiveViewMode()}
+                fontScale={fontScale()}
+                highContrast={highContrast()}
+                onDensityChange={handleSetDensity}
+                onLayoutChange={handleSetLayoutMode}
+                onThemeChange={(t) => handleSetTheme(t, true)}
+                onTimeFormatChange={(tf) => {
+                  setTimeFormat(tf);
+                  if (typeof window !== "undefined") localStorage.setItem("byos_time_format", tf);
+                }}
+                onLanguageChange={(l) => {
+                  setLanguage(l);
+                  if (typeof window !== "undefined") localStorage.setItem("byos_language", l);
+                }}
+                onWeekStartChange={(ws) => {
+                  setWeekStart(ws);
+                  if (typeof window !== "undefined") localStorage.setItem("byos_week_start", ws);
+                }}
+                onToggleFocusedInbox={(enabled) => setFocusedInboxEnabledState(enabled)}
+                onToggleViewMode={() => setViewMode((prev) => (prev === "threads" ? "flat" : "threads"))}
+                onFontScaleChange={(scale) => setFontScale(scale)}
+                onHighContrastChange={(hc) => setHighContrast(hc)}
+                onResetDefaults={() => {
+                  handleSetTheme("cloud_dancer", true);
+                  handleSetLayoutMode("split", true);
+                  handleSetDensity("cozy", true);
+                  setFontScale("default");
+                  setHighContrast(false);
+                  setTimeFormat("12h");
+                  setWeekStart("sunday");
+                  setLanguage("en");
+                  showToast("Appearance reset to defaults");
+                }}
+                onClose={() => setRightCustomizerOpen(false)}
+                onOpenFullSettings={() => {
+                  setActiveSettingsTab("account");
+                  setSettingsOpen(true);
+                }}
+              />
+            </div>
+          </div>
+        </Show>
 
       {/* ── Docking Compose Drawer ── */}
       <ComposeDrawer
@@ -7147,18 +8364,24 @@ const App: Component = () => {
         onClose={() => setShortcutsHelpOpen(false)}
       />
 
-      {/* ── Unlock Account Modal (Rule 2) ── */}
+      {/* ── Unlock Account / Historical Mails Modal ── */}
       <Show when={unlockAccountTarget()}>
         <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
           <div class="w-full max-w-md rounded-2xl bg-white dark:bg-[#1E2025] shadow-2xl overflow-hidden flex flex-col border border-[#E2DFD8] dark:border-[#2E3138] font-sans">
             <div class="px-6 py-4 border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between">
               <h3 class="font-medium text-base text-[#2B2C2D] dark:text-[#F3F4F6]">
-                Unlock {unlockAccountTarget()?.email}
+                <Show
+                  when={unlockAccountTarget()?.isHistorical || Boolean(selectedMailbox()?.previous_wrapped_sk_user || currentUser()?.previous_wrapped_sk_user)}
+                  fallback={`Unlock ${unlockAccountTarget()?.email}`}
+                >
+                  Unlock Historical Messages
+                </Show>
               </h3>
               <button
                 type="button"
                 onClick={() => {
                   setUnlockAccountTarget(null);
+                  setUnlockSecretInput("");
                   setUnlockAccountPassword("");
                   setUnlockAccountError(null);
                 }}
@@ -7172,9 +8395,19 @@ const App: Component = () => {
               </button>
             </div>
             <form onSubmit={handlePerformUnlockAccount} class="p-6 space-y-4">
-              <p class="text-xs text-[#6F7173] dark:text-[#A1A1AA]">
-                Enter your account password to decrypt and load end-to-end encryption keys for{" "}
-                <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">{unlockAccountTarget()?.email}</span>.
+              <p class="text-xs text-[#6F7173] dark:text-[#A1A1AA] leading-relaxed">
+                <Show
+                  when={unlockAccountTarget()?.isHistorical || Boolean(selectedMailbox()?.previous_wrapped_sk_user || currentUser()?.previous_wrapped_sk_user)}
+                  fallback={
+                    <>
+                      Enter your account password to decrypt and load end-to-end encryption keys for{" "}
+                      <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">{unlockAccountTarget()?.email}</span>.
+                    </>
+                  }
+                >
+                  Your account password was recently reset. Enter your <strong>24-word recovery phrase</strong> or <strong>previous password</strong> to unlock your historical messages for{" "}
+                  <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">{unlockAccountTarget()?.email}</span>.
+                </Show>
               </p>
 
               <Show when={unlockAccountError()}>
@@ -7188,16 +8421,29 @@ const App: Component = () => {
 
               <div class="space-y-1.5">
                 <label class="block text-xs font-semibold text-[#2B2C2D] dark:text-[#ECEBE8]">
-                  Password
+                  24-Word Recovery Phrase or Old Password
+                </label>
+                <textarea
+                  rows={2}
+                  data-testid="unlock-mails-secret-input"
+                  value={unlockSecretInput()}
+                  onInput={(e) => setUnlockSecretInput(e.currentTarget.value)}
+                  placeholder="Enter 24 words separated by spaces, or previous password"
+                  class="w-full px-3 py-2 text-xs rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#18191D] text-[#1A1B1E] dark:text-[#F3F4F6] font-mono focus:outline-none focus:ring-2 focus:ring-[#A27561]"
+                />
+              </div>
+
+              <div class="space-y-1.5">
+                <label class="block text-xs font-semibold text-[#2B2C2D] dark:text-[#ECEBE8]">
+                  Current Account Password
                 </label>
                 <input
                   type="password"
                   data-testid="unlock-account-password-input"
+                  data-testid-secondary="unlock-mails-current-password-input"
                   value={unlockAccountPassword()}
                   onInput={(e) => setUnlockAccountPassword(e.currentTarget.value)}
-                  placeholder="Enter password"
-                  required
-                  autofocus
+                  placeholder="Enter current password"
                   class="w-full px-3 py-2 text-xs rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#18191D] text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#A27561]"
                 />
               </div>
@@ -7207,6 +8453,7 @@ const App: Component = () => {
                   type="button"
                   onClick={() => {
                     setUnlockAccountTarget(null);
+                    setUnlockSecretInput("");
                     setUnlockAccountPassword("");
                     setUnlockAccountError(null);
                   }}
@@ -7216,11 +8463,12 @@ const App: Component = () => {
                 </button>
                 <button
                   type="submit"
-                  data-testid="unlock-account-submit-btn"
-                  disabled={unlockAccountBusy() || !unlockAccountPassword()}
+                  data-testid="unlock-mails-submit-btn"
+                  data-account-submit-btn="true"
+                  disabled={unlockAccountBusy() || (!unlockSecretInput() && !unlockAccountPassword())}
                   class="px-5 py-2 text-xs font-semibold rounded-xl bg-[#A27561] hover:bg-[#8F6452] text-white transition disabled:opacity-50 cursor-pointer shadow-xs"
                 >
-                  {unlockAccountBusy() ? "Unlocking…" : "Unlock Mailbox"}
+                  {unlockAccountBusy() ? "Unlocking…" : "Unlock Mails"}
                 </button>
               </div>
             </form>

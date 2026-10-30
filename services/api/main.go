@@ -336,6 +336,14 @@ func main() {
 	}
 	go startScheduledPathADelivery(schedulerCtx, schedulerDSN)
 
+	// Startup reconciliation for calendar legacy migrations
+	startupReconcileCtx, startupReconcileCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	_, _ = RunStartupMigrationReconciliation(startupReconcileCtx, schedulerDSN)
+	startupReconcileCancel()
+
+	// Start recurring calendar expiration worker (60-second bounded interval)
+	StartCalendarExpirationWorker(schedulerCtx, schedulerDSN, 60*time.Second)
+
 	http.HandleFunc("/health", withSecurityHeaders(withCORS(healthHandler)))
 	http.HandleFunc("/metrics", withSecurityHeaders(metricsHandler))
 	http.HandleFunc("/", withSecurityHeaders(rootHandler))
@@ -437,6 +445,31 @@ func main() {
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/contacts/import", withSecurityHeaders(withCORS(contactsImportHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/contacts/export", withSecurityHeaders(withCORS(contactsExportHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/contacts/{contact_id}", withSecurityHeaders(withCORS(contactsHandler)))
+	// Calendar subsystem
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendars", withSecurityHeaders(withCORS(calendarsHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendars/{calendar_id}", withSecurityHeaders(withCORS(calendarsHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendars/{calendar_id}/shares", withSecurityHeaders(withCORS(calendarSharesHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendars/{calendar_id}/shares/{share_id}", withSecurityHeaders(withCORS(calendarSharesHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendar-events", withSecurityHeaders(withCORS(calendarEventsHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendar-events/{event_id}", withSecurityHeaders(withCORS(calendarEventsHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendar-events/{event_id}/stage-migration", withSecurityHeaders(withCORS(calendarEventStageMigrationHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendar-events/{event_id}/migration-status", withSecurityHeaders(withCORS(calendarEventMigrationStatusHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendar-events/{event_id}/finalize-migration", withSecurityHeaders(withCORS(calendarEventFinalizeMigrationHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendar-events/{event_id}/rollback-migration", withSecurityHeaders(withCORS(calendarEventRollbackMigrationHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendar-events/{event_id}/exceptions", withSecurityHeaders(withCORS(calendarEventExceptionsHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/calendar-events/{event_id}/exceptions/{exception_id}", withSecurityHeaders(withCORS(calendarEventExceptionsHandler)))
+
+	// CalDAV Synchronization Subsystem (RFC 4791, RFC 4918, RFC 6764, RFC 6578)
+	http.HandleFunc("/.well-known/caldav", withSecurityHeaders(calDavWellKnownHandler))
+	http.HandleFunc("/dav/principals", withSecurityHeaders(calDavPrincipalHandler))
+	http.HandleFunc("/dav/principals/", withSecurityHeaders(calDavPrincipalHandler))
+	http.HandleFunc("/dav/principals/{email}", withSecurityHeaders(calDavPrincipalHandler))
+	http.HandleFunc("/dav/principals/{email}/", withSecurityHeaders(calDavPrincipalHandler))
+	http.HandleFunc("/dav/calendars/{mailbox_id}", withSecurityHeaders(calDavHomeHandler))
+	http.HandleFunc("/dav/calendars/{mailbox_id}/", withSecurityHeaders(calDavHomeHandler))
+	http.HandleFunc("/dav/calendars/{mailbox_id}/{calendar_id}", withSecurityHeaders(calDavCollectionHandler))
+	http.HandleFunc("/dav/calendars/{mailbox_id}/{calendar_id}/", withSecurityHeaders(calDavCollectionHandler))
+	http.HandleFunc("/dav/calendars/{mailbox_id}/{calendar_id}/{resource_name}", withSecurityHeaders(calDavResourceHandler))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/folders", withSecurityHeaders(withCORS(mailboxFoldersHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/folders/{folder_id}", withSecurityHeaders(withCORS(mailboxFoldersHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/labels", withSecurityHeaders(withCORS(mailboxLabelsHandler)))
@@ -471,6 +504,8 @@ func main() {
 	http.HandleFunc("/v1/auth/2fa/recovery-methods", withSecurityHeaders(withCORS(recoveryMethodsHandler)))
 	http.HandleFunc("/v1/auth/2fa/verify-login", withSecurityHeaders(withCORS(login2FAVerifyHandler)))
 	http.HandleFunc("/v1/auth/2fa/send-code", withSecurityHeaders(withCORS(login2FASendCodeHandler)))
+	http.HandleFunc("/v1/auth/recovery-contacts/send-code", withSecurityHeaders(withCORS(recoveryContactSendCodeHandler)))
+	http.HandleFunc("/v1/auth/recovery-contacts/confirm", withSecurityHeaders(withCORS(recoveryContactConfirmHandler)))
 
 	http.HandleFunc("/v1/organizations/{org_id}/billing", withSecurityHeaders(withCORS(billingHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/billing/plan", withSecurityHeaders(withCORS(billingHandler)))
@@ -521,6 +556,8 @@ func main() {
 	http.HandleFunc("/v1/auth/passkeys/register", withSecurityHeaders(withCORS(passkeyRegisterHandler)))
 	http.HandleFunc("/v1/auth/passkeys/login-options", withSecurityHeaders(withCORS(passkeyLoginOptionsHandler)))
 	http.HandleFunc("/v1/auth/passkeys/login", withSecurityHeaders(withCORS(passkeyLoginHandler)))
+	http.HandleFunc("/v1/auth/passkeys/step-up-options", withSecurityHeaders(withCORS(passkeyStepUpOptionsHandler)))
+	http.HandleFunc("/v1/auth/passkeys/step-up-verify", withSecurityHeaders(withCORS(passkeyStepUpVerifyHandler)))
 	http.HandleFunc("/v1/auth/passkeys", withSecurityHeaders(withCORS(passkeysListHandler)))
 	http.HandleFunc("/v1/auth/passkeys/{id}", withSecurityHeaders(withCORS(passkeyItemHandler)))
 
@@ -528,7 +565,19 @@ func main() {
 	http.HandleFunc("/v1/auth/recovery/options", withSecurityHeaders(withCORS(recoveryFlowOptionsHandler)))
 	http.HandleFunc("/v1/auth/recovery/request", withSecurityHeaders(withCORS(recoveryFlowRequestHandler)))
 	http.HandleFunc("/v1/auth/recovery/reset-password", withSecurityHeaders(withCORS(recoveryFlowResetPasswordHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/reactivate-keys/prepare", withSecurityHeaders(withCORS(mailboxReactivateKeysPrepareHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/reactivate-keys/pending", withSecurityHeaders(withCORS(mailboxReactivateKeysPendingHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/reactivate-keys/finalize", withSecurityHeaders(withCORS(mailboxReactivateKeysFinalizeHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/reactivate-keys/rollback", withSecurityHeaders(withCORS(mailboxReactivateKeysRollbackHandler)))
+	http.HandleFunc("/v1/mailboxes/{mailbox_id}/reactivate-keys/{migration_id}", withSecurityHeaders(withCORS(mailboxReactivateKeysPendingHandler)))
 	http.HandleFunc("/v1/mailboxes/{mailbox_id}/reactivate-keys", withSecurityHeaders(withCORS(mailboxReactivateKeysHandler)))
+
+	// Exceptional Employee Recovery with Organization Owner Approval
+	http.HandleFunc("/v1/auth/recovery/request-exceptional", withSecurityHeaders(withCORS(exceptionalRecoveryRequestHandler)))
+	http.HandleFunc("/v1/organizations/{org_id}/exceptional-recovery", withSecurityHeaders(withCORS(exceptionalRecoveryListHandler)))
+	http.HandleFunc("/v1/organizations/{org_id}/exceptional-recovery/{id}/approve", withSecurityHeaders(withCORS(exceptionalRecoveryApproveHandler)))
+	http.HandleFunc("/v1/organizations/{org_id}/exceptional-recovery/{id}/reject", withSecurityHeaders(withCORS(exceptionalRecoveryRejectHandler)))
+	http.HandleFunc("/v1/auth/recovery/reset-with-approval", withSecurityHeaders(withCORS(exceptionalRecoveryResetHandler)))
 
 	log.Printf("BYOS API service starting on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))

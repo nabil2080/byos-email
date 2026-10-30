@@ -388,8 +388,8 @@ func TestDraftInactiveUserRejected(t *testing.T) {
 }
 
 func TestDraftSameOrgMemberAllowed(t *testing.T) {
-	// Documents the established mailbox access model: any active same-org
-	// member may use the mailbox (cf. mailboxGetHandler org check).
+	// Verifies the secure mailbox access model: a non-owner regular member cannot
+	// access another user's mailbox (403 Forbidden), while the owner can.
 	db := setupTestDB(t)
 	defer db.Close()
 	_, ownerID, _, memberID := createTestOrgAndUsers(t, db)
@@ -397,12 +397,20 @@ func TestDraftSameOrgMemberAllowed(t *testing.T) {
 	memberToken := createTestSession(t, db, memberID)
 	w := draftRequest(t, http.MethodPost, mailboxID, "",
 		`{"subject":"m","encrypted_envelope":"`+testEnvelopeB64()+`"}`, memberToken)
-	if w.Code != http.StatusCreated {
-		t.Errorf("same-org member create: expected 201, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusForbidden {
+		t.Errorf("unauthorized member create: expected 403, got %d: %s", w.Code, w.Body.String())
 	}
 	w = draftRequest(t, http.MethodGet, mailboxID, "", "", memberToken)
-	if w.Code != http.StatusOK {
-		t.Errorf("same-org member list: expected 200, got %d", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("unauthorized member list: expected 403, got %d", w.Code)
+	}
+
+	// Owner access succeeds
+	ownerToken := createTestSession(t, db, ownerID)
+	w = draftRequest(t, http.MethodPost, mailboxID, "",
+		`{"subject":"m","encrypted_envelope":"`+testEnvelopeB64()+`"}`, ownerToken)
+	if w.Code != http.StatusCreated {
+		t.Errorf("owner create: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

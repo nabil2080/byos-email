@@ -96,14 +96,18 @@ func deviceEnrollHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "wrapped_root_secret required with mailbox_id", http.StatusBadRequest)
 			return
 		}
-		var userOrgID, mailboxOrgID string
-		_ = tx.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1`, userID).Scan(&userOrgID)
-		err = tx.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, strings.TrimSpace(req.MailboxID)).Scan(&mailboxOrgID)
+		var userOrgID, userRole string
+		_ = tx.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1`, userID).Scan(&userOrgID, &userRole)
+		var mailboxOrgID string
+		var mailboxUserID *string
+		err = tx.QueryRow(ctx, `SELECT org_id::text, user_id::text FROM mailboxes WHERE id=$1`, strings.TrimSpace(req.MailboxID)).Scan(&mailboxOrgID, &mailboxUserID)
 		if err != nil {
 			http.Error(w, "mailbox not found", http.StatusNotFound)
 			return
 		}
-		if mailboxOrgID != userOrgID {
+		isOwner := mailboxUserID != nil && *mailboxUserID == userID
+		isAdminOrOwner := userRole == "admin" || userRole == "owner"
+		if mailboxOrgID != userOrgID || (!isOwner && !isAdminOrOwner) {
 			http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
 			return
 		}

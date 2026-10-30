@@ -184,6 +184,13 @@ WITH del_ms2 AS (
 )
 INSERT INTO cleanup_counts (table_name, deleted_count) VALUES ('mailbox_settings', (SELECT count(*) FROM del_ms2));
 
+DO $$
+BEGIN
+    IF to_regclass('calendar_event_migrations') IS NOT NULL THEN
+        EXECUTE 'DELETE FROM calendar_event_migrations WHERE mailbox_id IN (SELECT id FROM target_test_mailboxes)';
+    END IF;
+END $$;
+
 -- Now delete test mailboxes
 WITH del_mb AS (
     DELETE FROM mailboxes WHERE id IN (SELECT id FROM target_test_mailboxes) RETURNING 1

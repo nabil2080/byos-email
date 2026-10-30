@@ -254,7 +254,7 @@ export function decryptMessageEnvelope(
   return new TextDecoder().decode(hexToBytes(plaintextHex));
 }
 
-function envelopeAadHex(mailboxId: string, prefix: string): string {
+export function envelopeAadHex(mailboxId: string, prefix: string): string {
   const pre = new TextEncoder().encode(prefix);
   const mid = hexToBytes(mailboxIdHex(mailboxId));
   const aad = new Uint8Array(pre.length + mid.length);

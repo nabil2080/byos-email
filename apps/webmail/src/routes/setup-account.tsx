@@ -26,16 +26,22 @@ export const SetupAccount: Component = () => {
   const [isSubmitting, setIsSubmitting] = createSignal(false);
   const [submitError, setSubmitError] = createSignal<string | null>(null);
 
-  // 2-Step Verification state
-  const [twoFactorMethod, setTwoFactorMethod] = createSignal<"totp" | "phone" | "email">("totp");
+  // 2-Step Verification state (TOTP Authenticator or Passkey)
+  const [selectedFactor, setSelectedFactor] = createSignal<"totp" | "passkey">("totp");
   const [totpSecret, setTotpSecret] = createSignal<string>("");
   const [totpCode, setTotpCode] = createSignal<string>("");
   const [totpVerified, setTotpVerified] = createSignal<boolean>(false);
   const [totpVerifying, setTotpVerifying] = createSignal<boolean>(false);
   const [totpVerifyError, setTotpVerifyError] = createSignal<string | null>(null);
   const [totpCopied, setTotpCopied] = createSignal<boolean>(false);
-  const [recoveryPhone, setRecoveryPhone] = createSignal<string>("");
-  const [recoveryEmail, setRecoveryEmail] = createSignal<string>("");
+
+  // Passkey enrollment state
+  const [passkeyRegistered, setPasskeyRegistered] = createSignal<boolean>(false);
+  const [passkeyRegistering, setPasskeyRegistering] = createSignal<boolean>(false);
+  const [passkeyError, setPasskeyError] = createSignal<string | null>(null);
+  const [passkeyCredId, setPasskeyCredId] = createSignal<string>("");
+  const [passkeyPublicKey, setPasskeyPublicKey] = createSignal<string>("");
+  const [passkeyDevice, setPasskeyDevice] = createSignal<string>("Security Key / Passkey");
 
   // Key material derived client-side
   const [derivedMailboxPk, setDerivedMailboxPk] = createSignal<string>("");
@@ -282,18 +288,82 @@ export const SetupAccount: Component = () => {
     setTimeout(() => setTotpCopied(false), 2000);
   }
 
+  function bufferToBase64URL(buffer: ArrayBuffer): string {
+    const bytes = new Uint8Array(buffer);
+    let str = "";
+    for (let i = 0; i < bytes.length; i++) {
+      str += String.fromCharCode(bytes[i]);
+    }
+    return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  }
+
+  async function handleRegisterPasskey() {
+    if (typeof window === "undefined" || !window.PublicKeyCredential) {
+      setPasskeyError("WebAuthn / Passkeys are not supported by this browser.");
+      return;
+    }
+    setPasskeyRegistering(true);
+    setPasskeyError(null);
+    try {
+      const email = inviteData()?.email || "employee@byos.local";
+      const challengeBytes = new Uint8Array(32);
+      crypto.getRandomValues(challengeBytes);
+
+      const effectiveRpId =
+        window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+          ? window.location.hostname
+          : window.location.hostname;
+
+      const cred = (await navigator.credentials.create({
+        publicKey: {
+          challenge: challengeBytes,
+          rp: {
+            name: "BYOS Secure Email",
+            id: effectiveRpId,
+          },
+          user: {
+            id: new TextEncoder().encode(email),
+            name: email,
+            displayName: email.split("@")[0] || email,
+          },
+          pubKeyCredParams: [
+            { type: "public-key", alg: -7 },   // ES256
+            { type: "public-key", alg: -257 }, // RS256
+          ],
+          authenticatorSelection: {
+            userVerification: "preferred",
+            residentKey: "preferred",
+          },
+          timeout: 60000,
+        },
+      })) as PublicKeyCredential;
+
+      if (!cred) {
+        throw new Error("Passkey registration was cancelled.");
+      }
+
+      const rawId = bufferToBase64URL(cred.rawId);
+      const resp = cred.response as AuthenticatorAttestationResponse;
+      const attestationHex = Array.from(new Uint8Array(resp.attestationObject), (b) =>
+        b.toString(16).padStart(2, "0")
+      ).join("");
+
+      setPasskeyCredId(rawId);
+      setPasskeyPublicKey(attestationHex);
+      setPasskeyRegistered(true);
+    } catch (err: any) {
+      if (err?.name === "NotAllowedError" || err?.message?.includes("cancelled")) {
+        setPasskeyError("Passkey registration was cancelled or timed out.");
+      } else {
+        setPasskeyError(err?.message || "Failed to register passkey.");
+      }
+    } finally {
+      setPasskeyRegistering(false);
+    }
+  }
+
   const is2FAValid = () => {
-    const method = twoFactorMethod();
-    if (method === "totp") {
-      return totpVerified() || totpCode().trim().length === 6;
-    }
-    if (method === "phone") {
-      return recoveryPhone().trim().length >= 7;
-    }
-    if (method === "email") {
-      return recoveryEmail().trim().includes("@");
-    }
-    return false;
+    return totpVerified() || totpCode().trim().length === 6;
   };
 
   async function handleFinalizeActivation() {
@@ -322,10 +392,8 @@ export const SetupAccount: Component = () => {
         mailbox_pk: pk,
         xwing_pk: derivedXWingPk() ? hexToBase64(derivedXWingPk()) : undefined,
         wrapped_sk_user: wrappedSk,
-        two_factor_method: twoFactorMethod(),
-        totp_secret: twoFactorMethod() === "totp" ? totpSecret() : undefined,
-        recovery_phone: twoFactorMethod() === "phone" ? recoveryPhone().trim() : undefined,
-        recovery_email: twoFactorMethod() === "email" ? recoveryEmail().trim() : undefined,
+        two_factor_method: "totp",
+        totp_secret: totpSecret(),
       });
 
       // Populate sessionStorage immediately with keys & session token so the user lands unlocked in the inbox!
@@ -764,194 +832,110 @@ export const SetupAccount: Component = () => {
                   </div>
                 </Show>
 
-                {/* Step 3: Mandatory 2-Step Verification */}
+                {/* Step 3: Mandatory 2-Step Verification (TOTP Only) */}
                 <Show when={step() === 3}>
                   <div class="space-y-5">
                     <div>
                       <h3 class="text-sm font-semibold text-[#3C3D3E]">
-                        Choose Mandatory 2-Step Verification
+                        Set Up Mandatory 2-Step Verification
                       </h3>
                       <p class="text-xs text-[#6F7173] mt-1 leading-relaxed">
-                        To protect your end-to-end encrypted mailbox from unauthorized takeover, a second verification factor is required on every new sign-in.
+                        To protect your end-to-end encrypted mailbox from unauthorized takeover, an Authenticator App (TOTP) is required on every new sign-in.
                       </p>
                     </div>
 
-                    {/* Method Selector Tabs / Cards */}
-                    <div class="grid grid-cols-3 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setTwoFactorMethod("totp")}
-                        class={`p-3 rounded-lg border text-left transition flex flex-col justify-between cursor-pointer ${
-                          twoFactorMethod() === "totp"
-                            ? "border-[#A27561] bg-[#A27561]/5 ring-1 ring-[#A27561]"
-                            : "border-[#E2DFD8] bg-[#FBFBF9] hover:bg-stone-50"
-                        }`}
-                      >
-                        <div class="flex items-center gap-1.5 mb-1.5">
-                          <svg class="w-4 h-4 stroke-[#A27561] fill-none stroke-2" viewBox="0 0 24 24">
-                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                          </svg>
-                          <span class="text-xs font-semibold text-[#3C3D3E]">Authenticator</span>
-                        </div>
-                        <span class="text-[10px] text-[#6F7173]">Recommended (TOTP)</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setTwoFactorMethod("phone")}
-                        class={`p-3 rounded-lg border text-left transition flex flex-col justify-between cursor-pointer ${
-                          twoFactorMethod() === "phone"
-                            ? "border-[#A27561] bg-[#A27561]/5 ring-1 ring-[#A27561]"
-                            : "border-[#E2DFD8] bg-[#FBFBF9] hover:bg-stone-50"
-                        }`}
-                      >
-                        <div class="flex items-center gap-1.5 mb-1.5">
-                          <svg class="w-4 h-4 stroke-[#A27561] fill-none stroke-2" viewBox="0 0 24 24">
-                            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
-                          </svg>
-                          <span class="text-xs font-semibold text-[#3C3D3E]">Phone (SMS)</span>
-                        </div>
-                        <span class="text-[10px] text-[#6F7173]">SMS Security Code</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setTwoFactorMethod("email")}
-                        class={`p-3 rounded-lg border text-left transition flex flex-col justify-between cursor-pointer ${
-                          twoFactorMethod() === "email"
-                            ? "border-[#A27561] bg-[#A27561]/5 ring-1 ring-[#A27561]"
-                            : "border-[#E2DFD8] bg-[#FBFBF9] hover:bg-stone-50"
-                        }`}
-                      >
-                        <div class="flex items-center gap-1.5 mb-1.5">
-                          <svg class="w-4 h-4 stroke-[#A27561] fill-none stroke-2" viewBox="0 0 24 24">
-                            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-                            <polyline points="22,6 12,13 2,6" />
-                          </svg>
-                          <span class="text-xs font-semibold text-[#3C3D3E]">Email</span>
-                        </div>
-                        <span class="text-[10px] text-[#6F7173]">External Email OTP</span>
-                      </button>
+                    {/* Notice on Passkeys & MFA */}
+                    <div class="bg-[#FAF9F6] border border-[#E2DFD8] text-[#3C3D3E] rounded-lg p-3 text-xs leading-relaxed flex items-start gap-2.5">
+                      <svg class="w-4 h-4 stroke-[#9E725F] fill-none stroke-2 shrink-0 mt-0.5" viewBox="0 0 24 24">
+                        <path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8 8 0 00.528 2.86" />
+                      </svg>
+                      <div>
+                        <span class="font-semibold block mb-0.5">Two-Factor Authentication:</span>
+                        <span>Enroll an Authenticator App (TOTP) below to complete activation. Once your account is active, you can also enroll biometric passkeys and physical security keys in Settings.</span>
+                      </div>
                     </div>
 
-                    {/* Method 1: Authenticator App */}
-                    <Show when={twoFactorMethod() === "totp"}>
-                      <div class="bg-[#FBFBF9] border border-[#E2DFD8] rounded-xl p-4 space-y-4">
-                        <div class="flex flex-col sm:flex-row items-center gap-5">
-                          {/* QR Code Container */}
-                          <div class="bg-white p-3 rounded-xl border border-[#E2DFD8] shadow-xs flex-shrink-0">
-                            <div
-                              class="w-36 h-36 flex items-center justify-center [&>svg]:w-full [&>svg]:h-full"
-                              innerHTML={generateQRCodeSVG(
-                                `otpauth://totp/BYOS:${encodeURIComponent(data().email)}?secret=${totpSecret()}&issuer=BYOS`
-                              )}
-                            />
-                          </div>
+                    {/* Authenticator App (TOTP) Setup */}
+                    <div class="bg-[#FBFBF9] border border-[#E2DFD8] rounded-xl p-4 space-y-4">
+                      <div class="flex flex-col sm:flex-row items-center gap-5">
+                        {/* QR Code Container */}
+                        <div class="bg-white p-3 rounded-xl border border-[#E2DFD8] shadow-xs flex-shrink-0">
+                          <div
+                            class="w-36 h-36 flex items-center justify-center [&>svg]:w-full [&>svg]:h-full"
+                            innerHTML={generateQRCodeSVG(
+                              `otpauth://totp/BYOS:${encodeURIComponent(data().email)}?secret=${totpSecret()}&issuer=BYOS`
+                            )}
+                          />
+                        </div>
 
-                          <div class="flex-1 space-y-2 text-center sm:text-left">
-                            <h4 class="text-xs font-semibold text-[#3C3D3E]">Scan with Authenticator App</h4>
-                            <p class="text-[11px] text-[#6F7173] leading-relaxed">
-                              Use Google Authenticator, Authy, Apple Keychain, or 1Password to scan this QR code.
-                            </p>
-                            <div class="pt-1">
-                              <span class="text-[10px] text-[#A0A2A4] block uppercase font-mono tracking-wider">
-                                Secret Key (Manual Entry)
+                        <div class="flex-1 space-y-2 text-center sm:text-left">
+                          <h4 class="text-xs font-semibold text-[#3C3D3E]">Scan with Authenticator App</h4>
+                          <p class="text-[11px] text-[#6F7173] leading-relaxed">
+                            Use Google Authenticator, Authy, Apple Keychain, or 1Password to scan this QR code.
+                          </p>
+                          <div class="pt-1">
+                            <span class="text-[10px] text-[#A0A2A4] block uppercase font-mono tracking-wider">
+                              Secret Key (Manual Entry)
+                            </span>
+                            <div class="inline-flex items-center gap-2 mt-1 bg-white border border-[#E2DFD8] rounded px-2.5 py-1">
+                              <span class="font-mono text-xs font-medium text-[#3C3D3E] select-all">
+                                {formatTOTPSecret(totpSecret())}
                               </span>
-                              <div class="inline-flex items-center gap-2 mt-1 bg-white border border-[#E2DFD8] rounded px-2.5 py-1">
-                                <span class="font-mono text-xs font-medium text-[#3C3D3E] select-all">
-                                  {formatTOTPSecret(totpSecret())}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={handleCopyTOTPSecret}
-                                  class="text-[11px] text-[#A27561] hover:underline ml-1 font-medium cursor-pointer"
-                                >
-                                  {totpCopied() ? "Copied!" : "Copy"}
-                                </button>
-                              </div>
+                              <button
+                                type="button"
+                                onClick={handleCopyTOTPSecret}
+                                class="text-[11px] text-[#A27561] hover:underline ml-1 font-medium cursor-pointer"
+                              >
+                                {totpCopied() ? "Copied!" : "Copy"}
+                              </button>
                             </div>
                           </div>
                         </div>
+                      </div>
 
-                        {/* Test Verification Input */}
-                        <div class="pt-2 border-t border-[#E2DFD8]">
-                          <label class="block text-xs font-semibold text-[#3C3D3E] mb-1.5">
-                            Verify 6-Digit Code from App
-                          </label>
-                          <div class="flex items-center gap-2">
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              maxlength="6"
-                              value={totpCode()}
-                              onInput={(e) => {
-                                setTotpCode(e.currentTarget.value.replace(/[^0-9]/g, ""));
-                                if (e.currentTarget.value.trim().length === 6) {
-                                  handleVerifyTOTP();
-                                }
-                              }}
-                              placeholder="123456"
-                              class="w-36 tracking-widest font-mono text-center bg-white border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561] text-sm rounded-lg px-3 py-2 text-[#3C3D3E] outline-none"
-                            />
-                            <button
-                              type="button"
-                              onClick={handleVerifyTOTP}
-                              disabled={totpCode().trim().length !== 6 || totpVerifying()}
-                              class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] disabled:opacity-50 text-white text-xs font-medium rounded-lg transition cursor-pointer"
-                            >
-                              {totpVerifying() ? "Verifying…" : "Verify"}
-                            </button>
-                            <Show when={totpVerified()}>
-                              <div class="inline-flex items-center gap-1.5 text-xs text-emerald-700 font-medium bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
-                                <svg class="w-4 h-4 stroke-emerald-600 fill-none stroke-2" viewBox="0 0 24 24">
-                                  <polyline points="20 6 9 17 4 12" />
-                                </svg>
-                                <span>Verified!</span>
-                              </div>
-                            </Show>
-                          </div>
-                          <Show when={totpVerifyError()}>
-                            <p class="text-[11px] text-rose-600 mt-1">{totpVerifyError()}</p>
+                      {/* Test Verification Input */}
+                      <div class="pt-2 border-t border-[#E2DFD8]">
+                        <label class="block text-xs font-semibold text-[#3C3D3E] mb-1.5">
+                          Verify 6-Digit Code from App
+                        </label>
+                        <div class="flex items-center gap-2">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            maxlength="6"
+                            value={totpCode()}
+                            onInput={(e) => {
+                              setTotpCode(e.currentTarget.value.replace(/[^0-9]/g, ""));
+                              if (e.currentTarget.value.trim().length === 6) {
+                                handleVerifyTOTP();
+                              }
+                            }}
+                            placeholder="123456"
+                            class="w-36 tracking-widest font-mono text-center bg-white border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561] text-sm rounded-lg px-3 py-2 text-[#3C3D3E] outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleVerifyTOTP}
+                            disabled={totpCode().trim().length !== 6 || totpVerifying()}
+                            class="px-4 py-2 bg-[#A27561] hover:bg-[#8F6452] disabled:opacity-50 text-white text-xs font-medium rounded-lg transition cursor-pointer"
+                          >
+                            {totpVerifying() ? "Verifying…" : "Verify"}
+                          </button>
+                          <Show when={totpVerified()}>
+                            <div class="inline-flex items-center gap-1.5 text-xs text-emerald-700 font-medium bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
+                              <svg class="w-4 h-4 stroke-emerald-600 fill-none stroke-2" viewBox="0 0 24 24">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                              <span>Verified!</span>
+                            </div>
                           </Show>
                         </div>
+                        <Show when={totpVerifyError()}>
+                          <p class="text-[11px] text-rose-600 mt-1">{totpVerifyError()}</p>
+                        </Show>
                       </div>
-                    </Show>
-
-                    {/* Method 2: Phone (SMS) */}
-                    <Show when={twoFactorMethod() === "phone"}>
-                      <div class="bg-[#FBFBF9] border border-[#E2DFD8] rounded-xl p-4 space-y-3">
-                        <h4 class="text-xs font-semibold text-[#3C3D3E]">Recovery Phone Number</h4>
-                        <p class="text-[11px] text-[#6F7173] leading-relaxed">
-                          Enter your mobile phone number including international country code (e.g. +1 555-0199).
-                        </p>
-                        <input
-                          type="tel"
-                          value={recoveryPhone()}
-                          onInput={(e) => setRecoveryPhone(e.currentTarget.value)}
-                          placeholder="+1 (555) 000-0000"
-                          class="w-full bg-white border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561] text-xs sm:text-sm rounded-lg px-3 py-2 text-[#3C3D3E] outline-none"
-                        />
-                      </div>
-                    </Show>
-
-                    {/* Method 3: Recovery Email */}
-                    <Show when={twoFactorMethod() === "email"}>
-                      <div class="bg-[#FBFBF9] border border-[#E2DFD8] rounded-xl p-4 space-y-3">
-                        <h4 class="text-xs font-semibold text-[#3C3D3E]">External Recovery Email</h4>
-                        <p class="text-[11px] text-[#6F7173] leading-relaxed">
-                          Enter a secondary external email address that you control (e.g. personal @gmail.com or @outlook.com).
-                        </p>
-                        <input
-                          type="email"
-                          value={recoveryEmail()}
-                          onInput={(e) => setRecoveryEmail(e.currentTarget.value)}
-                          placeholder="personal.email@example.com"
-                          class="w-full bg-white border border-[#E2DFD8] focus:border-[#A27561] focus:ring-1 focus:ring-[#A27561] text-xs sm:text-sm rounded-lg px-3 py-2 text-[#3C3D3E] outline-none"
-                        />
-                      </div>
-                    </Show>
+                    </div>
 
                     {/* Actions */}
                     <div class="flex items-center gap-3 pt-2">

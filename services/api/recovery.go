@@ -22,6 +22,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -58,11 +59,7 @@ func recoveryRateLimited(w http.ResponseWriter, r *http.Request, scope string) b
 		http.Error(w, "recovery service unavailable", http.StatusServiceUnavailable)
 		return true
 	}
-	ip := r.RemoteAddr
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		ip = strings.Split(fwd, ",")[0]
-	}
-	ip = strings.TrimSpace(strings.Split(ip, ":")[0])
+	ip := getClientIP(r)
 	ctx := context.Background()
 	key := "auth:recovery:" + scope + ":" + ip
 
@@ -280,16 +277,31 @@ func recoveryVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to restore access", http.StatusInternalServerError)
 		return
 	}
+
+	// Operation-bound recovery authorization: single-use, 15-minute validity, bound to this specific session's token_hash
+	resetAuthToken, _ := generateRandomBase64URL(32)
+	callerTokenHashHex := hex.EncodeToString(tokenHash)
+	_, _ = conn.Exec(ctx, `
+		INSERT INTO auth_challenges (user_id, challenge_type, challenge_token, destination, expires_at)
+		VALUES ($1, 'section15_recovery_pwd_reset', $2, $3, NOW() + INTERVAL '15 minutes')
+	`, userID, resetAuthToken, callerTokenHashHex)
+
 	auditLog(ctx, conn, orgID, userID, "recovery_verify", "user", userID, nil)
 	setSessionCookie(w, r, token, expires)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"id": userID, "email": email, "org_id": orgID})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":                  userID,
+		"email":               email,
+		"org_id":              orgID,
+		"recovery_auth_token": resetAuthToken,
+	})
 }
 
 // changePasswordHandler sets a new account password for the session owner.
-// It exists so a user who recovered access via recovery-verify (without
-// knowing the old password) can durably regain login. It changes
-// authentication only — never mailbox keys.
+// Security Invariants:
+// - Finding F-03: current_password is unconditionally required and verified.
+// - Finding F-04: If the account has two-factor authentication enabled, mfa_code is required.
+// - Finding F-05: When wrapped_sk_user is updated, mailbox_id is validated to avoid corrupting secondary mailboxes.
 func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -302,13 +314,19 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req struct {
-		NewPassword   string `json:"new_password"`
-		WrappedSkUser string `json:"wrapped_sk_user,omitempty"`
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+		WrappedSkUser   string `json:"wrapped_sk_user,omitempty"`
+		MailboxID       string `json:"mailbox_id,omitempty"`
+		MFACode         string `json:"mfa_code,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+
+	req.CurrentPassword = strings.TrimSpace(req.CurrentPassword)
+
 	if len(req.NewPassword) < 8 || len(req.NewPassword) > 128 {
 		http.Error(w, "password must be 8-128 characters", http.StatusBadRequest)
 		return
@@ -332,6 +350,121 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
+
+	// Finding F-03: Verify current password unconditionally on ordinary password changes.
+	// Bypass is permitted strictly when authenticated via single-use Section 15 Ed25519 recovery verification bound to this session.
+	var currentPwdHash string
+	var twoFactorEnabled bool
+	var totpSecret *string
+	var passkeyCount int
+	err = conn.QueryRow(ctx, `
+		SELECT u.password_hash, u.two_factor_enabled, u.totp_secret,
+		       (SELECT COUNT(*) FROM user_passkeys pk WHERE pk.user_id = u.id)
+		FROM users u WHERE u.id=$1 AND is_active=true
+	`, userID).Scan(&currentPwdHash, &twoFactorEnabled, &totpSecret, &passkeyCount)
+	if err != nil {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+
+	if req.CurrentPassword == "" {
+		callerHash, hasHash := getCallerTokenHash(r)
+		if !hasHash {
+			http.Error(w, "current_password is required", http.StatusBadRequest)
+			return
+		}
+		callerHashHex := hex.EncodeToString(callerHash)
+		var challengeID string
+		err := conn.QueryRow(ctx, `
+			SELECT id::text FROM auth_challenges
+			WHERE user_id = $1
+			  AND challenge_type = 'section15_recovery_pwd_reset'
+			  AND destination = $2
+			  AND expires_at > NOW()
+			LIMIT 1
+		`, userID, callerHashHex).Scan(&challengeID)
+		if err != nil {
+			http.Error(w, "current_password is required", http.StatusBadRequest)
+			return
+		}
+		// Single-use: consume authorization token immediately
+		_, _ = conn.Exec(ctx, `DELETE FROM auth_challenges WHERE id = $1`, challengeID)
+	} else {
+		if !verifyPassword(currentPwdHash, req.CurrentPassword) {
+			http.Error(w, "current password is incorrect", http.StatusUnauthorized)
+			return
+		}
+
+		// Enforce MFA step-up reauthentication for ordinary password changes.
+		hasActiveTOTP := (totpSecret != nil && *totpSecret != "")
+		hasPasskeys := passkeyCount > 0
+
+		if hasActiveTOTP || hasPasskeys {
+			mfaCode := strings.TrimSpace(req.MFACode)
+			if mfaCode == "" {
+				if hasActiveTOTP {
+					http.Error(w, "mfa_code is required: account has two-factor authentication enabled", http.StatusForbidden)
+				} else {
+					http.Error(w, "mfa_code is required: account has passkey authentication enabled", http.StatusForbidden)
+				}
+				return
+			}
+
+			validMFA := false
+			if hasActiveTOTP && validateTOTP(*totpSecret, mfaCode) {
+				validMFA = true
+			}
+			if !validMFA {
+				var chID string
+				err := conn.QueryRow(ctx, `
+					DELETE FROM auth_challenges
+					WHERE user_id=$1 AND challenge_type IN ('step_up_mfa', 'webauthn_step_up', 'recovery_reset_totp')
+					  AND challenge_token=$2 AND expires_at > NOW()
+					RETURNING id::text
+				`, userID, mfaCode).Scan(&chID)
+				if err == nil {
+					validMFA = true
+				}
+			}
+			if !validMFA {
+				http.Error(w, "invalid two-factor authentication code", http.StatusUnauthorized)
+				return
+			}
+		}
+	}
+
+	// Finding F-05: Enforce mailbox key preservation and isolate multiple mailboxes
+	var mailboxCount int
+	var mailboxWrappedCount int
+	err = conn.QueryRow(ctx, `
+		SELECT COUNT(*), COUNT(NULLIF(wrapped_sk_user, ''))
+		FROM mailboxes
+		WHERE user_id=$1 AND is_active=true
+	`, userID).Scan(&mailboxCount, &mailboxWrappedCount)
+	if err != nil {
+		http.Error(w, "database query failed", http.StatusInternalServerError)
+		return
+	}
+	if mailboxWrappedCount > 0 && wrappedSkUser == "" {
+		http.Error(w, "mailbox key envelope (wrapped_sk_user) is required when changing password for accounts with active mailboxes to prevent loss of access; please change your password in Webmail where your mailbox is unlocked", http.StatusBadRequest)
+		return
+	}
+
+	reqMailboxID := strings.TrimSpace(req.MailboxID)
+	if wrappedSkUser != "" {
+		if reqMailboxID != "" {
+			var mbExists bool
+			err = conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mailboxes WHERE id=$1 AND user_id=$2 AND is_active=true)`, reqMailboxID, userID).Scan(&mbExists)
+			if err != nil || !mbExists {
+				http.Error(w, "invalid or unauthorized mailbox_id", http.StatusBadRequest)
+				return
+			}
+		} else if mailboxWrappedCount > 1 {
+			http.Error(w, "mailbox_id is required when user has multiple active mailboxes with key envelopes", http.StatusBadRequest)
+			return
+		}
+	}
+
 	hash, err := hashPassword(req.NewPassword)
 	if err != nil {
 		http.Error(w, "failed to hash password", http.StatusInternalServerError)
@@ -343,26 +476,88 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
+
+	// Canonical Lock Order: 1. Lock all active mailbox parent rows for this user FIRST
+	mRows, err := tx.Query(ctx, `
+		SELECT id::text
+		FROM mailboxes
+		WHERE user_id = $1 AND is_active = true
+		FOR UPDATE
+	`, userID)
+	if err != nil {
+		http.Error(w, "failed to lock mailboxes", http.StatusInternalServerError)
+		return
+	}
+	var userMailboxIDs []string
+	for mRows.Next() {
+		var mID string
+		if err := mRows.Scan(&mID); err == nil {
+			userMailboxIDs = append(userMailboxIDs, mID)
+		}
+	}
+	mRows.Close()
+
 	var orgID string
-	err = tx.QueryRow(ctx, `UPDATE users SET password_hash=$1 WHERE id=$2 AND is_active=true RETURNING org_id::text`, hash, userID).Scan(&orgID)
+	err = tx.QueryRow(ctx, `UPDATE users SET password_hash=$1, updated_at=NOW() WHERE id=$2 AND is_active=true RETURNING org_id::text`, hash, userID).Scan(&orgID)
 	if err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
 	}
+
 	if wrappedSkUser != "" {
-		_, err = tx.Exec(ctx, `UPDATE mailboxes SET wrapped_sk_user=$1, mailbox_sk_wrapped=$2, updated_at=NOW() WHERE user_id=$3 AND is_active=true`, wrappedSkUser, []byte(wrappedSkUser), userID)
+		if reqMailboxID != "" {
+			_, err = tx.Exec(ctx, `UPDATE mailboxes SET wrapped_sk_user=$1, mailbox_sk_wrapped=$2, updated_at=NOW() WHERE id=$3 AND user_id=$4 AND is_active=true`, wrappedSkUser, []byte(wrappedSkUser), reqMailboxID, userID)
+		} else {
+			_, err = tx.Exec(ctx, `UPDATE mailboxes SET wrapped_sk_user=$1, mailbox_sk_wrapped=$2, updated_at=NOW() WHERE user_id=$3 AND is_active=true AND wrapped_sk_user IS NOT NULL AND wrapped_sk_user != ''`, wrappedSkUser, []byte(wrappedSkUser), userID)
+		}
 		if err != nil {
 			http.Error(w, "failed to update mailbox wrapped key", http.StatusInternalServerError)
 			return
 		}
 	}
-	// Revoke every other session so the forgotten/old credential's sessions
-	// die; the current session (this request's cookie) stays alive.
-	var currentHash []byte
-	if cookie, cerr := r.Cookie("byos_session"); cerr == nil {
-		currentHash = hashToken(cookie.Value)
+
+	// Canonical Lock Order: 2. Lock & invalidate pending reactivation child rows SECOND
+	if len(userMailboxIDs) > 0 {
+		_, err = tx.Exec(ctx, `
+			UPDATE mailbox_key_reactivations
+			SET status = 'rolled_back', rolled_back_at = NOW(), rollback_reason = 'password_changed_during_pending'
+			WHERE user_id = $1 AND mailbox_id = ANY($2::uuid[]) AND status = 'pending'
+		`, userID, userMailboxIDs)
+	} else {
+		_, err = tx.Exec(ctx, `
+			UPDATE mailbox_key_reactivations
+			SET status = 'rolled_back', rolled_back_at = NOW(), rollback_reason = 'password_changed_during_pending'
+			WHERE user_id = $1 AND status = 'pending'
+		`, userID)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND token_hash != $2`, userID, currentHash); err != nil {
+	if err != nil {
+		http.Error(w, "failed to invalidate pending key reactivations", http.StatusInternalServerError)
+		return
+	}
+
+	// Revoke every other session so old sessions die; the current session stays alive.
+	var currentHash []byte
+	if h, ok := getCallerTokenHash(r); ok {
+		currentHash = h
+	}
+
+	// Query token hashes to be revoked for Redis purge
+	rows, err := tx.Query(ctx, `
+		SELECT token_hash FROM sessions
+		WHERE user_id=$1 AND token_hash != $2 AND revoked_at IS NULL
+	`, userID, currentHash)
+	var hashesToRevoke [][]byte
+	if err == nil {
+		for rows.Next() {
+			var h []byte
+			if err := rows.Scan(&h); err == nil {
+				hashesToRevoke = append(hashesToRevoke, h)
+			}
+		}
+		rows.Close()
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND token_hash != $2 AND revoked_at IS NULL`, userID, currentHash); err != nil {
 		http.Error(w, "failed to rotate sessions", http.StatusInternalServerError)
 		return
 	}
@@ -370,6 +565,18 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to commit", http.StatusInternalServerError)
 		return
 	}
+
+	// Purge revoked sessions in Redis
+	if redisClient != nil {
+		ctx2 := context.Background()
+		for _, h := range hashesToRevoke {
+			hexHash := hex.EncodeToString(h)
+			redisClient.Del(ctx2, "auth:session:"+hexHash)
+			redisClient.Del(ctx2, "session:"+hexHash)
+		}
+		redisClient.Del(ctx2, "auth:user_sessions:"+userID)
+	}
+
 	auditLog(ctx, conn, orgID, userID, "change_password", "user", userID, nil)
 	w.WriteHeader(http.StatusNoContent)
 }

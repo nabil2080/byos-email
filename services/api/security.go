@@ -52,7 +52,11 @@ func withSecurityHeaders(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; connect-src 'self' http: https:;")
+		csp := "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; connect-src 'self';"
+		if os.Getenv("BYOS_ENV") != "production" {
+			csp = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; connect-src 'self' http://localhost:* http://127.0.0.1:* https://localhost:*;"
+		}
+		w.Header().Set("Content-Security-Policy", csp)
 
 		if os.Getenv("BYOS_ENV") == "production" || os.Getenv("HTTPS_ENABLED") == "true" {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")

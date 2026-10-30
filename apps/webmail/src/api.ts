@@ -1015,8 +1015,11 @@ export interface ClaimInvitationRequest {
   wrapped_sk_user: string;
   mailbox_pk?: string;
   xwing_pk?: string;
-  two_factor_method?: "totp" | "phone" | "email";
+  two_factor_method?: "totp" | "passkey" | "phone" | "email";
   totp_secret?: string;
+  passkey_cred_id?: string;
+  passkey_public_key?: string;
+  passkey_device?: string;
   recovery_email?: string;
   recovery_phone?: string;
 }
@@ -1220,17 +1223,59 @@ export async function saveRecoveryMethods(recoveryEmail: string, recoveryPhone: 
 
 export async function changeAccountPassword(
   newPassword: string,
-  wrappedSkUser?: string
+  wrappedSkUser?: string,
+  currentPassword?: string,
+  mfaCode?: string,
+  mailboxId?: string
 ): Promise<void> {
   const payload: Record<string, string> = { new_password: newPassword };
   if (wrappedSkUser) {
     payload.wrapped_sk_user = wrappedSkUser;
+  }
+  if (currentPassword) {
+    payload.current_password = currentPassword;
+  }
+  if (mfaCode) {
+    payload.mfa_code = mfaCode;
+  }
+  if (mailboxId) {
+    payload.mailbox_id = mailboxId;
   }
   return apiRequest<void>("/v1/auth/change-password", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
+
+export interface ExceptionalRecoveryRequestResponse {
+  request_id: string;
+  challenge_token: string;
+  expires_at: string;
+}
+
+export async function requestExceptionalRecovery(
+  orgId: string,
+  email: string
+): Promise<ExceptionalRecoveryRequestResponse> {
+  return apiRequest<ExceptionalRecoveryRequestResponse>(`/v1/organizations/${encodeURIComponent(orgId)}/exceptional-recovery`, {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function resetPasswordWithExceptionalApproval(
+  challengeToken: string,
+  newPassword: string
+): Promise<{ status: string; message: string }> {
+  return apiRequest<{ status: string; message: string }>("/v1/auth/recovery/exceptional-reset", {
+    method: "POST",
+    body: JSON.stringify({
+      challenge_token: challengeToken,
+      new_password: newPassword,
+    }),
+  });
+}
+
 
 // ── Custom Filters & Sieve Filters ──
 
@@ -1457,13 +1502,7 @@ export async function fetchPasskeyRegisterOptions(): Promise<PasskeyRegisterOpti
   return apiRequest<PasskeyRegisterOptionsResponse>("/v1/auth/passkeys/register-options");
 }
 
-export async function registerPasskey(data: {
-  credential_id: string;
-  public_key: string;
-  device_name: string;
-  challenge_token: string;
-  aaguid?: string;
-}): Promise<UserPasskey> {
+export async function registerPasskey(data: any): Promise<UserPasskey> {
   return apiRequest<UserPasskey>("/v1/auth/passkeys/register", {
     method: "POST",
     body: JSON.stringify(data),
@@ -1477,15 +1516,21 @@ export async function fetchPasskeyLoginOptions(email?: string): Promise<PasskeyL
   return apiRequest<PasskeyLoginOptionsResponse>(url);
 }
 
-export async function loginWithPasskey(data: {
-  credential_id: string;
-  challenge_token: string;
-  signature: string;
-  client_data_json: string;
-}): Promise<{ token: string; user?: any; [key: string]: any }> {
+export async function loginWithPasskey(data: any): Promise<{ token: string; user?: any; [key: string]: any }> {
   return apiRequest<{ token: string; user?: any }>("/v1/auth/passkeys/login", {
     method: "POST",
     body: JSON.stringify(data),
+  });
+}
+
+export async function fetchPasskeyStepUpOptions(): Promise<PasskeyLoginOptionsResponse> {
+  return apiRequest<PasskeyLoginOptionsResponse>("/v1/auth/passkeys/step-up-options");
+}
+
+export async function verifyPasskeyStepUp(payload: any): Promise<{ success: boolean; step_up_token: string }> {
+  return apiRequest<{ success: boolean; step_up_token: string }>("/v1/auth/passkeys/step-up-verify", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 
@@ -1513,7 +1558,7 @@ export interface RecoveryRequestResponse {
 
 export async function requestRecoveryChallenge(
   email: string,
-  method: "email" | "phone" | "totp" = "email"
+  method: "email" | "phone" | "totp" | "passkey" = "email"
 ): Promise<RecoveryRequestResponse> {
   return apiRequest<RecoveryRequestResponse>("/v1/auth/recovery/request", {
     method: "POST",
@@ -1536,6 +1581,90 @@ export async function resetPasswordWithRecovery(
       new_password: newPassword,
       new_mailbox_pk: newMailboxPk || undefined,
       new_wrapped_sk_user: newWrappedSkUser || undefined,
+    }),
+  });
+}
+
+export interface PrepareReactivationResponse {
+  migration_id: string;
+  mailbox_id: string;
+  status: string;
+  expires_at: string;
+}
+
+export interface PendingReactivationResponse {
+  migration_id: string;
+  mailbox_id: string;
+  status: string;
+  candidate_wrapped_sk: string;
+  candidate_mailbox_pk?: string;
+  expires_at: string;
+}
+
+export interface FinalizeReactivationResponse {
+  success: boolean;
+  migration_id: string;
+  mailbox_id: string;
+  status: string;
+  message: string;
+}
+
+export interface RollbackReactivationResponse {
+  success: boolean;
+  migration_id: string;
+  mailbox_id: string;
+  status: string;
+  restored_at?: string;
+}
+
+export async function prepareHistoricalKeyReactivation(
+  mailboxId: string,
+  candidateWrappedSk: string,
+  mailboxPk?: string
+): Promise<PrepareReactivationResponse> {
+  return apiRequest<PrepareReactivationResponse>(`/v1/mailboxes/${mailboxId}/reactivate-keys/prepare`, {
+    method: "POST",
+    body: JSON.stringify({
+      wrapped_sk_user: candidateWrappedSk,
+      mailbox_pk: mailboxPk || undefined,
+    }),
+  });
+}
+
+export async function fetchPendingHistoricalKeyReactivation(
+  mailboxId: string,
+  migrationId?: string
+): Promise<PendingReactivationResponse> {
+  const url = migrationId
+    ? `/v1/mailboxes/${mailboxId}/reactivate-keys/${migrationId}`
+    : `/v1/mailboxes/${mailboxId}/reactivate-keys/pending`;
+  return apiRequest<PendingReactivationResponse>(url, {
+    method: "GET",
+  });
+}
+
+export async function finalizeHistoricalKeyReactivation(
+  mailboxId: string,
+  migrationId: string
+): Promise<FinalizeReactivationResponse> {
+  return apiRequest<FinalizeReactivationResponse>(`/v1/mailboxes/${mailboxId}/reactivate-keys/finalize`, {
+    method: "POST",
+    body: JSON.stringify({
+      migration_id: migrationId,
+    }),
+  });
+}
+
+export async function rollbackHistoricalKeyReactivation(
+  mailboxId: string,
+  migrationId: string,
+  reason?: string
+): Promise<RollbackReactivationResponse> {
+  return apiRequest<RollbackReactivationResponse>(`/v1/mailboxes/${mailboxId}/reactivate-keys/rollback`, {
+    method: "POST",
+    body: JSON.stringify({
+      migration_id: migrationId,
+      reason: reason || "client_verification_failed",
     }),
   });
 }
@@ -1588,9 +1717,11 @@ export async function sendLogin2FACode(
 }
 
 export interface RecoveryOptionItem {
-  type: "email" | "phone" | "totp";
+  type: "email" | "phone" | "totp" | "passkey";
   destination_masked: string;
 }
+
+export type RecoveryMethodOption = RecoveryOptionItem;
 
 export async function fetchRecoveryOptions(
   email: string
@@ -1828,3 +1959,426 @@ export async function deleteMaskedAlias(aliasId: string, token?: string): Promis
   }, token);
 }
 
+// ── Calendar Subsystem ──
+
+export interface UserCalendar {
+  id: string;
+  mailbox_id: string;
+  name: string;
+  color: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+  is_shared?: boolean;
+  permission?: "owner" | "read" | "write";
+  owner_email?: string;
+  encrypted_key?: string;
+  share_id?: string;
+}
+
+export interface CalendarShare {
+  id: string;
+  calendar_id: string;
+  grantor_mailbox_id: string;
+  grantee_mailbox_id: string;
+  grantee_email: string;
+  permission: "read" | "write";
+  encrypted_key?: string;
+  status: "active" | "revoked";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CalendarEventExceptionItem {
+  id: string;
+  parent_event_id: string;
+  mailbox_id: string;
+  calendar_id: string;
+  recurrence_id: string;
+  is_cancelled: boolean;
+  start_time: string;
+  end_time: string;
+  is_all_day: boolean;
+  status: string;
+  encrypted_payload: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CalendarEventItem {
+  id: string;
+  mailbox_id: string;
+  calendar_id: string;
+  start_time: string;
+  end_time: string;
+  is_all_day: boolean;
+  rrule?: string;
+  status: string;
+  encrypted_payload: string;
+  exceptions?: CalendarEventExceptionItem[];
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchCalendars(mailboxId: string, token?: string): Promise<UserCalendar[]> {
+  return apiRequest<UserCalendar[]>(`/v1/mailboxes/${mailboxId}/calendars`, undefined, token);
+}
+
+export async function createCalendar(
+  mailboxId: string,
+  payload: { name: string; color?: string; is_default?: boolean },
+  token?: string
+): Promise<UserCalendar> {
+  return apiRequest<UserCalendar>(`/v1/mailboxes/${mailboxId}/calendars`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function updateCalendar(
+  mailboxId: string,
+  calendarId: string,
+  payload: { name?: string; color?: string; is_default?: boolean },
+  token?: string
+): Promise<UserCalendar> {
+  return apiRequest<UserCalendar>(`/v1/mailboxes/${mailboxId}/calendars/${calendarId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function deleteCalendar(mailboxId: string, calendarId: string, token?: string): Promise<void> {
+  await apiRequest<void>(`/v1/mailboxes/${mailboxId}/calendars/${calendarId}`, {
+    method: "DELETE",
+  }, token);
+}
+
+export async function fetchCalendarShares(
+  mailboxId: string,
+  calendarId: string,
+  token?: string
+): Promise<CalendarShare[]> {
+  return apiRequest<CalendarShare[]>(
+    `/v1/mailboxes/${mailboxId}/calendars/${calendarId}/shares`,
+    undefined,
+    token
+  );
+}
+
+export async function shareCalendar(
+  mailboxId: string,
+  calendarId: string,
+  payload: { grantee_email: string; permission: "read" | "write"; encrypted_key?: string },
+  token?: string
+): Promise<CalendarShare> {
+  return apiRequest<CalendarShare>(
+    `/v1/mailboxes/${mailboxId}/calendars/${calendarId}/shares`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    token
+  );
+}
+
+export async function updateCalendarShare(
+  mailboxId: string,
+  calendarId: string,
+  shareId: string,
+  payload: { permission?: "read" | "write"; status?: "active" | "revoked" },
+  token?: string
+): Promise<CalendarShare> {
+  return apiRequest<CalendarShare>(
+    `/v1/mailboxes/${mailboxId}/calendars/${calendarId}/shares/${shareId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
+    token
+  );
+}
+
+export async function revokeCalendarShare(
+  mailboxId: string,
+  calendarId: string,
+  shareId: string,
+  token?: string
+): Promise<void> {
+  await apiRequest<void>(
+    `/v1/mailboxes/${mailboxId}/calendars/${calendarId}/shares/${shareId}`,
+    {
+      method: "DELETE",
+    },
+    token
+  );
+}
+
+export async function fetchCalendarEvents(
+  mailboxId: string,
+  start?: string,
+  end?: string,
+  calendarId?: string,
+  token?: string
+): Promise<CalendarEventItem[]> {
+  const params = new URLSearchParams();
+  if (start) params.append("start", start);
+  if (end) params.append("end", end);
+  if (calendarId) params.append("calendar_id", calendarId);
+  const qs = params.toString();
+  return apiRequest<CalendarEventItem[]>(`/v1/mailboxes/${mailboxId}/calendar-events${qs ? `?${qs}` : ""}`, undefined, token);
+}
+
+export async function createCalendarEvent(
+  mailboxId: string,
+  payload: {
+    calendar_id: string;
+    start_time: string;
+    end_time: string;
+    is_all_day?: boolean;
+    rrule?: string;
+    status?: string;
+    encrypted_payload: string;
+  exceptions?: CalendarEventExceptionItem[];
+  },
+  token?: string
+): Promise<CalendarEventItem> {
+  return apiRequest<CalendarEventItem>(`/v1/mailboxes/${mailboxId}/calendar-events`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function updateCalendarEvent(
+  mailboxId: string,
+  eventId: string,
+  payload: {
+    calendar_id?: string;
+    start_time?: string;
+    end_time?: string;
+    is_all_day?: boolean;
+    rrule?: string;
+    status?: string;
+    encrypted_payload?: string;
+  },
+  token?: string
+): Promise<CalendarEventItem> {
+  return apiRequest<CalendarEventItem>(`/v1/mailboxes/${mailboxId}/calendar-events/${eventId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function deleteCalendarEvent(mailboxId: string, eventId: string, token?: string): Promise<void> {
+  await apiRequest<void>(`/v1/mailboxes/${mailboxId}/calendar-events/${eventId}`, {
+    method: "DELETE",
+  }, token);
+}
+
+
+export async function fetchCalendarEventExceptions(
+  mailboxId: string,
+  eventId: string,
+  token?: string
+): Promise<CalendarEventExceptionItem[]> {
+  return apiRequest<CalendarEventExceptionItem[]>(`/v1/mailboxes/${mailboxId}/calendar-events/${eventId}/exceptions`, undefined, token);
+}
+
+export async function createCalendarEventException(
+  mailboxId: string,
+  eventId: string,
+  payload: {
+    recurrence_id: string;
+    is_cancelled: boolean;
+    start_time: string;
+    end_time: string;
+    is_all_day?: boolean;
+    status?: string;
+    encrypted_payload: string;
+  },
+  token?: string
+): Promise<CalendarEventExceptionItem> {
+  return apiRequest<CalendarEventExceptionItem>(`/v1/mailboxes/${mailboxId}/calendar-events/${eventId}/exceptions`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function updateCalendarEventException(
+  mailboxId: string,
+  eventId: string,
+  exceptionId: string,
+  payload: {
+    is_cancelled?: boolean;
+    start_time?: string;
+    end_time?: string;
+    is_all_day?: boolean;
+    status?: string;
+    encrypted_payload?: string;
+  },
+  token?: string
+): Promise<CalendarEventExceptionItem> {
+  return apiRequest<CalendarEventExceptionItem>(`/v1/mailboxes/${mailboxId}/calendar-events/${eventId}/exceptions/${exceptionId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  }, token);
+}
+
+export async function deleteCalendarEventException(
+  mailboxId: string,
+  eventId: string,
+  exceptionId: string,
+  token?: string
+): Promise<void> {
+  await apiRequest<void>(`/v1/mailboxes/${mailboxId}/calendar-events/${eventId}/exceptions/${exceptionId}`, {
+    method: "DELETE",
+  }, token);
+}
+
+export interface StagedMigrationResponse {
+  migration_id: string;
+  event_id: string;
+  status: string;
+  expires_at: string;
+  updated_at: string;
+  etag: string;
+}
+
+export interface FinalizedMigrationResponse {
+  migration_id: string;
+  event_id: string;
+  status: string;
+  finalized_at: string;
+}
+
+export interface RollbackMigrationResponse {
+  migration_id: string;
+  event_id: string;
+  status: string;
+  restored_at: string;
+}
+
+export interface MigrationStatusResponse {
+  event_id: string;
+  has_active_migration: boolean;
+  migration_id?: string;
+  status?: string;
+  expires_at?: string;
+}
+
+export async function apiRequestWithHeaders<T>(
+  path: string,
+  init?: RequestInit,
+  token?: string
+): Promise<{ data: T; headers: Headers }> {
+  const impersonationToken =
+    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
+  const activeToken =
+    token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
+  const authHeaders: Record<string, string> = {};
+  if (activeToken) {
+    authHeaders["Authorization"] = `Bearer ${activeToken}`;
+  } else if (impersonationToken) {
+    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  }
+
+  const response = await fetch(`${apiBase()}${path}`, {
+    credentials: "include",
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      "X-BYOS-Client": "webmail",
+      ...authHeaders,
+      ...(init?.headers as Record<string, string> | undefined),
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    const error = new Error(errorText || `API error ${response.status}`) as Error & { status: number };
+    error.status = response.status;
+    throw error;
+  }
+
+  const data = (response.status === 204 ? undefined : await response.json()) as T;
+  return { data, headers: response.headers };
+}
+
+export async function fetchCalendarEventWithETag(
+  mailboxId: string,
+  eventId: string,
+  token?: string
+): Promise<{ event: CalendarEventItem; etag: string }> {
+  const res = await apiRequestWithHeaders<CalendarEventItem>(
+    `/v1/mailboxes/${mailboxId}/calendar-events/${eventId}`,
+    { method: "GET" },
+    token
+  );
+  const etag = res.headers.get("ETag") || "";
+  return { event: res.data, etag };
+}
+
+export async function stageCalendarEventMigration(
+  mailboxId: string,
+  eventId: string,
+  stagedPayload: string,
+  ifMatchEtag: string,
+  token?: string
+): Promise<StagedMigrationResponse> {
+  const res = await apiRequestWithHeaders<StagedMigrationResponse>(
+    `/v1/mailboxes/${mailboxId}/calendar-events/${eventId}/stage-migration`,
+    {
+      method: "POST",
+      headers: {
+        "If-Match": ifMatchEtag,
+      },
+      body: JSON.stringify({ staged_encrypted_payload: stagedPayload }),
+    },
+    token
+  );
+  return res.data;
+}
+
+export async function finalizeCalendarEventMigration(
+  mailboxId: string,
+  eventId: string,
+  migrationId: string,
+  token?: string
+): Promise<FinalizedMigrationResponse> {
+  return apiRequest<FinalizedMigrationResponse>(
+    `/v1/mailboxes/${mailboxId}/calendar-events/${eventId}/finalize-migration`,
+    {
+      method: "POST",
+      body: JSON.stringify({ migration_id: migrationId }),
+    },
+    token
+  );
+}
+
+export async function rollbackCalendarEventMigration(
+  mailboxId: string,
+  eventId: string,
+  migrationId: string,
+  reason: string,
+  token?: string
+): Promise<RollbackMigrationResponse> {
+  return apiRequest<RollbackMigrationResponse>(
+    `/v1/mailboxes/${mailboxId}/calendar-events/${eventId}/rollback-migration`,
+    {
+      method: "POST",
+      body: JSON.stringify({ migration_id: migrationId, reason }),
+    },
+    token
+  );
+}
+
+export async function fetchCalendarEventMigrationStatus(
+  mailboxId: string,
+  eventId: string,
+  token?: string
+): Promise<MigrationStatusResponse> {
+  return apiRequest<MigrationStatusResponse>(
+    `/v1/mailboxes/${mailboxId}/calendar-events/${eventId}/migration-status`,
+    { method: "GET" },
+    token
+  );
+}

@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap');
 @import "tailwindcss";
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, .dark, .dark *));
@@ -24,6 +25,7 @@
   --border-hairline: #E2DFD8;
   --surface-card: #FFFFFF;
   color-scheme: light;
+  transition: background-color 0.2s, color 0.2s;
 }
 
 :root[data-theme="dark"], html.dark {
@@ -42,8 +44,13 @@
 body {
   background-color: var(--canvas-bg);
   color: var(--text-main);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: 'DM Sans', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Monospace accent class using DM Mono */
+.font-mono-dm {
+  font-family: 'DM Mono', ui-monospace, monospace;
 }
 
 button, 
@@ -83,8 +90,8 @@ input:-webkit-autofill:active {
 
 /* Custom minimal scrollbar */
 .custom-scrollbar::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 .custom-scrollbar::-webkit-scrollbar-track {
   background: transparent;
@@ -92,15 +99,57 @@ input:-webkit-autofill:active {
 .custom-scrollbar::-webkit-scrollbar-thumb {
   background: #D5D1C8;
   border-radius: 9999px;
+  transition: background 0.2s ease;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #9E725F;
 }
 .dark .custom-scrollbar::-webkit-scrollbar-thumb {
   background: #3A3A3E;
+  transition: background 0.2s ease;
 }
 .dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #B2826F;
+}
+
+/* Slide-in from right animation */
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.animate-slide-in-right {
+  animation: slide-in-right 200ms ease-out;
+}
+
+/* Fade-in animation */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-fade-in {
+  animation: fade-in 180ms ease-out;
+}
+
+/* Skeleton loading shimmer */
+@keyframes skeleton-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #E2DFD8 25%, #F0EEE9 50%, #E2DFD8 75%);
+  background-size: 800px 100%;
+  animation: skeleton-shimmer 1.5s infinite linear;
+}
+.dark .skeleton {
+  background: linear-gradient(90deg, #2E3138 25%, #1E2025 50%, #2E3138 75%);
+  background-size: 800px 100%;
+  animation: skeleton-shimmer 1.5s infinite linear;
 }
 
 /* Preserve inline image flow and table display inside message bodies
@@ -196,5 +245,28 @@ input:-webkit-autofill:active {
   background-color: #18191D;
   border-color: #2E3138;
 }
+
+/* Reading pane text scale classes */
+.text-scale-default {
+  font-size: 0.875rem !important; /* 14px */
+  line-height: 1.5rem !important;
+}
+.text-scale-large {
+  font-size: 1rem !important; /* 16px */
+  line-height: 1.75rem !important;
+}
+.text-scale-xlarge {
+  font-size: 1.125rem !important; /* 18px */
+  line-height: 1.875rem !important;
+}
+
+/* High contrast mode support */
+html.high-contrast {
+  --border-hairline: #BDB9B0;
+}
+html.dark.high-contrast {
+  --border-hairline: #4B4F58;
+}
+
 
 

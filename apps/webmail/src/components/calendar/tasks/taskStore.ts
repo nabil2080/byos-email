@@ -1,0 +1,340 @@
+import { TaskList, TaskItem } from "./taskTypes";
+import { utcToZonedParts } from "../../../utils/calendarTimezones";
+
+const LISTS_PREFIX = "byos_calendar_task_lists_";
+const TASKS_PREFIX = "byos_calendar_tasks_";
+
+function getListsKey(mailboxId: string): string {
+  return `${LISTS_PREFIX}${mailboxId}`;
+}
+
+function getTasksKey(mailboxId: string): string {
+  return `${TASKS_PREFIX}${mailboxId}`;
+}
+
+function dispatchTasksUpdated() {
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    try {
+      const EventCtor = (window as any).CustomEvent || (window as any).Event || (globalThis as any).CustomEvent || (globalThis as any).Event;
+      if (EventCtor) {
+        window.dispatchEvent(new EventCtor("byos_tasks_updated"));
+      }
+    } catch (e) {
+      // Ignore event dispatch failure in non-browser environments
+    }
+  }
+}
+
+/**
+ * Retrieves all task lists for a mailbox.
+ * Creates a default "My Tasks" list if none exists.
+ */
+export function getTaskLists(mailboxId: string): TaskList[] {
+  if (!mailboxId) return [];
+  try {
+    const raw = typeof window !== "undefined" ? localStorage.getItem(getListsKey(mailboxId)) : null;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn("[taskStore] Error loading task lists:", err);
+  }
+
+  // Fallback: seed default list
+  const defaultList: TaskList = {
+    id: `list-default-${mailboxId.slice(0, 8)}`,
+    mailboxId,
+    name: "My Tasks",
+    color: "#9E725F",
+    isDefault: true,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  return [defaultList];
+}
+
+/**
+ * Creates a new task list for a mailbox.
+ */
+export function createTaskList(mailboxId: string, name: string, color?: string): TaskList {
+  if (!mailboxId || !name.trim()) {
+    throw new Error("Missing required fields for task list creation");
+  }
+  const current = getTaskLists(mailboxId);
+  const newList: TaskList = {
+    id: `list-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    mailboxId,
+    name: name.trim(),
+    color: color || "#9E725F",
+    isDefault: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const updated = [...current, newList];
+  if (typeof window !== "undefined") {
+    localStorage.setItem(getListsKey(mailboxId), JSON.stringify(updated));
+  }
+  dispatchTasksUpdated();
+  return newList;
+}
+
+/**
+ * Updates a task list's name or color.
+ */
+export function updateTaskList(
+  mailboxId: string,
+  listId: string,
+  updates: Partial<Pick<TaskList, "name" | "color">>
+): TaskList {
+  const current = getTaskLists(mailboxId);
+  const idx = current.findIndex((l) => l.id === listId);
+  if (idx === -1) {
+    throw new Error(`Task list not found: ${listId}`);
+  }
+
+  const updatedList: TaskList = {
+    ...current[idx],
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+
+  current[idx] = updatedList;
+  if (typeof window !== "undefined") {
+    localStorage.setItem(getListsKey(mailboxId), JSON.stringify(current));
+  }
+  dispatchTasksUpdated();
+  return updatedList;
+}
+
+/**
+ * Deletes a task list and either deletes its tasks or migrates them to the default list.
+ */
+export function deleteTaskList(mailboxId: string, listId: string): void {
+  const current = getTaskLists(mailboxId);
+  const target = current.find((l) => l.id === listId);
+  if (!target) return;
+  if (target.isDefault) {
+    throw new Error("Cannot delete default task list");
+  }
+
+  const remaining = current.filter((l) => l.id !== listId);
+  const defaultList = remaining.find((l) => l.isDefault) || remaining[0];
+
+  if (typeof window !== "undefined") {
+    localStorage.setItem(getListsKey(mailboxId), JSON.stringify(remaining));
+
+    // Reassign orphan tasks to default list
+    const tasks = getTasks(mailboxId);
+    let tasksChanged = false;
+    const updatedTasks = tasks.map((t) => {
+      if (t.listId === listId) {
+        tasksChanged = true;
+        return { ...t, listId: defaultList ? defaultList.id : "default", updatedAt: new Date().toISOString() };
+      }
+      return t;
+    });
+
+    if (tasksChanged) {
+      localStorage.setItem(getTasksKey(mailboxId), JSON.stringify(updatedTasks));
+    }
+  }
+  dispatchTasksUpdated();
+}
+
+/**
+ * Retrieves all tasks for a mailbox.
+ */
+export function getTasks(mailboxId: string): TaskItem[] {
+  if (!mailboxId) return [];
+  try {
+    const raw = typeof window !== "undefined" ? localStorage.getItem(getTasksKey(mailboxId)) : null;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn("[taskStore] Error loading tasks:", err);
+  }
+  return [];
+}
+
+/**
+ * Saves a new task or updates an existing task.
+ */
+export function saveTask(
+  mailboxId: string,
+  taskData: Omit<TaskItem, "id" | "mailboxId" | "createdAt" | "updatedAt"> & { id?: string }
+): TaskItem {
+  if (!mailboxId) throw new Error("Mailbox ID required to save task");
+  if (!taskData.title || !taskData.title.trim()) {
+    throw new Error("Task title cannot be empty");
+  }
+
+  const current = getTasks(mailboxId);
+  const now = new Date().toISOString();
+
+  let savedTask: TaskItem;
+
+  if (taskData.id) {
+    // Update existing task
+    const idx = current.findIndex((t) => t.id === taskData.id);
+    if (idx === -1) {
+      throw new Error(`Task not found: ${taskData.id}`);
+    }
+
+    savedTask = {
+      ...current[idx],
+      ...taskData,
+      title: taskData.title.trim(),
+      updatedAt: now,
+    };
+    current[idx] = savedTask;
+  } else {
+    // Create new task
+    savedTask = {
+      ...taskData,
+      id: `task-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      mailboxId,
+      title: taskData.title.trim(),
+      completed: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    current.push(savedTask);
+  }
+
+  if (typeof window !== "undefined") {
+    localStorage.setItem(getTasksKey(mailboxId), JSON.stringify(current));
+  }
+  dispatchTasksUpdated();
+  return savedTask;
+}
+
+/**
+ * Toggles a task's completion status.
+ * If the task is repeating and is being marked completed, automatically spawns
+ * the next recurrence task according to its rrule.
+ */
+export function toggleTaskComplete(mailboxId: string, taskId: string): TaskItem {
+  const current = getTasks(mailboxId);
+  const idx = current.findIndex((t) => t.id === taskId);
+  if (idx === -1) {
+    throw new Error(`Task not found: ${taskId}`);
+  }
+
+  const target = current[idx];
+  const nextCompleted = !target.completed;
+  const nowIso = new Date().toISOString();
+
+  const updated: TaskItem = {
+    ...target,
+    completed: nextCompleted,
+    completedAt: nextCompleted ? nowIso : undefined,
+    updatedAt: nowIso,
+  };
+  current[idx] = updated;
+
+  // Handle repeating task progression when completing
+  if (nextCompleted && target.rrule && target.dueDate) {
+    const nextDueDate = computeNextTaskDueDate(target.dueDate, target.rrule);
+    if (nextDueDate) {
+      const nextTask: TaskItem = {
+        ...target,
+        id: `task-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        completed: false,
+        completedAt: undefined,
+        dueDate: nextDueDate,
+        scheduledDate: target.scheduledDate ? computeNextTaskDueDate(target.scheduledDate, target.rrule) : undefined,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+      current.push(nextTask);
+    }
+  }
+
+  if (typeof window !== "undefined") {
+    localStorage.setItem(getTasksKey(mailboxId), JSON.stringify(current));
+  }
+  dispatchTasksUpdated();
+  return updated;
+}
+
+/**
+ * Deletes a task by id.
+ */
+export function deleteTask(mailboxId: string, taskId: string): void {
+  const current = getTasks(mailboxId);
+  const remaining = current.filter((t) => t.id !== taskId);
+  if (typeof window !== "undefined") {
+    localStorage.setItem(getTasksKey(mailboxId), JSON.stringify(remaining));
+  }
+  dispatchTasksUpdated();
+}
+
+/**
+ * Checks whether an uncompleted task is overdue relative to a reference timestamp and timezone.
+ */
+export function isTaskOverdue(task: TaskItem, referenceTime: Date = new Date(), timeZone: string = "UTC"): boolean {
+  if (task.completed) return false;
+  if (!task.dueDate) return false;
+
+  const { dateStr, timeStr } = utcToZonedParts(referenceTime, timeZone);
+
+  if (task.dueTime) {
+    const taskDueDateTime = `${task.dueDate}T${task.dueTime}`;
+    const currentDateTime = `${dateStr}T${timeStr}`;
+    return taskDueDateTime < currentDateTime;
+  }
+
+  // All-day due date: overdue if dueDate is strictly prior to today's date
+  return task.dueDate < dateStr;
+}
+
+/**
+ * Filters tasks scheduled or due on a given calendar date (YYYY-MM-DD).
+ */
+export function getTasksForDate(tasks: TaskItem[], targetDate: Date, timeZone: string = "UTC"): TaskItem[] {
+  const { dateStr } = utcToZonedParts(targetDate, timeZone);
+  return tasks.filter((t) => {
+    return t.dueDate === dateStr || t.scheduledDate === dateStr;
+  });
+}
+
+/**
+ * Computes the next occurrence date for a repeating task.
+ */
+export function computeNextTaskDueDate(currentDateStr: string, rruleStr: string): string | null {
+  const [y, m, d] = currentDateStr.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+
+  const upper = rruleStr.toUpperCase();
+  let interval = 1;
+  const intervalMatch = upper.match(/INTERVAL=(\d+)/);
+  if (intervalMatch) {
+    interval = parseInt(intervalMatch[1], 10);
+  }
+
+  if (upper.includes("FREQ=DAILY")) {
+    date.setUTCDate(date.getUTCDate() + interval);
+  } else if (upper.includes("FREQ=WEEKLY")) {
+    date.setUTCDate(date.getUTCDate() + 7 * interval);
+  } else if (upper.includes("FREQ=MONTHLY")) {
+    date.setUTCMonth(date.getUTCMonth() + interval);
+  } else if (upper.includes("FREQ=YEARLY")) {
+    date.setUTCFullYear(date.getUTCFullYear() + interval);
+  } else {
+    return null;
+  }
+
+  const nextY = date.getUTCFullYear();
+  const nextM = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const nextD = String(date.getUTCDate()).padStart(2, "0");
+  return `${nextY}-${nextM}-${nextD}`;
+}
