@@ -837,7 +837,7 @@ export const CalendarSettingsPanel: Component<CalendarSettingsPanelProps> = (pro
       <div class="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
         {/* Left Navigation Drawer */}
         <nav
-          class="w-full md:w-64 lg:w-72 bg-white dark:bg-[#1E1F23] border-b md:border-b-0 md:border-r border-[#E2DFD8] dark:border-[#2A2D35] flex md:flex-col shrink-0 overflow-x-auto md:overflow-y-auto p-2 sm:p-3 gap-1 select-none"
+          class="w-full md:w-64 lg:w-72 bg-white dark:bg-[#1E1F23] border-b md:border-b-0 md:border-r border-[#E2DFD8] dark:border-[#2A2D35] flex md:flex-col shrink-0 overflow-x-auto md:overflow-y-auto p-2 sm:p-3 gap-1 select-none custom-scrollbar"
           aria-label="Calendar Settings Sections"
           data-testid="calendar-settings-nav"
         >
@@ -1187,7 +1187,7 @@ export const CalendarSettingsPanel: Component<CalendarSettingsPanelProps> = (pro
 
         {/* ── Right Content Panel ── */}
         <main
-          class="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-[#FAF9F5] dark:bg-[#18191D]"
+          class="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-[#FAF9F5] dark:bg-[#18191D] custom-scrollbar"
           data-testid="calendar-settings-content"
         >
           <div class="max-w-3xl mx-auto space-y-6">

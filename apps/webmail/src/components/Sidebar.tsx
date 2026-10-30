@@ -99,7 +99,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
     return props.currentFolder;
   };
 
-  createEffect(() => {
+  const updateFolderPill = () => {
     const key = activeFolderKey();
     if (!key) {
       setNavPillStyle((prev) => ({ ...prev, opacity: 0 }));
@@ -115,9 +115,9 @@ export const Sidebar: Component<SidebarProps> = (props) => {
     } else {
       setNavPillStyle((prev) => ({ ...prev, opacity: 0 }));
     }
-  });
+  };
 
-  createEffect(() => {
+  const updateCustomFolderPill = () => {
     const activeId = props.activeFolderId;
     if (activeId && customFolderRefs.has(activeId)) {
       const el = customFolderRefs.get(activeId);
@@ -131,9 +131,9 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       }
     }
     setCustomFolderPillStyle((prev) => ({ ...prev, opacity: 0 }));
-  });
+  };
 
-  createEffect(() => {
+  const updateLabelPill = () => {
     const activeId = props.activeLabelId;
     if (activeId && labelRefs.has(activeId)) {
       const el = labelRefs.get(activeId);
@@ -147,6 +147,24 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       }
     }
     setLabelPillStyle((prev) => ({ ...prev, opacity: 0 }));
+  };
+
+  createEffect(() => {
+    activeFolderKey();
+    updateFolderPill();
+    setTimeout(updateFolderPill, 20);
+  });
+
+  createEffect(() => {
+    props.activeFolderId;
+    updateCustomFolderPill();
+    setTimeout(updateCustomFolderPill, 20);
+  });
+
+  createEffect(() => {
+    props.activeLabelId;
+    updateLabelPill();
+    setTimeout(updateLabelPill, 20);
   });
 
   // Load expanded labels on mount or mailbox change
@@ -177,6 +195,15 @@ export const Sidebar: Component<SidebarProps> = (props) => {
   const visibleLabels = () => flattenVisibleLabelTree(labelTree(), expandedLabelIds());
 
   onMount(() => {
+    const triggerAllPills = () => {
+      updateFolderPill();
+      updateCustomFolderPill();
+      updateLabelPill();
+    };
+    setTimeout(triggerAllPills, 30);
+    setTimeout(triggerAllPills, 100);
+    setTimeout(triggerAllPills, 250);
+
     const handleGlobalClick = () => {
       setOpenFolderMenuId(null);
       setOpenLabelMenuId(null);
@@ -386,6 +413,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
         <nav data-testid="sidebar-folders-nav" class="space-y-0.5 relative">
           {/* Morphing Sliding Highlight Pill */}
           <div
+            data-testid="sidebar-folder-pill"
             class="absolute left-0 right-0 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
             style={{
               top: `${navPillStyle().top}px`,
@@ -397,7 +425,13 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           {/* Dynamic Top Inbox Folder: 'All Inboxes' when Unified, or 'Inbox' for selected account */}
           <div class="relative group">
             <button
-              ref={(el) => { if (el) folderRefs.set(isAllInboxes() ? "unified_inbox" : "inbox", el); }}
+              ref={(el) => {
+                if (el) {
+                  folderRefs.set("inbox", el);
+                  folderRefs.set("unified_inbox", el);
+                  updateFolderPill();
+                }
+              }}
               type="button"
               onClick={() => {
                 if (isAllInboxes()) {
@@ -951,15 +985,31 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           </button>
         </div>
 
-        <div class="flex items-center justify-between px-2 py-1 text-xs text-[#878A8E]">
-          <span class="text-[11px] truncate max-w-[120px] font-mono">
-            {props.currentUser?.email?.split("@")[0] || "User"}
-          </span>
+        <div class="px-2.5 py-1.5 rounded-xl bg-black/[0.03] dark:bg-white/[0.04] border border-[#E2DFD8]/70 dark:border-[#2E3138] flex items-center justify-between gap-2 shadow-2xs">
+          <div class="flex items-center gap-1.5 min-w-0">
+            <div class="w-5 h-5 rounded-full bg-[#EAE6DE] dark:bg-[#252830] border border-[#DDD9D0] dark:border-[#33363F] flex items-center justify-center text-[10px] font-bold text-[#8C6351] dark:text-[#E2B7A3] flex-shrink-0 select-none">
+              {(props.currentUser?.email?.[0] || "U").toUpperCase()}
+            </div>
+            <span
+              class="text-[11px] font-medium text-[#464748] dark:text-[#D1D5DB] truncate max-w-[105px]"
+              title={props.currentUser?.email || "User"}
+            >
+              {props.currentUser?.email?.split("@")[0] || "User"}
+            </span>
+          </div>
           <button
+            type="button"
             onClick={() => props.onLogout?.(props.selectedMailbox?.id, false)}
-            class="text-[11px] text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:underline cursor-pointer font-medium"
+            data-testid="sidebar-signout-btn"
+            title="Sign out of this session"
+            class="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-[#6E7075] dark:text-[#A1A1AA] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/15 transition-all duration-150 cursor-pointer select-none active:scale-95"
           >
-            Sign out
+            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            <span>Sign out</span>
           </button>
         </div>
       </div>

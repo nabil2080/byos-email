@@ -671,7 +671,7 @@ export const EventModal: Component<EventModalProps> = (props) => {
           </div>
 
           {/* Form Content */}
-          <form onSubmit={handleSave} class="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4">
+          <form onSubmit={handleSave} class="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4 custom-scrollbar">
             <Show when={errorMsg()}>
               <div class="p-2.5 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 text-xs font-medium border border-red-200 dark:border-red-800" data-testid="event-modal-error">
                 {errorMsg()}

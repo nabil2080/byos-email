@@ -398,15 +398,31 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           </button>
         </div>
 
-        <div class="flex items-center justify-between px-2 py-1 text-xs text-[#878A8E]">
-          <span class="text-[11px] truncate max-w-[120px] font-mono">
-            {props.currentUser?.email?.split("@")[0] || "User"}
-          </span>
+        <div class="px-2.5 py-1.5 rounded-xl bg-black/[0.03] dark:bg-white/[0.04] border border-[#E2DFD8]/70 dark:border-[#2E3138] flex items-center justify-between gap-2 shadow-2xs">
+          <div class="flex items-center gap-1.5 min-w-0">
+            <div class="w-5 h-5 rounded-full bg-[#EAE6DE] dark:bg-[#252830] border border-[#DDD9D0] dark:border-[#33363F] flex items-center justify-center text-[10px] font-bold text-[#8C6351] dark:text-[#E2B7A3] flex-shrink-0 select-none">
+              {(props.currentUser?.email?.[0] || "U").toUpperCase()}
+            </div>
+            <span
+              class="text-[11px] font-medium text-[#464748] dark:text-[#D1D5DB] truncate max-w-[105px]"
+              title={props.currentUser?.email || "User"}
+            >
+              {props.currentUser?.email?.split("@")[0] || "User"}
+            </span>
+          </div>
           <button
+            type="button"
             onClick={() => props.onLogout?.(props.selectedMailbox?.id, false)}
-            class="text-[11px] text-[#5E6063] dark:text-[#A3A3A3] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:underline cursor-pointer font-medium"
+            data-testid="sidebar-signout-btn"
+            title="Sign out of this session"
+            class="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-[#6E7075] dark:text-[#A1A1AA] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/15 transition-all duration-150 cursor-pointer select-none active:scale-95"
           >
-            Sign out
+            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            <span>Sign out</span>
           </button>
         </div>
       </div>

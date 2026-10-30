@@ -17,6 +17,7 @@ import {
   togglePinNote,
   duplicateNote,
   loadLabels,
+  addLabel,
   addNoteDrawing,
   removeNoteDrawing,
   addNoteImage,
@@ -117,6 +118,10 @@ export const NotesView: Component<NotesViewProps> = (props) => {
   const [editIsPinned, setEditIsPinned] = createSignal(false);
   const [editLabels, setEditLabels] = createSignal<string[]>([]);
   const [showEditPalette, setShowEditPalette] = createSignal(false);
+  const [showEditLabelMenu, setShowEditLabelMenu] = createSignal(false);
+  const [composeLabelQuery, setComposeLabelQuery] = createSignal("");
+  const [cardLabelQuery, setCardLabelQuery] = createSignal("");
+  const [editLabelQuery, setEditLabelQuery] = createSignal("");
 
   // Popover tracking on cards
   const [activePaletteCardId, setActivePaletteCardId] = createSignal<string | null>(null);
@@ -149,6 +154,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
       setShowComposeCollaborator(false);
       setShowComposeMenu(false);
       setShowComposeLabelMenu(false);
+      setShowEditLabelMenu(false);
       setActivePaletteCardId(null);
       setActiveReminderCardId(null);
       setActiveMenuCardId(null);
@@ -171,9 +177,11 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     });
   });
 
+  const effectiveMailboxId = () => props.mailboxId || props.selectedMailbox?.id;
+
   function refreshAll() {
-    setNotes(loadNotes(props.mailboxId));
-    setLabels(loadLabels(props.mailboxId));
+    setNotes(loadNotes(effectiveMailboxId()));
+    setLabels(loadLabels(effectiveMailboxId()));
   }
 
   function getColorDef(colorId: string) {
@@ -218,6 +226,24 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
   const pinnedNotes = createMemo(() => searchFilteredNotes().filter((n) => n.isPinned));
   const otherNotes = createMemo(() => searchFilteredNotes().filter((n) => !n.isPinned));
+
+  const filteredComposeLabels = createMemo(() => {
+    const q = composeLabelQuery().trim().toLowerCase();
+    if (!q) return labels();
+    return labels().filter((l) => l.toLowerCase().includes(q));
+  });
+
+  const filteredCardLabels = createMemo(() => {
+    const q = cardLabelQuery().trim().toLowerCase();
+    if (!q) return labels();
+    return labels().filter((l) => l.toLowerCase().includes(q));
+  });
+
+  const filteredEditLabels = createMemo(() => {
+    const q = editLabelQuery().trim().toLowerCase();
+    if (!q) return labels();
+    return labels().filter((l) => l.toLowerCase().includes(q));
+  });
 
   // Counts for sidebar badges
   const notesCounts = createMemo(() => {
@@ -317,7 +343,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     const images = newImages();
 
     if (title || content || items.length > 0 || drawings.length > 0 || images.length > 0) {
-      createNote(props.mailboxId, title, content, newColor(), newIsPinned(), {
+      createNote(effectiveMailboxId(), title, content, newColor(), newIsPinned(), {
         isChecklist: newIsChecklist(),
         checklistItems: items,
         drawings,
@@ -475,14 +501,51 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     refreshAll();
   }
 
-  function handleToggleCardLabel(id: string, label: string, e: MouseEvent) {
-    e.stopPropagation();
+  function handleToggleCardLabel(id: string, label: string, e?: MouseEvent | Event | null) {
+    if (e && typeof e.stopPropagation === "function") {
+      e.stopPropagation();
+    }
     const note = notes().find((n) => n.id === id);
     if (!note) return;
     const current = note.labels || [];
     const updated = current.includes(label) ? current.filter((l) => l !== label) : [...current, label];
-    updateNote(props.mailboxId, id, { labels: updated });
+    updateNote(effectiveMailboxId(), id, { labels: updated });
     refreshAll();
+  }
+
+  function handleCreateAndAssignComposeLabel() {
+    const query = composeLabelQuery().trim();
+    if (!query) return;
+    addLabel(effectiveMailboxId(), query);
+    setLabels(loadLabels(effectiveMailboxId()));
+    if (!newSelectedLabels().includes(query)) {
+      setNewSelectedLabels([...newSelectedLabels(), query]);
+    }
+    setComposeLabelQuery("");
+  }
+
+  function handleCreateAndAssignCardLabel(noteId: string) {
+    const query = cardLabelQuery().trim();
+    if (!query) return;
+    addLabel(effectiveMailboxId(), query);
+    setLabels(loadLabels(effectiveMailboxId()));
+    const note = notes().find((n) => n.id === noteId);
+    const currentLabels = note?.labels || [];
+    if (!currentLabels.includes(query)) {
+      handleToggleCardLabel(noteId, query, null);
+    }
+    setCardLabelQuery("");
+  }
+
+  function handleCreateAndAssignEditLabel() {
+    const query = editLabelQuery().trim();
+    if (!query) return;
+    addLabel(effectiveMailboxId(), query);
+    setLabels(loadLabels(effectiveMailboxId()));
+    if (!editLabels().includes(query)) {
+      setEditLabels([...editLabels(), query]);
+    }
+    setEditLabelQuery("");
   }
 
   // Edit Modal Actions
@@ -497,6 +560,8 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     setEditIsPinned(note.isPinned);
     setEditLabels(note.labels || []);
     setShowEditPalette(false);
+    setShowEditLabelMenu(false);
+    setEditLabelQuery("");
   }
 
   function handleSaveEdit() {
@@ -507,9 +572,9 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     const items = editChecklistItems().filter((it) => it.text.trim());
 
     if (!title && !content && items.length === 0 && (!note.drawings || note.drawings.length === 0) && (!note.images || note.images.length === 0)) {
-      deleteNote(props.mailboxId, note.id);
+      deleteNote(effectiveMailboxId(), note.id);
     } else {
-      updateNote(props.mailboxId, note.id, {
+      updateNote(effectiveMailboxId(), note.id, {
         title,
         content,
         isChecklist: editIsChecklist(),
@@ -911,7 +976,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                     </Show>
 
                     {/* Previews: Collaborators & Labels & Reminders */}
-                    <div class="flex flex-wrap gap-1.5 mb-2">
+                    <div class="flex flex-wrap gap-1.5 mb-2" data-testid="compose-labels-preview">
                       <Show when={newReminder()}>
                         <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-[#F2E8E2] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F]">
                           <svg class="w-3 h-3 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -949,7 +1014,10 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
                       <For each={newSelectedLabels()}>
                         {(lbl) => (
-                          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-black/5 dark:bg-white/10 text-[#3C3D3E] dark:text-[#ECEBE8]">
+                          <span
+                            data-testid={`compose-label-chip-${lbl}`}
+                            class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-black/5 dark:bg-white/10 text-[#3C3D3E] dark:text-[#ECEBE8]"
+                          >
                             <span>{lbl}</span>
                             <button
                               type="button"
@@ -1213,7 +1281,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                           <Show when={showComposeMenu()}>
                             <div
                               data-testid="compose-more-menu-popover"
-                              class="absolute left-0 bottom-full mb-2 w-48 p-1.5 rounded-xl bg-white dark:bg-[#1E1F23] border border-[#E2DFD8] dark:border-[#2A2D35] shadow-xl flex flex-col gap-0.5 z-30 text-xs"
+                              class="absolute left-0 top-full mt-2 w-48 p-1.5 rounded-xl bg-white dark:bg-[#1E1F23] border border-[#E2DFD8] dark:border-[#2A2D35] shadow-xl flex flex-col gap-0.5 z-40 text-xs"
                               onClick={(e) => e.stopPropagation()}
                             >
                               {/* 1. Add label */}
@@ -1230,26 +1298,55 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                                   </svg>
                                 </button>
                                 <Show when={showComposeLabelMenu()}>
-                                  <div class="p-2 border-t border-black/5 dark:border-white/5 max-h-32 overflow-y-auto space-y-1">
-                                    <For each={labels()}>
-                                      {(lbl) => (
-                                        <label class="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-black/5 cursor-pointer text-[11px]">
-                                          <input
-                                            type="checkbox"
-                                            checked={newSelectedLabels().includes(lbl)}
-                                            onChange={() => {
-                                              if (newSelectedLabels().includes(lbl)) {
-                                                setNewSelectedLabels(newSelectedLabels().filter((l) => l !== lbl));
-                                              } else {
-                                                setNewSelectedLabels([...newSelectedLabels(), lbl]);
-                                              }
-                                            }}
-                                            class="w-3.5 h-3.5 rounded text-[#9E725F]"
-                                          />
-                                          <span class="truncate">{lbl}</span>
-                                        </label>
-                                      )}
-                                    </For>
+                                  <div class="p-2 border-t border-black/5 dark:border-white/5 space-y-1.5" data-testid="compose-label-popover">
+                                    <input
+                                      type="text"
+                                      data-testid="compose-label-input"
+                                      placeholder="Enter label name"
+                                      value={composeLabelQuery()}
+                                      onInput={(e) => setComposeLabelQuery(e.currentTarget.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          e.preventDefault();
+                                          handleCreateAndAssignComposeLabel();
+                                        }
+                                      }}
+                                      class="w-full px-2 py-1 rounded-lg border border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F5] dark:bg-[#151618] text-xs text-[#1A1B1E] dark:text-[#ECEBE8] outline-none focus:ring-1 focus:ring-[#9E725F]"
+                                    />
+                                    <Show when={composeLabelQuery().trim() && !labels().some((l) => l.toLowerCase() === composeLabelQuery().trim().toLowerCase())}>
+                                      <button
+                                        type="button"
+                                        data-testid="compose-create-label-btn"
+                                        onClick={handleCreateAndAssignComposeLabel}
+                                        class="w-full px-1.5 py-1 text-left text-[11px] rounded hover:bg-black/5 dark:hover:bg-white/5 text-[#9E725F] dark:text-[#D5BDB1] font-medium flex items-center gap-1 cursor-pointer truncate"
+                                      >
+                                        <span>+ Create &ldquo;{composeLabelQuery().trim()}&rdquo;</span>
+                                      </button>
+                                    </Show>
+                                    <div class="custom-scrollbar max-h-32 overflow-y-auto space-y-0.5">
+                                      <For each={filteredComposeLabels()}>
+                                        {(lbl) => (
+                                          <label class="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer text-[11px]">
+                                            <input
+                                              type="checkbox"
+                                              checked={newSelectedLabels().includes(lbl)}
+                                              onChange={() => {
+                                                if (newSelectedLabels().includes(lbl)) {
+                                                  setNewSelectedLabels(newSelectedLabels().filter((l) => l !== lbl));
+                                                } else {
+                                                  setNewSelectedLabels([...newSelectedLabels(), lbl]);
+                                                }
+                                              }}
+                                              class="w-3.5 h-3.5 rounded text-[#9E725F] cursor-pointer"
+                                            />
+                                            <span class="truncate">{lbl}</span>
+                                          </label>
+                                        )}
+                                      </For>
+                                      <Show when={filteredComposeLabels().length === 0 && !composeLabelQuery().trim()}>
+                                        <div class="px-1 py-1.5 text-[11px] text-[#878A8E] text-center italic">Type above to create a label</div>
+                                      </Show>
+                                    </div>
                                   </div>
                                 </Show>
                               </div>
@@ -1672,6 +1769,27 @@ export const NotesView: Component<NotesViewProps> = (props) => {
               </div>
             </Show>
 
+            {/* Attached Labels in Edit Modal */}
+            <Show when={editLabels().length > 0}>
+              <div class="flex flex-wrap gap-1.5 pt-2" data-testid="edit-note-labels-list">
+                <For each={editLabels()}>
+                  {(lbl) => (
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-black/5 dark:bg-white/10 text-[#3C3D3E] dark:text-[#ECEBE8]">
+                      <span>{lbl}</span>
+                      <button
+                        type="button"
+                        onClick={() => setEditLabels(editLabels().filter((l) => l !== lbl))}
+                        class="hover:text-red-500 cursor-pointer ml-0.5 font-bold"
+                        title="Remove label"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )}
+                </For>
+              </div>
+            </Show>
+
             {/* Bottom Actions */}
             <div class="flex items-center justify-between pt-3 border-t border-black/5 dark:border-white/5 relative">
               <div class="flex items-center gap-1">
@@ -1753,6 +1871,80 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                     <polyline points="21 15 16 10 5 21" />
                   </svg>
                 </button>
+
+                {/* Change Labels button */}
+                <div class="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowEditLabelMenu(!showEditLabelMenu())}
+                    data-testid="edit-note-label-btn"
+                    title="Change labels"
+                    class="p-1.5 rounded-lg text-[#6F7173] dark:text-[#878A8E] hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
+                  >
+                    <svg class="w-4 h-4 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                      <line x1="7" y1="7" x2="7.01" y2="7" />
+                    </svg>
+                  </button>
+
+                  <Show when={showEditLabelMenu()}>
+                    <div
+                      data-testid="edit-note-label-popover"
+                      class="absolute left-0 bottom-full mb-2 w-52 p-2 rounded-xl bg-white dark:bg-[#1E1F23] border border-[#E2DFD8] dark:border-[#2A2D35] shadow-xl flex flex-col gap-1 z-30 text-xs"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div class="font-semibold text-[11px] text-[#6F7173] dark:text-[#878A8E] px-1">Label note</div>
+                      <input
+                        type="text"
+                        data-testid="edit-label-input"
+                        placeholder="Enter label name"
+                        value={editLabelQuery()}
+                        onInput={(e) => setEditLabelQuery(e.currentTarget.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleCreateAndAssignEditLabel();
+                          }
+                        }}
+                        class="w-full px-2 py-1 rounded-lg border border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F5] dark:bg-[#151618] text-xs text-[#1A1B1E] dark:text-[#ECEBE8] outline-none focus:ring-1 focus:ring-[#9E725F]"
+                      />
+                      <Show when={editLabelQuery().trim() && !labels().some((l) => l.toLowerCase() === editLabelQuery().trim().toLowerCase())}>
+                        <button
+                          type="button"
+                          data-testid="edit-create-label-btn"
+                          onClick={handleCreateAndAssignEditLabel}
+                          class="w-full px-1.5 py-1 text-left text-[11px] rounded hover:bg-black/5 dark:hover:bg-white/5 text-[#9E725F] dark:text-[#D5BDB1] font-medium flex items-center gap-1 cursor-pointer truncate"
+                        >
+                          <span>+ Create &ldquo;{editLabelQuery().trim()}&rdquo;</span>
+                        </button>
+                      </Show>
+                      <div class="custom-scrollbar max-h-36 overflow-y-auto space-y-0.5 pt-1">
+                        <For each={filteredEditLabels()}>
+                          {(lbl) => (
+                            <label class="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer text-[11px]">
+                              <input
+                                type="checkbox"
+                                checked={editLabels().includes(lbl)}
+                                onChange={() => {
+                                  if (editLabels().includes(lbl)) {
+                                    setEditLabels(editLabels().filter((l) => l !== lbl));
+                                  } else {
+                                    setEditLabels([...editLabels(), lbl]);
+                                  }
+                                }}
+                                class="w-3.5 h-3.5 rounded text-[#9E725F] cursor-pointer"
+                              />
+                              <span class="truncate">{lbl}</span>
+                            </label>
+                          )}
+                        </For>
+                        <Show when={filteredEditLabels().length === 0 && !editLabelQuery().trim()}>
+                          <div class="px-1.5 py-2 text-[11px] text-[#878A8E] text-center italic">Type above to create a label</div>
+                        </Show>
+                      </div>
+                    </div>
+                  </Show>
+                </div>
 
                 {/* Version History */}
                 <button
@@ -2158,6 +2350,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                           <button
                             type="button"
                             onClick={() => setActiveLabelMenuCardId(activeLabelMenuCardId() === note.id ? null : note.id)}
+                            data-testid={`card-add-label-btn-${note.id}`}
                             class="w-full px-2.5 py-1 text-left rounded hover:bg-black/5 dark:hover:bg-white/5 flex items-center justify-between cursor-pointer font-medium"
                           >
                             <span>Add label</span>
@@ -2166,20 +2359,52 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                             </svg>
                           </button>
                           <Show when={activeLabelMenuCardId() === note.id}>
-                            <div class="p-1.5 border-t border-black/5 dark:border-white/5 max-h-32 overflow-y-auto space-y-1">
-                              <For each={labels()}>
-                                {(lbl) => (
-                                  <label class="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-black/5 cursor-pointer text-[11px]">
-                                    <input
-                                      type="checkbox"
-                                      checked={(note.labels || []).includes(lbl)}
-                                      onChange={(e) => handleToggleCardLabel(note.id, lbl, e as unknown as MouseEvent)}
-                                      class="w-3.5 h-3.5 rounded text-[#9E725F]"
-                                    />
-                                    <span class="truncate">{lbl}</span>
-                                  </label>
-                                )}
-                              </For>
+                            <div
+                              data-testid={`card-label-popover-${note.id}`}
+                              class="p-2 border-t border-black/5 dark:border-white/5 space-y-1.5"
+                            >
+                              <input
+                                type="text"
+                                data-testid={`card-label-input-${note.id}`}
+                                placeholder="Enter label name"
+                                value={cardLabelQuery()}
+                                onInput={(e) => setCardLabelQuery(e.currentTarget.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    handleCreateAndAssignCardLabel(note.id);
+                                  }
+                                }}
+                                class="w-full px-2 py-1 rounded border border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F5] dark:bg-[#151618] text-xs text-[#1A1B1E] dark:text-[#ECEBE8] outline-none focus:ring-1 focus:ring-[#9E725F]"
+                              />
+                              <Show when={cardLabelQuery().trim() && !labels().some((l) => l.toLowerCase() === cardLabelQuery().trim().toLowerCase())}>
+                                <button
+                                  type="button"
+                                  data-testid={`card-create-label-btn-${note.id}`}
+                                  onClick={() => handleCreateAndAssignCardLabel(note.id)}
+                                  class="w-full px-1.5 py-1 text-left text-[11px] rounded hover:bg-black/5 dark:hover:bg-white/5 text-[#9E725F] dark:text-[#D5BDB1] font-medium flex items-center gap-1 cursor-pointer truncate"
+                                >
+                                  <span>+ Create &ldquo;{cardLabelQuery().trim()}&rdquo;</span>
+                                </button>
+                              </Show>
+                              <div class="custom-scrollbar max-h-32 overflow-y-auto space-y-0.5">
+                                <For each={filteredCardLabels()}>
+                                  {(lbl) => (
+                                    <label class="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer text-[11px]">
+                                      <input
+                                        type="checkbox"
+                                        checked={(note.labels || []).includes(lbl)}
+                                        onChange={(e) => handleToggleCardLabel(note.id, lbl, e as unknown as MouseEvent)}
+                                        class="w-3.5 h-3.5 rounded text-[#9E725F] cursor-pointer"
+                                      />
+                                      <span class="truncate">{lbl}</span>
+                                    </label>
+                                  )}
+                                </For>
+                                <Show when={filteredCardLabels().length === 0 && !cardLabelQuery().trim()}>
+                                  <div class="px-1 py-1.5 text-[11px] text-[#878A8E] text-center italic">Type above to create a label</div>
+                                </Show>
+                              </div>
                             </div>
                           </Show>
                         </div>

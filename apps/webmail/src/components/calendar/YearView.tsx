@@ -117,7 +117,7 @@ export const YearView: Component<YearViewProps> = (props) => {
 
   return (
     <div
-      class="flex flex-col flex-1 h-full min-h-0 bg-[#FAF9F5] dark:bg-[#18191D] select-none overflow-y-auto"
+      class="flex flex-col flex-1 h-full min-h-0 bg-[#FAF9F5] dark:bg-[#18191D] select-none overflow-y-auto custom-scrollbar"
       data-testid="calendar-year-view"
     >
       {/* ── 12-Month Grid ── */}
@@ -323,7 +323,7 @@ export const YearView: Component<YearViewProps> = (props) => {
 
                 {/* Events List */}
                 <div
-                  class="flex-1 overflow-y-auto p-4 flex flex-col gap-2.5"
+                  class="flex-1 overflow-y-auto p-4 flex flex-col gap-2.5 custom-scrollbar"
                   data-testid="year-inspector-events-list"
                 >
                   <Show

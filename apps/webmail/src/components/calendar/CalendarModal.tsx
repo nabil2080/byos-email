@@ -252,7 +252,7 @@ export const CalendarModal: Component<CalendarModalProps> = (props) => {
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSave} class="p-5 flex flex-col gap-4 overflow-y-auto max-h-[75vh]">
+          <form onSubmit={handleSave} class="p-5 flex flex-col gap-4 overflow-y-auto max-h-[75vh] custom-scrollbar">
             <Show when={errorMsg()}>
               <div class="p-2.5 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 text-xs font-medium border border-red-200 dark:border-red-800" data-testid="calendar-modal-error">
                 {errorMsg()}

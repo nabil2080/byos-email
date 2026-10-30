@@ -7854,6 +7854,7 @@ const App: Component = () => {
             <div class="flex-1 flex min-w-0 h-full overflow-hidden">
               <NotesView
                 currentUser={currentUser()}
+                mailboxId={selectedMailbox()?.id}
                 selectedMailbox={selectedMailbox()}
                 connectedAccounts={connectedAccounts()}
                 activeAccountId={currentFolder() === "unified_inbox" ? "__all__" : selectedMailbox()?.id || "__all__"}

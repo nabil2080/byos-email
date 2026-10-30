@@ -59,7 +59,7 @@ export const AgendaView: Component<AgendaViewProps> = (props) => {
   });
 
   return (
-    <div class="flex-1 h-full min-h-0 bg-[#FAF9F5] dark:bg-[#18191D] overflow-y-auto p-4 md:p-6 select-none">
+    <div class="flex-1 h-full min-h-0 bg-[#FAF9F5] dark:bg-[#18191D] overflow-y-auto p-4 md:p-6 select-none custom-scrollbar">
       <div class="max-w-3xl mx-auto flex flex-col gap-6">
         <Show
           when={grouped().length > 0}

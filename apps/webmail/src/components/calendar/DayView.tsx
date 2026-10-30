@@ -320,7 +320,7 @@ export const DayView: Component<DayViewProps> = (props) => {
       </Show>
 
       {/* ── Time Grid ── */}
-      <div class="flex-1 overflow-y-auto relative flex bg-white dark:bg-[#18191D]">
+      <div class="flex-1 overflow-y-auto relative flex bg-white dark:bg-[#18191D] custom-scrollbar">
         {/* Time Labels Column (Single or Dual) */}
         <Show
           when={props.showSecondaryTimeZone}

@@ -456,7 +456,7 @@ export const WeekView: Component<WeekViewProps> = (props) => {
       </Show>
 
       {/* ── Scrollable 24-Hour Time Grid ── */}
-      <div class="flex-1 overflow-y-auto overflow-x-hidden relative flex">
+      <div class="flex-1 overflow-y-auto overflow-x-hidden relative flex custom-scrollbar">
         {/* Left Time Column (Single or Dual) */}
         <Show
           when={props.showSecondaryTimeZone}

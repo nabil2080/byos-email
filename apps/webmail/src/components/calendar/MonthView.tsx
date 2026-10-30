@@ -119,7 +119,7 @@ export const MonthView: Component<MonthViewProps> = (props) => {
       </div>
 
       {/* ── Month Grid ── */}
-      <div class="grid grid-cols-7 flex-1 auto-rows-fr overflow-y-auto">
+      <div class="grid grid-cols-7 flex-1 auto-rows-fr overflow-y-auto custom-scrollbar">
         <For each={monthDays()}>
           {(cell, idx) => {
             const cellEvents = () =>

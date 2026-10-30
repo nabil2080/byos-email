@@ -89,6 +89,13 @@ input:-webkit-autofill:active {
 
 
 /* Custom minimal scrollbar */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #D5D1C8 transparent;
+}
+.dark .custom-scrollbar {
+  scrollbar-color: #3A3A3E transparent;
+}
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;

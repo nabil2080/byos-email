@@ -125,7 +125,7 @@ export const CalendarTrashModal: Component<CalendarTrashModalProps> = (props) =>
           </div>
 
           {/* List body */}
-          <div class="p-6 overflow-y-auto flex-1 space-y-3">
+          <div class="p-6 overflow-y-auto flex-1 space-y-3 custom-scrollbar">
             <Show
               when={items().length > 0}
               fallback={
