@@ -359,7 +359,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
               </span>
 
               {/* Floating Hover Action Pill (Gmail style) */}
-              <div class="absolute right-0 hidden group-hover:flex items-center gap-1 bg-white/95 dark:bg-[#26282E]/95 backdrop-blur-sm px-1.5 py-0.5 rounded-xl border border-[#E2DFD8] dark:border-[#3A3D46] shadow-sm z-10">
+              <div class="absolute right-0 opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 pointer-events-none group-hover:pointer-events-auto transition-all duration-150 ease-out flex items-center gap-1 bg-white/95 dark:bg-[#202227]/95 backdrop-blur-md px-1.5 py-0.5 rounded-xl border border-[#E2DFD8] dark:border-[#333640] shadow-xs z-10">
                 {/* Single Contextual Read/Unread Smart Toggle */}
                 <button
                   type="button"
@@ -544,7 +544,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
               </span>
 
               {/* Floating Hover Action Pill */}
-              <div class="absolute right-0 hidden group-hover:flex items-center gap-0.5 bg-white/95 dark:bg-[#26282E]/95 backdrop-blur-sm px-1 py-0.5 rounded-lg border border-[#E2DFD8] dark:border-[#3A3D46] shadow-sm z-10">
+              <div class="absolute right-0 opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 pointer-events-none group-hover:pointer-events-auto transition-all duration-150 ease-out flex items-center gap-0.5 bg-white/95 dark:bg-[#202227]/95 backdrop-blur-md px-1 py-0.5 rounded-lg border border-[#E2DFD8] dark:border-[#333640] shadow-xs z-10">
                 <button
                   type="button"
                   onClick={(e) => {

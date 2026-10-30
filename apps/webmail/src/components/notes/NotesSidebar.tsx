@@ -62,13 +62,14 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
       <div class="p-2 pb-2 relative z-50 overflow-visible space-y-2 flex-shrink-0">
         {/* Top Brand Header matching Sidebar.tsx */}
         <div class="flex items-center justify-between px-1.5 pt-0.5 pb-0.5">
-          <div class="flex items-center gap-2">
-            <div class="w-6 h-6 rounded-xl bg-[#A27561] flex items-center justify-center text-white font-bold text-xs shadow-2xs tracking-wider ring-1 ring-[#A27561]/30">
+          <div class="flex items-center gap-2.5">
+            <div class="w-7 h-7 rounded-xl bg-gradient-to-br from-[#A27561] to-[#8E6351] flex items-center justify-center text-white font-bold text-xs shadow-xs tracking-wider ring-1 ring-black/5 dark:ring-white/10 select-none">
               B
             </div>
-            <span class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight">
-              BYOS Notes
-            </span>
+            <div class="flex flex-col">
+              <span class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight leading-tight">BYOS Notes</span>
+              <span class="text-[10px] font-mono text-[#878A8E] tracking-wider uppercase leading-none mt-0.5">Zero-Knowledge</span>
+            </div>
           </div>
           <Show when={props.onCloseMobile}>
             <button
@@ -124,8 +125,8 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           data-testid="notes-nav-notes"
           class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer ${
             isSelected("notes")
-              ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs"
-              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+              ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs border-l-2 border-l-[#A27561]"
+              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium border-l-2 border-l-transparent"
           }`}
         >
           <div class="flex items-center gap-2.5">
@@ -138,7 +139,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           </div>
           <Show when={props.notesCounts?.notes !== undefined}>
             <span
-              class={`text-xs font-mono px-1.5 py-0.2 rounded-full ${
+              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full ${
                 isSelected("notes")
                   ? "bg-[#A27561] text-white font-semibold"
                   : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
@@ -159,8 +160,8 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           data-testid="notes-nav-reminders"
           class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer ${
             isSelected("reminders")
-              ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs"
-              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+              ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs border-l-2 border-l-[#A27561]"
+              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium border-l-2 border-l-transparent"
           }`}
         >
           <div class="flex items-center gap-2.5">
@@ -172,7 +173,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           </div>
           <Show when={props.notesCounts?.reminders !== undefined}>
             <span
-              class={`text-xs font-mono px-1.5 py-0.2 rounded-full ${
+              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full ${
                 isSelected("reminders")
                   ? "bg-[#A27561] text-white font-semibold"
                   : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
@@ -218,8 +219,8 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
               data-testid={`notes-nav-label-${lbl}`}
               class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer ${
                 isSelected(`label:${lbl}`)
-                  ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs"
-                  : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+                  ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs border-l-2 border-l-[#A27561]"
+                  : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium border-l-2 border-l-transparent"
               }`}
             >
               <div class="flex items-center gap-2.5 truncate">
@@ -231,7 +232,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
               </div>
               <Show when={props.notesCounts?.labelCounts?.[lbl] !== undefined}>
                 <span
-                  class={`text-xs font-mono px-1.5 py-0.2 rounded-full ${
+                  class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full ${
                     isSelected(`label:${lbl}`)
                       ? "bg-[#A27561] text-white font-semibold"
                       : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
@@ -260,8 +261,8 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           data-testid="notes-nav-archive"
           class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer ${
             isSelected("archive")
-              ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs"
-              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+              ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs border-l-2 border-l-[#A27561]"
+              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium border-l-2 border-l-transparent"
           }`}
         >
           <div class="flex items-center gap-2.5">
@@ -274,7 +275,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           </div>
           <Show when={props.notesCounts?.archive !== undefined}>
             <span
-              class={`text-xs font-mono px-1.5 py-0.2 rounded-full ${
+              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full ${
                 isSelected("archive")
                   ? "bg-[#A27561] text-white font-semibold"
                   : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
@@ -295,8 +296,8 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           data-testid="notes-nav-bin"
           class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer ${
             isSelected("bin")
-              ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs"
-              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+              ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs border-l-2 border-l-[#A27561]"
+              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium border-l-2 border-l-transparent"
           }`}
         >
           <div class="flex items-center gap-2.5">
@@ -310,7 +311,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           </div>
           <Show when={props.notesCounts?.bin !== undefined}>
             <span
-              class={`text-xs font-mono px-1.5 py-0.2 rounded-full ${
+              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full ${
                 isSelected("bin")
                   ? "bg-[#A27561] text-white font-semibold"
                   : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"

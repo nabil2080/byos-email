@@ -1,4 +1,4 @@
-import { Component, createSignal, createMemo, Show, For, onMount, onCleanup } from "solid-js";
+import { Component, createSignal, createMemo, createEffect, Show, For, onMount, onCleanup } from "solid-js";
 import { UserMe, Mailbox, ConnectedAccount } from "../../api";
 import {
   NoteItem,
@@ -124,6 +124,12 @@ export const NotesView: Component<NotesViewProps> = (props) => {
   const [activeMenuCardId, setActiveMenuCardId] = createSignal<string | null>(null);
   const [activeLabelMenuCardId, setActiveLabelMenuCardId] = createSignal<string | null>(null);
   const [activeCollabCardId, setActiveCollabCardId] = createSignal<string | null>(null);
+
+  createEffect(() => {
+    // Re-load notes and labels reactively when active mailbox changes
+    const _mb = props.mailboxId || props.selectedMailbox?.id;
+    refreshAll();
+  });
 
   onMount(() => {
     refreshAll();
@@ -1450,7 +1456,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
       {/* ── EDIT LABELS MODAL ── */}
       <EditLabelsModal
-        mailboxId={props.mailboxId}
+        mailboxId={props.mailboxId || props.selectedMailbox?.id}
         labels={labels()}
         isOpen={isEditLabelsOpen()}
         onClose={() => setIsEditLabelsOpen(false)}

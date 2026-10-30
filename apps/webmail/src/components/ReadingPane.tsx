@@ -384,7 +384,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
     !props.decryptedContent.startsWith("Unlock ");
 
   return (
-    <section data-testid="reading-pane" class="flex-1 bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2A2D35] rounded-2xl flex flex-col min-w-0 shadow-2xs overflow-hidden h-full">
+    <section data-testid="reading-pane" class="flex-1 bg-white dark:bg-[#18191D] flex flex-col min-w-0 overflow-hidden h-full">
       {/* ── Top Reading Pane Action Toolbar ── */}
       <div
         ref={paneToolbarRef}

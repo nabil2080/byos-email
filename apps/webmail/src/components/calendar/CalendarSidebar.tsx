@@ -124,13 +124,14 @@ export const CalendarSidebar: Component<CalendarSidebarProps> = (props) => {
       <div class="p-2 pb-2 relative z-50 overflow-visible space-y-2 flex-shrink-0">
         {/* Top-Left App Brand Header */}
         <div class="flex items-center justify-between px-1.5 pt-0.5 pb-0.5">
-          <div class="flex items-center gap-2">
-            <div class="w-6 h-6 rounded-xl bg-[#A27561] flex items-center justify-center text-white font-bold text-xs shadow-2xs tracking-wider ring-1 ring-[#A27561]/30">
+          <div class="flex items-center gap-2.5">
+            <div class="w-7 h-7 rounded-xl bg-gradient-to-br from-[#A27561] to-[#8E6351] flex items-center justify-center text-white font-bold text-xs shadow-xs tracking-wider ring-1 ring-black/5 dark:ring-white/10 select-none">
               B
             </div>
-            <span class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight">
-              BYOS Calendar
-            </span>
+            <div class="flex flex-col">
+              <span class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight leading-tight">BYOS Calendar</span>
+              <span class="text-[10px] font-mono text-[#878A8E] tracking-wider uppercase leading-none mt-0.5">Zero-Knowledge</span>
+            </div>
           </div>
           <Show when={props.onCloseMobile}>
             <button

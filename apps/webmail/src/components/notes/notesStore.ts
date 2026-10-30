@@ -125,6 +125,7 @@ export const NOTE_COLORS: Array<{
 
 const STORAGE_PREFIX = "byos_notes_";
 const LABELS_STORAGE_PREFIX = "byos_note_labels_";
+const LABELS_INITIALIZED_PREFIX = "byos_note_labels_init_";
 
 export function getNotesStorageKey(mailboxId?: string): string {
   return `${STORAGE_PREFIX}${mailboxId || "local_default"}`;
@@ -139,13 +140,18 @@ export function loadLabels(mailboxId?: string): string[] {
   if (typeof window === "undefined" || !window.localStorage) {
     return ["Personal", "Work", "Inspiration"];
   }
+  const key = getLabelsStorageKey(mailboxId);
   try {
-    const raw = localStorage.getItem(getLabelsStorageKey(mailboxId));
+    const raw = localStorage.getItem(key);
     if (raw !== null) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         return parsed;
       }
+    }
+    // If this mailbox was previously initialized (even if all labels were deleted), do not restore defaults
+    if (localStorage.getItem(LABELS_INITIALIZED_PREFIX + key) === "true") {
+      return [];
     }
   } catch (err) {
     console.warn("Failed to load note labels:", err);
@@ -157,8 +163,10 @@ export function loadLabels(mailboxId?: string): string[] {
 
 export function saveLabels(mailboxId: string | undefined, labels: string[]): void {
   if (typeof window === "undefined" || !window.localStorage) return;
+  const key = getLabelsStorageKey(mailboxId);
   try {
-    localStorage.setItem(getLabelsStorageKey(mailboxId), JSON.stringify(labels));
+    localStorage.setItem(key, JSON.stringify(labels));
+    localStorage.setItem(LABELS_INITIALIZED_PREFIX + key, "true");
   } catch (err) {
     console.warn("Failed to save note labels:", err);
   }
@@ -201,22 +209,19 @@ export function renameLabel(mailboxId: string | undefined, oldName: string, newN
 export function deleteLabel(mailboxId: string | undefined, name: string): boolean {
   const labels = loadLabels(mailboxId);
   const filtered = labels.filter((l) => l.toLowerCase() !== name.toLowerCase());
-  if (filtered.length !== labels.length) {
-    saveLabels(mailboxId, filtered);
+  saveLabels(mailboxId, filtered);
 
-    // Remove label from all notes
-    const notes = loadNotes(mailboxId);
-    let changed = false;
-    for (const n of notes) {
-      if (n.labels && n.labels.includes(name)) {
-        n.labels = n.labels.filter((l) => l !== name);
-        changed = true;
-      }
+  // Remove label from all notes (case-insensitive cleanup)
+  const notes = loadNotes(mailboxId);
+  let changed = false;
+  for (const n of notes) {
+    if (n.labels && n.labels.some((l) => l.toLowerCase() === name.toLowerCase())) {
+      n.labels = n.labels.filter((l) => l.toLowerCase() !== name.toLowerCase());
+      changed = true;
     }
-    if (changed) saveNotes(mailboxId, notes);
-    return true;
   }
-  return false;
+  if (changed) saveNotes(mailboxId, notes);
+  return true;
 }
 
 // ── NOTES STORE ──

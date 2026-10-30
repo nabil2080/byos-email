@@ -7892,7 +7892,7 @@ const App: Component = () => {
             {/* ── Mailbox Workspace Container (Beside Sidebar and Beside RightBar) ── */}
             <div class="flex-1 min-w-0 h-full flex overflow-hidden gap-2.5 sm:gap-3">
               {/* Email Workspace Card (Matching Calendar & Notes Card Radius & Styling) */}
-              <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] shadow-2xs overflow-hidden flex min-w-0 h-full">
+              <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex min-w-0 h-full">
                 {/* ── Message List Column (Dynamic Full-Width, 380px Split, or Hidden in Full Mode) ── */}
                 <div
                   class={`${

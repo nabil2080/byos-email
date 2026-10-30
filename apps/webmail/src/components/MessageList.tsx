@@ -247,7 +247,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
       {/* Focused Inbox Tabs (Inbox view only, when enabled) */}
       <Show when={props.currentFolder === "inbox" && props.focusedInboxEnabled !== false && props.onSelectCategory}>
         <div
-          class="flex items-center border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#1E2025] px-2 overflow-x-auto no-scrollbar flex-shrink-0"
+          class="flex items-center gap-1 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#1A1B20] px-2.5 py-1.5 overflow-x-auto no-scrollbar flex-shrink-0"
           role="tablist"
           aria-label="Focused Inbox Categories"
           data-testid="focused-inbox-tabs"

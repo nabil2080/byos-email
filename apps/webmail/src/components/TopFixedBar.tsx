@@ -64,16 +64,23 @@ export const TopFixedBar: Component<TopFixedBarProps> = (props) => {
             placeholder={searchPlaceholder()}
             value={props.searchQuery || ""}
             onInput={(e) => props.onSearchChange?.(e.currentTarget.value)}
-            class="w-full h-9 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#FAF9F5] dark:bg-[#1E2025] pl-9 pr-8 text-xs sm:text-sm text-[#1A1B1E] dark:text-[#F3F4F6] placeholder-[#6E7075] dark:placeholder-[#878A8E] shadow-2xs focus:outline-none focus:border-[#9E725F] focus:ring-2 focus:ring-[#9E725F]/20 transition-all duration-150 leading-normal"
+            class="w-full h-9 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#FAF9F5] dark:bg-[#1E2025] pl-9 pr-10 text-xs sm:text-sm text-[#1A1B1E] dark:text-[#F3F4F6] placeholder-[#878A8E] shadow-[inset_0_1px_2px_rgba(0,0,0,0.02)] focus:outline-none focus:border-[#9E725F] focus:ring-2 focus:ring-[#9E725F]/20 transition-all duration-150 leading-normal"
           />
           <svg
-            class="w-4 h-4 text-[#6E7075] dark:text-[#878A8E] absolute left-3 top-1/2 -translate-y-1/2 stroke-current fill-none stroke-[1.8] pointer-events-none"
+            class="w-4 h-4 text-[#878A8E] absolute left-3 top-1/2 -translate-y-1/2 stroke-current fill-none stroke-[1.8] pointer-events-none"
             viewBox="0 0 24 24"
           >
             <circle cx="11" cy="11" r="8" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <Show when={props.searchQuery}>
+          <Show
+            when={props.searchQuery}
+            fallback={
+              <kbd class="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none hidden sm:inline-flex items-center gap-0.5 text-[10px] font-mono text-[#878A8E] bg-[#EAE7E0]/70 dark:bg-[#2A2D35]/70 px-1.5 py-0.5 rounded border border-[#DDD9D0]/80 dark:border-[#383B44]/80 leading-none select-none">
+                /
+              </kbd>
+            }
+          >
             <button
               type="button"
               onClick={() => props.onSearchChange?.("")}

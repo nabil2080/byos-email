@@ -225,11 +225,14 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       <div class="p-2 pb-2 relative z-50 overflow-visible space-y-2 flex-shrink-0">
         {/* Top-Left App Brand Header */}
         <div class="flex items-center justify-between px-1.5 pt-0.5 pb-0.5">
-          <div class="flex items-center gap-2">
-            <div class="w-6 h-6 rounded-xl bg-[#A27561] flex items-center justify-center text-white font-bold text-xs shadow-2xs tracking-wider ring-1 ring-[#A27561]/30">
+          <div class="flex items-center gap-2.5">
+            <div class="w-7 h-7 rounded-xl bg-gradient-to-br from-[#A27561] to-[#8E6351] flex items-center justify-center text-white font-bold text-xs shadow-xs tracking-wider ring-1 ring-black/5 dark:ring-white/10 select-none">
               B
             </div>
-            <span class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight">BYOS Mail</span>
+            <div class="flex flex-col">
+              <span class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight leading-tight">BYOS Mail</span>
+              <span class="text-[10px] font-mono text-[#878A8E] tracking-wider uppercase leading-none mt-0.5">Zero-Knowledge</span>
+            </div>
           </div>
           <Show when={props.onCloseMobile}>
             <button
@@ -286,13 +289,16 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               props.onCompose();
               props.onCloseMobile?.();
             }}
-            class="w-full bg-[#A27561] hover:bg-[#8F6452] dark:bg-[#A27561] dark:hover:bg-[#B2826F] text-white text-[13px] tracking-wide font-semibold py-2.5 px-3.5 min-h-[40px] rounded-xl shadow-none transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]"
+            class="w-full bg-gradient-to-b from-[#A27561] via-[#986A57] to-[#8E6351] hover:from-[#966855] hover:to-[#825746] text-white text-[13px] tracking-wide font-semibold py-2.5 px-3.5 min-h-[40px] rounded-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_2px_4px_rgba(162,117,97,0.25)] hover:shadow-[inset_0_1px_1px_rgba(255,255,255,0.35),0_3px_8px_rgba(162,117,97,0.3)] transition-all duration-150 flex items-center justify-between cursor-pointer active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/40"
           >
-            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-            <span>New Message</span>
+            <div class="flex items-center gap-2">
+              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              <span>New Message</span>
+            </div>
+            <kbd class="hidden sm:inline-block text-[10px] font-mono text-white/80 bg-black/20 px-1.5 py-0.5 rounded border border-white/15 leading-none">C</kbd>
           </button>
         </div>
       </div>
@@ -328,12 +334,12 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 }
               }}
               onDrop={(e) => handleDrop(e, isAllInboxes() ? "unified_inbox" : "inbox", false)}
-              class={`w-full flex items-center justify-between px-3 py-2.5 md:py-2 min-h-[40px] text-sm rounded-xl transition-all cursor-pointer ${
+              class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all duration-150 cursor-pointer select-none ${
                 dragOverTarget() === (isAllInboxes() ? "unified_inbox" : "inbox")
                   ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
                   : (isAllInboxes() ? props.currentFolder === "unified_inbox" : props.currentFolder === "inbox")
-                  ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold"
-                  : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium transition-colors"
+                  ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold border-l-2 border-l-[#A27561] shadow-2xs"
+                  : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
               }`}
               data-testid={isAllInboxes() ? "unified-inbox-button" : "folder-inbox"}
             >
@@ -428,47 +434,49 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           </div>
 
           {/* Remaining Folders */}
-          {(["sent", "scheduled", "drafts", "snoozed", "archive", "spam", "trash"] as Folder[]).map((f) => {
-            const isActive = () => props.currentFolder === f;
-            const isDropTarget = () => dragOverTarget() === f;
-            const count = () => (props.folderCounts ? props.folderCounts[f] || 0 : 0);
+          <For each={(["sent", "scheduled", "drafts", "snoozed", "archive", "spam", "trash"] as Folder[])}>
+            {(f) => {
+              const isActive = () => props.currentFolder === f;
+              const isDropTarget = () => dragOverTarget() === f;
+              const count = () => (props.folderCounts ? props.folderCounts[f] || 0 : 0);
 
-            return (
-              <button
-                onClick={() => {
-                  props.onSelectFolder(f);
-                  props.onCloseMobile?.();
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-                  setDragOverTarget(f);
-                }}
-                onDragLeave={() => {
-                  if (dragOverTarget() === f) setDragOverTarget(null);
-                }}
-                onDrop={(e) => handleDrop(e, f, false)}
-                class={`w-full flex items-center justify-between px-3 py-2.5 md:py-2 min-h-[40px] text-sm rounded-xl transition-all cursor-pointer ${
-                  isDropTarget()
-                    ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
-                    : isActive()
-                    ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold"
-                    : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium transition-colors"
-                }`}
-                data-testid={`folder-${f}`}
-              >
-                <div class="flex items-center gap-2.5">
-                  {renderFolderIcon(f)}
-                  <span>{folderLabels[f]}</span>
-                </div>
-                <Show when={count() > 0}>
-                  <span class={`text-xs font-mono ${isActive() ? "text-[#A27561] dark:text-[#D4A38F] font-semibold" : "text-[#6F7173] dark:text-[#808288]"}`}>
-                    {count()}
-                  </span>
-                </Show>
-              </button>
-            );
-          })}
+              return (
+                <button
+                  onClick={() => {
+                    props.onSelectFolder(f);
+                    props.onCloseMobile?.();
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                    setDragOverTarget(f);
+                  }}
+                  onDragLeave={() => {
+                    if (dragOverTarget() === f) setDragOverTarget(null);
+                  }}
+                  onDrop={(e) => handleDrop(e, f, false)}
+                  class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all duration-150 cursor-pointer select-none ${
+                    isDropTarget()
+                      ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
+                      : isActive()
+                      ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold border-l-2 border-l-[#A27561] shadow-2xs"
+                      : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+                  }`}
+                  data-testid={`folder-${f}`}
+                >
+                  <div class="flex items-center gap-2.5">
+                    {renderFolderIcon(f)}
+                    <span>{folderLabels[f]}</span>
+                  </div>
+                  <Show when={count() > 0}>
+                    <span class={`text-xs font-mono tabular-nums px-1.5 py-0.2 rounded-full ${isActive() ? "bg-[#A27561] text-white font-semibold" : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"}`}>
+                      {count()}
+                    </span>
+                  </Show>
+                </button>
+              );
+            }}
+          </For>
         </nav>
 
         {/* Custom Folders Section */}
