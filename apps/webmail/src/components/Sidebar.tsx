@@ -947,61 +947,91 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       {/* FIXED BOTTOM: Unified Contacts | Settings | Sign out Capsule Pill */}
       <div class="p-2 border-t border-[#E2DFD8]/60 dark:border-[#333336] relative z-40 overflow-visible flex-shrink-0">
         <div class="w-full rounded-full bg-[#EAE7DF]/85 dark:bg-[#1E2025] border border-[#DDD8CE] dark:border-[#2E3138] p-1 flex items-center justify-between shadow-2xs transition-colors">
-          <button
-            type="button"
-            onClick={() => {
-              props.onOpenContacts();
-              props.onCloseMobile?.();
-            }}
-            data-testid="sidebar-contacts-btn"
-            data-testid-secondary="contacts-nav-btn"
-            title="Contacts"
-            class="flex-1 flex items-center justify-center gap-1.5 py-1 px-1.5 sm:px-2 rounded-full text-[11px] sm:text-xs font-medium text-[#46484B] dark:text-[#D1D5DB] hover:text-[#1A1B1E] dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none truncate"
-          >
-            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-              <circle cx="9" cy="7" r="4" />
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-            </svg>
-            <span class="truncate">Contacts</span>
-          </button>
+          {/* Contacts */}
+          <div class="relative group flex-1 flex justify-center">
+            <button
+              type="button"
+              onClick={() => {
+                props.onOpenContacts();
+                props.onCloseMobile?.();
+              }}
+              data-testid="sidebar-contacts-btn"
+              data-testid-secondary="contacts-nav-btn"
+              aria-label="Contacts"
+              class="w-full flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none"
+            >
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+              <span class="sr-only">Contacts</span>
+            </button>
+            <div
+              role="tooltip"
+              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-[11px] font-medium shadow-md whitespace-nowrap"
+            >
+              Contacts
+              <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1E2025] dark:border-t-[#2A2D35]" />
+            </div>
+          </div>
 
           <div class="w-px h-3.5 bg-[#D2CDC3] dark:bg-[#383B44] flex-shrink-0" />
 
-          <button
-            type="button"
-            onClick={() => {
-              props.onOpenSettings();
-              props.onCloseMobile?.();
-            }}
-            data-testid="sidebar-settings-btn"
-            title="Settings"
-            class="flex-1 flex items-center justify-center gap-1.5 py-1 px-1.5 sm:px-2 rounded-full text-[11px] sm:text-xs font-medium text-[#46484B] dark:text-[#D1D5DB] hover:text-[#1A1B1E] dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none truncate"
-          >
-            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-            <span class="truncate">Settings</span>
-          </button>
+          {/* Settings */}
+          <div class="relative group flex-1 flex justify-center">
+            <button
+              type="button"
+              onClick={() => {
+                props.onOpenSettings();
+                props.onCloseMobile?.();
+              }}
+              data-testid="sidebar-settings-btn"
+              aria-label="Settings"
+              class="w-full flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none"
+            >
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+              <span class="sr-only">Settings</span>
+            </button>
+            <div
+              role="tooltip"
+              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-[11px] font-medium shadow-md whitespace-nowrap"
+            >
+              Settings
+              <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1E2025] dark:border-t-[#2A2D35]" />
+            </div>
+          </div>
 
           <div class="w-px h-3.5 bg-[#D2CDC3] dark:bg-[#383B44] flex-shrink-0" />
 
-          <button
-            type="button"
-            onClick={() => props.onLogout?.(props.selectedMailbox?.id, false)}
-            data-testid="sidebar-signout-btn"
-            title="Sign out"
-            class="flex-1 flex items-center justify-center gap-1.5 py-1 px-1.5 sm:px-2 rounded-full text-[11px] sm:text-xs font-medium text-[#46484B] dark:text-[#D1D5DB] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/15 transition-all duration-150 cursor-pointer select-none truncate"
-          >
-            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-              <polyline points="16 17 21 12 16 7" />
-              <line x1="21" y1="12" x2="9" y2="12" />
-            </svg>
-            <span class="truncate">Sign out</span>
-          </button>
+          {/* Sign out */}
+          <div class="relative group flex-1 flex justify-center">
+            <button
+              type="button"
+              onClick={() => props.onLogout?.(props.selectedMailbox?.id, false)}
+              data-testid="sidebar-signout-btn"
+              aria-label="Sign out"
+              class="w-full flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/15 transition-all duration-150 cursor-pointer select-none"
+            >
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+              <span class="sr-only">Sign out</span>
+            </button>
+            <div
+              role="tooltip"
+              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-[11px] font-medium shadow-md whitespace-nowrap"
+            >
+              Sign out
+              <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1E2025] dark:border-t-[#2A2D35]" />
+            </div>
+          </div>
         </div>
       </div>
     </aside>

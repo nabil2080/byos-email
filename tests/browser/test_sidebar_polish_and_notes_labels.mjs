@@ -128,8 +128,43 @@ async function run() {
     const mailSignoutText = await page.$eval('[data-testid="sidebar"] [data-testid="sidebar-signout-btn"]', (el) => el.textContent.trim());
     assert(mailSignoutText === "Sign out", `Sign-out button text is 'Sign out' (got '${mailSignoutText}')`);
 
+    // Verify at rest: text is in sr-only (no visible inline text next to the icon)
+    const restVisibility = await page.evaluate(() => {
+      const btn = document.querySelector('[data-testid="sidebar"] [data-testid="sidebar-contacts-btn"]');
+      const srSpan = btn ? btn.querySelector('.sr-only') : null;
+      return {
+        hasSrOnly: Boolean(srSpan),
+        srDisplay: srSpan ? window.getComputedStyle(srSpan).position : null,
+      };
+    });
+    assert(restVisibility.hasSrOnly && restVisibility.srDisplay === "absolute", "Text is visually hidden at rest using sr-only");
+
     await page.screenshot({ path: path.join(artifactsDir, 'sidebar_bottom_capsule_pill.png') });
     console.log("  Saved screenshot: sidebar_bottom_capsule_pill.png");
+
+    // Hover over Contacts button and verify custom tooltip appears
+    await page.hover('[data-testid="sidebar"] [data-testid="sidebar-contacts-btn"]');
+    await sleep(250);
+
+    const tooltipStatus = await page.evaluate(() => {
+      const container = document.querySelector('[data-testid="sidebar"] [data-testid="sidebar-contacts-btn"]')?.closest('.group');
+      const tooltip = container ? container.querySelector('[role="tooltip"]') : null;
+      if (!tooltip) return { found: false };
+      const style = window.getComputedStyle(tooltip);
+      return {
+        found: true,
+        text: tooltip.textContent.trim(),
+        opacity: parseFloat(style.opacity),
+        display: style.display,
+      };
+    });
+    console.log("  Contacts tooltip on hover:", tooltipStatus);
+    assert(tooltipStatus.found, "Contacts tooltip element exists");
+    assert(tooltipStatus.opacity > 0.5, `Contacts tooltip becomes visible on hover (opacity: ${tooltipStatus.opacity})`);
+    assert(tooltipStatus.text === "Contacts", `Contacts tooltip displays 'Contacts' (got '${tooltipStatus.text}')`);
+
+    await page.screenshot({ path: path.join(artifactsDir, 'sidebar_capsule_tooltip_hover.png') });
+    console.log("  Saved screenshot: sidebar_capsule_tooltip_hover.png");
 
     console.log("\n--- [STEP 4] Verify Calendar View Scrollbars & Unified Capsule Pill ---");
     await page.click('[data-testid="nav-calendar-tab"]');

@@ -2,7 +2,7 @@
 
 ## What was built
 Resolved five UI/UX issues across the webmail platform:
-1. **Unified Capsule Footer**: Replaced all separate bottom elements in the sidebar footer (Contacts button, Settings button, and user account card) with a single continuous horizontal capsule pill bar (`rounded-full`) containing `Contacts | Settings | Sign out` separated by vertical dividers, matching user specification across `Sidebar.tsx`, `CalendarSidebar.tsx`, and `NotesSidebar.tsx`.
+1. **Unified Capsule Footer with Hover Tooltips**: Replaced all separate bottom elements in the sidebar footer with a single continuous horizontal capsule pill bar (`rounded-full`) containing `Contacts | Settings | Sign out` separated by vertical dividers. Icons are clean and textless at rest, revealing smooth floating tooltips on hover with zero horizontal layout shift across `Sidebar.tsx`, `CalendarSidebar.tsx`, and `NotesSidebar.tsx`.
 2. **Mailbox Inbox Selected Animation on Initial Load**: Fixed the mailbox folder selection sliding pill so it immediately renders on initial page load when Inbox is active without requiring any folder clicks.
 3. **Calendar Scrollbar Styling**: Ported the custom `#D5D1C8` / mocha hover scrollbar design from the mailbox to all calendar views, modals, and settings panels.
 4. **Notes Add Label Feature**: Restored the interactive "Add label" creation and assignment capabilities across the Notes module (in the new note composer, note cards popovers, and edit note modal) with live label creation, search, and reactive multi-selection.
@@ -13,9 +13,9 @@ Resolved five UI/UX issues across the webmail platform:
 |------|--------|
 | `apps/webmail/src/app.css` | Added cross-browser `scrollbar-width` and `scrollbar-color` rules to `.custom-scrollbar` for consistent styling across Chrome, Firefox, and Safari. |
 | `apps/webmail/src/App.tsx` | Passed `mailboxId={selectedMailbox()?.id}` to `<NotesView />` so notes and labels load from the active mailbox rather than falling back to default keys. |
-| `apps/webmail/src/components/Sidebar.tsx` | Replaced all bottom footer elements with a single unified capsule pill (`Contacts | Settings | Sign out`); fixed initial load Inbox sliding pill with ref callback registration and staged timeouts. |
-| `apps/webmail/src/components/calendar/CalendarSidebar.tsx` | Replaced all bottom footer elements with the unified capsule pill (`Contacts | Settings | Sign out`); resolved type check for external url feeds. |
-| `apps/webmail/src/components/notes/NotesSidebar.tsx` | Replaced all bottom footer elements with the unified capsule pill (`Contacts | Settings | Sign out`) matching Mailbox and Calendar sidebars. |
+| `apps/webmail/src/components/Sidebar.tsx` | Updated unified capsule pill to hide text labels at rest and reveal animated tooltip badges on hover; preserved screen-reader accessibility and test selectors. |
+| `apps/webmail/src/components/calendar/CalendarSidebar.tsx` | Updated calendar sidebar capsule pill with icon-only resting state and hover tooltips matching mailbox sidebar. |
+| `apps/webmail/src/components/notes/NotesSidebar.tsx` | Updated notes sidebar capsule pill with icon-only resting state and hover tooltips matching mailbox sidebar. |
 | `apps/webmail/src/components/notes/NotesView.tsx` | Added interactive label search, inline creation, and multi-selection popovers in note composer, note cards, and edit note modal with attached label chips. |
 | `apps/webmail/src/components/calendar/DayView.tsx` | Applied `custom-scrollbar` class to Day time grid. |
 | `apps/webmail/src/components/calendar/WeekView.tsx` | Applied `custom-scrollbar` class to Week time grid. |
@@ -26,10 +26,11 @@ Resolved five UI/UX issues across the webmail platform:
 | `apps/webmail/src/components/calendar/CalendarModal.tsx` | Applied `custom-scrollbar` class to Calendar modal body container. |
 | `apps/webmail/src/components/calendar/settings/CalendarSettingsPanel.tsx` | Applied `custom-scrollbar` class to Calendar settings drawer and content panel. |
 | `apps/webmail/src/components/calendar/trash/CalendarTrashModal.tsx` | Applied `custom-scrollbar` class to Calendar trash event list. |
+| `tests/browser/test_sidebar_polish_and_notes_labels.mjs` | Added assertions for icon-only resting state (`.sr-only`) and tooltip reveal on hover (`opacity: 1`, text content `Contacts`). |
 
 ## Raw evidence
 
-### Verification of Inbox Selection Pill on Load, Calendar Scrollbars, Notes Labels & Unified Bottom Capsule
+### Verification of Inbox Selection Pill on Load, Calendar Scrollbars, Notes Labels & Unified Bottom Capsule Hover Tooltips
 Execution of `node tests/browser/test_sidebar_polish_and_notes_labels.mjs`:
 ```
 ================================================================================
@@ -62,7 +63,55 @@ Execution of `node tests/browser/test_sidebar_polish_and_notes_labels.mjs`:
   PASS: Settings button text is 'Settings' (got 'Settings')
   PASS: Sign-out button is present inside Mailbox capsule
   PASS: Sign-out button text is 'Sign out' (got 'Sign out')
+  PASS: Text is visually hidden at rest using sr-only
   Saved screenshot: sidebar_bottom_capsule_pill.png
+  Contacts tooltip on hover: { found: true, text: 'Contacts', opacity: 1, display: 'block' }
+  PASS: Contacts tooltip element exists
+  PASS: Contacts tooltip becomes visible on hover (opacity: 1)
+  PASS: Contacts tooltip displays 'Contacts' (got 'Contacts')
+  Saved screenshot: sidebar_capsule_tooltip_hover.png
+
+--- [STEP 4] Verify Calendar View Scrollbars & Unified Capsule Pill ---
+  PASS: Unified capsule pill container is present in Calendar sidebar
+  PASS: Contacts button is present in Calendar capsule
+  PASS: Settings button is present in Calendar capsule
+  PASS: Sign-out button is present in Calendar capsule
+  Found 3 elements with .custom-scrollbar in Calendar view.
+  PASS: Calendar view contains .custom-scrollbar elements
+  Saved screenshot: calendar_custom_scrollbar_applied.png
+
+--- [STEP 5] Switch to Notes View & Verify Unified Capsule Pill ---
+  PASS: Unified capsule pill container is present in Notes sidebar
+  PASS: Contacts button is present in Notes capsule
+  PASS: Settings button is present in Notes capsule
+  PASS: Sign-out button is present in Notes capsule
+
+--- [STEP 6] Test Note Composer Label Creation & Assignment ---
+  Compose label input is open.
+  Compose label chips: [ 'Core Architecture' ]
+  PASS: Label 'Core Architecture' was created and attached to note in composer
+  Saved note card details: {
+  "title": "Architecture Decisions",
+  "labels": [
+    "Core Architecture×"
+  ]
+}
+  PASS: Note card 'Architecture Decisions' exists
+  PASS: Note card displays 'Core Architecture' label chip
+  Saved screenshot: notes_composer_label_created.png
+
+--- [STEP 7] Test Note Edit Modal Label Popover ---
+  PASS: Found 'Architecture Decisions' note card to click
+  Edit modal label chips: [ 'Core Architecture', 'Reviewed' ]
+  PASS: Label 'Reviewed' added to edit modal chips list
+  Updated card labels: [ 'Core Architecture×', 'Reviewed×' ]
+  PASS: Note card now has both 'Core Architecture' and 'Reviewed' labels
+  Saved screenshot: notes_edit_modal_label_created.png
+
+================================================================================
+   ALL AUDIT CHECKS PASSED WITH RAW VERIFICATION EVIDENCE                      
+================================================================================
+```
 
 --- [STEP 4] Verify Calendar View Scrollbars & Unified Capsule Pill ---
   PASS: Unified capsule pill container is present in Calendar sidebar
