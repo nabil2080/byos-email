@@ -1,4 +1,4 @@
-import { Component, Show } from "solid-js";
+import { Component, Show, For, createSignal, createEffect } from "solid-js";
 
 export type CalendarViewMode = "day" | "week" | "month" | "year" | "agenda";
 
@@ -37,6 +37,28 @@ export const CalendarToolbar: Component<CalendarToolbarProps> = (props) => {
     year: "Year",
     agenda: "Agenda",
   };
+
+  // Morphing sliding indicator for view mode switcher
+  const [indicatorStyle, setIndicatorStyle] = createSignal<{ left: number; width: number; opacity: number }>({
+    left: 0,
+    width: 0,
+    opacity: 0,
+  });
+  const buttonRefs = new Map<CalendarViewMode, HTMLButtonElement>();
+
+  createEffect(() => {
+    const currentMode = props.viewMode;
+    const btn = buttonRefs.get(currentMode);
+    if (btn) {
+      setIndicatorStyle({
+        left: btn.offsetLeft,
+        width: btn.offsetWidth,
+        opacity: 1,
+      });
+    } else {
+      setIndicatorStyle((prev) => ({ ...prev, opacity: 0 }));
+    }
+  });
 
   return (
     <header
@@ -197,27 +219,40 @@ export const CalendarToolbar: Component<CalendarToolbarProps> = (props) => {
 
         </Show>
 
-        {/* View Mode Segmented Control */}
+        {/* View Mode Segmented Control with Morphing Indicator */}
         <div
-          class="flex items-center p-0.5 rounded-lg bg-[#F0EEE9] dark:bg-[#2A2D35] text-xs font-semibold"
+          class="relative flex items-center p-0.5 rounded-xl bg-[#F0EEE9] dark:bg-[#2A2D35] border border-[#E2DFD8]/80 dark:border-[#2E3138] text-xs font-semibold"
           role="group"
           aria-label="Calendar view"
         >
-          {viewModes.map((mode) => (
-            <button
-              type="button"
-              onClick={() => props.onChangeViewMode(mode)}
-              class={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md transition-colors cursor-pointer focus:outline-none focus:ring-1 focus:ring-[#9E725F] ${
-                props.viewMode === mode
-                  ? "bg-white dark:bg-[#1E1F23] text-[#3C3D3E] dark:text-[#ECEBE8] shadow-2xs shadow-xs font-bold"
-                  : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#3C3D3E] dark:hover:text-[#ECEBE8]"
-              }`}
-              data-testid={`view-${mode}-btn`}
-              aria-pressed={props.viewMode === mode}
-            >
-              {viewLabels[mode]}
-            </button>
-          ))}
+          {/* Morphing Sliding Highlight Pill */}
+          <div
+            class="absolute top-0.5 bottom-0.5 rounded-lg bg-white dark:bg-[#1E1F23] shadow-xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
+            style={{
+              left: `${indicatorStyle().left}px`,
+              width: `${indicatorStyle().width}px`,
+              opacity: indicatorStyle().opacity,
+            }}
+          />
+
+          <For each={viewModes}>
+            {(mode) => (
+              <button
+                type="button"
+                ref={(el) => { if (el) buttonRefs.set(mode, el); }}
+                onClick={() => props.onChangeViewMode(mode)}
+                class={`relative z-10 px-2 sm:px-2.5 py-1 rounded-md transition-colors duration-150 cursor-pointer focus:outline-none focus:ring-1 focus:ring-[#9E725F]/40 bg-transparent ${
+                  props.viewMode === mode
+                    ? "text-[#1A1B1E] dark:text-[#ECEBE8] font-bold"
+                    : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#1A1B1E] dark:hover:text-[#ECEBE8]"
+                }`}
+                data-testid={`view-${mode}-btn`}
+                aria-pressed={props.viewMode === mode}
+              >
+                {viewLabels[mode]}
+              </button>
+            )}
+          </For>
         </div>
 
         {/* Action Icons Bar */}

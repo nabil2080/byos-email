@@ -206,17 +206,31 @@ export const TasksSidebarPanel: Component<TasksSidebarPanelProps> = (props) => {
             </form>
           </Show>
 
-          {/* Filter Tabs */}
-          <div class="grid grid-cols-4 gap-1 p-0.5 rounded-lg bg-[#EAE8E2] dark:bg-[#141518] text-[11px] font-semibold text-[#6F7173]">
+          {/* Filter Tabs with Morphing Indicator */}
+          <div class="relative grid grid-cols-4 gap-1 p-0.5 rounded-lg bg-[#EAE8E2] dark:bg-[#141518] text-[11px] font-semibold text-[#6F7173]">
+            {/* Morphing Sliding Pill */}
+            <div
+              class="absolute top-0.5 bottom-0.5 w-[calc(25%-2px)] rounded bg-white dark:bg-[#1E1F23] shadow-xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
+              style={{
+                left:
+                  filterMode() === "all"
+                    ? "2px"
+                    : filterMode() === "today"
+                    ? "calc(25% + 1px)"
+                    : filterMode() === "upcoming"
+                    ? "calc(50% + 1px)"
+                    : "calc(75% + 0px)",
+              }}
+            />
             <For each={filterTabs}>
               {(tab) => (
                 <button
                   type="button"
                   onClick={() => setFilterMode(tab.key)}
-                  class={`py-1 rounded text-center transition-colors cursor-pointer ${
+                  class={`relative z-10 py-1 rounded text-center transition-colors duration-150 cursor-pointer bg-transparent ${
                     filterMode() === tab.key
-                      ? "bg-white dark:bg-[#1E1F23] text-[#3C3D3E] dark:text-[#ECEBE8] shadow-2xs font-bold"
-                      : "hover:text-[#3C3D3E]"
+                      ? "text-[#3C3D3E] dark:text-[#ECEBE8] font-bold"
+                      : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#3C3D3E] dark:hover:text-[#ECEBE8]"
                   }`}
                   data-testid={`task-filter-${tab.key}`}
                 >

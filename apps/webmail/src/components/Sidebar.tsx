@@ -69,6 +69,86 @@ export const Sidebar: Component<SidebarProps> = (props) => {
   const [expandedLabelIds, setExpandedLabelIds] = createSignal<Set<string>>(new Set());
   const [showUnifiedConfig, setShowUnifiedConfig] = createSignal(false);
 
+  // Morphing sliding highlight pills for Folders, Custom Folders, and Labels
+  const [navPillStyle, setNavPillStyle] = createSignal<{ top: number; height: number; opacity: number }>({
+    top: 0,
+    height: 0,
+    opacity: 0,
+  });
+  const folderRefs = new Map<string, HTMLElement>();
+
+  const [customFolderPillStyle, setCustomFolderPillStyle] = createSignal<{ top: number; height: number; opacity: number }>({
+    top: 0,
+    height: 0,
+    opacity: 0,
+  });
+  const customFolderRefs = new Map<string, HTMLElement>();
+
+  const [labelPillStyle, setLabelPillStyle] = createSignal<{ top: number; height: number; opacity: number }>({
+    top: 0,
+    height: 0,
+    opacity: 0,
+  });
+  const labelRefs = new Map<string, HTMLElement>();
+
+  const activeFolderKey = () => {
+    if (props.activeLabelId || props.activeFolderId) return null;
+    if (props.activeAccountId === "__all__" || props.currentFolder === "unified_inbox") {
+      return "unified_inbox";
+    }
+    return props.currentFolder;
+  };
+
+  createEffect(() => {
+    const key = activeFolderKey();
+    if (!key) {
+      setNavPillStyle((prev) => ({ ...prev, opacity: 0 }));
+      return;
+    }
+    const el = folderRefs.get(key);
+    if (el) {
+      setNavPillStyle({
+        top: el.offsetTop,
+        height: el.offsetHeight,
+        opacity: 1,
+      });
+    } else {
+      setNavPillStyle((prev) => ({ ...prev, opacity: 0 }));
+    }
+  });
+
+  createEffect(() => {
+    const activeId = props.activeFolderId;
+    if (activeId && customFolderRefs.has(activeId)) {
+      const el = customFolderRefs.get(activeId);
+      if (el) {
+        setCustomFolderPillStyle({
+          top: el.offsetTop,
+          height: el.offsetHeight,
+          opacity: 1,
+        });
+        return;
+      }
+    }
+    setCustomFolderPillStyle((prev) => ({ ...prev, opacity: 0 }));
+  });
+
+  createEffect(() => {
+    const activeId = props.activeLabelId;
+    if (activeId && labelRefs.has(activeId)) {
+      const el = labelRefs.get(activeId);
+      if (el) {
+        setLabelPillStyle({
+          top: el.offsetTop,
+          height: el.offsetHeight,
+          opacity: 1,
+        });
+        return;
+      }
+    }
+    setLabelPillStyle((prev) => ({ ...prev, opacity: 0 }));
+  });
+
   // Load expanded labels on mount or mailbox change
   createEffect(() => {
     const boxId = props.selectedMailbox?.id;
@@ -225,14 +305,11 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       <div class="p-2 pb-2 relative z-50 overflow-visible space-y-2 flex-shrink-0">
         {/* Top-Left App Brand Header */}
         <div class="flex items-center justify-between px-1.5 pt-0.5 pb-0.5">
-          <div class="flex items-center gap-2.5">
-            <div class="w-7 h-7 rounded-xl bg-gradient-to-br from-[#A27561] to-[#8E6351] flex items-center justify-center text-white font-bold text-xs shadow-xs tracking-wider ring-1 ring-black/5 dark:ring-white/10 select-none">
+          <div class="flex items-center gap-2">
+            <div class="w-6 h-6 rounded-xl bg-[#A27561] flex items-center justify-center text-white font-bold text-xs shadow-2xs tracking-wider ring-1 ring-[#A27561]/30">
               B
             </div>
-            <div class="flex flex-col">
-              <span class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight leading-tight">BYOS Mail</span>
-              <span class="text-[10px] font-mono text-[#878A8E] tracking-wider uppercase leading-none mt-0.5">Zero-Knowledge</span>
-            </div>
+            <span class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight">BYOS Mail</span>
           </div>
           <Show when={props.onCloseMobile}>
             <button
@@ -305,11 +382,22 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
       {/* SCROLLABLE MIDDLE: Folders & Labels (z-10, overflow-y-auto) */}
       <div class="flex-1 min-h-0 overflow-y-auto px-2 py-1 space-y-3 custom-scrollbar relative z-10">
-        {/* Navigation Folders List */}
-        <nav class="space-y-0.5">
+        {/* Navigation Folders List with Morphing Pill */}
+        <nav data-testid="sidebar-folders-nav" class="space-y-0.5 relative">
+          {/* Morphing Sliding Highlight Pill */}
+          <div
+            class="absolute left-0 right-0 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] border-l-2 border-l-[#A27561] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
+            style={{
+              top: `${navPillStyle().top}px`,
+              height: `${navPillStyle().height}px`,
+              opacity: navPillStyle().opacity,
+            }}
+          />
+
           {/* Dynamic Top Inbox Folder: 'All Inboxes' when Unified, or 'Inbox' for selected account */}
           <div class="relative group">
             <button
+              ref={(el) => { if (el) folderRefs.set(isAllInboxes() ? "unified_inbox" : "inbox", el); }}
               type="button"
               onClick={() => {
                 if (isAllInboxes()) {
@@ -334,12 +422,12 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 }
               }}
               onDrop={(e) => handleDrop(e, isAllInboxes() ? "unified_inbox" : "inbox", false)}
-              class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all duration-150 cursor-pointer select-none ${
+              class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all duration-150 cursor-pointer select-none bg-transparent ${
                 dragOverTarget() === (isAllInboxes() ? "unified_inbox" : "inbox")
                   ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
                   : (isAllInboxes() ? props.currentFolder === "unified_inbox" : props.currentFolder === "inbox")
-                  ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold border-l-2 border-l-[#A27561] shadow-2xs"
-                  : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+                  ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
+                  : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
               }`}
               data-testid={isAllInboxes() ? "unified-inbox-button" : "folder-inbox"}
             >
@@ -442,6 +530,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
               return (
                 <button
+                  ref={(el) => { if (el) folderRefs.set(f, el); }}
                   onClick={() => {
                     props.onSelectFolder(f);
                     props.onCloseMobile?.();
@@ -455,12 +544,12 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                     if (dragOverTarget() === f) setDragOverTarget(null);
                   }}
                   onDrop={(e) => handleDrop(e, f, false)}
-                  class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all duration-150 cursor-pointer select-none ${
+                  class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all duration-150 cursor-pointer select-none bg-transparent ${
                     isDropTarget()
                       ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
                       : isActive()
-                      ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold border-l-2 border-l-[#A27561] shadow-2xs"
-                      : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium"
+                      ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
+                      : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
                   }`}
                   data-testid={`folder-${f}`}
                 >
@@ -494,13 +583,23 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               </svg>
             </button>
           </div>
-          <div class="space-y-0.5 mt-0.5">
+          <div class="space-y-0.5 mt-0.5 relative">
+            {/* Morphing Sliding Highlight Pill */}
+            <div
+              class="absolute left-0 right-0 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] border-l-2 border-l-[#A27561] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
+              style={{
+                top: `${customFolderPillStyle().top}px`,
+                height: `${customFolderPillStyle().height}px`,
+                opacity: customFolderPillStyle().opacity,
+              }}
+            />
             <For each={props.customFolders || []}>
               {(f) => {
                 const isActive = () => props.activeFolderId === f.id;
                 const isDropTarget = () => dragOverTarget() === f.id;
                 return (
                   <div
+                    ref={(el) => { if (el) customFolderRefs.set(f.id, el); }}
                     onClick={() => {
                       props.onSelectCustomFolder?.(f);
                       props.onCloseMobile?.();
@@ -514,14 +613,14 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                       if (dragOverTarget() === f.id) setDragOverTarget(null);
                     }}
                     onDrop={(e) => handleDrop(e, f.id, false)}
-                    class={`group relative w-full flex items-center justify-between px-2.5 py-2 md:py-1.5 min-h-[38px] text-xs rounded-xl transition-all cursor-pointer ${
+                    class={`group relative z-10 w-full flex items-center justify-between px-2.5 py-2 md:py-1.5 min-h-[38px] text-xs rounded-xl transition-all cursor-pointer bg-transparent ${
                       f.parent_id ? "pl-5" : ""
                     } ${
                       isDropTarget()
                         ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
                         : isActive()
-                        ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold"
-                        : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium transition-colors"
+                        ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
+                        : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium transition-colors"
                     }`}
                   >
                     <div class="flex items-center gap-2 truncate min-w-0 flex-1">
@@ -615,13 +714,23 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               </svg>
             </button>
           </div>
-          <div class="space-y-0.5 mt-0.5" role="tree" aria-label="Labels">
+          <div class="space-y-0.5 mt-0.5 relative" role="tree" aria-label="Labels">
+            {/* Morphing Sliding Highlight Pill */}
+            <div
+              class="absolute left-0 right-0 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] border-l-2 border-l-[#A27561] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
+              style={{
+                top: `${labelPillStyle().top}px`,
+                height: `${labelPillStyle().height}px`,
+                opacity: labelPillStyle().opacity,
+              }}
+            />
             <For each={visibleLabels()}>
               {(node) => {
                 const isActive = () => props.activeLabelId === node.label.id;
                 const isDropTarget = () => dragOverTarget() === node.label.id;
                 return (
                   <div
+                    ref={(el) => { if (el) labelRefs.set(node.label.id, el); }}
                     tabIndex={0}
                     role="treeitem"
                     aria-expanded={node.hasChildren ? node.isExpanded : undefined}
@@ -663,12 +772,12 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                     }}
                     onDrop={(e) => handleDrop(e, node.label.id, true)}
                     style={{ "padding-left": `${node.depth * 12 + 6}px` }}
-                    class={`group relative w-full flex items-center justify-between pr-2.5 py-1.5 min-h-[36px] text-xs rounded-xl transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
+                    class={`group relative z-10 w-full flex items-center justify-between pr-2.5 py-1.5 min-h-[36px] text-xs rounded-xl transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 bg-transparent ${
                       isDropTarget()
                         ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#9E725F] border-dashed rounded-xl scale-[1.02]"
                         : isActive()
-                        ? "bg-[#F2E8E2] text-[#9E725F] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold"
-                        : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium transition-colors"
+                        ? "text-[#9E725F] dark:text-[#D4A38F] font-semibold"
+                        : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium transition-colors"
                     }`}
                   >
                     <div class="flex items-center gap-1.5 truncate min-w-0 flex-1">

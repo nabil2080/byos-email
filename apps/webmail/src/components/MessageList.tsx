@@ -1,4 +1,4 @@
-import { Component, For, Show } from "solid-js";
+import { Component, For, Show, createSignal, createEffect } from "solid-js";
 import { Folder } from "./Sidebar";
 import { InboxToolbar, SelectionFilter, SortOrder } from "./InboxToolbar";
 import { MessageRow } from "./MessageRow";
@@ -118,6 +118,28 @@ interface MessageListProps {
 }
 
 export const MessageList: Component<MessageListProps> = (props) => {
+  // Morphing sliding indicator for Focused Inbox category tabs
+  const [tabPillStyle, setTabPillStyle] = createSignal<{ left: number; width: number; opacity: number }>({
+    left: 0,
+    width: 0,
+    opacity: 0,
+  });
+  const tabRefs = new Map<string, HTMLButtonElement>();
+
+  createEffect(() => {
+    const cat = props.focusedCategory || "primary";
+    const el = tabRefs.get(cat);
+    if (el) {
+      setTabPillStyle({
+        left: el.offsetLeft,
+        width: el.offsetWidth,
+        opacity: 1,
+      });
+    } else {
+      setTabPillStyle((prev) => ({ ...prev, opacity: 0 }));
+    }
+  });
+
   const folderNames: Record<Folder, string> = {
     inbox: "Inbox",
     sent: "Sent",
@@ -247,11 +269,30 @@ export const MessageList: Component<MessageListProps> = (props) => {
       {/* Focused Inbox Tabs (Inbox view only, when enabled) */}
       <Show when={props.currentFolder === "inbox" && props.focusedInboxEnabled !== false && props.onSelectCategory}>
         <div
-          class="flex items-center gap-1 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#1A1B20] px-2.5 py-1.5 overflow-x-auto no-scrollbar flex-shrink-0"
+          class="relative flex items-center gap-1 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#1A1B20] px-2.5 py-1.5 overflow-x-auto no-scrollbar flex-shrink-0"
           role="tablist"
           aria-label="Focused Inbox Categories"
           data-testid="focused-inbox-tabs"
         >
+          {/* Morphing Sliding Background Pill */}
+          <div
+            class="absolute top-1.5 bottom-1.5 rounded-xl bg-white dark:bg-[#252830] shadow-2xs border border-[#E2DFD8]/80 dark:border-[#2E3138] transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] pointer-events-none z-0"
+            style={{
+              left: `${tabPillStyle().left}px`,
+              width: `${tabPillStyle().width}px`,
+              opacity: tabPillStyle().opacity,
+            }}
+          />
+          {/* Morphing Sliding Accent Underline */}
+          <div
+            class="absolute bottom-0 h-0.5 bg-[#9E725F] rounded-full transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] pointer-events-none z-10"
+            style={{
+              left: `${tabPillStyle().left}px`,
+              width: `${tabPillStyle().width}px`,
+              opacity: tabPillStyle().opacity,
+            }}
+          />
+
           <For
             each={[
               {
@@ -303,16 +344,17 @@ export const MessageList: Component<MessageListProps> = (props) => {
               const unreadCount = () => props.categoryCounts?.[cat.id]?.unread || 0;
               return (
                 <button
+                  ref={(el) => { if (el) tabRefs.set(cat.id, el); }}
                   type="button"
                   role="tab"
                   aria-selected={isActive()}
                   data-category={cat.id}
                   data-testid={`category-tab-${cat.id}`}
                   onClick={() => props.onSelectCategory?.(cat.id)}
-                  class={`flex items-center gap-2 px-3 py-2.5 text-xs font-medium border-b-2 transition-all cursor-pointer whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
+                  class={`relative z-10 flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-xl transition-colors duration-150 cursor-pointer whitespace-nowrap focus:outline-none focus:ring-1 focus:ring-[#9E725F]/40 bg-transparent ${
                     isActive()
-                      ? "border-[#9E725F] text-[#3C3D3E] dark:text-[#F3F4F6] font-semibold bg-[#F0EEE9]/40 dark:bg-[#252830]/50"
-                      : "border-transparent text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#3C3D3E] dark:hover:text-[#F3F4F6] hover:bg-stone-50 dark:hover:bg-[#252830]/20"
+                      ? "text-[#1A1B1E] dark:text-[#F3F4F6] font-semibold"
+                      : "text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6]"
                   }`}
                 >
                   <span class={`flex-shrink-0 ${isActive() ? "text-[#9E725F]" : "text-[#6F7173] dark:text-[#A1A1AA]"}`}>

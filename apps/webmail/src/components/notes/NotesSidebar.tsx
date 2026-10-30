@@ -1,4 +1,4 @@
-import { Component, For, Show } from "solid-js";
+import { Component, For, Show, createSignal, createEffect } from "solid-js";
 import { UserMe, Mailbox, ConnectedAccount } from "../../api";
 import { AccountSwitcher } from "../AccountSwitcher";
 
@@ -39,6 +39,28 @@ export interface NotesSidebarProps {
 export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
   const isSelected = (view: string) => props.activeView === view;
 
+  // Morphing sliding highlight pill tracking active view
+  const [navPillStyle, setNavPillStyle] = createSignal<{ top: number; height: number; opacity: number }>({
+    top: 0,
+    height: 0,
+    opacity: 0,
+  });
+  const viewRefs = new Map<string, HTMLElement>();
+
+  createEffect(() => {
+    const view = props.activeView;
+    const el = viewRefs.get(view);
+    if (el) {
+      setNavPillStyle({
+        top: el.offsetTop,
+        height: el.offsetHeight,
+        opacity: 1,
+      });
+    } else {
+      setNavPillStyle((prev) => ({ ...prev, opacity: 0 }));
+    }
+  });
+
   const mailboxEmail = () => {
     if (!props.selectedMailbox) return props.currentUser?.email || "byos.email";
     if ((props.selectedMailbox as any)?.email) return (props.selectedMailbox as any).email;
@@ -62,14 +84,11 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
       <div class="p-2 pb-2 relative z-50 overflow-visible space-y-2 flex-shrink-0">
         {/* Top Brand Header matching Sidebar.tsx */}
         <div class="flex items-center justify-between px-1.5 pt-0.5 pb-0.5">
-          <div class="flex items-center gap-2.5">
-            <div class="w-7 h-7 rounded-xl bg-gradient-to-br from-[#A27561] to-[#8E6351] flex items-center justify-center text-white font-bold text-xs shadow-xs tracking-wider ring-1 ring-black/5 dark:ring-white/10 select-none">
+          <div class="flex items-center gap-2">
+            <div class="w-6 h-6 rounded-xl bg-[#A27561] flex items-center justify-center text-white font-bold text-xs shadow-2xs tracking-wider ring-1 ring-[#A27561]/30">
               B
             </div>
-            <div class="flex flex-col">
-              <span class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight leading-tight">BYOS Notes</span>
-              <span class="text-[10px] font-mono text-[#878A8E] tracking-wider uppercase leading-none mt-0.5">Zero-Knowledge</span>
-            </div>
+            <span class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight">BYOS Notes</span>
           </div>
           <Show when={props.onCloseMobile}>
             <button
@@ -114,19 +133,30 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
       </div>
 
       {/* ── MIDDLE SCROLLABLE SECTION: Notes Navigation Items ── */}
-      <div class="flex-1 min-h-0 overflow-y-auto px-2 py-1 space-y-1 custom-scrollbar">
+      <div class="flex-1 min-h-0 overflow-y-auto px-2 py-1 space-y-1 custom-scrollbar relative">
+        {/* Morphing Sliding Highlight Pill */}
+        <div
+          class="absolute left-2 right-2 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] border-l-2 border-l-[#A27561] shadow-2xs pointer-events-none transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] z-0"
+          style={{
+            top: `${navPillStyle().top}px`,
+            height: `${navPillStyle().height}px`,
+            opacity: navPillStyle().opacity,
+          }}
+        />
+
         {/* 1. Notes */}
         <button
+          ref={(el) => { if (el) viewRefs.set("notes", el); }}
           type="button"
           onClick={() => {
             props.onSelectView("notes");
             props.onCloseMobile?.();
           }}
           data-testid="notes-nav-notes"
-          class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer ${
+          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent ${
             isSelected("notes")
-              ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs border-l-2 border-l-[#A27561]"
-              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium border-l-2 border-l-transparent"
+              ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
+              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
           }`}
         >
           <div class="flex items-center gap-2.5">
@@ -152,16 +182,17 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
 
         {/* 2. Reminders */}
         <button
+          ref={(el) => { if (el) viewRefs.set("reminders", el); }}
           type="button"
           onClick={() => {
             props.onSelectView("reminders");
             props.onCloseMobile?.();
           }}
           data-testid="notes-nav-reminders"
-          class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer ${
+          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent ${
             isSelected("reminders")
-              ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs border-l-2 border-l-[#A27561]"
-              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium border-l-2 border-l-transparent"
+              ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
+              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
           }`}
         >
           <div class="flex items-center gap-2.5">
@@ -211,16 +242,17 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
         <For each={props.labels}>
           {(lbl) => (
             <button
+              ref={(el) => { if (el) viewRefs.set(`label:${lbl}`, el); }}
               type="button"
               onClick={() => {
                 props.onSelectView(`label:${lbl}`);
                 props.onCloseMobile?.();
               }}
               data-testid={`notes-nav-label-${lbl}`}
-              class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer ${
+              class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent ${
                 isSelected(`label:${lbl}`)
-                  ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs border-l-2 border-l-[#A27561]"
-                  : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium border-l-2 border-l-transparent"
+                  ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
+                  : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
               }`}
             >
               <div class="flex items-center gap-2.5 truncate">
@@ -253,16 +285,17 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
 
         {/* 4. Archive */}
         <button
+          ref={(el) => { if (el) viewRefs.set("archive", el); }}
           type="button"
           onClick={() => {
             props.onSelectView("archive");
             props.onCloseMobile?.();
           }}
           data-testid="notes-nav-archive"
-          class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer ${
+          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent ${
             isSelected("archive")
-              ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs border-l-2 border-l-[#A27561]"
-              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium border-l-2 border-l-transparent"
+              ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
+              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
           }`}
         >
           <div class="flex items-center gap-2.5">
@@ -288,16 +321,17 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
 
         {/* 5. Bin */}
         <button
+          ref={(el) => { if (el) viewRefs.set("bin", el); }}
           type="button"
           onClick={() => {
             props.onSelectView("bin");
             props.onCloseMobile?.();
           }}
           data-testid="notes-nav-bin"
-          class={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer ${
+          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent ${
             isSelected("bin")
-              ? "bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-semibold shadow-2xs border-l-2 border-l-[#A27561]"
-              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/70 dark:hover:bg-[#26282E] font-medium border-l-2 border-l-transparent"
+              ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
+              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
           }`}
         >
           <div class="flex items-center gap-2.5">
