@@ -2,6 +2,7 @@ import { Component, createSignal, Show, For } from "solid-js";
 import { ConnectedAccount, login, verifyLogin2FA, sendLogin2FACode, LoginResponse, apiBase } from "../api";
 import { autoUnwrapMailboxKey, autoUnwrapKeys } from "../message_crypto";
 import { unsealAccountKeys, persistAccountListForDisplay, setAccountKeys, sanitizeConnectedAccounts } from "../session_isolation";
+import { cryptoWorkerBridge } from "../crypto_worker_bridge";
 
 interface AddMailboxModalProps {
   isOpen: boolean;
@@ -78,7 +79,7 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
         const salt = new Uint8Array(16);
         crypto.getRandomValues(salt);
         const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
-        const passphraseEnvelope = wasm.wasm_passphrase_wrap_key(pass, saltHex, kp.secret_key);
+        const passphraseEnvelope = await cryptoWorkerBridge.passphraseWrapKey(pass, saltHex, kp.secret_key);
         const healWrapped = JSON.stringify({
           salt: saltHex,
           envelope: passphraseEnvelope,

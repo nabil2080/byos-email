@@ -62,6 +62,7 @@ import { runNotesTests } from "./components/notes/notes.test.js";
 import { runTrack2SecurityTests } from "./track2_security.test.js";
 import { runCalendarTrack3Tests } from "./calendar_track3.test.js";
 import { runTrack4ResilienceTests } from "./track4_resilience.test.js";
+import { runCryptoWorkerTests } from "./crypto_worker.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -440,6 +441,10 @@ async function main() {
   const track4Res = await runTrack4ResilienceTests();
   totalPassed += track4Res.passed;
   totalFailed += track4Res.failed;
+
+  const cryptoWorkerRes = await runCryptoWorkerTests();
+  totalPassed += cryptoWorkerRes.passed;
+  totalFailed += cryptoWorkerRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

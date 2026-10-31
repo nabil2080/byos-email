@@ -47,6 +47,7 @@ import {
   getSigningSeedFor,
   getXWingSeedFor,
 } from "../../session_isolation";
+import { cryptoWorkerBridge } from "../../crypto_worker_bridge";
 
 interface SecurityTabProps {
   mailbox: Mailbox;
@@ -478,14 +479,12 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
         }
 
         try {
-          const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
-
           // Fresh salt for mailbox key password wrap
           const mbSalt = new Uint8Array(16);
           crypto.getRandomValues(mbSalt);
           const mbSaltHex = Array.from(mbSalt).map((b) => b.toString(16).padStart(2, "0")).join("");
           const mbSkHex = Array.from(mbKeyBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-          const mbEnvelope = wasm.wasm_passphrase_wrap_key(next, mbSaltHex, mbSkHex);
+          const mbEnvelope = await cryptoWorkerBridge.passphraseWrapKey(next, mbSaltHex, mbSkHex);
 
           let signingSaltHex = "";
           let signingEnvelope = "";
@@ -494,7 +493,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
             crypto.getRandomValues(sSalt);
             signingSaltHex = Array.from(sSalt).map((b) => b.toString(16).padStart(2, "0")).join("");
             const seedHex = Array.from(signSeedBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-            signingEnvelope = wasm.wasm_passphrase_wrap_key(next, signingSaltHex, seedHex);
+            signingEnvelope = await cryptoWorkerBridge.passphraseWrapKey(next, signingSaltHex, seedHex);
           }
 
           let xwingSaltHex = "";
@@ -504,7 +503,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
             crypto.getRandomValues(xSalt);
             xwingSaltHex = Array.from(xSalt).map((b) => b.toString(16).padStart(2, "0")).join("");
             const seedHex = Array.from(xwingSeedBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-            xwingEnvelope = wasm.wasm_passphrase_wrap_key(next, xwingSaltHex, seedHex);
+            xwingEnvelope = await cryptoWorkerBridge.passphraseWrapKey(next, xwingSaltHex, seedHex);
           }
 
           const payloadObj: Record<string, string> = {
@@ -727,12 +726,11 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
         }
 
         try {
-          const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
           const mbSalt = new Uint8Array(16);
           crypto.getRandomValues(mbSalt);
           const mbSaltHex = Array.from(mbSalt).map((b) => b.toString(16).padStart(2, "0")).join("");
           const mbSkHex = Array.from(mbKeyBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-          const mbEnvelope = wasm.wasm_passphrase_wrap_key(next, mbSaltHex, mbSkHex);
+          const mbEnvelope = await cryptoWorkerBridge.passphraseWrapKey(next, mbSaltHex, mbSkHex);
 
           let signingSaltHex = "";
           let signingEnvelope = "";
@@ -741,7 +739,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
             crypto.getRandomValues(sSalt);
             signingSaltHex = Array.from(sSalt).map((b) => b.toString(16).padStart(2, "0")).join("");
             const seedHex = Array.from(signSeedBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-            signingEnvelope = wasm.wasm_passphrase_wrap_key(next, signingSaltHex, seedHex);
+            signingEnvelope = await cryptoWorkerBridge.passphraseWrapKey(next, signingSaltHex, seedHex);
           }
 
           let xwingSaltHex = "";
@@ -751,7 +749,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
             crypto.getRandomValues(xSalt);
             xwingSaltHex = Array.from(xSalt).map((b) => b.toString(16).padStart(2, "0")).join("");
             const seedHex = Array.from(xwingSeedBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-            xwingEnvelope = wasm.wasm_passphrase_wrap_key(next, xwingSaltHex, seedHex);
+            xwingEnvelope = await cryptoWorkerBridge.passphraseWrapKey(next, xwingSaltHex, seedHex);
           }
 
           const payloadObj: Record<string, string> = {
@@ -910,8 +908,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
       if (!skHex) {
         const s = settings();
         if (s?.recovery_phrase_wrapped && s?.recovery_phrase_salt) {
-          const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
-          const unwrappedHex = wasm.wasm_passphrase_unwrap_key(
+          const unwrappedHex = await cryptoWorkerBridge.passphraseUnwrapKey(
             exportPasswordInput(),
             s.recovery_phrase_salt,
             s.recovery_phrase_wrapped
@@ -1000,8 +997,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
         throw new Error("No wrapped recovery phrase found for this mailbox.");
       }
 
-      const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
-      const unwrappedHex = wasm.wasm_passphrase_unwrap_key(
+      const unwrappedHex = await cryptoWorkerBridge.passphraseUnwrapKey(
         verifyPasswordInput(),
         s.recovery_phrase_salt,
         s.recovery_phrase_wrapped

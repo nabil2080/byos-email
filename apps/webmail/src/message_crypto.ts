@@ -2,6 +2,7 @@ import { bytesToHex, hexToBytes } from "./attachment_crypto";
 export { bytesToHex, hexToBytes };
 import type * as WasmCore from "./generated/crypto-core/byos_crypto_core.js";
 import { lookupMailboxKeys, type KeyDirectoryRecord } from "./api";
+import { cryptoWorkerBridge } from "./crypto_worker_bridge";
 
 // Client-side message/draft envelope handling (Section 12).
 //
@@ -425,7 +426,11 @@ export async function decryptPathAEnvelope(
   // 1. Decrypt
   let plaintextHex: string;
   try {
-    plaintextHex = wasm.wasm_open_xwing_envelope(recipientSeedHex, envelopeJson);
+    if (deps?.wasm) {
+      plaintextHex = deps.wasm.wasm_open_xwing_envelope(recipientSeedHex, envelopeJson);
+    } else {
+      plaintextHex = await cryptoWorkerBridge.openXwingEnvelope(recipientSeedHex, envelopeJson);
+    }
   } catch (e: unknown) {
     const rawMsg =
       e instanceof Error

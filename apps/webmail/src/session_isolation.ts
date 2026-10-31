@@ -22,6 +22,7 @@
  */
 
 import { autoUnwrapKeys } from "./message_crypto";
+import { cryptoWorkerBridge } from "./crypto_worker_bridge";
 
 export const SESSION_GENERATION_KEY = "byos_session_generation";
 
@@ -483,12 +484,8 @@ export async function unsealAccountKeys(
   if (!wrappedSkUser) {
     throw new Error("Missing wrapped key material for account");
   }
-  const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-  const unwrapped = autoUnwrapKeys(wasm, password, wrappedSkUser);
-
-  const skBytes = unwrapped.mailboxSk;
-  const skHex = Array.from(skBytes, (b) => b.toString(16).padStart(2, "0")).join("");
-  const searchKeyHex = wasm.wasm_derive_search_key(skHex);
+  const unwrapped = await cryptoWorkerBridge.autoUnwrapKeys(password, wrappedSkUser);
+  const searchKeyHex = unwrapped.searchKeyHex;
 
   // Store private keys strictly in-memory
   setAccountKeys(accountId, {

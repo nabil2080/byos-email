@@ -4,6 +4,7 @@ import { mailboxIdHex, hexToBase64 } from "../message_crypto";
 import { generateQRCodeSVG } from "../utils/qr";
 import { generateTOTPSecret, formatTOTPSecret, verifyTOTPClient } from "../utils/totp";
 import { persistAccountListForDisplay, setAccountKeys, sanitizeConnectedAccounts } from "../session_isolation";
+import { cryptoWorkerBridge } from "../crypto_worker_bridge";
 
 export const SetupAccount: Component = () => {
   const [loading, setLoading] = createSignal(true);
@@ -128,11 +129,11 @@ export const SetupAccount: Component = () => {
       // 1. Wrap under user root secret derived from recovery phrase
       const rootWrappedHex = wasm.wasm_wrap_mailbox_key(rootHex, mailboxSkHex, boxIdHex);
 
-      // 2. Wrap under user's password using wasm_passphrase_wrap_key
+      // 2. Wrap under user's password using cryptoWorkerBridge
       const salt = new Uint8Array(16);
       crypto.getRandomValues(salt);
       const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
-      const passphraseEnvelope = wasm.wasm_passphrase_wrap_key(password(), saltHex, mailboxSkHex);
+      const passphraseEnvelope = await cryptoWorkerBridge.passphraseWrapKey(password(), saltHex, mailboxSkHex);
 
       // 3. Derive signing seed and wrap twice (password + recovery_root)
       const signingSeedHex = wasm.wasm_derive_signing_seed(
@@ -147,7 +148,7 @@ export const SetupAccount: Component = () => {
         .map((b) => b.toString(16).padStart(2, "0"))
         .join("");
 
-      const signingEnvelope = wasm.wasm_passphrase_wrap_key(
+      const signingEnvelope = await cryptoWorkerBridge.passphraseWrapKey(
         password(),
         signingSaltHex,
         signingSeedHex,
@@ -168,7 +169,7 @@ export const SetupAccount: Component = () => {
         .map((b) => b.toString(16).padStart(2, "0"))
         .join("");
 
-      const xwingEnvelope = wasm.wasm_passphrase_wrap_key(
+      const xwingEnvelope = await cryptoWorkerBridge.passphraseWrapKey(
         password(),
         xwingSaltHex,
         xwingSeedHex,
@@ -468,7 +469,7 @@ export const SetupAccount: Component = () => {
         const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
         const phraseBytes = new TextEncoder().encode(mnemonic());
         const mnemonicHex = Array.from(phraseBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-        const wrappedPhraseHex = wasm.wasm_passphrase_wrap_key(password(), saltHex, mnemonicHex);
+        const wrappedPhraseHex = await cryptoWorkerBridge.passphraseWrapKey(password(), saltHex, mnemonicHex);
 
         await updateMailboxSettings(data.mailbox_id, {
           recovery_phrase_wrapped: wrappedPhraseHex,

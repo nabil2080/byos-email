@@ -5,6 +5,10 @@ import wasm from "vite-plugin-wasm";
 
 export default defineConfig({
   plugins: [wasm(), solid(), tailwindcss()],
+  worker: {
+    format: "es",
+    plugins: () => [wasm()],
+  },
   server: {
     port: 3001,
     host: process.env.VITE_HOST || "0.0.0.0",

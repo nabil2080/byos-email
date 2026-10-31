@@ -121,6 +121,7 @@ import {
   MAX_ATTACHMENT_SIZE,
   decryptChunk,
 } from "./attachment_crypto";
+import { cryptoWorkerBridge } from "./crypto_worker_bridge";
 import {
   unlockMailboxKey,
   autoUnwrapMailboxKey,
@@ -476,7 +477,7 @@ export async function tryPathASend(
     } else {
       const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
       // Canonical form is AAD || ciphertext (raw bytes). Attachment envelopes are excluded from message envelope signature.
-      envelopeJson = wasm.wasm_seal_xwing_envelope_signed(
+      envelopeJson = await cryptoWorkerBridge.sealXwingEnvelopeSigned(
         xwingPkHex,
         record.key_id,
         record.key_epoch,
@@ -487,7 +488,7 @@ export async function tryPathASend(
         const senderXwingPkHex = wasm.wasm_xwing_public_key_from_seed(
           bytesToHex(senderXwingSeed),
         );
-        senderEnvelopeJson = wasm.wasm_seal_xwing_envelope_signed(
+        senderEnvelopeJson = await cryptoWorkerBridge.sealXwingEnvelopeSigned(
           senderXwingPkHex,
           senderMailboxId,
           1, // TODO: use sender's real key_epoch when rotation is implemented
@@ -3483,7 +3484,7 @@ const App: Component = () => {
           const salt = new Uint8Array(16);
           crypto.getRandomValues(salt);
           const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
-          const passphraseEnvelope = wasm.wasm_passphrase_wrap_key(newPass, saltHex, skHex);
+          const passphraseEnvelope = await cryptoWorkerBridge.passphraseWrapKey(newPass, saltHex, skHex);
 
           const rootHex = wasm.wasm_recover_root_secret(phrase);
           const boxIdClean = boxId.replace(/-/g, "");
@@ -3511,7 +3512,7 @@ const App: Component = () => {
         const salt = new Uint8Array(16);
         crypto.getRandomValues(salt);
         const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
-        const passphraseEnvelope = wasm.wasm_passphrase_wrap_key(newPass, saltHex, kp.secret_key);
+        const passphraseEnvelope = await cryptoWorkerBridge.passphraseWrapKey(newPass, saltHex, kp.secret_key);
 
         newWrappedSkUser = JSON.stringify({
           salt: saltHex,
@@ -3688,7 +3689,7 @@ const App: Component = () => {
           const salt = new Uint8Array(16);
           crypto.getRandomValues(salt);
           const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, "0")).join("");
-          const passphraseEnvelope = wasm.wasm_passphrase_wrap_key(password, saltHex, kp.secret_key);
+          const passphraseEnvelope = await cryptoWorkerBridge.passphraseWrapKey(password, saltHex, kp.secret_key);
           const healWrapped = JSON.stringify({
             salt: saltHex,
             envelope: passphraseEnvelope,
@@ -5312,7 +5313,7 @@ const App: Component = () => {
           xwingSeedHex = bytesToHex(stagedResult.unwrappedXWingSeed);
         } else {
           try {
-            const unsealedHistorical = autoUnwrapKeys(wasm, secret, prevWrapped);
+            const unsealedHistorical = await cryptoWorkerBridge.autoUnwrapKeys(secret, prevWrapped);
             if (unsealedHistorical.xwingSeed) {
               xwingSeedHex = bytesToHex(unsealedHistorical.xwingSeed);
             }
@@ -5322,7 +5323,7 @@ const App: Component = () => {
           signingSeedHex = bytesToHex(stagedResult.unwrappedSigningSeed);
         } else {
           try {
-            const unsealedHistorical = autoUnwrapKeys(wasm, secret, prevWrapped);
+            const unsealedHistorical = await cryptoWorkerBridge.autoUnwrapKeys(secret, prevWrapped);
             if (unsealedHistorical.signingSeed) {
               signingSeedHex = bytesToHex(unsealedHistorical.signingSeed);
             }
@@ -5939,7 +5940,7 @@ const App: Component = () => {
               const xwingPkHex = bytesToHex(bytes);
               const plaintextHex = bytesToHex(new TextEncoder().encode(mimeMessage));
               const signingSeedHex = bytesToHex(sSeed);
-              envJson = wasm.wasm_seal_xwing_envelope_signed(
+              envJson = await cryptoWorkerBridge.sealXwingEnvelopeSigned(
                 xwingPkHex,
                 recRecord.key_id,
                 recRecord.key_epoch,
@@ -5947,7 +5948,7 @@ const App: Component = () => {
                 signingSeedHex,
               );
               const senderXwingPkHex = wasm.wasm_xwing_public_key_from_seed(bytesToHex(sXwing));
-              senderEnvJson = wasm.wasm_seal_xwing_envelope_signed(
+              senderEnvJson = await cryptoWorkerBridge.sealXwingEnvelopeSigned(
                 senderXwingPkHex,
                 box.id,
                 1,
@@ -6174,7 +6175,7 @@ const App: Component = () => {
             const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
             const xwingPkBytes = base64ToBytes(record.xwing_public_key);
             if (xwingPkBytes.length === 1216) {
-              const envelopeJson = wasm.wasm_seal_xwing_envelope_signed(
+              const envelopeJson = await cryptoWorkerBridge.sealXwingEnvelopeSigned(
                 bytesToHex(xwingPkBytes),
                 record.key_id,
                 record.key_epoch,
