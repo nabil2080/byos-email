@@ -1,4 +1,4 @@
-.PHONY: clean-test-data test-api test-webmail smoke help test-crypto
+.PHONY: clean-test-data test-api test-webmail lint-webmail smoke help test-crypto
 
 clean-test-data:
 	@powershell -NoProfile -ExecutionPolicy Bypass -File ./clean-test-data.ps1
@@ -8,6 +8,9 @@ test-api:
 
 test-webmail:
 	cd apps/webmail && npm run typecheck && npm test -- --run
+
+lint-webmail:
+	cd apps/webmail && npm run lint
 
 smoke:
 	@powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/smoke.ps1

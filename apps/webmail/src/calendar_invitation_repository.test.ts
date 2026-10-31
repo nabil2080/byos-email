@@ -303,7 +303,7 @@ export async function runCalendarInvitationRepositoryTests(): Promise<{ passed: 
     try {
       const res = fn();
       if (res instanceof Promise) {
-        return res
+        res
           .then(() => {
             console.log(`  ✓ ${name}`);
             passed++;

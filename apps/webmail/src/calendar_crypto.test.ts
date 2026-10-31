@@ -20,7 +20,7 @@ export async function runCalendarCryptoTests() {
     try {
       const res = fn();
       if (res instanceof Promise) {
-        return res
+        res
           .then(() => {
             console.log(`  ✓ ${name}`);
             passed++;

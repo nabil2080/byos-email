@@ -53,7 +53,7 @@ export async function uploadChunksConcurrently(
         }
         // Exponential backoff with jitter
         const backoffMs = Math.min(
-          baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 50,
+          baseDelayMs * 2 ** (attempt - 1) + Math.random() * 50,
           2000,
         );
         await new Promise((resolve) => setTimeout(resolve, backoffMs));

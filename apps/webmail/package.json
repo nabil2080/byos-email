@@ -7,6 +7,10 @@
     "build": "vite build",
     "preview": "vite preview --port 3001",
     "typecheck": "tsc --noEmit",
+    "lint": "biome lint src",
+    "lint:fix": "biome lint --write src",
+    "format": "biome format --write src",
+    "check": "biome check src",
     "test": "npx tsx --experimental-wasm-modules src/run_test.node.js",
     "test:legacy": "npx tsx --experimental-wasm-modules src/run_test.node.js",
     "test:vitest": "vitest run",
@@ -23,6 +27,7 @@
     "solid-js": "^1.9.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.6.4",
     "@solidjs/testing-library": "^0.8.10",
     "@tailwindcss/vite": "^4.1.0",
     "@testing-library/jest-dom": "^7.0.1",

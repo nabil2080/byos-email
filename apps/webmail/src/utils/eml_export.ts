@@ -27,7 +27,7 @@ export interface EmlMessageParams {
  */
 export function formatRFC2822Date(dateInput?: string | Date): string {
   const d = dateInput ? new Date(dateInput) : new Date();
-  if (isNaN(d.getTime())) {
+  if (Number.isNaN(d.getTime())) {
     return new Date().toUTCString();
   }
   return d.toUTCString();
