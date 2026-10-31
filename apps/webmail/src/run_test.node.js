@@ -60,6 +60,8 @@ import { runCalendarLayoutTests } from "./utils/calendarLayout.test.js";
 import { runUnlockAnd2FAPersistenceTests } from "./unlock_and_2fa_persistence.test.js";
 import { runNotesTests } from "./components/notes/notes.test.js";
 import { runTrack2SecurityTests } from "./track2_security.test.js";
+import { runCalendarTrack3Tests } from "./calendar_track3.test.js";
+import { runTrack4ResilienceTests } from "./track4_resilience.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -430,6 +432,14 @@ async function main() {
   console.log(`TRACK 2 & ZERO-KNOWLEDGE SECURITY TESTS: ${track2Res.passed} passed, ${track2Res.failed} failed\n`);
   totalPassed += track2Res.passed;
   totalFailed += track2Res.failed;
+
+  const track3Res = await runCalendarTrack3Tests();
+  totalPassed += track3Res.passed;
+  totalFailed += track3Res.failed;
+
+  const track4Res = await runTrack4ResilienceTests();
+  totalPassed += track4Res.passed;
+  totalFailed += track4Res.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

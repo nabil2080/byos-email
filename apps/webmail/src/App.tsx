@@ -175,6 +175,7 @@ import { ChangeParentModal } from "./components/modals/ChangeParentModal";
 import { CreateFolderModal } from "./components/modals/CreateFolderModal";
 import { ImportEmailsModal } from "./components/modals/ImportEmailsModal";
 import { ContactsModal } from "./components/modals/ContactsModal";
+import { AppErrorBoundary } from "./components/ErrorBoundary";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { RightBar } from "./components/RightBar";
 import { QuickSettingsPanel } from "./components/QuickSettingsPanel";
@@ -6964,6 +6965,18 @@ const App: Component = () => {
         counts.scheduled++;
         continue;
       }
+      if (m.folder === "drafts") {
+        counts.drafts++;
+        continue;
+      }
+      if (m.folder === "sent") {
+        counts.sent++;
+        continue;
+      }
+      if (m.folder === "trash") {
+        counts.trash++;
+        continue;
+      }
       const isSnoozed = Boolean(m.snoozedUntil && new Date(m.snoozedUntil).getTime() > now);
       if (isSnoozed) {
         counts.snoozed++;
@@ -8288,93 +8301,97 @@ const App: Component = () => {
 
           <Show when={activeModule() === "calendar"}>
             <div class="flex-1 flex min-w-0 h-full overflow-hidden">
-              <CalendarView
-                currentUser={currentUser()}
-                selectedMailbox={selectedMailbox()}
-                connectedAccounts={connectedAccounts()}
-                activeAccountId={currentFolder() === "unified_inbox" ? "__all__" : selectedMailbox()?.id || "__all__"}
-                onSelectAccount={handleSwitchAccount}
-                onSelectAllInboxes={() => {
-                  setActiveModule("mail");
-                  setCurrentFolder("unified_inbox");
-                  loadUnifiedInboxMessages();
-                }}
-                onOpenAddMailbox={() => setAddMailboxModalOpen(true)}
-                onLogout={handleLogout}
-                profilePhotoUrl={profilePhotoUrl()}
-                photoUrls={undefined}
-                isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
-                storageError={storageErrorBanner()}
-                accountUnreadCounts={accountUnreadCounts()}
-                unifiedUnreadCount={unifiedUnreadCount()}
-                mailboxId={selectedMailbox()?.id || ""}
-                mailboxKey={mailboxKey()}
-                mailboxPk={selectedMailbox()?.public_key || null}
-                unlockedBoxId={unlockedBoxId()}
-                currentUserEmail={currentUser()?.email}
-                contacts={contacts()}
-                onSwitchToMail={() => setActiveModule("mail")}
-                onSendInvitation={handleSendInvitationEmail}
-                externalSearchQuery={searchQuery()}
-                onSearchChange={setSearchQuery}
-                activeModule={activeModule()}
-                onSwitchModule={setActiveModule}
-                onOpenContacts={openContacts}
-                onOpenSettings={() => {
-                  setActiveSettingsTab("account");
-                  setSettingsOpen(true);
-                }}
-                isOnline={!isOffline()}
-                isCustomizerOpen={rightCustomizerOpen()}
-                onToggleCustomizer={() => setRightCustomizerOpen(!rightCustomizerOpen())}
-                theme={theme()}
-                onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
-                savedViewMode={calendarViewMode()}
-                onViewModeChange={setCalendarViewMode}
-                onCheckReminders={checkCalendarReminders}
-                selectedEventId={selectedCalendarEventId()}
-              />
+              <AppErrorBoundary name="Calendar">
+                <CalendarView
+                  currentUser={currentUser()}
+                  selectedMailbox={selectedMailbox()}
+                  connectedAccounts={connectedAccounts()}
+                  activeAccountId={currentFolder() === "unified_inbox" ? "__all__" : selectedMailbox()?.id || "__all__"}
+                  onSelectAccount={handleSwitchAccount}
+                  onSelectAllInboxes={() => {
+                    setActiveModule("mail");
+                    setCurrentFolder("unified_inbox");
+                    loadUnifiedInboxMessages();
+                  }}
+                  onOpenAddMailbox={() => setAddMailboxModalOpen(true)}
+                  onLogout={handleLogout}
+                  profilePhotoUrl={profilePhotoUrl()}
+                  photoUrls={undefined}
+                  isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
+                  storageError={storageErrorBanner()}
+                  accountUnreadCounts={accountUnreadCounts()}
+                  unifiedUnreadCount={unifiedUnreadCount()}
+                  mailboxId={selectedMailbox()?.id || ""}
+                  mailboxKey={mailboxKey()}
+                  mailboxPk={selectedMailbox()?.public_key || null}
+                  unlockedBoxId={unlockedBoxId()}
+                  currentUserEmail={currentUser()?.email}
+                  contacts={contacts()}
+                  onSwitchToMail={() => setActiveModule("mail")}
+                  onSendInvitation={handleSendInvitationEmail}
+                  externalSearchQuery={searchQuery()}
+                  onSearchChange={setSearchQuery}
+                  activeModule={activeModule()}
+                  onSwitchModule={setActiveModule}
+                  onOpenContacts={openContacts}
+                  onOpenSettings={() => {
+                    setActiveSettingsTab("account");
+                    setSettingsOpen(true);
+                  }}
+                  isOnline={!isOffline()}
+                  isCustomizerOpen={rightCustomizerOpen()}
+                  onToggleCustomizer={() => setRightCustomizerOpen(!rightCustomizerOpen())}
+                  theme={theme()}
+                  onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
+                  savedViewMode={calendarViewMode()}
+                  onViewModeChange={setCalendarViewMode}
+                  onCheckReminders={checkCalendarReminders}
+                  selectedEventId={selectedCalendarEventId()}
+                />
+              </AppErrorBoundary>
             </div>
           </Show>
 
           <Show when={activeModule() === "notes"}>
             <div class="flex-1 flex min-w-0 h-full overflow-hidden">
-              <NotesView
-                currentUser={currentUser()}
-                selectedMailbox={selectedMailbox()}
-                connectedAccounts={connectedAccounts()}
-                activeAccountId={currentFolder() === "unified_inbox" ? "__all__" : selectedMailbox()?.id || "__all__"}
-                onSelectAccount={handleSwitchAccount}
-                onSelectAllInboxes={() => {
-                  setActiveModule("mail");
-                  setCurrentFolder("unified_inbox");
-                  loadUnifiedInboxMessages();
-                }}
-                onOpenAddMailbox={() => setAddMailboxModalOpen(true)}
-                onLogout={handleLogout}
-                profilePhotoUrl={profilePhotoUrl()}
-                photoUrls={undefined}
-                isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
-                storageError={storageErrorBanner()}
-                accountUnreadCounts={accountUnreadCounts()}
-                unifiedUnreadCount={unifiedUnreadCount()}
-                mailboxId={selectedMailbox()?.id}
-                mailboxKey={unlockedBoxId() === selectedMailbox()?.id ? mailboxKey() : null}
-                searchQuery={searchQuery()}
-                onSearchChange={setSearchQuery}
-                activeModule={activeModule()}
-                onSwitchModule={setActiveModule}
-                onOpenContacts={openContacts}
-                onOpenSettings={() => {
-                  setActiveSettingsTab("account");
-                  setSettingsOpen(true);
-                }}
-                isOnline={!isOffline()}
-                isCustomizerOpen={rightCustomizerOpen()}
-                onToggleCustomizer={() => setRightCustomizerOpen(!rightCustomizerOpen())}
-                theme={theme()}
-                onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
-              />
+              <AppErrorBoundary name="Notes">
+                <NotesView
+                  currentUser={currentUser()}
+                  selectedMailbox={selectedMailbox()}
+                  connectedAccounts={connectedAccounts()}
+                  activeAccountId={currentFolder() === "unified_inbox" ? "__all__" : selectedMailbox()?.id || "__all__"}
+                  onSelectAccount={handleSwitchAccount}
+                  onSelectAllInboxes={() => {
+                    setActiveModule("mail");
+                    setCurrentFolder("unified_inbox");
+                    loadUnifiedInboxMessages();
+                  }}
+                  onOpenAddMailbox={() => setAddMailboxModalOpen(true)}
+                  onLogout={handleLogout}
+                  profilePhotoUrl={profilePhotoUrl()}
+                  photoUrls={undefined}
+                  isUnlocked={Boolean(mailboxKey() && unlockedBoxId() === selectedMailbox()?.id)}
+                  storageError={storageErrorBanner()}
+                  accountUnreadCounts={accountUnreadCounts()}
+                  unifiedUnreadCount={unifiedUnreadCount()}
+                  mailboxId={selectedMailbox()?.id}
+                  mailboxKey={unlockedBoxId() === selectedMailbox()?.id ? mailboxKey() : null}
+                  searchQuery={searchQuery()}
+                  onSearchChange={setSearchQuery}
+                  activeModule={activeModule()}
+                  onSwitchModule={setActiveModule}
+                  onOpenContacts={openContacts}
+                  onOpenSettings={() => {
+                    setActiveSettingsTab("account");
+                    setSettingsOpen(true);
+                  }}
+                  isOnline={!isOffline()}
+                  isCustomizerOpen={rightCustomizerOpen()}
+                  onToggleCustomizer={() => setRightCustomizerOpen(!rightCustomizerOpen())}
+                  theme={theme()}
+                  onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
+                />
+              </AppErrorBoundary>
             </div>
           </Show>
 
@@ -8488,7 +8505,8 @@ const App: Component = () => {
           {/* ── Reading Pane (Only mounted when selectedMsg()) ── */}
           <Show when={selectedMsg()}>
             <div class="flex-1 min-w-0 w-full h-full overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]">
-              <ReadingPane
+              <AppErrorBoundary name="Reading Pane">
+                <ReadingPane
                 message={selectedMsg()!}
                 isDecrypting={isDecrypting()}
                 decryptedContent={decryptedContent()}
@@ -8552,6 +8570,7 @@ const App: Component = () => {
                 onRemoveSuggestedCalendarEvent={handleRemoveSuggestedCalendarEvent}
                 fontScale={fontScale()}
               />
+              </AppErrorBoundary>
             </div>
           </Show>
               </div>
@@ -8788,17 +8807,19 @@ const App: Component = () => {
 
       {/* ── Contacts Modal ── */}
       <Show when={contactsOpen() && selectedMailbox()}>
-        <ContactsModal
-          mailboxId={selectedMailbox()!.id}
-          mailboxKey={getMailboxKeyFor(selectedMailbox()!.id) || mailboxKey()}
-          onClose={() => setContactsOpen(false)}
-          onContactsUpdated={setContacts}
-          onComposeTo={(email) => {
-            clearComposeForm();
-            setComposeTo(email);
-            setComposeOpen(true);
-          }}
-        />
+        <AppErrorBoundary name="Contacts">
+          <ContactsModal
+            mailboxId={selectedMailbox()!.id}
+            mailboxKey={getMailboxKeyFor(selectedMailbox()!.id) || mailboxKey()}
+            onClose={() => setContactsOpen(false)}
+            onContactsUpdated={setContacts}
+            onComposeTo={(email) => {
+              clearComposeForm();
+              setComposeTo(email);
+              setComposeOpen(true);
+            }}
+          />
+        </AppErrorBoundary>
       </Show>
 
       {/* ── Add Mailbox Modal ── */}

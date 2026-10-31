@@ -3,6 +3,7 @@ import {
   wasm_aes_gcm_decrypt,
 } from "../../generated/crypto-core/byos_crypto_core.js";
 import { bytesToHex, hexToBytes } from "../../attachment_crypto";
+import { getMailboxKeyFor } from "../../session_isolation";
 
 export interface NoteChecklistItem {
   id: string;
@@ -447,16 +448,109 @@ export function openNotesMediaDB(): Promise<IDBDatabase | null> {
   return mediaDbPromise;
 }
 
-export async function saveMediaToIDB(id: string, dataUrl: string): Promise<string> {
+export function computeNotesMediaAad(mailboxId?: string): Uint8Array {
+  return new TextEncoder().encode(`byos-notes-media-v1:${mailboxId || "default"}`);
+}
+
+export function resolveMediaMailboxKey(
+  mailboxId?: string,
+  key?: Uint8Array | null
+): Uint8Array | null {
+  if (key && key instanceof Uint8Array && key.length === 32) {
+    return key;
+  }
+  if (storeMailboxKey && storeMailboxKey.length === 32) {
+    return storeMailboxKey;
+  }
+  if (mailboxId) {
+    const memKey = getMailboxKeyFor(mailboxId);
+    if (memKey && memKey.length === 32) {
+      return memKey;
+    }
+  }
+  return null;
+}
+
+export function encryptNotesMedia(
+  mailboxKey: Uint8Array,
+  mailboxId: string | undefined,
+  dataUrl: string
+): string | null {
+  if (!mailboxKey || !(mailboxKey instanceof Uint8Array) || mailboxKey.length !== 32 || !dataUrl) {
+    return null;
+  }
+  try {
+    if (typeof wasm_aes_gcm_encrypt === "function") {
+      const ptBytes = new TextEncoder().encode(dataUrl);
+      const aad = computeNotesMediaAad(mailboxId);
+      return wasm_aes_gcm_encrypt(
+        bytesToHex(mailboxKey),
+        bytesToHex(ptBytes),
+        bytesToHex(aad)
+      );
+    }
+  } catch (err) {
+    console.warn("[notesStore] WASM AES-GCM media encryption failed:", err);
+  }
+  return null;
+}
+
+export function decryptNotesMedia(
+  mailboxKey: Uint8Array,
+  mailboxId: string | undefined,
+  encryptedHex: string
+): string | null {
+  if (!mailboxKey || !(mailboxKey instanceof Uint8Array) || mailboxKey.length !== 32 || !encryptedHex) {
+    return null;
+  }
+  try {
+    if (typeof wasm_aes_gcm_decrypt === "function") {
+      const aad = computeNotesMediaAad(mailboxId);
+      const decHex = wasm_aes_gcm_decrypt(
+        bytesToHex(mailboxKey),
+        encryptedHex,
+        bytesToHex(aad)
+      );
+      const decBytes = hexToBytes(decHex);
+      return new TextDecoder().decode(decBytes);
+    }
+  } catch (err) {
+    console.warn("[notesStore] WASM AES-GCM media decryption failed:", err);
+  }
+  return null;
+}
+
+export async function saveMediaToIDB(
+  id: string,
+  dataUrl: string,
+  mailboxKey?: Uint8Array | null,
+  mailboxId?: string
+): Promise<string> {
   mediaCache.set(id, dataUrl);
   const db = await openNotesMediaDB();
   if (!db) return id;
+
+  const activeKey = resolveMediaMailboxKey(mailboxId, mailboxKey);
+  let encryptedDataUrl: string | undefined;
+  let storedDataUrl = dataUrl;
+
+  if (activeKey) {
+    const enc = encryptNotesMedia(activeKey, mailboxId, dataUrl);
+    if (enc) {
+      encryptedDataUrl = enc;
+      storedDataUrl = "(Encrypted Media)";
+    }
+  }
 
   return new Promise((resolve) => {
     try {
       const tx = db.transaction(MEDIA_STORE_NAME, "readwrite");
       const store = tx.objectStore(MEDIA_STORE_NAME);
-      const req = store.put({ id, dataUrl, createdAt: Date.now() });
+      const record: any = { id, dataUrl: storedDataUrl, createdAt: Date.now() };
+      if (encryptedDataUrl) {
+        record.encryptedDataUrl = encryptedDataUrl;
+      }
+      const req = store.put(record);
       req.onsuccess = () => resolve(id);
       req.onerror = () => {
         console.warn("Failed to put media in IDB:", req.error);
@@ -469,12 +563,18 @@ export async function saveMediaToIDB(id: string, dataUrl: string): Promise<strin
   });
 }
 
-export async function getMediaFromIDB(id: string): Promise<string | null> {
+export async function getMediaFromIDB(
+  id: string,
+  mailboxKey?: Uint8Array | null,
+  mailboxId?: string
+): Promise<string | null> {
   if (mediaCache.has(id)) {
     return mediaCache.get(id)!;
   }
   const db = await openNotesMediaDB();
   if (!db) return null;
+
+  const activeKey = resolveMediaMailboxKey(mailboxId, mailboxKey);
 
   return new Promise((resolve) => {
     try {
@@ -482,12 +582,34 @@ export async function getMediaFromIDB(id: string): Promise<string | null> {
       const store = tx.objectStore(MEDIA_STORE_NAME);
       const req = store.get(id);
       req.onsuccess = () => {
-        if (req.result?.dataUrl) {
-          mediaCache.set(id, req.result.dataUrl);
-          resolve(req.result.dataUrl);
-        } else {
+        if (!req.result) {
           resolve(null);
+          return;
         }
+
+        // Check if media is zero-knowledge encrypted in IDB
+        if (req.result.encryptedDataUrl) {
+          if (activeKey) {
+            const dec = decryptNotesMedia(activeKey, mailboxId, req.result.encryptedDataUrl);
+            if (dec) {
+              setCachedMedia(id, dec);
+              resolve(dec);
+              return;
+            }
+          }
+          // Key required or decryption failed
+          resolve(null);
+          return;
+        }
+
+        // Legacy unencrypted media in IDB
+        if (req.result.dataUrl && req.result.dataUrl !== "(Encrypted Media)") {
+          setCachedMedia(id, req.result.dataUrl);
+          resolve(req.result.dataUrl);
+          return;
+        }
+
+        resolve(null);
       };
       req.onerror = () => resolve(null);
     } catch {
@@ -514,10 +636,15 @@ export async function deleteMediaFromIDB(id: string): Promise<boolean> {
   });
 }
 
-export function offloadMediaIfDataUrl(dataUrl: string, prefix: "drawing" | "image"): string {
+export function offloadMediaIfDataUrl(
+  dataUrl: string,
+  prefix: "drawing" | "image",
+  mailboxKey?: Uint8Array | null,
+  mailboxId?: string
+): string {
   if (typeof dataUrl === "string" && dataUrl.startsWith("data:image/")) {
     const id = `idb:${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    saveMediaToIDB(id, dataUrl);
+    saveMediaToIDB(id, dataUrl, mailboxKey, mailboxId);
     return id;
   }
   return dataUrl;
@@ -711,8 +838,8 @@ export function saveNotes(mailboxId: string | undefined, notes: NoteItem[], mail
   try {
     const toStore = notes.map((n) => {
       // Offload any inline data URLs in images/drawings to IDB if needed
-      const drawings = (n.drawings || []).map((d) => offloadMediaIfDataUrl(d, "drawing"));
-      const images = (n.images || []).map((img) => offloadMediaIfDataUrl(img, "image"));
+      const drawings = (n.drawings || []).map((d) => offloadMediaIfDataUrl(d, "drawing", key, mailboxId));
+      const images = (n.images || []).map((img) => offloadMediaIfDataUrl(img, "image", key, mailboxId));
 
       if (key && key.length === 32) {
         // If note was locked and not decrypted, retain its original encrypted payload!
@@ -768,11 +895,13 @@ export function createNote(
   content: string,
   color: string = "default",
   isPinned: boolean = false,
-  extra?: Partial<NoteItem>
+  extra?: Partial<NoteItem>,
+  mailboxKey?: Uint8Array | null
 ): NoteItem {
-  const notes = loadNotes(mailboxId);
-  const images = (extra?.images || []).map((img) => offloadMediaIfDataUrl(img, "image"));
-  const drawings = (extra?.drawings || []).map((drw) => offloadMediaIfDataUrl(drw, "drawing"));
+  const key = resolveMediaMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
+  const images = (extra?.images || []).map((img) => offloadMediaIfDataUrl(img, "image", key, mailboxId));
+  const drawings = (extra?.drawings || []).map((drw) => offloadMediaIfDataUrl(drw, "drawing", key, mailboxId));
 
   const newNote: NoteItem = {
     id: `note-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -842,9 +971,11 @@ export function isMediaReferencedInNotes(notes: NoteItem[], mediaId: string, exc
 export function updateNote(
   mailboxId: string | undefined,
   id: string,
-  patch: Partial<NoteItem>
+  patch: Partial<NoteItem>,
+  mailboxKey?: Uint8Array | null
 ): NoteItem | null {
-  const notes = loadNotes(mailboxId);
+  const key = resolveMediaMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
   const idx = notes.findIndex((n) => n.id === id);
   if (idx === -1) return null;
 
@@ -854,10 +985,10 @@ export function updateNote(
   }
 
   const patchImages = patch.images
-    ? patch.images.map((img) => offloadMediaIfDataUrl(img, "image"))
+    ? patch.images.map((img) => offloadMediaIfDataUrl(img, "image", key, mailboxId))
     : undefined;
   const patchDrawings = patch.drawings
-    ? patch.drawings.map((drw) => offloadMediaIfDataUrl(drw, "drawing"))
+    ? patch.drawings.map((drw) => offloadMediaIfDataUrl(drw, "drawing", key, mailboxId))
     : undefined;
 
   const updatedNote: NoteItem = {
@@ -869,7 +1000,7 @@ export function updateNote(
   };
 
   notes[idx] = updatedNote;
-  saveNotes(mailboxId, notes);
+  saveNotes(mailboxId, notes, key);
   return updatedNote;
 }
 
@@ -991,51 +1122,75 @@ export function duplicateNote(mailboxId: string | undefined, id: string): NoteIt
   return clone;
 }
 
-export function addNoteImage(mailboxId: string | undefined, id: string, dataUrl: string): boolean {
+export function addNoteImage(
+  mailboxId: string | undefined,
+  id: string,
+  dataUrl: string,
+  mailboxKey?: Uint8Array | null
+): boolean {
+  const key = resolveMediaMailboxKey(mailboxId, mailboxKey);
   saveNoteVersion(mailboxId, id);
-  const notes = loadNotes(mailboxId);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return false;
-  const storedRef = offloadMediaIfDataUrl(dataUrl, "image");
+  const storedRef = offloadMediaIfDataUrl(dataUrl, "image", key, mailboxId);
   note.images = [...(note.images || []), storedRef];
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes);
+  saveNotes(mailboxId, notes, key);
   return true;
 }
 
-export function removeNoteImage(mailboxId: string | undefined, id: string, index: number): boolean {
+export function removeNoteImage(
+  mailboxId: string | undefined,
+  id: string,
+  index: number,
+  mailboxKey?: Uint8Array | null
+): boolean {
+  const key = resolveMediaMailboxKey(mailboxId, mailboxKey);
   saveNoteVersion(mailboxId, id);
-  const notes = loadNotes(mailboxId);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note || !note.images) return false;
   // Do NOT delete media from IDB here because saveNoteVersion preserves it in version history
   note.images = note.images.filter((_, i) => i !== index);
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes);
+  saveNotes(mailboxId, notes, key);
   return true;
 }
 
-export function addNoteDrawing(mailboxId: string | undefined, id: string, dataUrl: string): boolean {
+export function addNoteDrawing(
+  mailboxId: string | undefined,
+  id: string,
+  dataUrl: string,
+  mailboxKey?: Uint8Array | null
+): boolean {
+  const key = resolveMediaMailboxKey(mailboxId, mailboxKey);
   saveNoteVersion(mailboxId, id);
-  const notes = loadNotes(mailboxId);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return false;
-  const storedRef = offloadMediaIfDataUrl(dataUrl, "drawing");
+  const storedRef = offloadMediaIfDataUrl(dataUrl, "drawing", key, mailboxId);
   note.drawings = [...(note.drawings || []), storedRef];
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes);
+  saveNotes(mailboxId, notes, key);
   return true;
 }
 
-export function removeNoteDrawing(mailboxId: string | undefined, id: string, index: number): boolean {
+export function removeNoteDrawing(
+  mailboxId: string | undefined,
+  id: string,
+  index: number,
+  mailboxKey?: Uint8Array | null
+): boolean {
+  const key = resolveMediaMailboxKey(mailboxId, mailboxKey);
   saveNoteVersion(mailboxId, id);
-  const notes = loadNotes(mailboxId);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note || !note.drawings) return false;
   // Do NOT delete media from IDB here because saveNoteVersion preserves it in version history
   note.drawings = note.drawings.filter((_, i) => i !== index);
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes);
+  saveNotes(mailboxId, notes, key);
   return true;
 }
 

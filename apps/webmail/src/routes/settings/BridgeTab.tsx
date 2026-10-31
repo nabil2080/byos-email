@@ -6,6 +6,7 @@ import {
   listBridgeCredentials,
   createBridgeCredential,
   revokeBridgeCredential,
+  apiBase,
 } from "../../api";
 
 interface BridgeTabProps {
@@ -18,6 +19,29 @@ export const BridgeTab: Component<BridgeTabProps> = (props) => {
   const [credentials, setCredentials] = createSignal<BridgeCredential[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const [revokingId, setRevokingId] = createSignal<string | null>(null);
+  const [bridgeStatus, setBridgeStatus] = createSignal<"checking" | "active" | "disconnected" | "ready">("checking");
+  const [lastChecked, setLastChecked] = createSignal<string | null>(null);
+
+  async function checkBridgeStatus() {
+    setBridgeStatus("checking");
+    try {
+      const base = apiBase();
+      const res = await fetch(`${base}/health`, { method: "GET" }).catch(() => null);
+      if (res && res.ok) {
+        if (credentials().length > 0) {
+          setBridgeStatus("active");
+        } else {
+          setBridgeStatus("ready");
+        }
+      } else {
+        setBridgeStatus("disconnected");
+      }
+    } catch {
+      setBridgeStatus("disconnected");
+    } finally {
+      setLastChecked(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+    }
+  }
 
   // Generate Modal State
   const [showModal, setShowModal] = createSignal(false);
@@ -36,6 +60,7 @@ export const BridgeTab: Component<BridgeTabProps> = (props) => {
       setLoading(true);
       const list = await listBridgeCredentials(props.mailbox.id);
       setCredentials(list);
+      checkBridgeStatus();
     } catch (err: any) {
       setError(err?.message || "Failed to load bridge credentials.");
     } finally {
@@ -125,10 +150,42 @@ export const BridgeTab: Component<BridgeTabProps> = (props) => {
           <h4 class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6] uppercase tracking-wider font-mono">
             Bridge Connection Settings
           </h4>
-          <span class="text-[11px] font-mono text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-900/50 inline-flex items-center gap-1.5">
-            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>Bridge Service Active</span>
-          </span>
+          <div class="flex items-center gap-2">
+            <Show when={bridgeStatus() === "checking"}>
+              <span class="text-[11px] font-mono text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded border border-amber-200 dark:border-amber-900/50 inline-flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+                <span>Checking Bridge…</span>
+              </span>
+            </Show>
+            <Show when={bridgeStatus() === "active"}>
+              <span class="text-[11px] font-mono text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-900/50 inline-flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>Bridge Service Active</span>
+              </span>
+            </Show>
+            <Show when={bridgeStatus() === "ready"}>
+              <span class="text-[11px] font-mono text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded border border-blue-200 dark:border-blue-900/50 inline-flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                <span>Bridge Ready</span>
+              </span>
+            </Show>
+            <Show when={bridgeStatus() === "disconnected"}>
+              <span class="text-[11px] font-mono text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/40 px-2 py-0.5 rounded border border-rose-200 dark:border-rose-900/50 inline-flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-rose-500"></span>
+                <span>Bridge Disconnected</span>
+              </span>
+            </Show>
+            <button
+              type="button"
+              onClick={checkBridgeStatus}
+              class="text-[#6F7173] hover:text-[#1A1B1E] dark:hover:text-white p-1 rounded hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35] transition-colors cursor-pointer"
+              title={lastChecked() ? `Last checked: ${lastChecked()}. Click to re-check.` : "Check bridge connection"}
+            >
+              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA]">

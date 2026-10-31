@@ -38,6 +38,7 @@ import { EditLabelsModal } from "./EditLabelsModal";
 import { DrawingModal } from "./DrawingModal";
 import { VersionHistoryModal } from "./VersionHistoryModal";
 import { TopFixedBar, AppModule } from "../TopFixedBar";
+import { getMailboxKeyFor } from "../../session_isolation";
 
 export interface NotesViewProps {
   currentUser?: UserMe | null;
@@ -209,11 +210,13 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     setNotes(loaded);
     setLabels(loadLabels(mb));
 
+    const mbKey = props.mailboxKey || (mb ? getMailboxKeyFor(mb) : null);
+
     for (const n of loaded) {
       if (n.images) {
         for (const img of n.images) {
           if (img && img.startsWith("idb:") && !getCachedMedia(img)) {
-            getMediaFromIDB(img).then((url) => {
+            getMediaFromIDB(img, mbKey, mb).then((url) => {
               if (url) {
                 setResolvedMedia((prev) => ({ ...prev, [img]: url }));
               }
@@ -224,7 +227,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
       if (n.drawings) {
         for (const drw of n.drawings) {
           if (drw && drw.startsWith("idb:") && !getCachedMedia(drw)) {
-            getMediaFromIDB(drw).then((url) => {
+            getMediaFromIDB(drw, mbKey, mb).then((url) => {
               if (url) {
                 setResolvedMedia((prev) => ({ ...prev, [drw]: url }));
               }
@@ -471,15 +474,17 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
+      const effId = effectiveMailboxId();
+      const mbKey = props.mailboxKey || (effId ? getMailboxKeyFor(effId) : null);
       if (targetNoteId) {
-        addNoteImage(effectiveMailboxId(), targetNoteId, dataUrl);
+        addNoteImage(effId, targetNoteId, dataUrl, mbKey);
         refreshAll();
         if (editingNote() && editingNote()!.id === targetNoteId) {
-          const fresh = loadNotes(effectiveMailboxId()).find((n) => n.id === targetNoteId);
+          const fresh = loadNotes(effId, mbKey).find((n) => n.id === targetNoteId);
           if (fresh) setEditingNote(fresh);
         }
       } else {
-        const storedRef = offloadMediaIfDataUrl(dataUrl, "image");
+        const storedRef = offloadMediaIfDataUrl(dataUrl, "image", mbKey, effId);
         setNewImages([...newImages(), storedRef]);
       }
     };
@@ -490,15 +495,17 @@ export const NotesView: Component<NotesViewProps> = (props) => {
   // Drawing Save handler
   function handleDrawingSaved(dataUrl: string) {
     const noteId = drawingTargetNoteId();
+    const effId = effectiveMailboxId();
+    const mbKey = props.mailboxKey || (effId ? getMailboxKeyFor(effId) : null);
     if (noteId) {
-      addNoteDrawing(effectiveMailboxId(), noteId, dataUrl);
+      addNoteDrawing(effId, noteId, dataUrl, mbKey);
       refreshAll();
       if (editingNote() && editingNote()!.id === noteId) {
-        const fresh = loadNotes(effectiveMailboxId()).find((n) => n.id === noteId);
+        const fresh = loadNotes(effId, mbKey).find((n) => n.id === noteId);
         if (fresh) setEditingNote(fresh);
       }
     } else {
-      const storedRef = offloadMediaIfDataUrl(dataUrl, "drawing");
+      const storedRef = offloadMediaIfDataUrl(dataUrl, "drawing", mbKey, effId);
       setNewDrawings([...newDrawings(), storedRef]);
     }
     setIsDrawingModalOpen(false);
