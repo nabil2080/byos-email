@@ -79,7 +79,6 @@ import {
   publishMailboxKeys,
   lookupMailboxKeys,
   sendInternal,
-  uploadAttachmentChunk,
   fetchMessageAttachmentEnvelopes,
   fetchMessageAttachmentChunk,
   AttachmentEnvelope,
@@ -123,6 +122,7 @@ import {
   MAX_ATTACHMENT_SIZE,
   decryptChunk,
 } from "./attachment_crypto";
+import { uploadChunksConcurrently } from "./attachment_upload_pipeline";
 import { cryptoWorkerBridge } from "./crypto_worker_bridge";
 import {
   unlockMailboxKey,
@@ -6109,14 +6109,12 @@ const AppContent: Component = () => {
                 senderXWingPkHex: senderXwingPkHex,
               });
 
-              // Upload recipient chunks to storage
-              for (const ch of prep.recipientChunks) {
-                await uploadAttachmentChunk(box.id, ch.storageRef, ch.data);
-              }
-              // Upload sender Sent chunks to storage
-              for (const ch of prep.senderChunks) {
-                await uploadAttachmentChunk(box.id, ch.storageRef, ch.data);
-              }
+              // Upload recipient & sender chunks concurrently to storage
+              await uploadChunksConcurrently(
+                box.id,
+                [...prep.recipientChunks, ...prep.senderChunks],
+                { concurrency: 4 }
+              );
 
               recipientAttEnvelopes.push(prep.recipientEnvelope);
               senderAttEnvelopes.push(prep.senderEnvelope);
@@ -6286,14 +6284,12 @@ const AppContent: Component = () => {
                     senderXWingPkHex: senderXwingPkHex,
                   });
 
-                  // Upload recipient chunks to storage
-                  for (const ch of prep.recipientChunks) {
-                    await uploadAttachmentChunk(box.id, ch.storageRef, ch.data);
-                  }
-                  // Upload sender Sent chunks to storage
-                  for (const ch of prep.senderChunks) {
-                    await uploadAttachmentChunk(box.id, ch.storageRef, ch.data);
-                  }
+                  // Upload recipient & sender chunks concurrently to storage
+                  await uploadChunksConcurrently(
+                    box.id,
+                    [...prep.recipientChunks, ...prep.senderChunks],
+                    { concurrency: 4 }
+                  );
 
                   recipientAttEnvelopes.push(prep.recipientEnvelope);
                   senderAttEnvelopes.push(prep.senderEnvelope);
