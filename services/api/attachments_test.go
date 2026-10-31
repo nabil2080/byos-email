@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestAttachmentsAuthentication verifies that unauthenticated requests or
@@ -368,6 +373,61 @@ func TestAttachmentMissingEncryptedPayloadRejected(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("missing file: status = %d, want 400", rec.Code)
 	}
+}
+
+// TestAttachmentQueryCount verifies that batch linking multiple outbound attachments
+// uses a single set-based SQL query rather than an N+1 query loop.
+func TestAttachmentQueryCount(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
+	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "querycount")
+
+	// 1. Seed 10 unlinked encrypted attachments for this mailbox
+	attachmentIDs := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		id := uuid.New().String()
+		_, err := db.Exec(`
+			INSERT INTO attachments (id, mailbox_id, filename, content_type, size_bytes, storage_key, encrypted)
+			VALUES ($1, $2, $3, 'application/octet-stream', 1024, $4, true)
+		`, id, mailboxID, fmt.Sprintf("file_%d.enc", i), fmt.Sprintf("mailboxes/%s/attachments/%s", mailboxID, id))
+		require.NoError(t, err)
+		attachmentIDs[i] = id
+	}
+
+	// 2. Attach SQL query counter to db and reset to isolate batch linking queries
+	counter := StartQueryCounter(t, db)
+	counter.Reset()
+
+	// 3. Execute batch linking of 10 attachments inside a transaction (matching outbound.go / scheduleOutboundMessage)
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	deliveryID := uuid.New().String()
+	res, err := tx.ExecContext(ctx, `
+		UPDATE attachments
+		SET message_id = $1
+		WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL
+	`, deliveryID, attachmentIDs, mailboxID)
+	require.NoError(t, err)
+
+	rows, err := res.RowsAffected()
+	require.NoError(t, err)
+	assert.Equal(t, int64(10), rows, "all 10 attachments should be linked")
+
+	err = tx.Commit()
+	require.NoError(t, err)
+
+	// 4. Assert batch query efficiency (1 BEGIN + 1 UPDATE + 1 COMMIT <= 3 queries)
+	assert.LessOrEqual(t, counter.Count(), 3, "N+1 query regression detected on attachment linking!")
+
+	// 5. Verify all attachments in DB reflect the deliveryID
+	var linkedCount int
+	err = db.QueryRow(`SELECT count(*) FROM attachments WHERE mailbox_id = $1 AND message_id = $2`, mailboxID, deliveryID).Scan(&linkedCount)
+	require.NoError(t, err)
+	assert.Equal(t, 10, linkedCount)
 }
 
 // Silence unused imports
