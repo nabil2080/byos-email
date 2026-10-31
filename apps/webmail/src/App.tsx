@@ -1,4 +1,6 @@
 import { Component, createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
+import { AppProviders, useAuth, useModal, useMail } from "./context";
+export { AppProviders, useAuth, useModal, useMail } from "./context";
 import {
   fetchCurrentUser,
   login,
@@ -621,9 +623,169 @@ export async function sendMimeWithFallback(
   }
 }
 
-const App: Component = () => {
+const AppContent: Component = () => {
+  const auth = useAuth();
+  const modal = useModal();
+  const mail = useMail();
+
+  // Auth Context state
+  const currentUser = auth.currentUser;
+  const setCurrentUser = auth.setCurrentUser;
+  const isLoading = auth.isLoading;
+  const setIsLoading = auth.setIsLoading;
+  const mailboxes = auth.mailboxes;
+  const setMailboxes = auth.setMailboxes;
+  const selectedMailbox = auth.selectedMailbox;
+  const setSelectedMailbox = auth.setSelectedMailbox;
+  const connectedAccounts = auth.connectedAccounts;
+  const setConnectedAccounts = auth.setConnectedAccounts;
+  const pendingSwitchAccount = auth.pendingSwitchAccount;
+  const setPendingSwitchAccount = auth.setPendingSwitchAccount;
+  const mailboxKey = auth.mailboxKey;
+  const setMailboxKey = auth.setMailboxKey;
+  const signingSeed = auth.signingSeed;
+  const setSigningSeed = auth.setSigningSeed;
+  const xwingSeed = auth.xwingSeed;
+  const setXwingSeed = auth.setXwingSeed;
+  const searchKey = auth.searchKey;
+  const setSearchKey = auth.setSearchKey;
+  const unlockedBoxId = auth.unlockedBoxId;
+  const setUnlockedBoxId = auth.setUnlockedBoxId;
+  const storageErrorBanner = auth.storageErrorBanner;
+  const setStorageErrorBanner = auth.setStorageErrorBanner;
+  const lockedReadingAccount = auth.lockedReadingAccount;
+  const setLockedReadingAccount = auth.setLockedReadingAccount;
+  const unlockAccountTarget = auth.unlockAccountTarget;
+  const setUnlockAccountTarget = auth.setUnlockAccountTarget;
+  const unlockSecretInput = auth.unlockSecretInput;
+  const setUnlockSecretInput = auth.setUnlockSecretInput;
+  const unlockAccountPassword = auth.unlockAccountPassword;
+  const setUnlockAccountPassword = auth.setUnlockAccountPassword;
+  const unlockAccountError = auth.unlockAccountError;
+  const setUnlockAccountError = auth.setUnlockAccountError;
+  const unlockAccountBusy = auth.unlockAccountBusy;
+  const setUnlockAccountBusy = auth.setUnlockAccountBusy;
+  const isSetupAccount = auth.isSetupAccount;
+  const setIsSetupAccount = auth.setIsSetupAccount;
+  const isImpersonating = auth.isImpersonating;
+  const setIsImpersonating = auth.setIsImpersonating;
+  const impersonateMailboxId = auth.impersonateMailboxId;
+  const setImpersonateMailboxId = auth.setImpersonateMailboxId;
+  const impersonateEmail = auth.impersonateEmail;
+  const setImpersonateEmail = auth.setImpersonateEmail;
+
+  // Modal Context state
+  const composeOpen = modal.composeOpen;
+  const setComposeOpen = modal.setComposeOpen;
+  const composeAccountId = modal.composeAccountId;
+  const setComposeAccountId = modal.setComposeAccountId;
+  const composeFromAlias = modal.composeFromAlias;
+  const setComposeFromAlias = modal.setComposeFromAlias;
+  const contactsOpen = modal.contactsOpen;
+  const setContactsOpen = modal.setContactsOpen;
+  const addMailboxModalOpen = modal.addMailboxModalOpen;
+  const setAddMailboxModalOpen = modal.setAddMailboxModalOpen;
+  const createFolderModalOpen = modal.createFolderModalOpen;
+  const setCreateFolderModalOpen = modal.setCreateFolderModalOpen;
+  const folderToEdit = modal.folderToEdit;
+  const setFolderToEdit = modal.setFolderToEdit;
+  const createLabelModalOpen = modal.createLabelModalOpen;
+  const setCreateLabelModalOpen = modal.setCreateLabelModalOpen;
+  const labelToEdit = modal.labelToEdit;
+  const setLabelToEdit = modal.setLabelToEdit;
+  const initialParentLabelId = modal.initialParentLabelId;
+  const setInitialParentLabelId = modal.setInitialParentLabelId;
+  const changeParentLabel = modal.changeParentLabel;
+  const setChangeParentLabel = modal.setChangeParentLabel;
+  const importEmailsModalOpen = modal.importEmailsModalOpen;
+  const setImportEmailsModalOpen = modal.setImportEmailsModalOpen;
+  const shortcutsHelpOpen = modal.shortcutsHelpOpen;
+  const setShortcutsHelpOpen = modal.setShortcutsHelpOpen;
+  const settingsOpen = modal.settingsOpen;
+  const setSettingsOpen = modal.setSettingsOpen;
+  const activeSettingsTab = modal.activeSettingsTab;
+  const setActiveSettingsTab = modal.setActiveSettingsTab;
+  const rightCustomizerOpen = modal.rightCustomizerOpen;
+  const setRightCustomizerOpen = modal.setRightCustomizerOpen;
+  const mobileSidebarOpen = modal.mobileSidebarOpen;
+  const setMobileSidebarOpen = modal.setMobileSidebarOpen;
+  const forgotPasswordModalOpen = modal.forgotPasswordModalOpen;
+  const setForgotPasswordModalOpen = modal.setForgotPasswordModalOpen;
+  const forgotStep = modal.forgotStep;
+  const setForgotStep = modal.setForgotStep;
+  const exceptionalRecoveryOpen = modal.exceptionalRecoveryOpen;
+  const setExceptionalRecoveryOpen = modal.setExceptionalRecoveryOpen;
+  const exceptionalStep = modal.exceptionalStep;
+  const setExceptionalStep = modal.setExceptionalStep;
+
+  // Mail Context state
+  const currentFolder = mail.currentFolder;
+  const setCurrentFolder = mail.setCurrentFolder;
+  const customFolders = mail.customFolders;
+  const setCustomFolders = mail.setCustomFolders;
+  const activeCustomFolder = mail.activeCustomFolder;
+  const setActiveCustomFolder = mail.setActiveCustomFolder;
+  const labels = mail.labels;
+  const setLabels = mail.setLabels;
+  const activeLabel = mail.activeLabel;
+  const setActiveLabel = mail.setActiveLabel;
+  const messages = mail.messages;
+  const setMessages = mail.setMessages;
+  const selectedMsg = mail.selectedMsg;
+  const setSelectedMsg = mail.setSelectedMsg;
+  const threads = mail.threads;
+  const setThreads = mail.setThreads;
+  const expandedThreadId = mail.expandedThreadId;
+  const setExpandedThreadId = mail.setExpandedThreadId;
+  const viewMode = mail.viewMode;
+  const setViewMode = mail.setViewMode;
+  const selectedIds = mail.selectedIds;
+  const setSelectedIds = mail.setSelectedIds;
+  const sortOrder = mail.sortOrder;
+  const setSortOrder = mail.setSortOrder;
+  const currentPage = mail.currentPage;
+  const setCurrentPage = mail.setCurrentPage;
+  const pageSize = mail.pageSize;
+  const searchQuery = mail.searchQuery;
+  const setSearchQuery = mail.setSearchQuery;
+  const serverMatchedMsgIds = mail.serverMatchedMsgIds;
+  const setServerMatchedMsgIds = mail.setServerMatchedMsgIds;
+  const isSearchingTokens = mail.isSearchingTokens;
+  const setIsSearchingTokens = mail.setIsSearchingTokens;
+  const focusedCategory = mail.focusedCategory;
+  const setFocusedCategory = mail.setFocusedCategory;
+  const focusedInboxEnabled = mail.focusedInboxEnabled;
+  const setFocusedInboxEnabledState = mail.setFocusedInboxEnabled;
+  const isDecrypting = mail.isDecrypting;
+  const setIsDecrypting = mail.setIsDecrypting;
+  const decryptedContent = mail.decryptedContent;
+  const setDecryptedContent = mail.setDecryptedContent;
+  const decryptedCalendarIcs = mail.decryptedCalendarIcs;
+  const setDecryptedCalendarIcs = mail.setDecryptedCalendarIcs;
+  const editablePlaintext = mail.editablePlaintext;
+  const setEditablePlaintext = mail.setEditablePlaintext;
+  const messagePlaintext = mail.messagePlaintext;
+  const setMessagePlaintext = mail.setMessagePlaintext;
+  const senderVerification = mail.senderVerification;
+  const setSenderVerification = mail.setSenderVerification;
+  const messageAttachments = mail.messageAttachments;
+  const setMessageAttachments = mail.setMessageAttachments;
+  const downloadingAttachment = mail.downloadingAttachment;
+  const setDownloadingAttachment = mail.setDownloadingAttachment;
+  const editingDraft = mail.editingDraft;
+  const setEditingDraft = mail.setEditingDraft;
+  const draftDirty = mail.draftDirty;
+  const setDraftDirty = mail.setDraftDirty;
+  const lastSavedDraftSnapshot = mail.lastSavedDraftSnapshot;
+  const setLastSavedDraftSnapshot = mail.setLastSavedDraftSnapshot;
+  const isAutoSaving = mail.isAutoSaving;
+  const setIsAutoSaving = mail.setIsAutoSaving;
+  const editingScheduledId = mail.editingScheduledId;
+  const setEditingScheduledId = mail.setEditingScheduledId;
+  const pendingSend = mail.pendingSend;
+  const setPendingSend = mail.setPendingSend;
+
   const [isMobile, setIsMobile] = createSignal(typeof window !== "undefined" ? window.innerWidth < 768 : false);
-  const [mobileSidebarOpen, setMobileSidebarOpen] = createSignal(false);
   const [activeModule, setActiveModule] = createSignal<AppModule>("mail");
   const [calendarViewMode, setCalendarViewMode] = createSignal<CalendarViewMode>("year");
 
@@ -650,29 +812,13 @@ const App: Component = () => {
     }
   });
 
-  const [currentUser, setCurrentUser] = createSignal<UserMe | null>(null);
-  const [mailboxes, setMailboxes] = createSignal<Mailbox[]>([]);
-  const [selectedMailbox, setSelectedMailbox] = createSignal<Mailbox | null>(null);
-  const [currentFolder, setCurrentFolder] = createSignal<Folder>("inbox");
-  const [messages, setMessages] = createSignal<DisplayMessage[]>([]);
-  const [selectedMsg, setSelectedMsg] = createSignal<DisplayMessage | null>(null);
-  const [threads, setThreads] = createSignal<ThreadSummary[]>([]);
-  const [expandedThreadId, setExpandedThreadId] = createSignal<string | null>(null);
-  const [viewMode, setViewMode] = createSignal<"threads" | "flat">(
-    typeof window !== "undefined"
-      ? ((localStorage.getItem("byos_view_mode") as "threads" | "flat") ||
-         (sessionStorage.getItem("byos_view_mode") as "threads" | "flat") ||
-         "flat")
-      : "flat"
-  );
   createEffect(() => {
     if (typeof window !== "undefined") {
       localStorage.setItem("byos_view_mode", viewMode());
       sessionStorage.setItem("byos_view_mode", viewMode());
     }
   });
-  const [focusedCategory, setFocusedCategory] = createSignal<FocusedCategory>("primary");
-  const [focusedInboxEnabled, setFocusedInboxEnabledState] = createSignal<boolean>(getFocusedInboxEnabled());
+
   onMount(() => {
     if (typeof window === "undefined") return;
     const handleFocusedInboxChange = (e: any) => {
@@ -689,10 +835,7 @@ const App: Component = () => {
       window.removeEventListener("storage", handleFocusedInboxChange);
     });
   });
-  const [searchQuery, setSearchQuery] = createSignal("");
-  const [composeOpen, setComposeOpen] = createSignal(false);
-  const [composeAccountId, setComposeAccountId] = createSignal<string | null>(null);
-  const [composeFromAlias, setComposeFromAlias] = createSignal<string | null>(null);
+
   const [maskedAliases, setMaskedAliases] = createSignal<MaskedAliasItem[]>([]);
   const refreshMaskedAliases = async () => {
     try {
@@ -736,10 +879,7 @@ const App: Component = () => {
     }
     return total;
   };
-  const [shortcutsHelpOpen, setShortcutsHelpOpen] = createSignal(false);
-  const [isDecrypting, setIsDecrypting] = createSignal(false);
-  const [decryptedContent, setDecryptedContent] = createSignal<string | null>(null);
-  const [decryptedCalendarIcs, setDecryptedCalendarIcs] = createSignal<string | null>(null);
+
   // Test-only hooks — exposed only in development/test builds (import.meta.env.DEV is true
   // during `vite dev` and `vite build --mode development`; it is statically replaced with
   // false in production builds and the entire block is tree-shaken by the bundler).
@@ -748,16 +888,7 @@ const App: Component = () => {
     (window as any).__BYOS_TEST_SELECT_MSG__ = setSelectedMsg;
     (window as any).__BYOS_TEST_SET_DECRYPTED_CONTENT__ = setDecryptedContent;
     (window as any).__BYOS_TEST_UNLOCK_ACCOUNT__ = () => setLockedReadingAccount(null);
-    (window as any).__BYOS_TEST_LOCK_MAILBOX__ = (mbId: string) => {
-      setMailboxKey(null);
-      setUnlockedBoxId(null);
-      zeroizeKeys(mbId);
-      sessionStorage.removeItem("byos_mailbox_sk_" + mbId);
-      sessionStorage.removeItem("byos_xwing_seed_" + mbId);
-      setConnectedAccounts((prev) =>
-        prev.map((a) => (a.id === mbId ? { ...a, mailboxSkHex: undefined, searchKeyHex: undefined, isLocked: true } : a))
-      );
-    };
+    (window as any).__BYOS_TEST_LOCK_MAILBOX__ = (mbId: string) => auth.lockMailbox(mbId);
     (window as any).__BYOS_TEST_TRIGGER_UNLOCK_MODAL__ = (target: { mailboxId: string; email: string }) => {
       setUnlockAccountTarget(target);
       setUnlockAccountPassword("");
@@ -772,42 +903,6 @@ const App: Component = () => {
       decryptedContent: decryptedContent(),
     });
   }
-  // Plaintext available for editing. Set ONLY on successful decrypt — the
-  // Edit action must never load a locked/error placeholder into compose.
-  const [editablePlaintext, setEditablePlaintext] = createSignal<string | null>(null);
-  // Message plaintext for reply/forward quoting. Same discipline: success-only.
-  const [messagePlaintext, setMessagePlaintext] = createSignal<string | null>(null);
-  const [senderVerification, setSenderVerification] = createSignal<{
-    verified: boolean;
-    error?: string;
-  } | null>(null);
-  const [isLoading, setIsLoading] = createSignal(true);
-  const [messageAttachments, setMessageAttachments] = createSignal<AttachmentItem[]>([]);
-  const [downloadingAttachment, setDownloadingAttachment] = createSignal<string | null>(null);
-
-  // Setup Account & Impersonation state
-  const [isSetupAccount, setIsSetupAccount] = createSignal(false);
-  const [isImpersonating, setIsImpersonating] = createSignal(false);
-  const [impersonateMailboxId, setImpersonateMailboxId] = createSignal<string | null>(null);
-  const [impersonateEmail, setImpersonateEmail] = createSignal<string | null>(null);
-
-  // Mailbox key custody: in-memory only, derived per unlock from the recovery
-  // phrase. Cleared on mailbox switch and lock. Never persisted or logged.
-  const [mailboxKey, setMailboxKey] = createSignal<Uint8Array | null>(null);
-  const [signingSeed, setSigningSeed] = createSignal<Uint8Array | null>(null);
-  const [xwingSeed, setXwingSeed] = createSignal<Uint8Array | null>(null);
-  const [searchKey, setSearchKey] = createSignal<string | null>(null);
-  const [serverMatchedMsgIds, setServerMatchedMsgIds] = createSignal<string[]>([]);
-  const [isSearchingTokens, setIsSearchingTokens] = createSignal(false);
-  const [unlockedBoxId, setUnlockedBoxId] = createSignal<string | null>(null);
-  const [storageErrorBanner, setStorageErrorBanner] = createSignal<string | null>(null);
-  const [lockedReadingAccount, setLockedReadingAccount] = createSignal<{ mailboxId: string; email: string; isHistorical?: boolean } | null>(null);
-  const [unlockAccountTarget, setUnlockAccountTarget] = createSignal<{ mailboxId: string; email: string; isHistorical?: boolean } | null>(null);
-  const [unlockSecretInput, setUnlockSecretInput] = createSignal("");
-  const [unlockAccountPassword, setUnlockAccountPassword] = createSignal("");
-  const [unlockAccountError, setUnlockAccountError] = createSignal<string | null>(null);
-  const [unlockAccountBusy, setUnlockAccountBusy] = createSignal(false);
-  const [pendingSwitchAccount, setPendingSwitchAccount] = createSignal<ConnectedAccount | null>(null);
 
   // ── Global Calendar Reminders Engine ──
   const [calendarAlerts, setCalendarAlerts] = createSignal<ActiveCalendarReminderAlert[]>([]);
@@ -973,20 +1068,10 @@ const App: Component = () => {
   const [composeStatus, setComposeStatus] = createSignal<string | null>(null);
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
   const [composeAttachments, setComposeAttachments] = createSignal<AttachmentItem[]>([]);
-  // When set, saving updates this draft (optimistic version) instead of creating.
-  const [editingDraft, setEditingDraft] = createSignal<{ id: string; version: number } | null>(null);
-  const [draftDirty, setDraftDirty] = createSignal(false);
-  const [lastSavedDraftSnapshot, setLastSavedDraftSnapshot] = createSignal("");
-  const [isAutoSaving, setIsAutoSaving] = createSignal(false);
   const [snoozeClock, setSnoozeClock] = createSignal(Date.now());
   let autoSaveDebounceTimer: any = null;
-  // When set, user is editing a pending scheduled message non-destructively.
-  const [editingScheduledId, setEditingScheduledId] = createSignal<string | null>(null);
-  const [pendingSend, setPendingSend] = createSignal<PendingSend | null>(null);
 
   // Settings suite & Layout preferences
-  const [settingsOpen, setSettingsOpen] = createSignal(false);
-  const [activeSettingsTab, setActiveSettingsTab] = createSignal<SettingsTabId>("account");
   const [profilePhotoUrl, setProfilePhotoUrl] = createSignal<string | null>(null);
 
   async function loadDecryptedProfilePhoto(
@@ -1079,7 +1164,6 @@ const App: Component = () => {
     }
   }
 
-  const [rightCustomizerOpen, setRightCustomizerOpen] = createSignal<boolean>(false);
   const [fontScale, setFontScale] = createSignal<"default" | "large" | "xlarge">(
     (typeof window !== "undefined" && (localStorage.getItem("byos_font_scale") as any)) || "default"
   );
@@ -1135,12 +1219,6 @@ const App: Component = () => {
       localStorage.setItem("byos_layout", layoutMode());
     }
   });
-
-  // Selection, Sorting, and Pagination state
-  const [selectedIds, setSelectedIds] = createSignal<Set<string>>(new Set());
-  const [sortOrder, setSortOrder] = createSignal<SortOrder>("newest");
-  const [currentPage, setCurrentPage] = createSignal(1);
-  const pageSize = 50;
 
   // Optimistic updates & Undo toast state
   const [undoAction, setUndoAction] = createSignal<{
@@ -2027,8 +2105,6 @@ const App: Component = () => {
   const [selected2FAMethod, setSelected2FAMethod] = createSignal<string>("totp");
 
   // Forgot Password / Account Recovery state
-  const [forgotPasswordModalOpen, setForgotPasswordModalOpen] = createSignal(false);
-  const [forgotStep, setForgotStep] = createSignal<1 | 2 | 3>(1);
   const [forgotEmail, setForgotEmail] = createSignal("");
   const [forgotMethods, setForgotMethods] = createSignal<RecoveryOptionItem[]>([]);
   const [forgotSelectedMethod, setForgotSelectedMethod] = createSignal<string>("email");
@@ -2045,21 +2121,16 @@ const App: Component = () => {
   const [showPhraseInput, setShowPhraseInput] = createSignal(false);
 
   // Exceptional Employee Recovery state (Finding F-08)
-  const [exceptionalRecoveryOpen, setExceptionalRecoveryOpen] = createSignal(false);
   const [exceptionalOrgId, setExceptionalOrgId] = createSignal("");
   const [exceptionalChallengeToken, setExceptionalChallengeToken] = createSignal("");
   const [exceptionalNewPassword, setExceptionalNewPassword] = createSignal("");
   const [exceptionalConfirmPassword, setExceptionalConfirmPassword] = createSignal("");
-  const [exceptionalStep, setExceptionalStep] = createSignal<1 | 2>(1);
   const [exceptionalSuccessMsg, setExceptionalSuccessMsg] = createSignal<string | null>(null);
 
   // Contacts manager state.
-  const [contactsOpen, setContactsOpen] = createSignal(false);
   const [contacts, setContacts] = createSignal<ContactItem[]>([]);
 
   // Multi-Mailbox state & toast notifications
-  const [connectedAccounts, setConnectedAccounts] = createSignal<ConnectedAccount[]>([]);
-  const [addMailboxModalOpen, setAddMailboxModalOpen] = createSignal(false);
   interface ToastItem {
     id: string;
     message: string;
@@ -2100,19 +2171,7 @@ const App: Component = () => {
     });
   }
 
-  // Custom Folders & Labels state
-  const [customFolders, setCustomFolders] = createSignal<MailboxFolder[]>([]);
-  const [activeCustomFolder, setActiveCustomFolder] = createSignal<MailboxFolder | null>(null);
-  const [createFolderModalOpen, setCreateFolderModalOpen] = createSignal(false);
-  const [folderToEdit, setFolderToEdit] = createSignal<MailboxFolder | null>(null);
-  const [importEmailsModalOpen, setImportEmailsModalOpen] = createSignal(false);
-
-  const [labels, setLabels] = createSignal<MailboxLabel[]>([]);
-  const [activeLabel, setActiveLabel] = createSignal<MailboxLabel | null>(null);
-  const [createLabelModalOpen, setCreateLabelModalOpen] = createSignal(false);
-  const [labelToEdit, setLabelToEdit] = createSignal<MailboxLabel | null>(null);
-  const [initialParentLabelId, setInitialParentLabelId] = createSignal<string | null>(null);
-  const [changeParentLabel, setChangeParentLabel] = createSignal<MailboxLabel | null>(null);
+  // Custom Folders & Labels handlers
 
   async function handleSaveFolder(name: string, parentId?: string | null, notify?: boolean) {
     const box = selectedMailbox();
@@ -9047,6 +9106,14 @@ const App: Component = () => {
     </Show>
     </Show>
     </>
+  );
+};
+
+export const App: Component = () => {
+  return (
+    <AppProviders>
+      <AppContent />
+    </AppProviders>
   );
 };
 
