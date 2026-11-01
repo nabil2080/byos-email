@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base32"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type TwoFactorStatusResponse struct {
@@ -82,25 +86,129 @@ func computeTOTP(secret string, t time.Time) (string, error) {
 	return fmt.Sprintf("%06d", otp), nil
 }
 
-// validateTOTP checks the provided code against time windows (now, -30s, +30s).
-func validateTOTP(secret, code string) bool {
+// queryExecer abstracts database query execution for *pgx.Conn, *pgxpool.Pool, and pgx.Tx.
+type queryExecer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, arguments ...any) pgx.Row
+}
+
+// matchTOTPStep checks the provided code against time windows (offset 0, -1, +1 time steps).
+// If matched, it returns the specific matching time step (unix / 30) and true.
+// Otherwise it returns 0, false.
+func matchTOTPStep(secret, code string, now time.Time) (int64, bool) {
 	cleanCode := strings.TrimSpace(code)
 	if len(cleanCode) != 6 {
-		return false
+		return 0, false
 	}
-	now := time.Now()
-	windows := []time.Time{
-		now,
-		now.Add(-30 * time.Second),
-		now.Add(30 * time.Second),
-	}
-	for _, w := range windows {
-		expected, err := computeTOTP(secret, w)
+	baseStep := now.Unix() / 30
+	// Check windows in order: current time step, previous step (-30s), next step (+30s)
+	offsets := []int64{0, -1, 1}
+	for _, offset := range offsets {
+		step := baseStep + offset
+		t := time.Unix(step*30, 0)
+		expected, err := computeTOTP(secret, t)
 		if err == nil && hmac.Equal([]byte(cleanCode), []byte(expected)) {
-			return true
+			return step, true
 		}
 	}
-	return false
+	return 0, false
+}
+
+// validateTOTP checks the provided code against time windows (now, -30s, +30s) statelessly.
+func validateTOTP(secret, code string) bool {
+	_, ok := matchTOTPStep(secret, code, time.Now())
+	return ok
+}
+
+// verifyAndConsumeTOTPatTime validates a TOTP code against drift windows and atomically consumes
+// the matched time step to prevent replay across challenges, sessions, or flows.
+// It coordinates replay state atomically in PostgreSQL (and Redis if available),
+// keyed by (userID, authenticatorSecretTag, timeStep).
+// It fails closed on storage or execution errors.
+func verifyAndConsumeTOTPatTime(ctx context.Context, exec queryExecer, userID, secret, code string, now time.Time) (bool, error) {
+	if exec == nil {
+		return false, errors.New("database executor required for TOTP verification")
+	}
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(secret) == "" {
+		return false, errors.New("userID and secret are required for TOTP verification")
+	}
+
+	step, ok := matchTOTPStep(secret, code, now)
+	if !ok {
+		// Invalid code: do not consume anything; do not burn valid steps
+		return false, nil
+	}
+
+	// Authenticator isolation: derive a short tag from the SHA-256 of the secret.
+	// This isolates replay tracking to this user's currently enrolled authenticator.
+	// Rotating or re-enrolling an authenticator changes the tag, preventing stale locks.
+	authHash := sha256.Sum256([]byte(secret))
+	authTag := hex.EncodeToString(authHash[:8])
+
+	// 1. Redis atomic coordination (if available)
+	if redisClient != nil {
+		redisKey := fmt.Sprintf("totp:replay:%s:%s:%d", userID, authTag, step)
+		set, err := redisClient.SetNX(ctx, redisKey, "1", 180*time.Second).Result()
+		if err != nil {
+			return false, fmt.Errorf("redis replay check error: %w", err)
+		}
+		if !set {
+			// Already consumed or in-flight concurrently! Replay rejected.
+			return false, nil
+		}
+	}
+
+	// 2. Query monotonic time step from unexpired challenge records
+	var maxStep int64
+	err := exec.QueryRow(ctx, `
+		SELECT COALESCE(MAX(NULLIF(verification_code, '')::bigint), 0)
+		FROM auth_challenges
+		WHERE user_id = $1 AND challenge_type = 'totp_step' AND destination = $2 AND expires_at > $3
+	`, userID, authTag, now).Scan(&maxStep)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, fmt.Errorf("failed to check totp step history: %w", err)
+	}
+
+	if maxStep > 0 && step <= maxStep {
+		// Replay detected! Submitted step was already consumed or is older than the last consumed step.
+		return false, nil
+	}
+
+	// 3. Atomically persist consumption into auth_challenges table.
+	// challenge_token has a UNIQUE constraint in auth_challenges.
+	// This guarantees that even without Redis, concurrent requests cannot both insert the same step.
+	challengeToken := fmt.Sprintf("totp_used:%s:%s:%d", userID, authTag, step)
+	stepCode := fmt.Sprintf("%d", step)
+	expiresAt := now.Add(10 * time.Minute)
+
+	_, err = exec.Exec(ctx, `
+		INSERT INTO auth_challenges (user_id, challenge_type, challenge_token, verification_code, destination, expires_at)
+		VALUES ($1, 'totp_step', $2, $3, $4, $5)
+	`, userID, challengeToken, stepCode, authTag, expiresAt)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			// Unique constraint violation: concurrent attempt or duplicate step.
+			return false, nil
+		}
+		if strings.Contains(strings.ToLower(err.Error()), "unique") || strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to record consumed totp step: %w", err)
+	}
+
+	// Prune expired totp_step records to keep table compact
+	_, _ = exec.Exec(ctx, `
+		DELETE FROM auth_challenges
+		WHERE challenge_type = 'totp_step' AND expires_at < $1
+	`, now)
+
+	return true, nil
+}
+
+// verifyAndConsumeTOTP wraps verifyAndConsumeTOTPatTime using the current time.
+func verifyAndConsumeTOTP(ctx context.Context, exec queryExecer, userID, secret, code string) (bool, error) {
+	return verifyAndConsumeTOTPatTime(ctx, exec, userID, secret, code, time.Now())
 }
 
 // twoFactorStatusHandler handles GET /v1/auth/2fa/status
@@ -251,16 +359,6 @@ func totpVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !validateTOTP(req.Secret, req.Code) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"valid": false,
-			"error": "Invalid verification code. Please check the code in your authenticator app and try again.",
-		})
-		return
-	}
-
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
@@ -272,6 +370,21 @@ func totpVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
+
+	consumed, err := verifyAndConsumeTOTP(ctx, conn, userID, req.Secret, req.Code)
+	if err != nil {
+		http.Error(w, "failed to verify code", http.StatusInternalServerError)
+		return
+	}
+	if !consumed {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"valid": false,
+			"error": "Invalid verification code. Please check the code in your authenticator app and try again.",
+		})
+		return
+	}
 
 	// Persist TOTP secret and activate 2FA
 	_, err = conn.Exec(ctx, `
@@ -656,15 +769,15 @@ func login2FAVerifyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	var challengeID, userID string
-	var verificationCode *string
+	var challengeID, userID, challengeType string
+	var verificationCode, destination *string
 	var expiresAt time.Time
 
 	err = conn.QueryRow(ctx, `
-		SELECT id::text, user_id::text, verification_code, expires_at
+		SELECT id::text, user_id::text, challenge_type, verification_code, destination, expires_at
 		FROM auth_challenges
-		WHERE challenge_token=$1 AND challenge_type='login_2fa'
-	`, challengeToken).Scan(&challengeID, &userID, &verificationCode, &expiresAt)
+		WHERE challenge_token=$1 AND challenge_type IN ('login_2fa', 'link_2fa')
+	`, challengeToken).Scan(&challengeID, &userID, &challengeType, &verificationCode, &destination, &expiresAt)
 
 	if err != nil || expiresAt.Before(time.Now()) {
 		w.Header().Set("Content-Type", "application/json")
@@ -673,6 +786,20 @@ func login2FAVerifyHandler(w http.ResponseWriter, r *http.Request) {
 			"error": "Verification session expired or invalid. Please sign in again.",
 		})
 		return
+	}
+
+	// For secondary account linking (link_2fa), verify that the challenge is bound to the caller's active primary session
+	callerHash, hasCaller := getCallerTokenHash(r)
+	if challengeType == "link_2fa" {
+		callerHex := hex.EncodeToString(callerHash)
+		if !hasCaller || destination == nil || *destination != callerHex {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "forbidden: challenge bound to a different primary session",
+			})
+			return
+		}
 	}
 
 	// 1. Check attempt counter
@@ -706,7 +833,12 @@ func login2FAVerifyHandler(w http.ResponseWriter, r *http.Request) {
 	// Validate code: Check TOTP first if user has totp_secret
 	valid := false
 	if totpSecret != nil && *totpSecret != "" && len(code) == 6 {
-		if validateTOTP(*totpSecret, code) {
+		consumed, err := verifyAndConsumeTOTP(ctx, conn, userID, *totpSecret, code)
+		if err != nil {
+			http.Error(w, "authentication verification failed", http.StatusInternalServerError)
+			return
+		}
+		if consumed {
 			valid = true
 		}
 	}
@@ -728,28 +860,23 @@ func login2FAVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Clear attempts & Delete used challenge atomically
+	// Clear attempts & Delete used challenge atomically (single use)
 	ClearOTPAttempts(ctx, challengeToken)
 	_, _ = conn.Exec(ctx, `DELETE FROM auth_challenges WHERE id=$1`, challengeID)
-
-	// Issue session
-	userAgent := r.UserAgent()
-	clientIP := getClientIP(r)
-	token, expires, err := createSession(ctx, conn, userID, 30*24*time.Hour, userAgent, clientIP)
-	if err != nil {
-		http.Error(w, "failed to create session", http.StatusInternalServerError)
-		return
-	}
 
 	// Query mailbox details
 	var mailboxID, mailboxLocalPart, mailboxMode string
 	var wrappedSkUser, previousWrappedSkUser *string
-	_ = conn.QueryRow(ctx, `
+	err = conn.QueryRow(ctx, `
 		SELECT id::text, local_part, mode, wrapped_sk_user, previous_wrapped_sk_user
 		FROM mailboxes
 		WHERE user_id=$1 AND is_active=true AND status='active'
 		ORDER BY created_at DESC
 		LIMIT 1`, userID).Scan(&mailboxID, &mailboxLocalPart, &mailboxMode, &wrappedSkUser, &previousWrappedSkUser)
+	if err != nil {
+		http.Error(w, "no active mailbox found for account", http.StatusNotFound)
+		return
+	}
 
 	wrappedSkUserStr := ""
 	if wrappedSkUser != nil {
@@ -760,7 +887,47 @@ func login2FAVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		previousWrappedSkUserStr = *previousWrappedSkUser
 	}
 
-	// Set session cookie
+	// If secondary account linking (link_2fa): Link mailbox to existing primary session WITHOUT setting session cookie
+	if challengeType == "link_2fa" {
+		var sessionExpiresAt time.Time
+		_ = conn.QueryRow(ctx, `SELECT expires_at FROM sessions WHERE token_hash=$1 AND revoked_at IS NULL`, callerHash).Scan(&sessionExpiresAt)
+		if sessionExpiresAt.IsZero() || sessionExpiresAt.Before(time.Now()) {
+			sessionExpiresAt = time.Now().Add(7 * 24 * time.Hour)
+		}
+		authorizeMailboxForSession(callerHash, mailboxID, userID, orgID, sessionExpiresAt)
+		auditLog(ctx, conn, orgID, userID, "link_mailbox_2fa", "mailbox", mailboxID, map[string]interface{}{
+			"linked_user_id": userID,
+			"email":          userEmail,
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":                       userID,
+			"email":                    userEmail,
+			"org_id":                   orgID,
+			"organization_id":          orgID,
+			"role":                     role,
+			"seat_count":               seatCount,
+			"subscription_status":      subscriptionStatus,
+			"mailbox_id":               mailboxID,
+			"mailbox_local_part":       mailboxLocalPart,
+			"mailbox_mode":             mailboxMode,
+			"wrapped_sk_user":          wrappedSkUserStr,
+			"previous_wrapped_sk_user": previousWrappedSkUserStr,
+		})
+		return
+	}
+
+	// Normal primary login flow (login_2fa): Issue new session and set session cookie
+	userAgent := r.UserAgent()
+	clientIP := getClientIP(r)
+	token, expires, err := createSession(ctx, conn, userID, 30*24*time.Hour, userAgent, clientIP)
+	if err != nil {
+		http.Error(w, "failed to create session", http.StatusInternalServerError)
+		return
+	}
+
+	// Set session cookie for primary login
 	setSessionCookie(w, r, token, expires)
 
 	auditLog(ctx, conn, orgID, userID, "login_2fa", "user", userID, nil)
