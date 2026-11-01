@@ -11,7 +11,7 @@ export function Footer() {
         { label: "Features", href: "/#features" },
         { label: "Pricing", href: "/pricing" },
         { label: "Security", href: "/security" },
-        { label: "Docs", href: "/docs" },
+        { label: "Support & FAQ", href: "/support" },
       ],
     },
     {

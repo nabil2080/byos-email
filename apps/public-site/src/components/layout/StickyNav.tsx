@@ -13,7 +13,7 @@ export function StickyNav() {
     { label: "About", href: "/#features" },
     { label: "Pricing", href: "/pricing" },
     { label: "Security", href: "/security" },
-    { label: "Docs", href: "/docs" },
+    { label: "Support", href: "/support" },
   ];
 
   onMount(() => {
