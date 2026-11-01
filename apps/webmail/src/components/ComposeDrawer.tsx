@@ -4,6 +4,11 @@ import { AttachmentBadge } from "./AttachmentBadge";
 import { RichTextEditor } from "./RichTextEditor";
 import { RecipientInput } from "./RecipientInput";
 import { isOffline } from "../offline";
+import {
+  validateAttachmentSendReadiness,
+  calculateAggregateProgress,
+  formatBytes,
+} from "../attachment_upload_pipeline";
 
 export type DrawerMode = "minimized" | "docked" | "maximized";
 
@@ -21,6 +26,9 @@ interface ComposeDrawerProps {
   attachments: AttachmentItem[];
   onAttachmentSelected: (e: Event) => void;
   onRemoveAttachment: (id: string) => void;
+  onCancelAttachment?: (id: string) => void;
+  onRetryAttachment?: (id: string) => void;
+  onCancelAllUploads?: () => void;
   scheduledTime: string;
   onScheduledTimeChange: (val: string) => void;
   trackOpens?: boolean;
@@ -51,6 +59,27 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
   const [drawerMode, setDrawerMode] = createSignal<DrawerMode>("docked");
   const [showScheduleInput, setShowScheduleInput] = createSignal(false);
   const [showCcBcc, setShowCcBcc] = createSignal(false);
+
+  const readiness = () => validateAttachmentSendReadiness(props.attachments);
+
+  const isAnyUploading = () =>
+    props.attachments.some(
+      (a) =>
+        a.uploadStatus === "uploading" ||
+        a.uploadStatus === "encrypting" ||
+        a.uploadStatus === "preparing",
+    );
+
+  const uploadingAttachments = () =>
+    props.attachments.filter(
+      (a) =>
+        a.uploadStatus === "uploading" ||
+        a.uploadStatus === "encrypting" ||
+        a.uploadStatus === "preparing",
+    );
+
+  const aggregateUploadProgress = () =>
+    calculateAggregateProgress(uploadingAttachments());
 
   createEffect(() => {
     if (props.isOpen) {
@@ -378,28 +407,167 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
               </Show>
             </div>
 
+            {/* Aggregate Upload Progress Banner */}
+            <Show when={isAnyUploading()}>
+              <div
+                data-testid="aggregate-upload-banner"
+                class="px-4 py-2 bg-[#F2E8E2] dark:bg-[#2C2420] border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between gap-3 text-xs flex-shrink-0"
+              >
+                <div class="flex items-center gap-2 flex-1 min-w-0">
+                  <div class="w-3.5 h-3.5 border-2 border-[#9E725F] border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                  <span class="font-medium text-[#3C3D3E] dark:text-[#F3F4F6] truncate">
+                    Uploading {uploadingAttachments().length} {uploadingAttachments().length === 1 ? "file" : "files"}
+                    <Show when={aggregateUploadProgress().totalBytes > 0}>
+                      {" "}({formatBytes(aggregateUploadProgress().completedBytes)} / {formatBytes(aggregateUploadProgress().totalBytes)}, {aggregateUploadProgress().percent}%)
+                    </Show>
+                  </span>
+                  <div class="flex-1 max-w-[140px] h-1.5 bg-[#E2DFD8] dark:bg-[#3C3D3E] rounded-full overflow-hidden hidden sm:block">
+                    <div
+                      class="h-full bg-[#9E725F] transition-all duration-200"
+                      style={{ width: `${aggregateUploadProgress().percent}%` }}
+                    />
+                  </div>
+                </div>
+                <Show when={props.onCancelAllUploads}>
+                  <button
+                    type="button"
+                    data-testid="cancel-all-uploads"
+                    onClick={props.onCancelAllUploads}
+                    class="text-xs font-medium text-rose-600 dark:text-rose-400 hover:text-rose-700 hover:underline px-2 py-0.5 rounded cursor-pointer"
+                    aria-label="Cancel all attachment uploads"
+                  >
+                    Cancel All
+                  </button>
+                </Show>
+              </div>
+            </Show>
+
             {/* Attachments Pills List */}
             <Show when={props.attachments.length > 0}>
               <div class="px-4 py-2 bg-[#F8F7F4] dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2E3138] flex flex-wrap gap-2 flex-shrink-0">
                 <For each={props.attachments}>
                   {(att) => (
-                    <div data-testid="compose-attachment-pill" class="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] text-xs font-mono text-[#1A1B1E] dark:text-[#F3F4F6] shadow-2xs">
-                      <AttachmentBadge filename={att.filename} contentType={att.content_type} size="xs" showLabel={false} />
-                      <span class="truncate max-w-[160px]">{att.filename}</span>
-                      <span class="text-[10px] text-[#55575B] dark:text-[#A1A1AA]">
-                        ({Math.round((att.byte_size ?? att.size_bytes ?? 0) / 1024)} KB)
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => props.onRemoveAttachment(att.id)}
-                        class="text-rose-500 hover:text-rose-700 p-0.5 ml-0.5 cursor-pointer rounded hover:bg-rose-50 dark:hover:bg-rose-950/40 transition"
-                        title="Remove attachment"
-                      >
-                        <svg class="w-3 h-3 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
-                          <line x1="18" y1="6" x2="6" y2="18" />
-                          <line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
-                      </button>
+                    <div
+                      data-testid="compose-attachment-pill"
+                      class={`relative overflow-hidden flex flex-col gap-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#1E2025] border text-xs font-mono shadow-2xs transition-colors ${
+                        att.uploadStatus === "failed"
+                          ? "border-rose-300 dark:border-rose-800 bg-rose-50/50 dark:bg-rose-950/20 text-rose-800 dark:text-rose-200"
+                          : att.uploadStatus === "cancelled"
+                          ? "border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 text-amber-800 dark:text-amber-200"
+                          : "border-[#E2DFD8] dark:border-[#2E3138] text-[#1A1B1E] dark:text-[#F3F4F6]"
+                      }`}
+                    >
+                      <div class="flex items-center gap-1.5">
+                        <AttachmentBadge filename={att.filename} contentType={att.content_type} size="xs" showLabel={false} />
+                        <span class="truncate max-w-[140px] font-medium" title={att.filename}>{att.filename}</span>
+                        <span class="text-[10px] text-[#6F7173] dark:text-[#A1A1AA]">
+                          ({Math.round((att.byte_size ?? att.size_bytes ?? 0) / 1024)} KB)
+                        </span>
+
+                        {/* Status badges */}
+                        <Show when={att.uploadStatus === "encrypting"}>
+                          <span class="text-[10px] px-1.5 py-0.5 rounded bg-[#F2E8E2] dark:bg-[#2C2420] text-[#9E725F] dark:text-[#D4A38F] font-sans flex items-center gap-1">
+                            <div class="w-2 h-2 border border-[#9E725F] border-t-transparent rounded-full animate-spin" />
+                            Encrypting…
+                          </span>
+                        </Show>
+
+                        <Show when={att.uploadStatus === "uploading"}>
+                          <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 font-sans flex items-center gap-1">
+                            <div class="w-2 h-2 border border-blue-600 border-t-transparent rounded-full animate-spin" />
+                            {att.uploadProgress && att.uploadProgress.totalBytes > 0
+                              ? `${formatBytes(att.uploadProgress.completedBytes)}/${formatBytes(att.uploadProgress.totalBytes)} (${att.uploadProgress.percent}%)`
+                              : "Uploading…"}
+                          </span>
+                        </Show>
+
+                        <Show when={att.uploadStatus === "completed"}>
+                          <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-sans flex items-center gap-0.5" title="Upload complete">
+                            <svg class="w-3 h-3 stroke-current fill-none stroke-[2.5]" viewBox="0 0 24 24">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          </span>
+                        </Show>
+
+                        <Show when={att.uploadStatus === "failed"}>
+                          <span class="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 font-sans" title={att.uploadError || "Upload failed"}>
+                            Failed
+                          </span>
+                        </Show>
+
+                        <Show when={att.uploadStatus === "cancelled"}>
+                          <span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 font-sans">
+                            Cancelled
+                          </span>
+                        </Show>
+
+                        {/* Actions: Cancel while in-flight */}
+                        <Show when={att.uploadStatus === "uploading" || att.uploadStatus === "encrypting" || att.uploadStatus === "preparing"}>
+                          <button
+                            type="button"
+                            data-testid="cancel-attachment-upload"
+                            onClick={() => props.onCancelAttachment?.(att.id)}
+                            class="text-rose-500 hover:text-rose-700 p-0.5 ml-0.5 cursor-pointer rounded hover:bg-rose-50 dark:hover:bg-rose-950/40 transition focus:outline-none focus:ring-1 focus:ring-[#9E725F]"
+                            title="Cancel upload"
+                            aria-label={`Cancel upload of ${att.filename}`}
+                          >
+                            <svg class="w-3 h-3 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                          </button>
+                        </Show>
+
+                        {/* Actions: Retry when failed or cancelled */}
+                        <Show when={att.uploadStatus === "failed" || att.uploadStatus === "cancelled"}>
+                          <button
+                            type="button"
+                            data-testid="retry-attachment-upload"
+                            onClick={() => props.onRetryAttachment?.(att.id)}
+                            class="text-[#9E725F] hover:text-[#865E4D] p-0.5 ml-0.5 cursor-pointer rounded hover:bg-[#F2E8E2] dark:hover:bg-[#2C2420] transition focus:outline-none focus:ring-1 focus:ring-[#9E725F]"
+                            title="Retry upload"
+                            aria-label={`Retry upload of ${att.filename}`}
+                          >
+                            <svg class="w-3 h-3 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                              <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+                            </svg>
+                          </button>
+                        </Show>
+
+                        {/* Actions: Remove attachment */}
+                        <Show when={att.uploadStatus !== "uploading" && att.uploadStatus !== "encrypting" && att.uploadStatus !== "preparing"}>
+                          <button
+                            type="button"
+                            data-testid="remove-attachment-btn"
+                            onClick={() => props.onRemoveAttachment(att.id)}
+                            class="text-rose-500 hover:text-rose-700 p-0.5 ml-0.5 cursor-pointer rounded hover:bg-rose-50 dark:hover:bg-rose-950/40 transition focus:outline-none focus:ring-1 focus:ring-[#9E725F]"
+                            title="Remove attachment"
+                            aria-label={`Remove ${att.filename}`}
+                          >
+                            <svg class="w-3 h-3 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                          </button>
+                        </Show>
+                      </div>
+
+                      {/* Progress bar along bottom of pill if uploading */}
+                      <Show when={att.uploadStatus === "uploading" && att.uploadProgress}>
+                        <div class="w-full h-1 bg-blue-100 dark:bg-blue-950/50 rounded-full overflow-hidden mt-0.5">
+                          <div
+                            class="h-full bg-blue-500 transition-all duration-200"
+                            style={{ width: `${att.uploadProgress?.percent ?? 0}%` }}
+                          />
+                        </div>
+                      </Show>
+
+                      {/* Error message detail if failed */}
+                      <Show when={att.uploadStatus === "failed" && att.uploadError}>
+                        <div class="text-[10px] text-rose-600 dark:text-rose-400 font-sans truncate max-w-[220px]">
+                          {att.uploadError}
+                        </div>
+                      </Show>
                     </div>
                   )}
                 </For>
@@ -452,10 +620,17 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                 <button
                   type="submit"
                   data-testid="compose-send-btn"
-                  disabled={Boolean(props.status)}
+                  disabled={Boolean(props.status) || !readiness().canSend}
                   class="px-4 py-2.5 rounded-xl bg-[#A27561] hover:bg-[#8F6452] text-white text-[13px] font-semibold tracking-wide transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50 cursor-pointer active:scale-[0.98]"
+                  title={
+                    props.status
+                      ? undefined
+                      : !readiness().canSend
+                      ? readiness().reason
+                      : undefined
+                  }
                 >
-                  <Show when={props.status}>
+                  <Show when={props.status || isAnyUploading()}>
                     <div class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                   </Show>
                   <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -463,7 +638,11 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                     <polygon points="22 2 15 22 11 13 2 9 22 2" />
                   </svg>
                   <span>
-                    {props.scheduledTime ? "Schedule Encrypted Send" : "Send Encrypted"}
+                    {isAnyUploading()
+                      ? "Uploading Attachments…"
+                      : props.scheduledTime
+                      ? "Schedule Encrypted Send"
+                      : "Send Encrypted"}
                   </span>
                 </button>
 

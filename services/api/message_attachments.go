@@ -56,6 +56,12 @@ func messageAttachmentsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
+	// Verify session authorization for target mailbox
+	if status, errMsg, authOk := verifyUserMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
+
 	var userOrgID, mailboxOrgID string
 	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)
 	if err != nil {
@@ -152,6 +158,12 @@ func messageAttachmentChunkHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
+
+	// Verify session authorization for target mailbox
+	if status, errMsg, authOk := verifyUserMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
 
 	var userOrgID, mailboxOrgID string
 	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)
@@ -294,6 +306,12 @@ func uploadAttachmentChunkHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
+
+	// Verify session authorization for target mailbox
+	if status, errMsg, authOk := verifyUserMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
 
 	var userOrgID, mailboxOrgID string
 	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)

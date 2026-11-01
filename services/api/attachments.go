@@ -57,27 +57,13 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	// Authorize org membership
-	var userOrgID, mailboxOrgID string
-	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)
-	if err != nil {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	// Authorize mailbox access for session
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
 		return
 	}
-	var userRole string
-	_ = conn.QueryRow(ctx, `SELECT COALESCE(role, 'member') FROM users WHERE id=$1`, userID).Scan(&userRole)
-	var mailboxUserID *string
-	err = conn.QueryRow(ctx, `SELECT org_id::text, user_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID, &mailboxUserID)
-	if err != nil {
-		http.Error(w, "mailbox not found", http.StatusNotFound)
-		return
-	}
-	isOwner := mailboxUserID != nil && *mailboxUserID == userID
-	isAdminOrOwner := userRole == "admin" || userRole == "owner"
-	if userOrgID != mailboxOrgID || (!isOwner && !isAdminOrOwner) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
+	var userOrgID string
+	_ = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1`, userID).Scan(&userOrgID)
 
 	attachmentID := r.PathValue("attachment_id")
 
