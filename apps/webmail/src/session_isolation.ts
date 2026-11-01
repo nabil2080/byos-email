@@ -53,6 +53,7 @@ interface AccountKeyBuffers {
   mailboxSk?: Uint8Array;
   signingSeed?: Uint8Array;
   xwingSeed?: Uint8Array;
+  searchKey?: string;
 }
 
 /** Strictly in-memory custody for private keys and seeds */
@@ -77,6 +78,7 @@ export function setAccountKeys(
     mailboxSk?: Uint8Array | string | null;
     signingSeed?: Uint8Array | string | null;
     xwingSeed?: Uint8Array | string | null;
+    searchKey?: string | null;
   }
 ): void {
   if (!accountId) return;
@@ -105,7 +107,26 @@ export function setAccountKeys(
       delete existing.xwingSeed;
     }
   }
+  if (keys.searchKey !== undefined) {
+    if (keys.searchKey) {
+      existing.searchKey = keys.searchKey;
+    } else {
+      delete existing.searchKey;
+    }
+  }
   inMemoryKeys.set(accountId, existing);
+}
+
+export function setSearchKeyFor(accountId: string, searchKey: string | null): void {
+  setAccountKeys(accountId, { searchKey });
+}
+
+export function getSearchKeyFor(accountId: string, storage?: Storage): string | null {
+  if (!accountId) return null;
+  const inMem = inMemoryKeys.get(accountId)?.searchKey;
+  if (inMem) return inMem;
+  const store = storage || (typeof sessionStorage !== "undefined" ? sessionStorage : null);
+  return store?.getItem("byos_mailbox_skey_" + accountId) || null;
 }
 
 export function setMailboxKeyFor(accountId: string, key: Uint8Array | string | null): void {
@@ -157,10 +178,12 @@ export function zeroizeKeys(accountId?: string, storage?: Storage): void {
       if (entry.mailboxSk) entry.mailboxSk.fill(0);
       if (entry.signingSeed) entry.signingSeed.fill(0);
       if (entry.xwingSeed) entry.xwingSeed.fill(0);
+      delete entry.searchKey;
       inMemoryKeys.delete(accountId);
     }
     if (store) {
       store.removeItem("byos_mailbox_sk_" + accountId);
+      store.removeItem("byos_mailbox_skey_" + accountId);
       store.removeItem("byos_signing_seed_" + accountId);
       store.removeItem("byos_xwing_seed_" + accountId);
     }
@@ -169,6 +192,7 @@ export function zeroizeKeys(accountId?: string, storage?: Storage): void {
       if (entry.mailboxSk) entry.mailboxSk.fill(0);
       if (entry.signingSeed) entry.signingSeed.fill(0);
       if (entry.xwingSeed) entry.xwingSeed.fill(0);
+      delete entry.searchKey;
     }
     inMemoryKeys.clear();
     if (store) {
@@ -178,6 +202,7 @@ export function zeroizeKeys(accountId?: string, storage?: Storage): void {
         if (
           key &&
           (key.startsWith("byos_mailbox_sk_") ||
+            key.startsWith("byos_mailbox_skey_") ||
             key.startsWith("byos_signing_seed_") ||
             key.startsWith("byos_xwing_seed_"))
         ) {
@@ -323,13 +348,10 @@ export function formatSessionExpiredError(email: string): string {
  */
 export async function validateRestoredAccount(
   account: { id: string; email: string; sessionToken?: string },
-  probeFn: (token: string) => Promise<unknown>,
+  probeFn: (token?: string) => Promise<unknown>,
 ): Promise<boolean> {
-  if (!account.sessionToken) {
-    return false;
-  }
   try {
-    await probeFn(account.sessionToken);
+    await probeFn(account.sessionToken || account.id);
     return true;
   } catch (err: any) {
     const status = err?.status ?? err?.statusCode;
@@ -459,6 +481,7 @@ export function getXWingSeedFor(accountId: string, storage?: Storage): Uint8Arra
 export function sanitizeConnectedAccounts<T extends Record<string, any>>(accounts: T[]): T[] {
   return accounts.map((a) => {
     const copy = { ...a };
+    delete copy.sessionToken;
     delete copy.mailboxSkHex;
     delete copy.signingSeedHex;
     delete copy.xwingSeedHex;
@@ -492,15 +515,16 @@ export async function unsealAccountKeys(
     mailboxSk: unwrapped.mailboxSk,
     signingSeed: unwrapped.signingSeed,
     xwingSeed: unwrapped.xwingSeed,
+    searchKey: searchKeyHex,
   });
 
   const store = storage || (typeof sessionStorage !== "undefined" ? sessionStorage : null);
   if (store) {
-    // Purge any raw private keys or seeds from sessionStorage
+    // Purge any raw private keys, seeds, or search keys from sessionStorage
     store.removeItem("byos_mailbox_sk_" + accountId);
     store.removeItem("byos_signing_seed_" + accountId);
     store.removeItem("byos_xwing_seed_" + accountId);
-    store.setItem("byos_mailbox_skey_" + accountId, searchKeyHex);
+    store.removeItem("byos_mailbox_skey_" + accountId);
   }
 
   return {

@@ -58,5 +58,6 @@ pre_cleanup_dump_*.sql
 tests/browser/*.png
 tests/browser/artifacts/*.png
 apps/webmail/*.png
+.agents/teamwork/
 
 

@@ -51,6 +51,11 @@ func messageSnoozeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		writeInternalSendError(w, status, errMsg)
+		return
+	}
+
 	// Verify ownership
 	var owns bool
 	err = conn.QueryRow(ctx, `

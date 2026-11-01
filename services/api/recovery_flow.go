@@ -296,7 +296,12 @@ func recoveryFlowResetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 	if challengeType == "recovery_reset_totp" {
 		var totpSecret *string
 		err = conn.QueryRow(ctx, `SELECT totp_secret FROM users WHERE id=$1`, userID).Scan(&totpSecret)
-		if err != nil || totpSecret == nil || !validateTOTP(*totpSecret, code) {
+		if err != nil || totpSecret == nil {
+			http.Error(w, "invalid authenticator code", http.StatusUnauthorized)
+			return
+		}
+		consumed, err := verifyAndConsumeTOTP(ctx, conn, userID, *totpSecret, code)
+		if err != nil || !consumed {
 			http.Error(w, "invalid authenticator code", http.StatusUnauthorized)
 			return
 		}

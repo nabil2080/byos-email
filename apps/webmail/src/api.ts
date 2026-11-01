@@ -4,10 +4,10 @@ import {
   AttachmentEnvelope,
   AttachmentWrappedKey,
   AttachmentChunk,
-  bytesToBase64,
+  type PreparedAttachment,
 } from "./attachment_crypto";
 
-export type { AttachmentEnvelope, AttachmentWrappedKey, AttachmentChunk };
+export type { AttachmentEnvelope, AttachmentWrappedKey, AttachmentChunk, PreparedAttachment };
 
 export interface UserMe {
   id?: string;
@@ -62,6 +62,18 @@ export interface AttachmentItem {
   rawFile?: File;
   isPathA?: boolean;
   envelope?: AttachmentEnvelope;
+  uploadStatus?: "idle" | "preparing" | "encrypting" | "uploading" | "completed" | "failed" | "cancelled";
+  uploadProgress?: {
+    completedBytes: number;
+    totalBytes: number;
+    completedChunks: number;
+    totalChunks: number;
+    percent: number;
+  };
+  uploadError?: string | null;
+  abortController?: AbortController;
+  uploadAttemptId?: string;
+  preparedPathA?: PreparedAttachment;
 }
 
 export interface MessageMetadata {
@@ -260,13 +272,23 @@ export function getTrackingPixelUrl(token: string): string {
   return `/v1/track/${encodeURIComponent(token)}.gif`;
 }
 
+let currentActiveMailboxId: string | null = null;
+
+export function setActiveMailboxContext(mailboxId: string | null) {
+  currentActiveMailboxId = mailboxId;
+}
+
+export function getActiveMailboxContext(): string | null {
+  return currentActiveMailboxId;
+}
+
 export interface ConnectedAccount {
   id: string;             // mailbox_id
   email: string;          // e.g. billing@testorg.byos
   displayName: string;
   role: string;
   privacyMode: string;
-  sessionToken: string;   // Auth token for this mailbox
+  sessionToken?: string;  // Deprecated/optional — sessions are server-managed via HttpOnly cookies
   mailboxSkHex?: string;  // Unsealed private key in memory (optional if locked)
   searchKeyHex?: string;  // Search index key (optional if locked)
   signingSeedHex?: string;
@@ -292,15 +314,12 @@ export async function uploadProfilePhoto(
   encryptedBytes: Uint8Array,
   token?: string
 ): Promise<{ photo_ref: string; updated_at: string }> {
-  const impersonationToken =
-    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
-  const activeToken =
-    token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
   const authHeaders: Record<string, string> = {};
-  if (activeToken) {
-    authHeaders["Authorization"] = `Bearer ${activeToken}`;
-  } else if (impersonationToken) {
-    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  if (token) {
+    authHeaders["Authorization"] = `Bearer ${token}`;
+  }
+  if (currentActiveMailboxId) {
+    authHeaders["X-BYOS-Active-Mailbox"] = currentActiveMailboxId;
   }
 
   const response = await fetch(`${apiBase()}/v1/users/me/profile-photo`, {
@@ -323,15 +342,12 @@ export async function uploadProfilePhoto(
 }
 
 export async function getProfilePhoto(token?: string): Promise<Uint8Array> {
-  const impersonationToken =
-    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
-  const activeToken =
-    token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
   const authHeaders: Record<string, string> = {};
-  if (activeToken) {
-    authHeaders["Authorization"] = `Bearer ${activeToken}`;
-  } else if (impersonationToken) {
-    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  if (token) {
+    authHeaders["Authorization"] = `Bearer ${token}`;
+  }
+  if (currentActiveMailboxId) {
+    authHeaders["X-BYOS-Active-Mailbox"] = currentActiveMailboxId;
   }
 
   const response = await fetch(`${apiBase()}/v1/users/me/profile-photo`, {
@@ -353,15 +369,12 @@ export async function getProfilePhoto(token?: string): Promise<Uint8Array> {
 }
 
 export async function deleteProfilePhoto(token?: string): Promise<void> {
-  const impersonationToken =
-    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
-  const activeToken =
-    token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
   const authHeaders: Record<string, string> = {};
-  if (activeToken) {
-    authHeaders["Authorization"] = `Bearer ${activeToken}`;
-  } else if (impersonationToken) {
-    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  if (token) {
+    authHeaders["Authorization"] = `Bearer ${token}`;
+  }
+  if (currentActiveMailboxId) {
+    authHeaders["X-BYOS-Active-Mailbox"] = currentActiveMailboxId;
   }
 
   const response = await fetch(`${apiBase()}/v1/users/me/profile-photo`, {
@@ -394,15 +407,17 @@ export function getAccountColor(id: string): string {
 }
 
 export async function apiRequest<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
-  const impersonationToken =
-    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
-  const activeToken =
-    token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
   const authHeaders: Record<string, string> = {};
-  if (activeToken) {
-    authHeaders["Authorization"] = `Bearer ${activeToken}`;
-  } else if (impersonationToken) {
-    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  if (token) {
+    authHeaders["Authorization"] = `Bearer ${token}`;
+  }
+  if (!(init?.headers as Record<string, string> | undefined)?.["X-BYOS-Active-Mailbox"]) {
+    const mbxMatch = path.match(/^\/v1\/mailboxes\/([0-9a-fA-F-]+)/);
+    if (mbxMatch && mbxMatch[1]) {
+      authHeaders["X-BYOS-Active-Mailbox"] = mbxMatch[1];
+    } else if (currentActiveMailboxId) {
+      authHeaders["X-BYOS-Active-Mailbox"] = currentActiveMailboxId;
+    }
   }
 
   const response = await fetch(`${apiBase()}${path}`, {
@@ -476,6 +491,21 @@ export async function login(email: string, password: string): Promise<LoginRespo
     when this throws (network failure must not keep a signed-in UI alive). */
 export async function logout(): Promise<void> {
   await apiRequest<void>("/v1/auth/logout", { method: "POST" });
+}
+
+/** Link an additional authenticated mailbox account to the active session server-side. */
+export async function linkAccount(email: string, password: string): Promise<LoginResponse> {
+  return apiRequest<LoginResponse>("/v1/auth/linked-accounts", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+/** Unlink a secondary mailbox account from the active session server-side. */
+export async function unlinkAccount(mailboxId: string): Promise<void> {
+  await apiRequest<void>(`/v1/auth/linked-accounts/${mailboxId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function fetchMailboxes(orgId: string): Promise<Mailbox[]> {
@@ -842,13 +872,21 @@ export async function uploadEncryptedAttachment(
   mailboxId: string,
   file: File,
   mailboxKey: Uint8Array,
-  messageId?: string
+  messageId?: string,
+  token?: string,
+  signal?: AbortSignal,
 ): Promise<AttachmentItem> {
   const arrayBuffer = await file.arrayBuffer();
+  if (signal?.aborted) {
+    throw new DOMException("Upload aborted", "AbortError");
+  }
   const plaintextBytes = new Uint8Array(arrayBuffer);
 
   // Encrypt client-side using Section 12 WASM primitive before network transit
   const ciphertextBytes = encryptAttachmentBytes(plaintextBytes, mailboxKey);
+  if (signal?.aborted) {
+    throw new DOMException("Upload aborted", "AbortError");
+  }
 
   const formData = new FormData();
   const encryptedBlob = new Blob([ciphertextBytes.buffer as ArrayBuffer], { type: "application/octet-stream" });
@@ -861,6 +899,7 @@ export async function uploadEncryptedAttachment(
     method: "POST",
     credentials: "include",
     body: formData,
+    signal,
   });
 
   if (!response.ok) {
@@ -872,19 +911,20 @@ export async function uploadEncryptedAttachment(
 }
 
 export async function downloadAttachment(mailboxId: string, attachmentId: string, token?: string): Promise<Blob> {
-  const impersonationToken =
-    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
-  const activeToken = token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
   const authHeaders: Record<string, string> = {};
-  if (activeToken) {
-    authHeaders["Authorization"] = `Bearer ${activeToken}`;
-  } else if (impersonationToken) {
-    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  if (token) {
+    authHeaders["Authorization"] = `Bearer ${token}`;
+  }
+  if (mailboxId) {
+    authHeaders["X-BYOS-Active-Mailbox"] = mailboxId;
+  } else if (currentActiveMailboxId) {
+    authHeaders["X-BYOS-Active-Mailbox"] = currentActiveMailboxId;
   }
 
   const response = await fetch(`${apiBase()}/v1/mailboxes/${mailboxId}/attachments/${attachmentId}?download=true`, {
     credentials: "include",
     headers: {
+      "X-BYOS-Client": "webmail",
       ...authHeaders,
     },
   });
@@ -1794,14 +1834,27 @@ export async function uploadAttachmentChunk(
   mailboxId: string,
   storageRef: string,
   chunkBytes: Uint8Array,
+  token?: string,
+  signal?: AbortSignal,
 ): Promise<void> {
-  await apiRequest(`/v1/mailboxes/${mailboxId}/attachment-chunks`, {
-    method: "POST",
-    body: JSON.stringify({
-      object_key: storageRef,
-      data: bytesToBase64(chunkBytes),
-    }),
-  });
+  const body =
+    chunkBytes.byteOffset === 0 && chunkBytes.byteLength === chunkBytes.buffer.byteLength
+      ? chunkBytes
+      : chunkBytes.slice();
+
+  await apiRequest(
+    `/v1/mailboxes/${mailboxId}/attachment-chunks`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Object-Key": storageRef,
+      },
+      body: body as unknown as BodyInit,
+      signal,
+    },
+    token,
+  );
 }
 
 export async function fetchMessageAttachmentEnvelopes(
@@ -1829,15 +1882,14 @@ export async function fetchMessageAttachmentChunk(
   chunkIndex: number,
   token?: string,
 ): Promise<Uint8Array> {
-  const impersonationToken =
-    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
-  const activeToken =
-    token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
   const authHeaders: Record<string, string> = {};
-  if (activeToken) {
-    authHeaders["Authorization"] = `Bearer ${activeToken}`;
-  } else if (impersonationToken) {
-    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  if (token) {
+    authHeaders["Authorization"] = `Bearer ${token}`;
+  }
+  if (mailboxId) {
+    authHeaders["X-BYOS-Active-Mailbox"] = mailboxId;
+  } else if (currentActiveMailboxId) {
+    authHeaders["X-BYOS-Active-Mailbox"] = currentActiveMailboxId;
   }
 
   const response = await fetch(
@@ -2278,15 +2330,17 @@ export async function apiRequestWithHeaders<T>(
   init?: RequestInit,
   token?: string
 ): Promise<{ data: T; headers: Headers }> {
-  const impersonationToken =
-    typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
-  const activeToken =
-    token || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null);
   const authHeaders: Record<string, string> = {};
-  if (activeToken) {
-    authHeaders["Authorization"] = `Bearer ${activeToken}`;
-  } else if (impersonationToken) {
-    authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
+  if (token) {
+    authHeaders["Authorization"] = `Bearer ${token}`;
+  }
+  if (!(init?.headers as Record<string, string> | undefined)?.["X-BYOS-Active-Mailbox"]) {
+    const mbxMatch = path.match(/^\/v1\/mailboxes\/([0-9a-fA-F-]+)/);
+    if (mbxMatch && mbxMatch[1]) {
+      authHeaders["X-BYOS-Active-Mailbox"] = mbxMatch[1];
+    } else if (currentActiveMailboxId) {
+      authHeaders["X-BYOS-Active-Mailbox"] = currentActiveMailboxId;
+    }
   }
 
   const response = await fetch(`${apiBase()}${path}`, {

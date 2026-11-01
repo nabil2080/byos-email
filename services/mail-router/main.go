@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -335,11 +336,78 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, InboundResponse{Stored: stored})
 }
 
+func isSupportRecipient(localPart, domain string) bool {
+	lp := strings.ToLower(strings.TrimSpace(localPart))
+	dom := strings.ToLower(strings.TrimSpace(domain))
+
+	if strings.HasPrefix(lp, "reply+") || strings.HasPrefix(lp, "reply-") {
+		return true
+	}
+	if lp == "support" {
+		return true
+	}
+	if strings.Contains(dom, "support.") {
+		return true
+	}
+	return false
+}
+
+func (a *App) forwardToSupportInbound(ctx context.Context, envelopeFrom, recipient string, rawMessage []byte) (StoredMessage, error) {
+	apiBase := os.Getenv("BYOS_API_URL")
+	if apiBase == "" {
+		apiBase = "http://127.0.0.1:8080"
+	}
+	apiBase = strings.TrimRight(apiBase, "/")
+
+	payload := map[string]string{
+		"envelope_from":   envelopeFrom,
+		"recipient":       recipient,
+		"raw_message_b64": base64.StdEncoding.EncodeToString(rawMessage),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return StoredMessage{}, fmt.Errorf("marshal support payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/v1/support/inbound-email", bytes.NewReader(body))
+	if err != nil {
+		return StoredMessage{}, fmt.Errorf("create support inbound request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[mail-router] support inbound forward failed: %v", err)
+		return StoredMessage{}, fmt.Errorf("support inbound unavailable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		log.Printf("[mail-router] support inbound rejected %d: %s", resp.StatusCode, string(respBody))
+		return StoredMessage{}, fmt.Errorf("550 support inbound rejected: %s", string(respBody))
+	}
+
+	return StoredMessage{
+		MessageID:       fmt.Sprintf("support-%s", uuid.New().String()),
+		MailboxID:       "support-subsystem",
+		Recipient:       normalizeAddress(recipient),
+		MessageSeq:      1,
+		StorageObjectID: "support-email",
+	}, nil
+}
+
 func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient string, rawMessage []byte, deliveryIdentity [32]byte, normalizedRecipients []string, preRoute *mailboxRoute) (StoredMessage, error) {
 	normalizedRecipient := normalizeAddress(recipient)
 	domain, localPart, err := splitAddress(normalizedRecipient)
 	if err != nil {
 		return StoredMessage{}, err
+	}
+
+	// Bypass customer mailbox lookup for dedicated support recipients
+	if isSupportRecipient(localPart, domain) {
+		return a.forwardToSupportInbound(ctx, envelopeFrom, recipient, rawMessage)
 	}
 
 	tx, err := a.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -629,6 +697,9 @@ func (a *App) encryptMessage(ctx context.Context, route mailboxRoute, messageSeq
 func (a *App) latestMessageHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !requireMailRouterInternalKey(w, r) {
 		return
 	}
 	recipient := normalizeAddress(r.URL.Query().Get("recipient"))

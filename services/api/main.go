@@ -354,6 +354,8 @@ func main() {
 	http.HandleFunc("/v1/auth/recovery-verify", withSecurityHeaders(withCORS(recoveryVerifyHandler)))
 	http.HandleFunc("/v1/auth/change-password", withSecurityHeaders(withCORS(changePasswordHandler)))
 	http.HandleFunc("/v1/auth/me", withSecurityHeaders(withCORS(meHandler)))
+	http.HandleFunc("/v1/auth/linked-accounts", withSecurityHeaders(withCORS(linkedAccountsHandler)))
+	http.HandleFunc("/v1/auth/linked-accounts/", withSecurityHeaders(withCORS(linkedAccountsHandler)))
 	http.HandleFunc("/v1/users/me/mailboxes", withSecurityHeaders(withCORS(userMailboxesHandler)))
 	http.HandleFunc("/api/v1/users/me/mailboxes", withSecurityHeaders(withCORS(userMailboxesHandler)))
 	http.HandleFunc("/v1/users/me/aliases", withSecurityHeaders(withCORS(aliasesHandler)))
@@ -579,6 +581,10 @@ func main() {
 	http.HandleFunc("/v1/organizations/{org_id}/exceptional-recovery/{id}/approve", withSecurityHeaders(withCORS(exceptionalRecoveryApproveHandler)))
 	http.HandleFunc("/v1/organizations/{org_id}/exceptional-recovery/{id}/reject", withSecurityHeaders(withCORS(exceptionalRecoveryRejectHandler)))
 	http.HandleFunc("/v1/auth/recovery/reset-with-approval", withSecurityHeaders(withCORS(exceptionalRecoveryResetHandler)))
+
+	// Customer Support Platform (Help Desk & Ticketing)
+	http.HandleFunc("/v1/support/tickets", withSecurityHeaders(withCORS(customerSupportTicketsHandler)))
+	http.HandleFunc("/v1/support/tickets/", withSecurityHeaders(withCORS(customerSupportTicketRouter)))
 
 	log.Printf("BYOS API service starting on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))

@@ -55,6 +55,11 @@ func autoReplyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
+
 	// Authorize org membership
 	var userOrgID, userRole string
 	err = conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole)

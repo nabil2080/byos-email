@@ -133,6 +133,10 @@ func mailboxTrackingHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	// Authorize user has access to mailbox's org
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
 	var userOrgID, mailboxOrgID string
 	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)
 	if err != nil {
@@ -255,6 +259,10 @@ func mailboxTrackingItemHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	// Auth check
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
 	var userOrgID, mailboxOrgID string
 	if err := conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)

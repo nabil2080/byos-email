@@ -130,9 +130,6 @@ export const OrgProvider: ParentComponent = (props) => {
   };
 
   const handleLogout = async () => {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("byos_cp_session_token");
-    }
     try {
       await fetch(`${apiBase()}/v1/auth/logout`, {
         method: "POST",

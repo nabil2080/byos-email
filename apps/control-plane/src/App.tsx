@@ -10,6 +10,7 @@ import BillingPage from "./routes/dashboard/billing";
 import SettingsPage from "./routes/dashboard/settings";
 import MembersPage from "./routes/dashboard/members";
 import SecurityPage from "./routes/dashboard/security";
+import SupportPage from "./routes/dashboard/support";
 import LoginPage from "./routes/login";
 import RegisterPage from "./routes/register";
 import OnboardingPricingPage from "./routes/onboarding/pricing";
@@ -46,6 +47,7 @@ const App: Component = () => {
         <Route path="/settings" component={SettingsPage} />
         <Route path="/members" component={MembersPage} />
         <Route path="/security" component={SecurityPage} />
+        <Route path="/support" component={SupportPage} />
       </Route>
       {/* Fallback: redirect root to dashboard */}
       <Route path="/" component={() => { window.location.replace("/dashboard"); return null; }} />

@@ -273,6 +273,7 @@ export async function restorePersistentSession(): Promise<UnsealedSessionPayload
         mailboxSk: unsealed.mailboxSkHex || null,
         signingSeed: unsealed.signingSeedHex || null,
         xwingSeed: unsealed.xwingSeedHex || null,
+        searchKey: unsealed.searchKeyHex || null,
       });
     }
 
@@ -282,9 +283,7 @@ export async function restorePersistentSession(): Promise<UnsealedSessionPayload
         sessionStorage.removeItem("byos_mailbox_sk_" + unsealed.mailboxId);
         sessionStorage.removeItem("byos_signing_seed_" + unsealed.mailboxId);
         sessionStorage.removeItem("byos_xwing_seed_" + unsealed.mailboxId);
-        if (unsealed.searchKeyHex) {
-          sessionStorage.setItem("byos_mailbox_skey_" + unsealed.mailboxId, unsealed.searchKeyHex);
-        }
+        sessionStorage.removeItem("byos_mailbox_skey_" + unsealed.mailboxId);
       }
     }
 

@@ -565,9 +565,18 @@ func resolveCalendarMailboxOwner(w http.ResponseWriter, r *http.Request, conn *p
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return "", "", "", false
 	}
-	// Strict owner-only check: User must belong to same org AND be the direct owner of the mailbox.
-	// Organization administrators and peer employees are forbidden from accessing another user's private calendar.
-	if mailboxOrgID != userOrgID || mailboxUserID == nil || *mailboxUserID != userID {
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return "", "", "", false
+	}
+	// Strict owner or linked session check: User must belong to same org AND be the direct owner or have linked session.
+	// Peer employees or unauthorized org administrators are forbidden from accessing another user's private calendar.
+	isOwner := mailboxUserID != nil && *mailboxUserID == userID
+	isLinked := false
+	if callerHash, hasHash := getCallerTokenHash(r); hasHash && len(callerHash) > 0 {
+		isLinked = isMailboxAuthorizedForSession(callerHash, userID, mailboxID, conn, ctx)
+	}
+	if mailboxOrgID != userOrgID || (!isOwner && !isLinked) {
 		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
 		return "", "", "", false
 	}

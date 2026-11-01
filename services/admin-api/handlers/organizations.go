@@ -31,6 +31,9 @@ type OrganizationResponse struct {
 }
 
 type AuditLogEntry struct {
+	ActorName  string    `json:"actor_name"`
+	TargetName string    `json:"target_name"`
+	TargetType string    `json:"target_type"`
 	ID         string    `json:"id"`
 	AdminUUID  string    `json:"admin_uuid"`
 	ActorUUID  string    `json:"actor_uuid"`
@@ -253,22 +256,48 @@ func handleSuspendOrganization(w http.ResponseWriter, r *http.Request, db *pgxpo
 	}
 	defer tx.Rollback(ctx)
 
-	// 1. Update status
+	// 1. Update organization status
 	cmdTag, err := tx.Exec(ctx, "UPDATE organizations SET status = $1, updated_at = now() WHERE id = $2", targetStatus, orgUUID)
 	if err != nil || cmdTag.RowsAffected() == 0 {
 		http.Error(w, "Organization update failed or not found", http.StatusInternalServerError)
 		return
 	}
 
-	// 2. Write Immutable Audit Log
-	adminActorUUID := uuid.New()
+	// 2. Cascade status to all users under this organization
+	userActive := targetStatus == "active"
+	_, err = tx.Exec(ctx, "UPDATE users SET status = $1, is_active = $2, updated_at = now() WHERE org_id = $3", targetStatus, userActive, orgUUID)
+	if err != nil {
+		http.Error(w, "Failed to cascade status to users", http.StatusInternalServerError)
+		return
+	}
+
+	// 3. Cascade status to all mailboxes under this organization
+	_, err = tx.Exec(ctx, "UPDATE mailboxes SET status = $1, is_active = $2, updated_at = now() WHERE org_id = $3", targetStatus, userActive, orgUUID)
+	if err != nil {
+		http.Error(w, "Failed to cascade status to mailboxes", http.StatusInternalServerError)
+		return
+	}
+
+	// 4. Invalidate active sessions if suspending
+	if targetStatus == "suspended" {
+		_, _ = tx.Exec(ctx, "DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE org_id = $1)", orgUUID)
+	}
+
+	// Fetch org name for audit metadata
+	var orgName string
+	_ = tx.QueryRow(ctx, "SELECT name FROM organizations WHERE id = $1", orgUUID).Scan(&orgName)
+
+	// 5. Write Immutable Audit Log
+	adminActorUUID := uuid.MustParse("11111111-2222-3333-4444-555555555501") // Sarah Chen (Tier 2 Lead Agent)
 	auditID := "aud_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:12]
-	metaJSON, _ := json.Marshal(map[string]string{
+	metaJSON, _ := json.Marshal(map[string]any{
 		"reason":    req.Reason,
 		"audit_id":  auditID,
 		"status":    targetStatus,
+		"org_name":  orgName,
 		"operation": "organization_status_change",
 		"client":    "byos-support-crm",
+		"actor":     "Sarah Chen (Tier 2)",
 	})
 
 	actionType := "org_suspend"
@@ -281,12 +310,11 @@ func handleSuspendOrganization(w http.ResponseWriter, r *http.Request, db *pgxpo
 		VALUES ($1, $2, $3, $4, $5)
 	`, adminActorUUID, adminActorUUID, actionType, orgUUID, metaJSON)
 	if err != nil {
-		// Rollback occurs automatically via defer tx.Rollback
 		http.Error(w, "Failed to commit audit trail: transaction rolled back", http.StatusInternalServerError)
 		return
 	}
 
-	// 3. Commit Transaction
+	// 6. Commit Transaction
 	if err := tx.Commit(ctx); err != nil {
 		http.Error(w, "Transaction commit failed", http.StatusInternalServerError)
 		return
@@ -297,8 +325,9 @@ func handleSuspendOrganization(w http.ResponseWriter, r *http.Request, db *pgxpo
 		"success":         true,
 		"audit_id":        auditID,
 		"target_org_uuid": orgUUID.String(),
+		"org_name":        orgName,
 		"status":          targetStatus,
-		"message":         "Organization status updated with immutable audit confirmation.",
+		"message":         "Organization and account status updated with immutable audit confirmation.",
 	})
 }
 
@@ -515,11 +544,23 @@ func handleGetAuditLogs(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool
 	}
 
 	rows, err := db.Query(r.Context(), `
-		SELECT id, actor_uuid, action_type,
-		       COALESCE(target_org_uuid::text, COALESCE(target_mailbox_uuid::text, '')) AS target_uuid,
-		       metadata, timestamp
-		FROM support_audit_logs
-		ORDER BY timestamp DESC
+		SELECT l.id, l.actor_uuid, l.action_type,
+		       COALESCE(l.target_org_uuid::text, COALESCE(l.target_mailbox_uuid::text, COALESCE(l.metadata->>'ticket_id', ''))) AS target_uuid,
+		       COALESCE(o.name, COALESCE(u.email, COALESCE(t.ticket_number, ''))) AS target_name,
+		       COALESCE(sa.display_name, COALESCE(sa.email, 'Sarah Chen (Tier 2)')) AS actor_name,
+		       CASE 
+		           WHEN l.target_org_uuid IS NOT NULL THEN 'organization'
+		           WHEN l.target_mailbox_uuid IS NOT NULL THEN 'customer'
+		           WHEN (l.metadata->>'ticket_id') IS NOT NULL THEN 'ticket'
+		           ELSE 'system'
+		       END AS target_type,
+		       l.metadata, l.timestamp
+		FROM support_audit_logs l
+		LEFT JOIN organizations o ON l.target_org_uuid = o.id
+		LEFT JOIN users u ON l.target_mailbox_uuid = u.id
+		LEFT JOIN support_tickets t ON (CASE WHEN (l.metadata->>'ticket_id') ~ '^[0-9a-fA-F-]{36}$' THEN (l.metadata->>'ticket_id')::uuid ELSE NULL END) = t.id
+		LEFT JOIN support_agents sa ON l.actor_uuid = sa.id
+		ORDER BY l.timestamp DESC
 		LIMIT 100
 	`)
 	if err != nil {
@@ -532,9 +573,9 @@ func handleGetAuditLogs(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool
 	for rows.Next() {
 		var e AuditLogEntry
 		var uid, actorUid uuid.UUID
-		var targetStr string
+		var targetStr, targetName, actorName, targetType string
 		var metaBytes []byte
-		if err := rows.Scan(&uid, &actorUid, &e.ActionType, &targetStr, &metaBytes, &e.Timestamp); err != nil {
+		if err := rows.Scan(&uid, &actorUid, &e.ActionType, &targetStr, &targetName, &actorName, &targetType, &metaBytes, &e.Timestamp); err != nil {
 			log.Printf("handleGetAuditLogs scan error: %v", err)
 			http.Error(w, `{"error":"Failed to scan audit logs"}`, http.StatusInternalServerError)
 			return
@@ -542,8 +583,11 @@ func handleGetAuditLogs(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool
 		e.ID = uid.String()
 		e.AdminUUID = actorUid.String()
 		e.ActorUUID = actorUid.String()
+		e.ActorName = actorName
 		e.Action = e.ActionType
 		e.TargetUUID = targetStr
+		e.TargetName = targetName
+		e.TargetType = targetType
 		var parsedMeta any
 		_ = json.Unmarshal(metaBytes, &parsedMeta)
 		e.Metadata = parsedMeta
@@ -559,8 +603,6 @@ func handleGetAuditLogs(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool
 	json.NewEncoder(w).Encode(entries)
 }
 
-// handleAdminCreateDomain provisions a domain for an organization, strictly enforcing the max_domains quota.
-// If the limit is reached, it returns 403 Forbidden with add-on upsell details.
 func handleAdminCreateDomain(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool) {
 	if db == nil {
 		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
@@ -765,5 +807,131 @@ func HandleGetCapacity(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool,
 		"domains":   map[string]interface{}{"used": usedDomains, "cap": domainsCap},
 		"aliases":   map[string]interface{}{"used": usedAliases, "cap": aliasesCap},
 		"storage":   map[string]interface{}{"used": nil, "cap": nil, "note": "customer-controlled"},
+	})
+}
+
+
+// RegisterCustomerRoutes registers customer management routes for support staff.
+func RegisterCustomerRoutes(mux *http.ServeMux, db *pgxpool.Pool, authMiddleware func(http.HandlerFunc) http.HandlerFunc) {
+	mux.HandleFunc("/admin/v1/customers/", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/admin/v1/customers/")
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) < 2 {
+			http.Error(w, "Customer user UUID and action required", http.StatusBadRequest)
+			return
+		}
+
+		userUUID, err := uuid.Parse(parts[0])
+		if err != nil {
+			http.Error(w, "Invalid customer user UUID", http.StatusBadRequest)
+			return
+		}
+
+		action := parts[1]
+		switch action {
+		case "suspend":
+			if r.Method != http.MethodPost {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			handleSuspendCustomer(w, r, db, userUUID)
+		default:
+			http.Error(w, "Unknown customer action", http.StatusNotFound)
+		}
+	}))
+}
+
+// handleSuspendCustomer toggles active/suspended status for a customer user account and their personal mailbox.
+func handleSuspendCustomer(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool, userUUID uuid.UUID) {
+	var req struct {
+		Status string `json:"status"` // "suspended" or "active"
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	targetStatus := req.Status
+	if targetStatus == "" {
+		targetStatus = "suspended"
+	}
+	if targetStatus != "suspended" && targetStatus != "active" {
+		http.Error(w, "Invalid status parameter", http.StatusBadRequest)
+		return
+	}
+
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx := r.Context()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		http.Error(w, "Failed to initiate database transaction", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var userEmail string
+	var orgID uuid.UUID
+	err = tx.QueryRow(ctx, "SELECT email, org_id FROM users WHERE id = $1", userUUID).Scan(&userEmail, &orgID)
+	if err != nil {
+		http.Error(w, "User account not found", http.StatusNotFound)
+		return
+	}
+
+	userActive := targetStatus == "active"
+	cmdTag, err := tx.Exec(ctx, "UPDATE users SET status = $1, is_active = $2, updated_at = now() WHERE id = $3", targetStatus, userActive, userUUID)
+	if err != nil || cmdTag.RowsAffected() == 0 {
+		http.Error(w, "Failed to update user account", http.StatusInternalServerError)
+		return
+	}
+
+	_, _ = tx.Exec(ctx, "UPDATE mailboxes SET status = $1, is_active = $2, updated_at = now() WHERE user_id = $3", targetStatus, userActive, userUUID)
+
+	if targetStatus == "suspended" {
+		_, _ = tx.Exec(ctx, "DELETE FROM sessions WHERE user_id = $1", userUUID)
+	}
+
+	adminActorUUID := uuid.MustParse("11111111-2222-3333-4444-555555555501") // Sarah Chen (Tier 2 Lead Agent)
+	auditID := "aud_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:12]
+	metaJSON, _ := json.Marshal(map[string]any{
+		"reason":    req.Reason,
+		"audit_id":  auditID,
+		"status":    targetStatus,
+		"email":     userEmail,
+		"user_id":   userUUID.String(),
+		"operation": "customer_account_status_change",
+		"client":    "byos-support-crm",
+		"actor":     "Sarah Chen (Tier 2)",
+	})
+
+	actionType := "customer_suspend"
+	if targetStatus == "active" {
+		actionType = "customer_reactivate"
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO support_audit_logs (actor_uuid, admin_actor_uuid, action_type, target_org_uuid, target_mailbox_uuid, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, adminActorUUID, adminActorUUID, actionType, orgID, userUUID, metaJSON)
+	if err != nil {
+		log.Printf("handleSuspendCustomer audit error: %v", err)
+		http.Error(w, "Failed to commit audit trail: " + err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		http.Error(w, "Transaction commit failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"audit_id": auditID,
+		"user_id":  userUUID.String(),
+		"email":    userEmail,
+		"status":   targetStatus,
+		"message":  fmt.Sprintf("Customer account %s status set to %s.", userEmail, targetStatus),
 	})
 }

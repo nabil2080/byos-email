@@ -23,18 +23,23 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/argon2"
 )
@@ -261,6 +266,76 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+var (
+	authDBPool  *pgxpool.Pool
+	authDBOnce  sync.Once
+	authDBMutex sync.Mutex
+)
+
+// InitAuthDBPool initializes the centralized auth connection pool.
+func InitAuthDBPool(ctx context.Context) (*pgxpool.Pool, error) {
+	return getAuthDBPool(ctx)
+}
+
+// CloseAuthDBPool closes the centralized auth connection pool gracefully.
+func CloseAuthDBPool() {
+	authDBMutex.Lock()
+	defer authDBMutex.Unlock()
+	if authDBPool != nil {
+		authDBPool.Close()
+		authDBPool = nil
+		authDBOnce = sync.Once{}
+	}
+}
+
+func getAuthDBPool(ctx context.Context) (*pgxpool.Pool, error) {
+	if authDBPool != nil {
+		return authDBPool, nil
+	}
+	authDBMutex.Lock()
+	defer authDBMutex.Unlock()
+	if authDBPool != nil {
+		return authDBPool, nil
+	}
+
+	var initErr error
+	authDBOnce.Do(func() {
+		dsn := os.Getenv("DATABASE_URL")
+		if dsn == "" {
+			dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+		}
+		cfg, err := pgxpool.ParseConfig(dsn)
+		if err != nil {
+			initErr = err
+			return
+		}
+
+		minConns := 2
+		if v := os.Getenv("DB_POOL_MIN_CONNS"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				minConns = n
+			}
+		}
+		maxConns := 25
+		if v := os.Getenv("DB_POOL_MAX_CONNS"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				maxConns = n
+			}
+		}
+
+		cfg.MinConns = int32(minConns)
+		cfg.MaxConns = int32(maxConns)
+		cfg.MaxConnLifetime = 30 * time.Minute
+		cfg.MaxConnIdleTime = 5 * time.Minute
+		authDBPool, initErr = pgxpool.NewWithConfig(context.Background(), cfg)
+	})
+	if initErr != nil {
+		authDBOnce = sync.Once{}
+		return nil, initErr
+	}
+	return authDBPool, nil
+}
+
 func getSessionUserID(r *http.Request) (string, bool) {
 	var token string
 	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) != "" {
@@ -289,18 +364,33 @@ func getSessionUserID(r *http.Request) (string, bool) {
 		return "", false
 	}
 	tokenHash := hashToken(token)
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+
+	pool, err := getAuthDBPool(r.Context())
+	if err != nil || pool == nil {
+		// Fallback to direct connection if pool fails
+		dsn := os.Getenv("DATABASE_URL")
+		if dsn == "" {
+			dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+		}
+		ctx := r.Context()
+		conn, err := pgx.Connect(ctx, dsn)
+		if err != nil {
+			return "", false
+		}
+		defer conn.Close(ctx)
+		var userID string
+		err = conn.QueryRow(ctx, `SELECT user_id::text FROM sessions WHERE token_hash=$1 AND expires_at > now() AND revoked_at IS NULL`, tokenHash).Scan(&userID)
+		if err != nil {
+			return "", false
+		}
+		if _, err := uuid.Parse(userID); err != nil {
+			return "", false
+		}
+		return userID, true
 	}
-	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		return "", false
-	}
-	defer conn.Close(ctx)
+
 	var userID string
-	err = conn.QueryRow(ctx, `SELECT user_id::text FROM sessions WHERE token_hash=$1 AND expires_at > now() AND revoked_at IS NULL`, tokenHash).Scan(&userID)
+	err = pool.QueryRow(r.Context(), `SELECT user_id::text FROM sessions WHERE token_hash=$1 AND expires_at > now() AND revoked_at IS NULL`, tokenHash).Scan(&userID)
 	if err != nil {
 		return "", false
 	}
@@ -745,12 +835,25 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var mailboxID, mailboxLocalPart, mailboxMode string
 	var wrappedSkUser, previousWrappedSkUser, profilePhotoRef *string
-	_ = conn.QueryRow(ctx, `
-		SELECT id::text, local_part, mode, wrapped_sk_user, previous_wrapped_sk_user, profile_photo_ref
-		FROM mailboxes
-		WHERE user_id=$1 AND is_active=true AND status='active'
-		ORDER BY created_at DESC
-		LIMIT 1`, userID).Scan(&mailboxID, &mailboxLocalPart, &mailboxMode, &wrappedSkUser, &previousWrappedSkUser, &profilePhotoRef)
+	activeMailboxID := strings.TrimSpace(r.Header.Get("X-BYOS-Active-Mailbox"))
+	if activeMailboxID != "" {
+		callerHash, _ := getCallerTokenHash(r)
+		if !isMailboxAuthorizedForSession(callerHash, userID, activeMailboxID, conn, ctx) {
+			http.Error(w, "not authorized for active mailbox", http.StatusForbidden)
+			return
+		}
+		_ = conn.QueryRow(ctx, `
+			SELECT id::text, local_part, mode, wrapped_sk_user, previous_wrapped_sk_user, profile_photo_ref
+			FROM mailboxes
+			WHERE id=$1 AND is_active=true AND status='active'`, activeMailboxID).Scan(&mailboxID, &mailboxLocalPart, &mailboxMode, &wrappedSkUser, &previousWrappedSkUser, &profilePhotoRef)
+	} else {
+		_ = conn.QueryRow(ctx, `
+			SELECT id::text, local_part, mode, wrapped_sk_user, previous_wrapped_sk_user, profile_photo_ref
+			FROM mailboxes
+			WHERE user_id=$1 AND is_active=true AND status='active'
+			ORDER BY created_at DESC
+			LIMIT 1`, userID).Scan(&mailboxID, &mailboxLocalPart, &mailboxMode, &wrappedSkUser, &previousWrappedSkUser, &profilePhotoRef)
+	}
 
 	wrappedSkUserStr := ""
 	if wrappedSkUser != nil {
@@ -838,6 +941,646 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = conn.Exec(ctx, `UPDATE sessions SET revoked_at=now() WHERE token_hash=$1`, tokenHash)
 	}
+	if len(tokenHash) > 0 {
+		revokeAllMailboxesForSession(tokenHash)
+	}
 	clearSessionCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// -----------------------------------------------------------------------------
+// Server-Managed Multi-Account Session Architecture
+// -----------------------------------------------------------------------------
+
+type linkedAccountInfo struct {
+	MailboxID string    `json:"mailbox_id"`
+	UserID    string    `json:"user_id"`
+	OrgID     string    `json:"org_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+var (
+	linkedSessionsMu  sync.RWMutex
+	linkedSessionsMap = make(map[string]map[string]linkedAccountInfo) // tokenHashHex -> mailboxID -> info
+)
+
+func authorizeMailboxForSession(tokenHash []byte, mailboxID, secondaryUserID, orgID string, expiresAt time.Time) {
+	if len(tokenHash) == 0 || mailboxID == "" {
+		return
+	}
+	tokenHex := hex.EncodeToString(tokenHash)
+
+	// 1. In-memory registry (fallback & fast path)
+	linkedSessionsMu.Lock()
+	if _, ok := linkedSessionsMap[tokenHex]; !ok {
+		linkedSessionsMap[tokenHex] = make(map[string]linkedAccountInfo)
+	}
+	linkedSessionsMap[tokenHex][mailboxID] = linkedAccountInfo{
+		MailboxID: mailboxID,
+		UserID:    secondaryUserID,
+		OrgID:     orgID,
+		ExpiresAt: expiresAt,
+	}
+	linkedSessionsMu.Unlock()
+
+	// 2. Redis cluster-wide session synchronization (if active)
+	if redisClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		ttl := time.Until(expiresAt)
+		if ttl > 0 {
+			redisKey := fmt.Sprintf("byos:session_links:%s", tokenHex)
+			payload, _ := json.Marshal(map[string]string{
+				"mailbox_id": mailboxID,
+				"user_id":    secondaryUserID,
+				"org_id":     orgID,
+			})
+			_ = redisClient.HSet(ctx, redisKey, mailboxID, payload).Err()
+			_ = redisClient.Expire(ctx, redisKey, ttl).Err()
+		}
+	}
+}
+
+func revokeMailboxForSession(tokenHash []byte, mailboxID string) {
+	if len(tokenHash) == 0 || mailboxID == "" {
+		return
+	}
+	tokenHex := hex.EncodeToString(tokenHash)
+
+	linkedSessionsMu.Lock()
+	if sub, ok := linkedSessionsMap[tokenHex]; ok {
+		delete(sub, mailboxID)
+		if len(sub) == 0 {
+			delete(linkedSessionsMap, tokenHex)
+		}
+	}
+	linkedSessionsMu.Unlock()
+
+	if redisClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		redisKey := fmt.Sprintf("byos:session_links:%s", tokenHex)
+		_ = redisClient.HDel(ctx, redisKey, mailboxID).Err()
+	}
+}
+
+func revokeAllMailboxesForSession(tokenHash []byte) {
+	if len(tokenHash) == 0 {
+		return
+	}
+	tokenHex := hex.EncodeToString(tokenHash)
+
+	linkedSessionsMu.Lock()
+	delete(linkedSessionsMap, tokenHex)
+	linkedSessionsMu.Unlock()
+
+	if redisClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		redisKey := fmt.Sprintf("byos:session_links:%s", tokenHex)
+		_ = redisClient.Del(ctx, redisKey).Err()
+	}
+}
+
+func getLinkedMailboxIDsForSession(tokenHash []byte) []string {
+	if len(tokenHash) == 0 {
+		return nil
+	}
+	tokenHex := hex.EncodeToString(tokenHash)
+	now := time.Now()
+	var ids []string
+
+	linkedSessionsMu.RLock()
+	if sub, ok := linkedSessionsMap[tokenHex]; ok {
+		for mID, info := range sub {
+			if now.Before(info.ExpiresAt) {
+				ids = append(ids, mID)
+			}
+		}
+	}
+	linkedSessionsMu.RUnlock()
+
+	if len(ids) == 0 && redisClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		redisKey := fmt.Sprintf("byos:session_links:%s", tokenHex)
+		keys, err := redisClient.HKeys(ctx, redisKey).Result()
+		if err == nil && len(keys) > 0 {
+			ids = append(ids, keys...)
+		}
+	}
+	return ids
+}
+
+func isMailboxAuthorizedForSession(tokenHash []byte, userID, mailboxID string, conn *pgx.Conn, ctx context.Context) bool {
+	if mailboxID == "" || userID == "" {
+		return false
+	}
+	// 1. Direct authorization: primary user owns the mailbox or is admin/owner of that org
+	if conn != nil {
+		var directAuthorized string
+		err := conn.QueryRow(ctx, `
+			SELECT m.id::text
+			FROM mailboxes m
+			JOIN users u ON u.org_id = m.org_id
+			WHERE m.id = $1 AND u.id = $2 AND u.is_active = true
+			  AND (m.user_id = u.id OR (m.mode = 'org_managed' AND u.role IN ('admin', 'owner')))
+		`, mailboxID, userID).Scan(&directAuthorized)
+		if err == nil && directAuthorized == mailboxID {
+			return true
+		}
+	}
+
+	// 2. Check if linked to caller's active session
+	if len(tokenHash) == 0 {
+		return false
+	}
+	tokenHex := hex.EncodeToString(tokenHash)
+	var linkedUserID string
+
+	linkedSessionsMu.RLock()
+	if sub, ok := linkedSessionsMap[tokenHex]; ok {
+		if info, found := sub[mailboxID]; found {
+			if time.Now().Before(info.ExpiresAt) {
+				linkedUserID = info.UserID
+			}
+		}
+	}
+	linkedSessionsMu.RUnlock()
+
+	if linkedUserID == "" && redisClient != nil {
+		rCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+		defer cancel()
+		redisKey := fmt.Sprintf("byos:session_links:%s", tokenHex)
+		val, rErr := redisClient.HGet(rCtx, redisKey, mailboxID).Result()
+		if rErr == nil && val != "" {
+			var parsed map[string]string
+			if err := json.Unmarshal([]byte(val), &parsed); err == nil {
+				linkedUserID = parsed["user_id"]
+			}
+		}
+	}
+
+	if linkedUserID == "" {
+		return false
+	}
+
+	// 3. Confirm the linked user and mailbox are active in the database
+	if conn != nil {
+		var activeCheck string
+		err := conn.QueryRow(ctx, `
+			SELECT m.id::text
+			FROM mailboxes m
+			JOIN users u ON u.id = m.user_id
+			WHERE m.id = $1 AND u.id = $2 AND u.is_active = true AND m.is_active = true
+		`, mailboxID, linkedUserID).Scan(&activeCheck)
+		return err == nil && activeCheck == mailboxID
+	}
+	return true
+}
+
+// verifyUserMailboxSession verifies that the request caller is authorized for the given mailbox via an active user session.
+// 1. Enforces that if X-BYOS-Active-Mailbox is present, it matches mailboxID (preventing selector mismatch attacks).
+// 2. Verifies isMailboxAuthorizedForSession for the session token and user ID.
+// This function does NOT permit internal service bypass.
+func verifyUserMailboxSession(r *http.Request, userID, mailboxID string, conn *pgx.Conn, ctx context.Context) (status int, errMsg string, ok bool) {
+	// 1. Header selector mismatch check: reject if X-BYOS-Active-Mailbox is present and doesn't match target mailbox
+	activeHeader := strings.TrimSpace(r.Header.Get("X-BYOS-Active-Mailbox"))
+	if activeHeader != "" && activeHeader != mailboxID {
+		return http.StatusForbidden, "X-BYOS-Active-Mailbox mismatch with target mailbox", false
+	}
+
+	// 2. Check authorization for this user & session
+	callerHash, _ := getCallerTokenHash(r)
+	if !isMailboxAuthorizedForSession(callerHash, userID, mailboxID, conn, ctx) {
+		return http.StatusForbidden, "not authorized for this mailbox", false
+	}
+
+	return 0, "", true
+}
+
+// verifyInternalServiceAuth verifies that the caller presents a valid internal service key for the expected service identity.
+// Comparisons use constant-time comparison. Unconfigured or empty credentials fail closed.
+func verifyInternalServiceAuth(r *http.Request, requiredService string) bool {
+	gotKey := strings.TrimSpace(r.Header.Get("X-Internal-Key"))
+	if gotKey == "" {
+		return false
+	}
+
+	switch requiredService {
+	case "storage":
+		storageKey := storageInternalKey()
+		return storageKey != "" && subtle.ConstantTimeCompare([]byte(gotKey), []byte(storageKey)) == 1
+	case "outbound":
+		expectedKey := internalAPIKey()
+		return expectedKey != "" && subtle.ConstantTimeCompare([]byte(gotKey), []byte(expectedKey)) == 1
+	default:
+		return false
+	}
+}
+
+// verifyMailboxScopedAccess verifies caller authorization for a mailbox.
+// If allowedService is non-empty ("storage" or "outbound"), callers presenting valid matching internal service credentials bypass session checks.
+// Otherwise, user-session authorization is strictly enforced via verifyUserMailboxSession.
+func verifyMailboxScopedAccess(r *http.Request, userID, mailboxID string, allowedService string, conn *pgx.Conn, ctx context.Context) (status int, errMsg string, ok bool) {
+	if allowedService != "" && verifyInternalServiceAuth(r, allowedService) {
+		return 0, "", true
+	}
+	return verifyUserMailboxSession(r, userID, mailboxID, conn, ctx)
+}
+
+// verifyMailboxSession provides standard user-session authorization for mailbox routes without internal-service bypass.
+func verifyMailboxSession(r *http.Request, userID, mailboxID string, conn *pgx.Conn, ctx context.Context) (status int, errMsg string, ok bool) {
+	return verifyUserMailboxSession(r, userID, mailboxID, conn, ctx)
+}
+
+// linkedAccountsHandler handles POST, GET, and DELETE /v1/auth/linked-accounts
+func linkedAccountsHandler(w http.ResponseWriter, r *http.Request) {
+	primaryUserID, ok := getSessionUserID(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	callerHash, ok := getCallerTokenHash(r)
+	if !ok || len(callerHash) == 0 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	switch r.Method {
+	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		var req struct {
+			Email          string `json:"email"`
+			Password       string `json:"password"`
+			Code           string `json:"code"`
+			ChallengeToken string `json:"challenge_token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		ip := getClientIP(r)
+
+		// Path A: Verification of an existing link_2fa MFA challenge
+		challengeTok := strings.TrimSpace(req.ChallengeToken)
+		if challengeTok != "" {
+			code := strings.TrimSpace(req.Code)
+			if code == "" {
+				http.Error(w, "verification code required", http.StatusBadRequest)
+				return
+			}
+
+			// 1. Check rate limits
+			if redisClient != nil {
+				cnt, err := redisClient.Get(ctx, "auth:link:ip:"+ip).Int()
+				if err == nil && cnt >= 5 {
+					w.Header().Set("Retry-After", "900")
+					http.Error(w, "too many attempts, try later", http.StatusTooManyRequests)
+					return
+				}
+			}
+
+			// 2. Query challenge bound to callerHash
+			var challengeID, secUserID string
+			var destination *string
+			var expiresAt time.Time
+			err = conn.QueryRow(ctx, `
+				SELECT id::text, user_id::text, destination, expires_at
+				FROM auth_challenges
+				WHERE challenge_token=$1 AND challenge_type='link_2fa'
+			`, challengeTok).Scan(&challengeID, &secUserID, &destination, &expiresAt)
+			if err != nil || expiresAt.Before(time.Now()) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error": "Verification session expired or invalid. Please link account again.",
+				})
+				return
+			}
+
+			// 3. Prevent replay from different primary session: destination MUST equal callerHash hex
+			callerHex := hex.EncodeToString(callerHash)
+			if destination == nil || *destination != callerHex {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error": "forbidden: challenge bound to a different primary session",
+				})
+				return
+			}
+
+			// 4. Query target secondary user
+			var secEmail, secOrgID, secDisplayName, secRole string
+			var secIsActive bool
+			var secTotpSecret *string
+			err = conn.QueryRow(ctx, `
+				SELECT email, org_id::text, COALESCE(display_name, ''), COALESCE(role, 'member'), is_active, totp_secret
+				FROM users
+				WHERE id=$1`, secUserID).Scan(&secEmail, &secOrgID, &secDisplayName, &secRole, &secIsActive, &secTotpSecret)
+			if err != nil || !secIsActive || secTotpSecret == nil || *secTotpSecret == "" {
+				http.Error(w, "account inactive or invalid", http.StatusUnauthorized)
+				return
+			}
+
+			// 5. Validate and atomically consume TOTP code (single-use step enforcement)
+			consumed, err := verifyAndConsumeTOTP(ctx, conn, secUserID, *secTotpSecret, code)
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+			if !consumed {
+				if redisClient != nil {
+					_ = redisClient.Incr(ctx, "auth:link:ip:"+ip)
+					_ = redisClient.Expire(ctx, "auth:link:ip:"+ip, 15*time.Minute)
+					_ = redisClient.Incr(ctx, "auth:link:email:"+secEmail)
+					_ = redisClient.Expire(ctx, "auth:link:email:"+secEmail, 15*time.Minute)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error": "invalid two-factor code",
+				})
+				return
+			}
+
+			// 6. Consume challenge atomically (single use)
+			_, _ = conn.Exec(ctx, `DELETE FROM auth_challenges WHERE id=$1`, challengeID)
+			ClearOTPAttempts(ctx, challengeTok)
+			if redisClient != nil {
+				_ = redisClient.Del(ctx, "auth:link:email:"+secEmail)
+			}
+
+			// 7. Query active mailbox
+			var secMailboxID, secLocalPart, secMode string
+			var secWrappedSkUser, secPrevWrappedSkUser, secProfilePhotoRef *string
+			err = conn.QueryRow(ctx, `
+				SELECT id::text, local_part, mode, wrapped_sk_user, previous_wrapped_sk_user, profile_photo_ref
+				FROM mailboxes
+				WHERE user_id=$1 AND is_active=true AND status='active'
+				ORDER BY created_at DESC
+				LIMIT 1`, secUserID).Scan(&secMailboxID, &secLocalPart, &secMode, &secWrappedSkUser, &secPrevWrappedSkUser, &secProfilePhotoRef)
+			if err != nil {
+				http.Error(w, "no active mailbox found for account", http.StatusNotFound)
+				return
+			}
+
+			var sessionExpiresAt time.Time
+			_ = conn.QueryRow(ctx, `SELECT expires_at FROM sessions WHERE token_hash=$1 AND revoked_at IS NULL`, callerHash).Scan(&sessionExpiresAt)
+			if sessionExpiresAt.IsZero() || sessionExpiresAt.Before(time.Now()) {
+				sessionExpiresAt = time.Now().Add(7 * 24 * time.Hour)
+			}
+
+			// 8. Authorize mailbox for session without modifying session cookie
+			authorizeMailboxForSession(callerHash, secMailboxID, secUserID, secOrgID, sessionExpiresAt)
+			auditLog(ctx, conn, secOrgID, primaryUserID, "link_mailbox", "mailbox", secMailboxID, map[string]interface{}{
+				"linked_user_id": secUserID,
+				"email":          secEmail,
+			})
+
+			secWrappedSkUserStr := ""
+			if secWrappedSkUser != nil {
+				secWrappedSkUserStr = *secWrappedSkUser
+			}
+			secPrevWrappedSkUserStr := ""
+			if secPrevWrappedSkUser != nil {
+				secPrevWrappedSkUserStr = *secPrevWrappedSkUser
+			}
+			var secProfilePhotoRefVal interface{}
+			if secProfilePhotoRef != nil {
+				secProfilePhotoRefVal = *secProfilePhotoRef
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"mailbox_id":               secMailboxID,
+				"id":                       secMailboxID,
+				"email":                    secEmail,
+				"display_name":             secDisplayName,
+				"role":                     secRole,
+				"privacy_mode":             secMode,
+				"mailbox_mode":             secMode,
+				"wrapped_sk_user":          secWrappedSkUserStr,
+				"previous_wrapped_sk_user": secPrevWrappedSkUserStr,
+				"profile_photo_ref":        secProfilePhotoRefVal,
+			})
+			return
+		}
+
+		// Path B: Initial credentials submission (email + password)
+		email := strings.TrimSpace(strings.ToLower(req.Email))
+		password := req.Password
+		if email == "" || password == "" {
+			http.Error(w, "invalid credentials", http.StatusUnauthorized)
+			return
+		}
+
+		// Rate limiting for account linking attempts
+		if redisClient != nil {
+			rKeys := []string{"auth:link:ip:" + ip, "auth:link:email:" + email}
+			for _, k := range rKeys {
+				cnt, err := redisClient.Get(ctx, k).Int()
+				if err != nil && err != redis.Nil {
+					log.Printf("linked accounts rate check failed: %v", err)
+					http.Error(w, "rate limiter unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				if cnt >= 5 {
+					w.Header().Set("Retry-After", "900")
+					http.Error(w, "too many attempts, try later", http.StatusTooManyRequests)
+					return
+				}
+			}
+		}
+
+		recordLinkFailure := func() {
+			if redisClient != nil {
+				_ = redisClient.Incr(ctx, "auth:link:email:"+email)
+				_ = redisClient.Expire(ctx, "auth:link:email:"+email, 15*time.Minute)
+				_ = redisClient.Incr(ctx, "auth:link:ip:"+ip)
+				_ = redisClient.Expire(ctx, "auth:link:ip:"+ip, 15*time.Minute)
+			}
+		}
+
+		var secUserID, secPasswordHash, secOrgID, secRole, secDisplayName string
+		var secIsActive, secTwoFactorEnabled bool
+		var secTotpSecret *string
+		err = conn.QueryRow(ctx, `
+			SELECT id::text, password_hash, org_id::text, COALESCE(role, 'member'), COALESCE(display_name, ''), is_active,
+			       COALESCE(two_factor_enabled, false), totp_secret
+			FROM users
+			WHERE lower(email)=$1`, email).Scan(&secUserID, &secPasswordHash, &secOrgID, &secRole, &secDisplayName, &secIsActive, &secTwoFactorEnabled, &secTotpSecret)
+		if err != nil || !secIsActive || !verifyPassword(secPasswordHash, password) {
+			recordLinkFailure()
+			http.Error(w, "invalid credentials", http.StatusUnauthorized)
+			return
+		}
+
+		// MFA enforcement: target accounts with active 2FA require TOTP verification
+		hasMFA := secTwoFactorEnabled && secTotpSecret != nil && *secTotpSecret != ""
+		if hasMFA {
+			code := strings.TrimSpace(req.Code)
+			if code == "" {
+				// Issue short-lived challenge bound strictly to callerHash (primary session)
+				tok, err := generateRandomBase64URL(32)
+				if err != nil {
+					http.Error(w, "failed to create 2fa challenge", http.StatusInternalServerError)
+					return
+				}
+				callerHex := hex.EncodeToString(callerHash)
+				expiresAt := time.Now().Add(5 * time.Minute)
+				_, err = conn.Exec(ctx, `
+					INSERT INTO auth_challenges (user_id, challenge_type, challenge_token, destination, expires_at)
+					VALUES ($1, 'link_2fa', $2, $3, $4)
+				`, secUserID, tok, callerHex, expiresAt)
+				if err != nil {
+					http.Error(w, "failed to record challenge", http.StatusInternalServerError)
+					return
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"two_factor_required": true,
+					"challenge_token":     tok,
+					"methods":             []string{"totp"},
+					"preferred_method":    "totp",
+				})
+				return
+			}
+			consumed, err := verifyAndConsumeTOTP(ctx, conn, secUserID, *secTotpSecret, code)
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+			if !consumed {
+				recordLinkFailure()
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error": "invalid two-factor code",
+				})
+				return
+			}
+		}
+
+		// Clear rate limits on successful authentication
+		if redisClient != nil {
+			_ = redisClient.Del(ctx, "auth:link:email:"+email)
+		}
+
+		var secMailboxID, secLocalPart, secMode string
+		var secWrappedSkUser, secPrevWrappedSkUser, secProfilePhotoRef *string
+		err = conn.QueryRow(ctx, `
+			SELECT id::text, local_part, mode, wrapped_sk_user, previous_wrapped_sk_user, profile_photo_ref
+			FROM mailboxes
+			WHERE user_id=$1 AND is_active=true AND status='active'
+			ORDER BY created_at DESC
+			LIMIT 1`, secUserID).Scan(&secMailboxID, &secLocalPart, &secMode, &secWrappedSkUser, &secPrevWrappedSkUser, &secProfilePhotoRef)
+		if err != nil {
+			http.Error(w, "no active mailbox found for account", http.StatusNotFound)
+			return
+		}
+
+		var expiresAt time.Time
+		_ = conn.QueryRow(ctx, `SELECT expires_at FROM sessions WHERE token_hash=$1 AND revoked_at IS NULL`, callerHash).Scan(&expiresAt)
+		if expiresAt.IsZero() || expiresAt.Before(time.Now()) {
+			expiresAt = time.Now().Add(7 * 24 * time.Hour)
+		}
+
+		authorizeMailboxForSession(callerHash, secMailboxID, secUserID, secOrgID, expiresAt)
+		auditLog(ctx, conn, secOrgID, primaryUserID, "link_mailbox", "mailbox", secMailboxID, map[string]interface{}{
+			"linked_user_id": secUserID,
+			"email":          email,
+		})
+
+		secWrappedSkUserStr := ""
+		if secWrappedSkUser != nil {
+			secWrappedSkUserStr = *secWrappedSkUser
+		}
+		secPrevWrappedSkUserStr := ""
+		if secPrevWrappedSkUser != nil {
+			secPrevWrappedSkUserStr = *secPrevWrappedSkUser
+		}
+		var secProfilePhotoRefVal interface{}
+		if secProfilePhotoRef != nil {
+			secProfilePhotoRefVal = *secProfilePhotoRef
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"mailbox_id":               secMailboxID,
+			"id":                       secMailboxID,
+			"email":                    email,
+			"display_name":             secDisplayName,
+			"role":                     secRole,
+			"privacy_mode":             secMode,
+			"mailbox_mode":             secMode,
+			"wrapped_sk_user":          secWrappedSkUserStr,
+			"previous_wrapped_sk_user": secPrevWrappedSkUserStr,
+			"profile_photo_ref":        secProfilePhotoRefVal,
+		})
+
+	case http.MethodDelete:
+		targetID := strings.TrimPrefix(r.URL.Path, "/v1/auth/linked-accounts/")
+		targetID = strings.TrimPrefix(targetID, "/v1/auth/linked-accounts")
+		targetID = strings.Trim(targetID, "/")
+		if targetID == "" {
+			http.Error(w, "mailbox ID required", http.StatusBadRequest)
+			return
+		}
+		revokeMailboxForSession(callerHash, targetID)
+		w.WriteHeader(http.StatusNoContent)
+
+	case http.MethodGet:
+		linkedIDs := getLinkedMailboxIDsForSession(callerHash)
+		type LinkedItem struct {
+			MailboxID   string `json:"mailbox_id"`
+			Email       string `json:"email"`
+			DisplayName string `json:"display_name"`
+			Role        string `json:"role"`
+			Mode        string `json:"mode"`
+		}
+		items := make([]LinkedItem, 0)
+		for _, mID := range linkedIDs {
+			var it LinkedItem
+			it.MailboxID = mID
+			err := conn.QueryRow(ctx, `
+				SELECT 
+					CASE WHEN d.name IS NOT NULL AND d.name != '' THEN m.local_part || '@' || d.name ELSE m.local_part END,
+					COALESCE(u.display_name, m.local_part),
+					COALESCE(u.role, 'member'),
+					m.mode
+				FROM mailboxes m
+				JOIN users u ON u.id = m.user_id
+				LEFT JOIN domains d ON d.id = m.domain_id
+				WHERE m.id = $1 AND u.is_active = true AND m.is_active = true
+			`, mID).Scan(&it.Email, &it.DisplayName, &it.Role, &it.Mode)
+			if err == nil {
+				items = append(items, it)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"linked_mailboxes": items,
+		})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }

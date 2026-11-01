@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -17,31 +19,172 @@ import (
 
 var db *pgxpool.Pool
 
-func mockWebAuthnMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func withSecurityHeaders(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://127.0.0.1:3003")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+
+		csp := "default-src 'self'; connect-src 'self';"
+		if os.Getenv("BYOS_ENV") != "production" {
+			csp = "default-src 'self'; connect-src 'self' http://localhost:* http://127.0.0.1:*;"
+		}
+		w.Header().Set("Content-Security-Policy", csp)
+		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+
+		next(w, r)
+	}
+}
+
+func isAllowedAdminOrigin(origin string) bool {
+	if origin == "" {
+		return false
+	}
+	allowedList := os.Getenv("ADMIN_ALLOWED_ORIGINS")
+	if allowedList != "" {
+		for _, a := range strings.Split(allowedList, ",") {
+			if strings.TrimSpace(a) == origin {
+				return true
+			}
+		}
+		return false
+	}
+	if os.Getenv("BYOS_DEV_MODE") == "1" || os.Getenv("BYOS_ENV") != "production" {
+		devOrigins := []string{
+			"http://127.0.0.1:3003",
+			"http://localhost:3003",
+			"http://localhost:3000",
+			"http://127.0.0.1:3000",
+		}
+		for _, dev := range devOrigins {
+			if origin == dev {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func applyCORS(w http.ResponseWriter, r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin != "" {
+		w.Header().Add("Vary", "Origin")
+	}
+	if isAllowedAdminOrigin(origin) {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Cookie")
+	}
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return true
+	}
+	return false
+}
 
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
+func setAdminSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
+	secure := os.Getenv("BYOS_COOKIE_SECURE") == "true" || os.Getenv("BYOS_ENV") == "production"
+	http.SetCookie(w, &http.Cookie{
+		Name:     "byos_admin_session",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   86400,
+	})
+}
+
+func clearAdminSessionCookie(w http.ResponseWriter, r *http.Request) {
+	secure := os.Getenv("BYOS_COOKIE_SECURE") == "true" || os.Getenv("BYOS_ENV") == "production"
+	http.SetCookie(w, &http.Cookie{
+		Name:     "byos_admin_session",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
+	})
+}
+
+func agentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return withSecurityHeaders(func(w http.ResponseWriter, r *http.Request) {
+		if applyCORS(w, r) {
 			return
 		}
 
-		if os.Getenv("BYOS_DEV_MODE") != "1" {
-			http.Error(w, "Unauthorized: mock WebAuthn disabled in production", http.StatusUnauthorized)
-			return
+		var token string
+		var isCookieAuth bool
+		if cookie, err := r.Cookie("byos_admin_session"); err == nil && cookie.Value != "" {
+			token = cookie.Value
+			isCookieAuth = true
+		} else {
+			authHeader := r.Header.Get("Authorization")
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				token = strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+			}
 		}
 
-		token := r.Header.Get("Authorization")
-		if token != "Bearer mock-support-agent" {
+		if token == "" {
 			http.Error(w, "Unauthorized: WebAuthn challenge required", http.StatusUnauthorized)
 			return
 		}
 
-		next.ServeHTTP(w, r)
-	}
+		// CSRF protection for cookie-authenticated state-changing requests
+		if isCookieAuth {
+			switch r.Method {
+			case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+				origin := r.Header.Get("Origin")
+				if origin == "" {
+					if ref := r.Header.Get("Referer"); ref != "" {
+						if u, err := url.Parse(ref); err == nil {
+							origin = u.Scheme + "://" + u.Host
+						}
+					}
+				}
+				if origin == "" || !isAllowedAdminOrigin(origin) {
+					http.Error(w, "Forbidden: CSRF check failed", http.StatusForbidden)
+					return
+				}
+			}
+		}
+
+		if token == "mock-support-agent" {
+			if os.Getenv("BYOS_DEV_MODE") != "1" {
+				http.Error(w, "Unauthorized: mock WebAuthn disabled in production", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		adminToken := os.Getenv("ADMIN_AGENT_TOKEN")
+		supportToken := os.Getenv("SUPPORT_AGENT_TOKEN")
+
+		tokenBytes := []byte(token)
+		var valid bool
+		if adminToken != "" && subtle.ConstantTimeCompare(tokenBytes, []byte(adminToken)) == 1 {
+			valid = true
+		}
+		if supportToken != "" && subtle.ConstantTimeCompare(tokenBytes, []byte(supportToken)) == 1 {
+			valid = true
+		}
+
+		if valid {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		http.Error(w, "Unauthorized: invalid agent credentials", http.StatusUnauthorized)
+	})
+}
+
+func mockWebAuthnMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return agentAuthMiddleware(next)
 }
 
 func mockLoginHandler(w http.ResponseWriter, r *http.Request) {
@@ -49,17 +192,30 @@ func mockLoginHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Access-Control-Allow-Origin", "http://127.0.0.1:3003")
+	if applyCORS(w, r) {
+		return
+	}
+	setAdminSessionCookie(w, r, "mock-support-agent")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"token": "mock-support-agent"})
 }
 
+func adminLogoutHandler(w http.ResponseWriter, r *http.Request) {
+	if applyCORS(w, r) {
+		return
+	}
+	clearAdminSessionCookie(w, r)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func setupRoutes(mux *http.ServeMux) {
-	handlers.RegisterOrganizationRoutes(mux, db, mockWebAuthnMiddleware)
-	mux.HandleFunc("/admin/v1/tickets", mockWebAuthnMiddleware(ticketsHandler))
-	mux.HandleFunc("/admin/v1/mailboxes/", mockWebAuthnMiddleware(healthHandler))
-	mux.HandleFunc("/admin/v1/interventions/execute", mockWebAuthnMiddleware(interventionHandler))
-	mux.HandleFunc("/admin/v1/auth/mock-login", mockLoginHandler)
+	handlers.RegisterOrganizationRoutes(mux, db, agentAuthMiddleware)
+	handlers.RegisterTicketRoutes(mux, db, agentAuthMiddleware)
+	handlers.RegisterCustomerRoutes(mux, db, agentAuthMiddleware)
+	mux.HandleFunc("/admin/v1/mailboxes/", agentAuthMiddleware(healthHandler))
+	mux.HandleFunc("/admin/v1/interventions/execute", agentAuthMiddleware(interventionHandler))
+	mux.HandleFunc("/admin/v1/auth/mock-login", withSecurityHeaders(mockLoginHandler))
+	mux.HandleFunc("/admin/v1/auth/logout", withSecurityHeaders(adminLogoutHandler))
 }
 
 func main() {

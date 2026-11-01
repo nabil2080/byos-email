@@ -184,21 +184,9 @@ func outboundPrepareHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
-	// Verify mailbox belongs to the actor's org and is active.
-	var userOrgID string
-	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)
-	if err != nil {
-		http.Error(w, "not authorized", http.StatusForbidden)
-		return
-	}
-	var mailboxOrgID string
-	var mailboxActive bool
-	err = conn.QueryRow(ctx, `SELECT org_id::text, is_active FROM mailboxes WHERE id=$1`, req.MailboxID).Scan(&mailboxOrgID, &mailboxActive)
-	if err != nil {
-		http.Error(w, "mailbox not found", http.StatusNotFound)
-		return
-	}
-	if mailboxOrgID != userOrgID || !mailboxActive {
+	// Verify mailbox authorization for session
+	callerHash, _ := getCallerTokenHash(r)
+	if !isMailboxAuthorizedForSession(callerHash, userID, req.MailboxID, conn, ctx) {
 		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
 		return
 	}
@@ -443,7 +431,8 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	if mailboxOrgID != userOrgID || !mailboxActive {
+	callerHash, _ := getCallerTokenHash(r)
+	if !isMailboxAuthorizedForSession(callerHash, userID, req.MailboxID, conn, ctx) || !mailboxActive {
 		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
 		return
 	}
@@ -764,7 +753,8 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	if mailboxOrgID != userOrgID || !mailboxActive {
+	callerHash, _ := getCallerTokenHash(r)
+	if !isMailboxAuthorizedForSession(callerHash, userID, req.MailboxID, conn, ctx) || !mailboxActive {
 		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
 		return
 	}
@@ -1266,6 +1256,11 @@ func mailboxScheduledCancelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
+
 	// Verify mailbox belongs to user
 	var authorized string
 	if err := conn.QueryRow(ctx, `SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true`, mailboxID, userID).Scan(&authorized); err != nil {
@@ -1419,6 +1414,11 @@ func mailboxScheduledUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
+
 	var authorized string
 	if err := conn.QueryRow(ctx, `SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true`, mailboxID, userID).Scan(&authorized); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -1570,6 +1570,11 @@ func mailboxScheduledGetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
+
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
 
 	var authorized string
 	if err := conn.QueryRow(ctx, `SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true`, mailboxID, userID).Scan(&authorized); err != nil {

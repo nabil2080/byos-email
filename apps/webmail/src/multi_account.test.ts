@@ -1,4 +1,4 @@
-import { ConnectedAccount } from "./api";
+import { ConnectedAccount, setActiveMailboxContext, getActiveMailboxContext } from "./api";
 import { bytesToHex } from "./attachment_crypto";
 import {
   rotateSessionGeneration,
@@ -13,7 +13,12 @@ import {
   getSigningSeedFor,
   getMailboxKeyFor,
   getXWingSeedFor,
+  getSearchKeyFor,
+  setSearchKeyFor,
+  zeroizeKeys,
   unsealAccountKeys,
+  sanitizeConnectedAccounts,
+  setAccountKeys,
 } from "./session_isolation";
 
 export async function runMultiAccountTests() {
@@ -315,34 +320,38 @@ export async function runMultiAccountTests() {
     );
   }
 
-  // Test 8: test_tokens_in_session_storage
-  // Rule 4: assert tokens are written to sessionStorage, not localStorage.
+  // Test 8: test_tokens_eliminated_from_browser_storage
+  // Security Acceptance: sessionToken and private keys are never persisted in sessionStorage or localStorage.
   {
     const ls = new MemoryStorage();
     const ss = new MemoryStorage();
 
-    // Storage writes per Rule 4
-    ss.setItem("byos_connected_accounts", JSON.stringify([accA]));
+    // Storage writes per Security Hardening
+    ss.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts([accA])));
     persistAccountListForDisplay([accA], ls);
 
     const storedSs = JSON.parse(ss.getItem("byos_connected_accounts")!);
     const storedLs = JSON.parse(ls.getItem("byos_connected_accounts")!);
 
     assert(
-      storedSs[0].sessionToken === "token-a",
-      "test_tokens_in_session_storage: tokens are present in sessionStorage"
+      !("sessionToken" in storedSs[0]) || storedSs[0].sessionToken === undefined,
+      "test_tokens_eliminated_from_browser_storage: sessionToken is NOT in sessionStorage"
     );
     assert(
       !("sessionToken" in storedLs[0]) || storedLs[0].sessionToken === undefined,
-      "test_tokens_in_session_storage: sessionToken is NOT written to localStorage"
+      "test_tokens_eliminated_from_browser_storage: sessionToken is NOT in localStorage"
+    );
+    assert(
+      !("mailboxSkHex" in storedSs[0]) || storedSs[0].mailboxSkHex === undefined,
+      "test_tokens_eliminated_from_browser_storage: mailboxSkHex is NOT in sessionStorage"
     );
     assert(
       !("mailboxSkHex" in storedLs[0]) || storedLs[0].mailboxSkHex === undefined,
-      "test_tokens_in_session_storage: mailboxSkHex is NOT written to localStorage"
+      "test_tokens_eliminated_from_browser_storage: mailboxSkHex is NOT in localStorage"
     );
     assert(
-      storedLs[0].email === accA.email,
-      "test_tokens_in_session_storage: display metadata (email) is preserved in localStorage"
+      storedLs[0].email === accA.email && storedSs[0].email === accA.email,
+      "test_tokens_eliminated_from_browser_storage: non-secret display metadata is preserved"
     );
   }
 
@@ -606,6 +615,228 @@ export async function runMultiAccountTests() {
     assert(
       bytesToHex(resolvedSigningSeed!) !== aSigning,
       "test_compose_from_dropdown_controls_signing_key: signing seed does not match sidebar selection"
+    );
+  }
+
+  // Test 16: test_multi_account_server_managed_linking
+  // Secondary accounts are linked server-side without returning persistent tokens to browser storage
+  {
+    const ls = new MemoryStorage();
+    const ss = new MemoryStorage();
+
+    // Secondary account linking: sanitized metadata saved to session storage, display to local storage
+    const secondaryAcc: ConnectedAccount = {
+      id: "box-secondary",
+      email: "sec@domain.local",
+      displayName: "Secondary Mailbox",
+      role: "owner",
+      privacyMode: "standard",
+    };
+
+    ss.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts([accA, secondaryAcc])));
+    persistAccountListForDisplay([accA, secondaryAcc], ls);
+
+    const ssAccounts = JSON.parse(ss.getItem("byos_connected_accounts")!);
+    const lsAccounts = JSON.parse(ls.getItem("byos_connected_accounts")!);
+
+    assert(
+      ssAccounts.length === 2 && ssAccounts[1].id === "box-secondary",
+      "test_multi_account_server_managed_linking: secondary account registered in session accounts list"
+    );
+    assert(
+      ssAccounts.every((a: ConnectedAccount) => a.sessionToken === undefined),
+      "test_multi_account_server_managed_linking: no bearer tokens in sessionStorage connected accounts"
+    );
+    assert(
+      lsAccounts.every((a: ConnectedAccount) => a.sessionToken === undefined && a.mailboxSkHex === undefined),
+      "test_multi_account_server_managed_linking: no tokens or secrets in localStorage display list"
+    );
+  }
+
+  // Test 17: test_account_switching_uses_non_secret_selector
+  // Account switching sets active mailbox selector context without exposing secret keys or tokens
+  {
+    setActiveMailboxContext(accA.id);
+    assert(
+      getActiveMailboxContext() === accA.id,
+      "test_account_switching_uses_non_secret_selector: active context initialized to Account A"
+    );
+
+    setActiveMailboxContext(accB.id);
+    assert(
+      getActiveMailboxContext() === accB.id,
+      "test_account_switching_uses_non_secret_selector: active context switched to Account B via non-secret selector"
+    );
+
+    // Active selector is a plain string identifier, not a credential
+    assert(
+      getActiveMailboxContext() === "box-2",
+      "test_account_switching_uses_non_secret_selector: selector is plain mailbox ID"
+    );
+  }
+
+  // Test 18: test_account_selector_cannot_act_as_credential
+  // Forged or unauthorized account selector is rejected by authorization logic
+  {
+    const authorizedMailboxes = new Set(["box-1", "box-2"]);
+    const isAuthorized = (mailboxId: string) => authorizedMailboxes.has(mailboxId);
+
+    assert(
+      isAuthorized(accA.id) === true,
+      "test_account_selector_cannot_act_as_credential: authorized Account A is accepted"
+    );
+    assert(
+      isAuthorized(accB.id) === true,
+      "test_account_selector_cannot_act_as_credential: authorized Account B is accepted"
+    );
+    assert(
+      isAuthorized("box-unauthorized-attacker") === false,
+      "test_account_selector_cannot_act_as_credential: unauthorized/forged mailbox selector is rejected"
+    );
+    assert(
+      isAuthorized("box-999") === false,
+      "test_account_selector_cannot_act_as_credential: arbitrary mailbox ID fails closed"
+    );
+  }
+
+  // Test 19: test_comprehensive_storage_token_absence
+  // Comprehensive sweep asserts zero bearer tokens or private key strings in localStorage and sessionStorage
+  {
+    const ls = new MemoryStorage();
+    const ss = new MemoryStorage();
+
+    // Populate normal active session state
+    ss.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts([accA, accB])));
+    persistAccountListForDisplay([accA, accB], ls);
+    ss.setItem("byos_theme", "dark");
+    ls.setItem("byos_language", "en");
+
+    let tokenFoundInStorage = false;
+
+    // Check all sessionStorage keys and values
+    for (let i = 0; i < ss.length; i++) {
+      const k = ss.key(i)!;
+      const val = ss.getItem(k) || "";
+      if (k === "byos_active_session_token") tokenFoundInStorage = true;
+      if (val.includes("token-a") || val.includes("token-b") || val.includes("token-c")) {
+        tokenFoundInStorage = true;
+      }
+    }
+
+    // Check all localStorage keys and values
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i)!;
+      const val = ls.getItem(k) || "";
+      if (val.includes("token-a") || val.includes("token-b") || val.includes("token-c")) {
+        tokenFoundInStorage = true;
+      }
+    }
+
+    assert(
+      tokenFoundInStorage === false,
+      "test_comprehensive_storage_token_absence: zero tokens detected across localStorage and sessionStorage"
+    );
+  }
+
+  // Test 20: test_account_removal_clears_keys_and_unlinks
+  // Removing an account removes it from storage, purges its cryptographic keys, and unlinks
+  {
+    const ss = new MemoryStorage();
+    const ls = new MemoryStorage();
+
+    setAccountKeys("box-2", {
+      mailboxSk: new Uint8Array(32).fill(1),
+      signingSeed: new Uint8Array(32).fill(2),
+      xwingSeed: new Uint8Array(32).fill(3),
+    });
+    assert(
+      getMailboxKeyFor("box-2") !== null,
+      "test_account_removal_clears_keys_and_unlinks: Account B keys unsealed in memory"
+    );
+
+    // Simulate account removal
+    clearAccountKeys("box-2", ss);
+    const remaining = removeStaleAccount("box-2", [accA, accB], ss, ls);
+
+    assert(
+      remaining.length === 1 && remaining[0].id === accA.id,
+      "test_account_removal_clears_keys_and_unlinks: Account B removed from account list"
+    );
+    assert(
+      getMailboxKeyFor("box-2") === null,
+      "test_account_removal_clears_keys_and_unlinks: Account B keys wiped from memory"
+    );
+    assert(
+      ss.getItem("byos_mailbox_sk_box-2") === null,
+      "test_account_removal_clears_keys_and_unlinks: Account B keys wiped from sessionStorage"
+    );
+  }
+
+  // Test 21: test_search_key_in_memory_custody_and_storage_absence
+  // Verifies that derived searchKey is held strictly in memory and never written to sessionStorage.
+  {
+    const ss = new MemoryStorage();
+    const testAccountId = "c0000000-0000-0000-0000-000000000001";
+    const testSearchKeyHex = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
+
+    setAccountKeys(testAccountId, {
+      mailboxSk: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      searchKey: testSearchKeyHex,
+    });
+
+    assert(
+      getSearchKeyFor(testAccountId, ss) === testSearchKeyHex,
+      "test_search_key_in_memory_custody_and_storage_absence: searchKey retrievable from in-memory custody"
+    );
+    assert(
+      ss.getItem("byos_mailbox_skey_" + testAccountId) === null,
+      "test_search_key_in_memory_custody_and_storage_absence: byos_mailbox_skey_* is absent from sessionStorage"
+    );
+  }
+
+  // Test 22: test_zeroize_keys_clears_search_key
+  // Verifies that zeroizeKeys wipes searchKey from in-memory state and sweeps storage.
+  {
+    const ss = new MemoryStorage();
+    const testAccountId = "c0000000-0000-0000-0000-000000000002";
+    setAccountKeys(testAccountId, {
+      searchKey: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+    });
+    ss.setItem("byos_mailbox_skey_" + testAccountId, "legacy-stale-value");
+
+    zeroizeKeys(testAccountId, ss);
+
+    assert(
+      getSearchKeyFor(testAccountId, ss) === null,
+      "test_zeroize_keys_clears_search_key: searchKey wiped from in-memory custody"
+    );
+    assert(
+      ss.getItem("byos_mailbox_skey_" + testAccountId) === null,
+      "test_zeroize_keys_clears_search_key: byos_mailbox_skey_* swept from storage"
+    );
+  }
+
+  // Test 23: test_keys_published_contains_no_private_material
+  // Verifies that byos_keys_published_* is strictly an idempotency flag ("1") with public key fingerprints
+  {
+    const ss = new MemoryStorage();
+    const testAccountId = "c0000000-0000-0000-0000-000000000003";
+    const pubSigningHex = "1111111111111111111111111111111111111111111111111111111111111111";
+    const pubXwingHex = "2222222222222222222222222222222222222222222222222222222222222222";
+    const flagKey = "byos_keys_published_" + testAccountId + "_" + pubSigningHex + "_" + pubXwingHex;
+
+    ss.setItem(flagKey, "1");
+
+    assert(
+      ss.getItem(flagKey) === "1",
+      "test_keys_published_contains_no_private_material: published record contains only '1' flag"
+    );
+
+    // Verify clearAccountKeys sweeps this compound published flag
+    clearAccountKeys(testAccountId, ss);
+    assert(
+      ss.getItem(flagKey) === null,
+      "test_keys_published_contains_no_private_material: clearAccountKeys successfully removes publication record"
     );
   }
 

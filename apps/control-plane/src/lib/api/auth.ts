@@ -83,9 +83,6 @@ export async function register(
     throw err;
   }
   const data = (await res.json()) as { id: string; email: string; org_id: string; org_name: string; token?: string };
-  if (data.token && typeof window !== "undefined") {
-    localStorage.setItem("byos_cp_session_token", data.token);
-  }
   return data;
 }
 
@@ -103,9 +100,6 @@ export async function login(email: string, password: string): Promise<AuthSessio
     throw err;
   }
   const data = (await res.json()) as AuthSessionResponse;
-  if (data.token && typeof window !== "undefined") {
-    localStorage.setItem("byos_cp_session_token", data.token);
-  }
   return data;
 }
 
@@ -134,9 +128,6 @@ export async function verifyLogin2FA(
     throw err;
   }
   const data = (await res.json()) as AuthSessionResponse;
-  if (data.token && typeof window !== "undefined") {
-    localStorage.setItem("byos_cp_session_token", data.token);
-  }
   return data;
 }
 
@@ -163,9 +154,6 @@ export async function sendLogin2FACode(
 }
 
 export async function logout(): Promise<void> {
-  if (typeof window !== "undefined") {
-    localStorage.removeItem("byos_cp_session_token");
-  }
   const res = await fetch(`${apiBase()}/v1/auth/logout`, {
     method: "POST",
     headers: getCpHeaders(),
@@ -272,9 +260,6 @@ export async function loginWithPasskey(data: any): Promise<AuthSessionResponse> 
     throw err;
   }
   const result = (await res.json()) as AuthSessionResponse;
-  if (result.token && typeof window !== "undefined") {
-    localStorage.setItem("byos_cp_session_token", result.token);
-  }
   return result;
 }
 
@@ -625,9 +610,6 @@ export async function resetPasswordWithRecovery(
     throw new Error(errorMsg);
   }
   const data = await res.json();
-  if (data.token && typeof window !== "undefined") {
-    localStorage.setItem("byos_cp_session_token", data.token);
-  }
   return data;
 }
 

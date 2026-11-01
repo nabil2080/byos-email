@@ -678,8 +678,8 @@ func mailboxGetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	if orgID != userOrgID {
-		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
 		return
 	}
 	wskStr := ""
@@ -730,8 +730,8 @@ func mailboxAliasesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	var userOrgID string
-	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)
+	var userOrgID, userRole string
+	err = conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole)
 	if err != nil {
 		http.Error(w, "not authorized", http.StatusForbidden)
 		return
@@ -742,7 +742,17 @@ func mailboxAliasesHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	if mailboxOrgID != userOrgID {
+
+	activeHeader := strings.TrimSpace(r.Header.Get("X-BYOS-Active-Mailbox"))
+	if activeHeader != "" && activeHeader != mailboxID {
+		http.Error(w, "X-BYOS-Active-Mailbox mismatch with target mailbox", http.StatusForbidden)
+		return
+	}
+
+	callerHash, _ := getCallerTokenHash(r)
+	isAuthorized := isMailboxAuthorizedForSession(callerHash, userID, mailboxID, conn, ctx)
+	isOrgAdmin := (mailboxOrgID == userOrgID) && (userRole == "admin" || userRole == "owner")
+	if !isAuthorized && !isOrgAdmin {
 		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
 		return
 	}
@@ -1016,8 +1026,8 @@ func mailboxAliasItemHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	var userOrgID string
-	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)
+	var userOrgID, userRole string
+	err = conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole)
 	if err != nil {
 		http.Error(w, "not authorized", http.StatusForbidden)
 		return
@@ -1029,7 +1039,17 @@ func mailboxAliasItemHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	if mailboxOrgID != userOrgID {
+
+	activeHeader := strings.TrimSpace(r.Header.Get("X-BYOS-Active-Mailbox"))
+	if activeHeader != "" && activeHeader != mailboxID {
+		http.Error(w, "X-BYOS-Active-Mailbox mismatch with target mailbox", http.StatusForbidden)
+		return
+	}
+
+	callerHash, _ := getCallerTokenHash(r)
+	isAuthorized := isMailboxAuthorizedForSession(callerHash, userID, mailboxID, conn, ctx)
+	isOrgAdmin := (mailboxOrgID == userOrgID) && (userRole == "admin" || userRole == "owner")
+	if !isAuthorized && !isOrgAdmin {
 		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
 		return
 	}
@@ -1118,6 +1138,36 @@ func userMailboxesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items = append(items, item)
+	}
+
+	callerHash, _ := getCallerTokenHash(r)
+	linkedIDs := getLinkedMailboxIDsForSession(callerHash)
+	for _, linkedID := range linkedIDs {
+		alreadyPresent := false
+		for _, it := range items {
+			if it.ID == linkedID {
+				alreadyPresent = true
+				break
+			}
+		}
+		if !alreadyPresent {
+			var it UserMailboxItem
+			it.ID = linkedID
+			err := conn.QueryRow(ctx, `
+				SELECT 
+					CASE WHEN d.name IS NOT NULL AND d.name != '' THEN m.local_part || '@' || d.name ELSE m.local_part END,
+					COALESCE(NULLIF(mu.display_name, ''), m.local_part),
+					m.org_id::text,
+					m.is_active
+				FROM mailboxes m
+				LEFT JOIN users mu ON mu.id = m.user_id
+				LEFT JOIN domains d ON d.id = m.domain_id
+				WHERE m.id = $1 AND m.is_active = true
+			`, linkedID).Scan(&it.Email, &it.DisplayName, &it.OrgID, &it.IsActive)
+			if err == nil {
+				items = append(items, it)
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -102,6 +102,7 @@ import {
   fetchPendingHistoricalKeyReactivation,
   finalizeHistoricalKeyReactivation,
   rollbackHistoricalKeyReactivation,
+  unlinkAccount,
 } from "./api";
 import { executeStagedHistoricalKeyReactivation } from "./historical_key_reactivation";
 import { generateRsvpReplyIcs, generateIcs, verifyInvitationAuthenticity, type ParsedIcsEvent } from "./utils/calendarIcs";
@@ -120,9 +121,15 @@ import {
   preparePathAAttachment,
   decryptPathAAttachment,
   MAX_ATTACHMENT_SIZE,
+  CHUNK_SIZE,
   decryptChunk,
 } from "./attachment_crypto";
-import { uploadChunksConcurrently } from "./attachment_upload_pipeline";
+import {
+  uploadChunksConcurrently,
+  validateAttachmentSendReadiness,
+  calculateAggregateProgress,
+  formatBytes,
+} from "./attachment_upload_pipeline";
 import { cryptoWorkerBridge } from "./crypto_worker_bridge";
 import {
   unlockMailboxKey,
@@ -218,6 +225,8 @@ import {
   getSigningSeedFor,
   getMailboxKeyFor,
   getXWingSeedFor,
+  getSearchKeyFor,
+  setSearchKeyFor,
   unsealAccountKeys,
   setAccountKeys,
   setMailboxKeyFor,
@@ -1481,7 +1490,7 @@ const AppContent: Component = () => {
         const senderSeed = getSigningSeedFor(currentBox.id) || signingSeed();
         const senderXwing = getXWingSeedFor(currentBox.id) || xwingSeed();
         const senderAccount = connectedAccounts().find((a) => a.id === currentBox.id);
-        const sendToken = senderAccount?.sessionToken || sessionStorage.getItem("byos_active_session_token") || undefined;
+        const sendToken = senderAccount?.sessionToken || undefined;
         const effectiveSeed = senderSeed || new Uint8Array(32);
         console.log(`[handleRsvpInvitation] Dispatching RSVP reply (${rsvpStatus}) to ${ev.organizer.email}`);
         const res = await sendMimeWithFallback({
@@ -1614,7 +1623,7 @@ const AppContent: Component = () => {
     const senderSeed = getSigningSeedFor(currentBox.id) || signingSeed();
     const senderXwing = getXWingSeedFor(currentBox.id) || xwingSeed();
     const senderAccount = connectedAccounts().find((a) => a.id === currentBox.id);
-    const sendToken = senderAccount?.sessionToken || sessionStorage.getItem("byos_active_session_token") || undefined;
+    const sendToken = senderAccount?.sessionToken || undefined;
     const effectiveSeed = senderSeed || new Uint8Array(32);
 
     const icsMethodMatch = /METHOD:([A-Z]+)/i.exec(icsContent);
@@ -2490,7 +2499,7 @@ const AppContent: Component = () => {
               xwingSeedHex: unwrapped.xwingSeed
                 ? Array.from(unwrapped.xwingSeed, (b) => b.toString(16).padStart(2, "0")).join("")
                 : undefined,
-              sessionToken: sessionToken || (typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") || "" : ""),
+              sessionToken: sessionToken || "",
               email: user.email || "",
             }).catch((err) => console.warn("[persistent-session] Failed saving device keys:", err));
           } else if (user.id || (user as any).user_id) {
@@ -2504,7 +2513,7 @@ const AppContent: Component = () => {
         const memSk = getMailboxKeyFor(targetBox.id);
         const memSigning = getSigningSeedFor(targetBox.id);
         const memXwing = getXWingSeedFor(targetBox.id);
-        const savedSKey = sessionStorage.getItem("byos_mailbox_skey_" + targetBox.id);
+        const savedSKey = getSearchKeyFor(targetBox.id);
         if (memSk) {
           try {
             setMailboxKey(memSk);
@@ -2537,19 +2546,14 @@ const AppContent: Component = () => {
         }
       }
 
-      // Sync into ConnectedAccount & sessionStorage
-      const tokenToSave = sessionToken || sessionStorage.getItem("byos_active_session_token") || "";
-      if (tokenToSave) {
-        sessionStorage.setItem("byos_active_session_token", tokenToSave);
-      }
-
+      // Sync into ConnectedAccount & sessionStorage (no bearer tokens)
+      setActiveMailboxContext(targetBox.id);
       const activeAcc: ConnectedAccount = {
         id: targetBox.id,
         email: user.email,
         displayName: user.display_name || targetBox.local_part || user.email.split("@")[0],
         role: user.role || "member",
         privacyMode: targetBox.mode || "private",
-        sessionToken: tokenToSave,
         mailboxSkHex: currentSkHex,
         searchKeyHex: currentSKey,
         profile_photo_ref: user.profile_photo_ref || targetBox.profile_photo_ref || undefined,
@@ -2617,21 +2621,20 @@ const AppContent: Component = () => {
 
     setIsLoading(true);
     try {
-      // 1. Set active session token
-      if (account.sessionToken) {
-        sessionStorage.setItem("byos_active_session_token", account.sessionToken);
-      }
+      // 1. Set active mailbox context for server-managed session requests
+      setActiveMailboxContext(account.id);
 
       // 2. Set active cryptographic keys in memory (Rule 1 & Rule 6)
       const skHex = bytesToHex(targetKey);
-      const searchKeyHex = account.searchKeyHex || sessionStorage.getItem("byos_mailbox_skey_" + account.id) || "";
+      const searchKeyHex = getSearchKeyFor(account.id) || account.searchKeyHex || "";
       setMailboxKey(targetKey);
       setMailboxKeyFor(account.id, targetKey);
       setSearchKey(searchKeyHex);
       setUnlockedBoxId(account.id);
       sessionStorage.removeItem("byos_mailbox_sk_" + account.id);
+      sessionStorage.removeItem("byos_mailbox_skey_" + account.id);
       if (searchKeyHex) {
-        sessionStorage.setItem("byos_mailbox_skey_" + account.id, searchKeyHex);
+        setSearchKeyFor(account.id, searchKeyHex);
       }
 
       // Restore signing seed if present (Rule 2 & Rule 6)
@@ -2993,7 +2996,7 @@ const AppContent: Component = () => {
           },
           getToken: (mId) => {
             const acc = connectedAccounts().find((a) => a.id === mId);
-            return acc?.sessionToken || sessionStorage.getItem("byos_active_session_token") || undefined;
+            return acc?.sessionToken || undefined;
           },
         });
         showToast("Back online. Pending messages synced.");
@@ -3103,46 +3106,19 @@ const AppContent: Component = () => {
           // we validate. Tokens marked as stale will be removed below.
           setConnectedAccounts(rawList);
           sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(rawList)));
-          if (!sessionStorage.getItem("byos_active_session_token") && rawList[0].sessionToken) {
-            sessionStorage.setItem("byos_active_session_token", rawList[0].sessionToken);
-          }
-
-          // Async token validation: probe each secondary account's sessionToken.
-          // The primary account (index 0) will be validated via fetchCurrentUser()
-          // below — skip it here to avoid double-validating.
+          // Server-managed session validation: validate secondary accounts against authorized mailboxes.
           if (rawList.length > 1) {
             const { fetchUserMailboxes } = await import("./api");
-            const validated: ConnectedAccount[] = [rawList[0]]; // primary — validated below
-            for (const acc of rawList.slice(1)) {
-              if (!acc.sessionToken) {
-                // No token stored → account was from a stale localStorage read,
-                // keys are missing. Drop it silently.
-                clearAccountKeys(acc.id);
-                continue;
-              }
-              try {
-                await fetchUserMailboxes(acc.sessionToken);
-                validated.push(acc); // token is still valid
-              } catch (err: any) {
-                const status = err?.status ?? err?.statusCode;
-                if (status === 401 || status === 403) {
-                  // Token revoked or expired — remove all keys for this account.
-                  console.info(
-                    `[session-isolation] Removing stale account ${acc.email}: token invalid (${status})`,
-                  );
-                  clearAccountKeys(acc.id);
-                  // Rule 5: no generic "unauthorized" — account is silently removed.
-                } else {
-                  // Network error — keep account but mark as needing re-auth
-                  console.warn(`[session-isolation] Could not validate ${acc.email}:`, err);
-                  validated.push(acc);
-                }
-              }
+            try {
+              const serverBoxes = await fetchUserMailboxes();
+              const serverBoxIds = new Set(serverBoxes.map((b) => b.id));
+              const validated = rawList.filter((acc, idx) => idx === 0 || serverBoxIds.has(acc.id));
+              setConnectedAccounts(validated);
+              sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(validated)));
+              persistAccountListForDisplay(validated);
+            } catch (err) {
+              console.warn("[session-isolation] Could not validate accounts with server:", err);
             }
-            // Update sidebar to reflect only validated accounts
-            setConnectedAccounts(validated);
-            sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(validated)));
-            persistAccountListForDisplay(validated);
           }
         }
       } catch {
@@ -3154,31 +3130,26 @@ const AppContent: Component = () => {
 
     setIsLoading(true);
     try {
-      let hasSession = !!(typeof window !== "undefined" && sessionStorage.getItem("byos_active_session_token"));
-      if (!hasSession) {
+      const user = await fetchCurrentUser();
+      if (user) {
+        await bootstrapSession(user);
+      } else {
+        let restoredUser: UserMe | null = null;
         try {
           const restored = await restorePersistentSession();
           if (restored) {
-            console.info("[persistent-session] Restored 30-day session for user:", restored.userId);
-            hasSession = true;
+            restoredUser = await fetchCurrentUser();
+            if (restoredUser) {
+              await bootstrapSession(restoredUser);
+            }
           }
-        } catch (err) {
-          console.warn("[persistent-session] Could not restore persistent session:", err);
-        }
-      }
-
-      if (hasSession) {
-        const user = await fetchCurrentUser();
-        if (user) {
-          await bootstrapSession(user);
-        } else {
-          await clearPersistentSession();
-        }
-      } else {
-        await clearPersistentSession();
-        try {
-          await logout();
         } catch {}
+        if (!restoredUser) {
+          await clearPersistentSession();
+          try {
+            await logout();
+          } catch {}
+        }
       }
     } catch (err) {
       console.warn("Failed loading user/mailbox data on mount:", err);
@@ -3253,11 +3224,6 @@ const AppContent: Component = () => {
       }
 
       setIsLoading(true);
-      if (loginRes.token) {
-        try {
-          sessionStorage.setItem("byos_active_session_token", loginRes.token);
-        } catch {}
-      }
       let user = await fetchCurrentUser();
       if (!user && loginRes.id) {
         user = {
@@ -3311,9 +3277,6 @@ const AppContent: Component = () => {
     try {
       const loginRes = await verifyLogin2FA(challenge.challenge_token, code);
       setIsLoading(true);
-      if (loginRes.token) {
-        sessionStorage.setItem("byos_active_session_token", loginRes.token);
-      }
       let user = currentUser();
       if (!user) {
         user = {
@@ -3664,9 +3627,6 @@ const AppContent: Component = () => {
       const loginRes = await loginWithPasskey(payload);
 
       setIsLoading(true);
-      if (loginRes.token) {
-        sessionStorage.setItem("byos_active_session_token", loginRes.token);
-      }
 
       // Security Remediation: Never read or persist unencrypted mailbox private keys in localStorage.
       // Purge any legacy plaintext passkey vaults from localStorage.
@@ -3734,9 +3694,6 @@ const AppContent: Component = () => {
       }
 
       setIsLoading(true);
-      if (loginRes.token) {
-        sessionStorage.setItem("byos_active_session_token", loginRes.token);
-      }
       let targetWrappedSk = loginRes.wrapped_sk_user || user.wrapped_sk_user;
 
       // Self-healing: if an account has no active wrapped key material, generate and register a fresh keypair
@@ -3802,9 +3759,10 @@ const AppContent: Component = () => {
       setMailboxKey(skBytes);
       setMailboxKeyFor(box.id, skBytes);
       setSearchKey(currentSKey);
+      setSearchKeyFor(box.id, currentSKey);
       setUnlockedBoxId(box.id);
       sessionStorage.removeItem("byos_mailbox_sk_" + box.id);
-      sessionStorage.setItem("byos_mailbox_skey_" + box.id, currentSKey);
+      sessionStorage.removeItem("byos_mailbox_skey_" + box.id);
 
       const words = phrase.trim();
       const rootHex = /^[0-9a-fA-F]{64}$/.test(words)
@@ -3904,7 +3862,10 @@ const AppContent: Component = () => {
     clearAccountKeys(targetId);
     clearPersistentSession(targetId).catch(() => {});
 
-    // 2. Best-effort server session revocation for target account
+    // 2. Best-effort server session revocation and mailbox unlinking for target account
+    try {
+      await unlinkAccount(targetId);
+    } catch {}
     if (targetAccount?.sessionToken) {
       try {
         await apiRequest("/v1/auth/logout", {
@@ -4414,11 +4375,11 @@ const AppContent: Component = () => {
             id: box.id,
             email: user.email,
             displayName: user.display_name || box.local_part || user.email.split("@")[0],
-            sessionToken: sessionStorage.getItem("byos_active_session_token") || "",
+            sessionToken: undefined,
             role: "owner",
             privacyMode: "standard",
             mailboxSkHex: getMailboxKeyFor(box.id) ? bytesToHex(getMailboxKeyFor(box.id)!) : "",
-            searchKeyHex: sessionStorage.getItem("byos_mailbox_skey_" + box.id) || "",
+            searchKeyHex: "",
           }];
         }
       }
@@ -4799,7 +4760,7 @@ const AppContent: Component = () => {
           await Promise.all(
             accounts.map(async (acc) => {
               if (excludedAccountIds().includes(acc.id)) return;
-              const sKey = sessionStorage.getItem("byos_mailbox_skey_" + acc.id) || acc.searchKeyHex || (unlockedBoxId() === acc.id ? searchKey() : null);
+              const sKey = getSearchKeyFor(acc.id) || acc.searchKeyHex || (unlockedBoxId() === acc.id ? searchKey() : null);
               if (!sKey) return;
               for (const kw of keywords) {
                 if (cancelled) return;
@@ -4847,7 +4808,7 @@ const AppContent: Component = () => {
     const targetBoxId = att.mailbox_id || (selected as any)?.mailbox_id || selected?.mailboxId || selectedMailbox()?.id;
     if (!targetBoxId) return;
     const targetAcc = connectedAccounts().find((a) => a.id === targetBoxId);
-    const targetToken = targetAcc?.sessionToken || sessionStorage.getItem("byos_active_session_token") || undefined;
+    const targetToken = targetAcc?.sessionToken || undefined;
     const keyMaterial = getMailboxKeyForMessage(selected || { mailboxId: targetBoxId });
 
     setDownloadingAttachment(att.id);
@@ -4957,7 +4918,7 @@ const AppContent: Component = () => {
     }
     const targetAcc = connectedAccounts().find((a) => a.id === targetBoxId);
     const targetEmail = msg.accountEmail || targetAcc?.email || (targetBoxId === selectedMailbox()?.id ? currentUser()?.email : undefined) || "account";
-    const targetToken = targetAcc?.sessionToken || sessionStorage.getItem("byos_active_session_token") || undefined;
+    const targetToken = targetAcc?.sessionToken || undefined;
 
     // Rule 1 & Rule 2: Resolve key material strictly using owning mailbox ID
     const keyMaterial = getMailboxKeyForMessage(msg);
@@ -5501,13 +5462,12 @@ const AppContent: Component = () => {
         mailboxSk: skBytes,
         signingSeed: signingSeedHex || null,
         xwingSeed: xwingSeedHex || null,
+        searchKey: currentSKey || null,
       });
       sessionStorage.removeItem("byos_mailbox_sk_" + target.mailboxId);
       sessionStorage.removeItem("byos_signing_seed_" + target.mailboxId);
       sessionStorage.removeItem("byos_xwing_seed_" + target.mailboxId);
-      if (currentSKey) {
-        sessionStorage.setItem("byos_mailbox_skey_" + target.mailboxId, currentSKey);
-      }
+      sessionStorage.removeItem("byos_mailbox_skey_" + target.mailboxId);
 
       if (selectedMailbox()?.id === target.mailboxId) {
         setMailboxKey(skBytes);
@@ -5577,51 +5537,244 @@ const AppContent: Component = () => {
     }
   }
 
+  async function runAttachmentUpload(
+    attId: string,
+    file: File,
+    box: Mailbox,
+    key: Uint8Array,
+    controller: AbortController,
+    attemptId: string,
+  ) {
+    const totalFileBytes = file.size;
+    try {
+      // Step 1: Encrypting
+      setComposeAttachments((prev) =>
+        prev.map((a) =>
+          a.id === attId && a.uploadAttemptId === attemptId && a.uploadStatus !== "cancelled"
+            ? {
+                ...a,
+                uploadStatus: "encrypting",
+                uploadProgress: {
+                  completedBytes: 0,
+                  totalBytes: totalFileBytes,
+                  completedChunks: 0,
+                  totalChunks: 1,
+                  percent: 0,
+                },
+                uploadError: null,
+                abortController: controller,
+              }
+            : a,
+        ),
+      );
+
+      // Step 2: Uploading
+      setComposeAttachments((prev) =>
+        prev.map((a) =>
+          a.id === attId && a.uploadAttemptId === attemptId && a.uploadStatus !== "cancelled"
+            ? {
+                ...a,
+                uploadStatus: "uploading",
+                uploadProgress: {
+                  completedBytes: Math.round(totalFileBytes * 0.1),
+                  totalBytes: totalFileBytes,
+                  completedChunks: 0,
+                  totalChunks: 1,
+                  percent: 10,
+                },
+              }
+            : a,
+        ),
+      );
+
+      const uploaded = await uploadEncryptedAttachment(
+        box.id,
+        file,
+        key,
+        undefined,
+        undefined,
+        controller.signal,
+      );
+
+      // Step 3: Completed (guarded against stale retry or race cancellation)
+      setComposeAttachments((prev) =>
+        prev.map((a) =>
+          a.id === attId && a.uploadAttemptId === attemptId && a.uploadStatus !== "cancelled"
+            ? {
+                ...uploaded,
+                id: uploaded.id || attId,
+                rawFile: file,
+                uploadStatus: "completed",
+                uploadProgress: {
+                  completedBytes: totalFileBytes,
+                  totalBytes: totalFileBytes,
+                  completedChunks: 1,
+                  totalChunks: 1,
+                  percent: 100,
+                },
+                uploadError: null,
+                abortController: undefined,
+              }
+            : a,
+        ),
+      );
+    } catch (err: unknown) {
+      const isAbort =
+        controller.signal.aborted ||
+        (err instanceof DOMException && err.name === "AbortError") ||
+        (typeof err === "object" && err !== null && (err as { name?: string }).name === "AbortError");
+
+      if (isAbort) {
+        setComposeAttachments((prev) =>
+          prev.map((a) =>
+            a.id === attId && a.uploadAttemptId === attemptId
+              ? { ...a, uploadStatus: "cancelled", uploadError: null, abortController: undefined }
+              : a,
+          ),
+        );
+      } else {
+        const errorMsg = err instanceof Error ? err.message : String(err || "Upload failed");
+        setComposeAttachments((prev) =>
+          prev.map((a) =>
+            a.id === attId && a.uploadAttemptId === attemptId && a.uploadStatus !== "cancelled"
+              ? { ...a, uploadStatus: "failed", uploadError: errorMsg, abortController: undefined }
+              : a,
+          ),
+        );
+      }
+    }
+  }
+
   async function handleAttachmentSelected(e: Event) {
     const input = e.target as HTMLInputElement;
     const boxId = composeAccountId() || selectedMailbox()?.id;
     const box = boxId ? (mailboxes().find((b) => b.id === boxId) || selectedMailbox()) : selectedMailbox();
     const key = box ? getMailboxKeyFor(box.id) : null;
-    // Attachments must be encrypted with the real per-mailbox key before
-    // transit. Without an unlocked mailbox there is no key, so refuse —
-    // never fall back to a constant or fabricated key.
     if (!box || !key) {
-      input.value = ""; // reset
-      setErrorMessage(
-        "Sign in again to attach files."
-      );
+      input.value = "";
+      setErrorMessage("Sign in again to attach files.");
       setComposeStatus(null);
       return;
     }
     const file = input.files?.[0];
-    input.value = ""; // reset; the encrypted upload below carries the bytes
+    input.value = "";
     if (!file) return;
     if (file.size > 40 * 1024 * 1024) {
       setErrorMessage("Attachment exceeds the 40 MB V1 budget.");
       return;
     }
-    setComposeStatus("Encrypting attachment…");
-    try {
-      const uploaded = await uploadEncryptedAttachment(box.id, file, key);
-      uploaded.rawFile = file;
-      setComposeAttachments((prev) => [...prev, uploaded]);
-      setComposeStatus(null);
-    } catch (err) {
-      setErrorMessage(
-        `Failed to upload attachment: ${err instanceof Error ? err.message : "unknown error"}`
-      );
-      setComposeStatus(null);
+
+    const attId = "att-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+    const controller = new AbortController();
+    const attemptId = crypto.randomUUID();
+
+    const initialItem: AttachmentItem = {
+      id: attId,
+      mailbox_id: box.id,
+      filename: file.name,
+      content_type: file.type || "application/octet-stream",
+      size_bytes: file.size,
+      byte_size: file.size,
+      encrypted: true,
+      created_at: new Date().toISOString(),
+      rawFile: file,
+      uploadStatus: "encrypting",
+      uploadProgress: {
+        completedBytes: 0,
+        totalBytes: file.size,
+        completedChunks: 0,
+        totalChunks: 1,
+        percent: 0,
+      },
+      uploadError: null,
+      abortController: controller,
+      uploadAttemptId: attemptId,
+    };
+    setComposeAttachments((prev) => [...prev, initialItem]);
+
+    runAttachmentUpload(attId, file, box, key, controller, attemptId);
+  }
+
+  function handleCancelAttachment(id: string) {
+    const target = composeAttachments().find((a) => a.id === id);
+    if (target?.abortController) {
+      target.abortController.abort();
     }
+    setComposeAttachments((prev) =>
+      prev.map((a) =>
+        a.id === id
+          ? { ...a, uploadStatus: "cancelled", uploadError: null, abortController: undefined }
+          : a,
+      ),
+    );
+  }
+
+  function handleRetryAttachment(id: string) {
+    const boxId = composeAccountId() || selectedMailbox()?.id;
+    const box = boxId ? (mailboxes().find((b) => b.id === boxId) || selectedMailbox()) : selectedMailbox();
+    const key = box ? getMailboxKeyFor(box.id) : null;
+    if (!box || !key) {
+      setErrorMessage("Sign in again to retry attachment upload.");
+      return;
+    }
+    const target = composeAttachments().find((a) => a.id === id);
+    if (!target || !target.rawFile) {
+      setErrorMessage("Original file data is not available for retry. Please re-attach the file.");
+      return;
+    }
+    if (target.abortController) {
+      target.abortController.abort();
+    }
+    const newController = new AbortController();
+    const newAttemptId = crypto.randomUUID();
+
+    setComposeAttachments((prev) =>
+      prev.map((a) =>
+        a.id === id
+          ? {
+              ...a,
+              uploadStatus: "encrypting",
+              uploadError: null,
+              abortController: newController,
+              uploadAttemptId: newAttemptId,
+            }
+          : a,
+      ),
+    );
+
+    runAttachmentUpload(target.id, target.rawFile, box, key, newController, newAttemptId);
+  }
+
+  function handleCancelAllUploads() {
+    for (const att of composeAttachments()) {
+      if (
+        att.uploadStatus === "uploading" ||
+        att.uploadStatus === "encrypting" ||
+        att.uploadStatus === "preparing"
+      ) {
+        if (att.abortController) {
+          att.abortController.abort();
+        }
+      }
+    }
+    setComposeAttachments((prev) =>
+      prev.map((a) =>
+        a.uploadStatus === "uploading" ||
+        a.uploadStatus === "encrypting" ||
+        a.uploadStatus === "preparing"
+          ? { ...a, uploadStatus: "cancelled", uploadError: null, abortController: undefined }
+          : a,
+      ),
+    );
   }
 
   function removeComposeAttachment(id: string) {
     const box = selectedMailbox();
     const target = composeAttachments().find((a) => a.id === id);
-    // Server-persisted uploads must be destroyed row+object, not merely
-    // detached — otherwise every removed file lingers as an orphaned blob.
-    // On failure the item stays attached (and stays linked at send) with an
-    // error, so removal is never silently half-done.
-    if (box && target) {
+    if (target?.abortController) {
+      target.abortController.abort();
+    }
+    if (box && target && target.uploadStatus === "completed" && !target.id.startsWith("att-")) {
       deleteAttachment(box.id, id)
         .then(() => setComposeAttachments((prev) => prev.filter((a) => a.id !== id)))
         .catch((err) => {
@@ -5639,6 +5792,7 @@ const AppContent: Component = () => {
   }
 
   function clearComposeForm() {
+    handleCancelAllUploads();
     setComposeTo("");
     setComposeCc("");
     setComposeBcc("");
@@ -6090,7 +6244,11 @@ const AppContent: Component = () => {
 
             const key = getMailboxKeyFor(box.id);
 
+            let pathAAttIndex = 0;
+            const pathATotalAtts = (payload.attachments || []).length;
             for (const att of payload.attachments || []) {
+              pathAAttIndex++;
+              setComposeStatus(`Encrypting attachment ${pathAAttIndex}/${pathATotalAtts}: ${att.filename}…`);
               let fileData: Uint8Array;
               if (att.rawFile) {
                 fileData = new Uint8Array(await att.rawFile.arrayBuffer());
@@ -6109,11 +6267,35 @@ const AppContent: Component = () => {
                 senderXWingPkHex: senderXwingPkHex,
               });
 
-              // Upload recipient & sender chunks concurrently to storage
+              const fileLen = fileData.length;
+              const allChunks = [...prep.recipientChunks, ...prep.senderChunks];
+              const chunksWithBytes = allChunks.map((chunk) => {
+                const offset = chunk.index * CHUNK_SIZE;
+                const ptBytes = Math.min(CHUNK_SIZE, Math.max(0, fileLen - offset));
+                return {
+                  storageRef: chunk.storageRef,
+                  data: chunk.data,
+                  plaintextBytes: ptBytes,
+                };
+              });
+
+              const totalPlaintextBytes = fileLen * 2; // recipient copy + sender copy
+              setComposeStatus(
+                `Uploading attachment ${pathAAttIndex}/${pathATotalAtts} (0 B / ${formatBytes(totalPlaintextBytes)}, 0%)…`
+              );
+
+              // Upload recipient & sender chunks concurrently to storage with byte-accurate progress
               await uploadChunksConcurrently(
                 box.id,
-                [...prep.recipientChunks, ...prep.senderChunks],
-                { concurrency: 4 }
+                chunksWithBytes,
+                {
+                  concurrency: 4,
+                  onByteProgress: (completedBytes, totalBytes, percent) => {
+                    setComposeStatus(
+                      `Uploading attachment ${pathAAttIndex}/${pathATotalAtts} (${formatBytes(completedBytes)} / ${formatBytes(totalBytes)}, ${percent}%)…`
+                    );
+                  },
+                }
               );
 
               recipientAttEnvelopes.push(prep.recipientEnvelope);
@@ -6123,7 +6305,7 @@ const AppContent: Component = () => {
         }
 
         const senderAccount = connectedAccounts().find((a) => a.id === payload.mailboxId);
-        const sendToken = senderAccount?.sessionToken || (payload.mailboxId === selectedMailbox()?.id ? sessionStorage.getItem("byos_active_session_token") || undefined : undefined);
+        const sendToken = senderAccount?.sessionToken || undefined;
 
         const result = await tryPathASend({
           recipient: to,
@@ -6265,7 +6447,11 @@ const AppContent: Component = () => {
 
                 const key = getMailboxKeyFor(box.id);
 
+                let schedAttIndex = 0;
+                const schedTotalAtts = (payload.attachments || []).length;
                 for (const att of payload.attachments || []) {
+                  schedAttIndex++;
+                  setComposeStatus(`Encrypting attachment ${schedAttIndex}/${schedTotalAtts}: ${att.filename}…`);
                   let fileData: Uint8Array;
                   if (att.rawFile) {
                     fileData = new Uint8Array(await att.rawFile.arrayBuffer());
@@ -6284,11 +6470,35 @@ const AppContent: Component = () => {
                     senderXWingPkHex: senderXwingPkHex,
                   });
 
-                  // Upload recipient & sender chunks concurrently to storage
+                  const fileLen = fileData.length;
+                  const allChunks = [...prep.recipientChunks, ...prep.senderChunks];
+                  const chunksWithBytes = allChunks.map((chunk) => {
+                    const offset = chunk.index * CHUNK_SIZE;
+                    const ptBytes = Math.min(CHUNK_SIZE, Math.max(0, fileLen - offset));
+                    return {
+                      storageRef: chunk.storageRef,
+                      data: chunk.data,
+                      plaintextBytes: ptBytes,
+                    };
+                  });
+
+                  const totalPlaintextBytes = fileLen * 2; // recipient copy + sender copy
+                  setComposeStatus(
+                    `Uploading attachment ${schedAttIndex}/${schedTotalAtts} (0 B / ${formatBytes(totalPlaintextBytes)}, 0%)…`
+                  );
+
+                  // Upload recipient & sender chunks concurrently to storage with byte-accurate progress
                   await uploadChunksConcurrently(
                     box.id,
-                    [...prep.recipientChunks, ...prep.senderChunks],
-                    { concurrency: 4 }
+                    chunksWithBytes,
+                    {
+                      concurrency: 4,
+                      onByteProgress: (completedBytes, totalBytes, percent) => {
+                        setComposeStatus(
+                          `Uploading attachment ${schedAttIndex}/${schedTotalAtts} (${formatBytes(completedBytes)} / ${formatBytes(totalBytes)}, ${percent}%)…`
+                        );
+                      },
+                    }
                   );
 
                   recipientAttEnvelopes.push(prep.recipientEnvelope);
@@ -6396,6 +6606,13 @@ const AppContent: Component = () => {
   async function handleSend(e: Event) {
     e.preventDefault();
     if (pendingSend()) return; // ignore double-send
+
+    const readiness = validateAttachmentSendReadiness(composeAttachments());
+    if (!readiness.canSend) {
+      setErrorMessage(readiness.reason || "Attachments are not ready.");
+      showToast(readiness.reason || "Attachments are not ready.");
+      return;
+    }
 
     const payload = prepareSendPayload();
     if (!payload) {
@@ -6718,7 +6935,7 @@ const AppContent: Component = () => {
     const targetBoxId = msg.mailboxId || selectedMailbox()?.id;
     if (!targetBoxId) return;
     const targetAcc = connectedAccounts().find((a) => a.id === targetBoxId);
-    const targetToken = targetAcc?.sessionToken || sessionStorage.getItem("byos_active_session_token") || undefined;
+    const targetToken = targetAcc?.sessionToken || undefined;
     const keyMaterial = getMailboxKeyForMessage(msg);
 
     try {
@@ -6903,7 +7120,7 @@ const AppContent: Component = () => {
       const box = selectedMailbox();
       if (box && box.id) {
         activeIds.add(box.id);
-        connectAccountSSE(box.id, sessionStorage.getItem("byos_active_session_token") || undefined);
+        connectAccountSSE(box.id, undefined);
       }
     }
 
@@ -8777,6 +8994,9 @@ const AppContent: Component = () => {
         attachments={composeAttachments()}
         onAttachmentSelected={handleAttachmentSelected}
         onRemoveAttachment={removeComposeAttachment}
+        onCancelAttachment={handleCancelAttachment}
+        onRetryAttachment={handleRetryAttachment}
+        onCancelAllUploads={handleCancelAllUploads}
         scheduledTime={scheduledTime()}
         onScheduledTimeChange={setScheduledTime}
         trackOpens={composeTrackOpens()}

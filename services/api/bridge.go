@@ -277,10 +277,30 @@ func bridgeCredentialsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	isOwner := mailboxUserID != nil && *mailboxUserID == userID
-	isAdminOrOwner := userRole == "admin" || userRole == "owner"
-	if userOrgID != mailboxOrgID || (!isOwner && !isAdminOrOwner) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	activeHeader := strings.TrimSpace(r.Header.Get("X-BYOS-Active-Mailbox"))
+	if activeHeader != "" && activeHeader != mailboxID {
+		http.Error(w, "X-BYOS-Active-Mailbox mismatch with target mailbox", http.StatusForbidden)
+		return
+	}
+
+	callerHash, _ := getCallerTokenHash(r)
+	isSessionAuthorized := isMailboxAuthorizedForSession(callerHash, userID, mailboxID, conn, ctx)
+	isAdminOrOwner := (userOrgID == mailboxOrgID) && (userRole == "admin" || userRole == "owner")
+
+	// Privacy policy: GET and POST access to private bridge integration credentials requires session authorization.
+	// Organization administrators may only invoke DELETE to revoke credentials (e.g. employee offboarding).
+	if r.Method == http.MethodGet || r.Method == http.MethodPost {
+		if !isSessionAuthorized {
+			http.Error(w, "forbidden: bridge credentials require an authorized mailbox session", http.StatusForbidden)
+			return
+		}
+	} else if r.Method == http.MethodDelete {
+		if !isSessionAuthorized && !isAdminOrOwner {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	} else {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 

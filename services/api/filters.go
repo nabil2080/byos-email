@@ -64,6 +64,10 @@ func mailboxFiltersHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	// Auth check
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
 	var userOrgID, userRole string
 	if err := conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -194,6 +198,10 @@ func mailboxFilterItemHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	// Auth check
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
 	var userOrgID, userRole string
 	if err := conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -298,6 +306,10 @@ func mailboxAddressRulesHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	// Auth check
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
 	var userOrgID, userRole string
 	if err := conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -446,6 +458,10 @@ func mailboxAddressRuleItemHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(ctx)
 
 	// Auth check
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
 	var userOrgID, userRole string
 	if err := conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)

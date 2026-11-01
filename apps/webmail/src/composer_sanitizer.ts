@@ -157,36 +157,36 @@ export function sanitizeOnReceive(
 
   try {
     purifier.addHook(hookName, hookFn);
-  } catch {}
 
-  const sanitized = purifier.sanitize(preProcessed, {
-    ALLOWED_TAGS: SAFE_OUTGOING_TAGS,
-    ALLOWED_ATTR: [
-      ...SAFE_OUTGOING_ATTRS,
-      "data-byos-blocked-src",
-      "data-language"
-    ],
-    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|byos-storage:\/\/|data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml)[;,])/i,
-    FORBID_TAGS: [
-      "script", "iframe", "object", "embed", "form", "input",
-      "button", "meta", "link", "style"
-    ],
-    FORBID_ATTR: [
-      "onclick", "onerror", "onload", "onmouseover", "onfocus", "onblur",
-      "onkeydown", "onkeyup", "onchange", "onsubmit", "onreset"
-    ],
-    FORCE_BODY: true,
-  });
+    const sanitized = purifier.sanitize(preProcessed, {
+      ALLOWED_TAGS: SAFE_OUTGOING_TAGS,
+      ALLOWED_ATTR: [
+        ...SAFE_OUTGOING_ATTRS,
+        "data-byos-blocked-src",
+        "data-language"
+      ],
+      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|byos-storage:\/\/|data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml)[;,])/i,
+      FORBID_TAGS: [
+        "script", "iframe", "object", "embed", "form", "input",
+        "button", "meta", "link", "style"
+      ],
+      FORBID_ATTR: [
+        "onclick", "onerror", "onload", "onmouseover", "onfocus", "onblur",
+        "onkeydown", "onkeyup", "onchange", "onsubmit", "onreset"
+      ],
+      FORCE_BODY: true,
+    });
 
-  try {
-    purifier.removeHook(hookName);
-  } catch {}
-
-  return {
-    sanitized,
-    hasBlockedImages,
-    blockedCount,
-  };
+    return {
+      sanitized,
+      hasBlockedImages,
+      blockedCount,
+    };
+  } finally {
+    try {
+      purifier.removeHook(hookName, hookFn);
+    } catch {}
+  }
 }
 
 /**

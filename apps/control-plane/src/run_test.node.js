@@ -9,6 +9,8 @@ import { runSearchTests } from "./lib/api/search.test.ts";
 import { runTotpTests } from "./utils/totp.test.ts";
 import { runAuth2FATests } from "./lib/api/auth_2fa.test.ts";
 import { runAuthSessionsAndPwdTests } from "./lib/api/auth_sessions_pwd.test.ts";
+import { runSupportApiTests } from "./lib/api/support.test.ts";
+import { runClientTests } from "./lib/api/client.test.ts";
 
 async function main() {
   let totalFailed = 0;
@@ -67,6 +69,16 @@ async function main() {
   const authPwdRes = await runAuthSessionsAndPwdTests();
   console.log(`SESSIONS & PWD RECOVERY TESTS: ${authPwdRes.passed} passed, ${authPwdRes.failed} failed\n`);
   totalFailed += authPwdRes.failed;
+
+  console.log("Running Customer Support & Help Desk API Tests...");
+  const supportRes = await runSupportApiTests();
+  console.log(`SUPPORT API TESTS: ${supportRes.passed} passed, ${supportRes.failed} failed\n`);
+  totalFailed += supportRes.failed;
+
+  console.log("Running Control Plane Client & Entropy Tests...");
+  const clientRes = runClientTests();
+  console.log(`CLIENT & ENTROPY TESTS: ${clientRes.passed} passed, ${clientRes.failed} failed\n`);
+  totalFailed += clientRes.failed;
 
   if (totalFailed > 0) process.exit(1);
 }

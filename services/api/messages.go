@@ -95,9 +95,8 @@ func messagesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	var authorized string
-	if err := conn.QueryRow(ctx, `SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true AND (m.user_id = u.id OR u.role IN ('admin', 'owner'))`, mailboxID, userID).Scan(&authorized); err != nil {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
 		return
 	}
 
@@ -330,9 +329,8 @@ func threadsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	var authorized string
-	if err := conn.QueryRow(ctx, `SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true AND (m.user_id = u.id OR u.role IN ('admin', 'owner'))`, mailboxID, userID).Scan(&authorized); err != nil {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
 		return
 	}
 
@@ -479,9 +477,8 @@ func threadDetailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	var authorized string
-	if err := conn.QueryRow(ctx, `SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true AND (m.user_id = u.id OR u.role IN ('admin', 'owner'))`, mailboxID, userID).Scan(&authorized); err != nil {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
 		return
 	}
 
@@ -699,9 +696,8 @@ func messageBodyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	var authorized string
-	if err := conn.QueryRow(ctx, `SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true AND (m.user_id = u.id OR u.role IN ('admin', 'owner'))`, mailboxID, userID).Scan(&authorized); err != nil {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
 		return
 	}
 
@@ -968,12 +964,9 @@ func messageReadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	// Verify ownership
-	var authorized string
-	if err := conn.QueryRow(ctx,
-		`SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id WHERE m.id=$1 AND u.id=$2 AND u.is_active=true AND (m.user_id = u.id OR u.role IN ('admin', 'owner'))`,
-		mailboxID, userID).Scan(&authorized); err != nil {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	// Verify session authorization for target mailbox
+	if status, errMsg, authOk := verifyUserMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
 		return
 	}
 
@@ -1043,17 +1036,9 @@ func messageStarHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	// Verify ownership
-	var owns bool
-	err = conn.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM mailboxes m
-			JOIN users u ON u.id = m.user_id
-			WHERE m.id = $1 AND u.id = $2 AND m.is_active = true
-		)
-	`, mailboxID, userID).Scan(&owns)
-	if err != nil || !owns {
-		writeInternalSendError(w, http.StatusForbidden, "not_mailbox_owner")
+	// Verify mailbox authorization
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		writeInternalSendError(w, status, errMsg)
 		return
 	}
 
@@ -1195,6 +1180,12 @@ func messageImportHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
+	// Verify session authorization for target mailbox
+	if status, errMsg, authOk := verifyUserMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
+
 	var domainID, orgID, localPart, domainName, objectPrefix string
 	var mailboxPK []byte
 	var mailboxSKVersion int32
@@ -1202,10 +1193,9 @@ func messageImportHandler(w http.ResponseWriter, r *http.Request) {
 		SELECT m.domain_id::text, m.org_id::text, m.local_part, d.name, m.mailbox_pk, m.mailbox_sk_version, COALESCE(ms.object_prefix, '')
 		FROM mailboxes m
 		JOIN domains d ON d.id = m.domain_id
-		JOIN users u ON u.org_id = m.org_id
 		LEFT JOIN mailbox_storage ms ON ms.mailbox_id = m.id AND ms.status = 'active'
-		WHERE m.id = $1 AND u.id = $2 AND u.is_active = true AND m.is_active = true AND (m.user_id = u.id OR u.role IN ('admin', 'owner'))`,
-		mailboxID, userID,
+		WHERE m.id = $1 AND m.is_active = true`,
+		mailboxID,
 	).Scan(&domainID, &orgID, &localPart, &domainName, &mailboxPK, &mailboxSKVersion, &objectPrefix)
 	if err != nil {
 		log.Printf("messageImportHandler: mailbox lookup error: %v (mailbox=%s, user=%s)", err, mailboxID, userID)

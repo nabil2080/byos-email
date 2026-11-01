@@ -106,6 +106,11 @@ func mailboxRulesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
+
 	orgID, err := verifyMailboxAccess(ctx, conn, mailboxID, userID)
 	if err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -325,6 +330,11 @@ func mailboxRuleItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(ctx)
+
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
 
 	orgID, err := verifyMailboxAccess(ctx, conn, mailboxID, userID)
 	if err != nil {

@@ -506,7 +506,12 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	// 5. Validate sender owns the mailbox
+	// 5. Validate sender mailbox authorization for session
+	callerHash, _ := getCallerTokenHash(r)
+	if !isMailboxAuthorizedForSession(callerHash, userID, req.SenderMailboxID, conn, ctx) {
+		writeInternalSendError(w, http.StatusForbidden, "not_sender_mailbox")
+		return
+	}
 	var senderOrgID string
 	var senderDomainID string
 	var senderLocalPart string
@@ -516,8 +521,8 @@ func internalSendHandler(w http.ResponseWriter, r *http.Request) {
 		SELECT m.org_id::text, m.local_part, d.name, m.mailbox_ed25519_pk, d.id::text
 		FROM mailboxes m
 		JOIN domains d ON d.id = m.domain_id
-		WHERE m.id = $1 AND m.user_id = $2 AND m.is_active = true
-	`, req.SenderMailboxID, userID).Scan(&senderOrgID, &senderLocalPart, &senderDomainName, &senderEd25519PK, &senderDomainID)
+		WHERE m.id = $1 AND m.is_active = true
+	`, req.SenderMailboxID).Scan(&senderOrgID, &senderLocalPart, &senderDomainName, &senderEd25519PK, &senderDomainID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeInternalSendError(w, http.StatusForbidden, "not_sender_mailbox")

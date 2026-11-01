@@ -409,8 +409,9 @@ export const SetupAccount: Component = () => {
           mailboxSk,
           signingSeed,
           xwingSeed,
+          searchKey: sKeyHex,
         });
-        sessionStorage.setItem("byos_mailbox_skey_" + data.mailbox_id, sKeyHex);
+        sessionStorage.removeItem("byos_mailbox_skey_" + data.mailbox_id);
         sessionStorage.removeItem("byos_mailbox_sk_" + data.mailbox_id);
         sessionStorage.removeItem("byos_signing_seed_" + data.mailbox_id);
         sessionStorage.removeItem("byos_xwing_seed_" + data.mailbox_id);

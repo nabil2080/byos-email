@@ -1,5 +1,5 @@
 import { Component, createSignal, Show, For } from "solid-js";
-import { ConnectedAccount, login, verifyLogin2FA, sendLogin2FACode, LoginResponse, apiBase } from "../api";
+import { ConnectedAccount, login, linkAccount, verifyLogin2FA, sendLogin2FACode, LoginResponse, apiBase } from "../api";
 import { autoUnwrapMailboxKey, autoUnwrapKeys } from "../message_crypto";
 import { unsealAccountKeys, persistAccountListForDisplay, setAccountKeys, sanitizeConnectedAccounts } from "../session_isolation";
 import { cryptoWorkerBridge } from "../crypto_worker_bridge";
@@ -85,14 +85,12 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
           envelope: passphraseEnvelope,
         });
 
-        const tempToken = res.token || sessionStorage.getItem("byos_active_session_token");
-
         const reactivateRes = await fetch(`${apiBase()}/v1/mailboxes/${res.mailbox_id}/reactivate-keys`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "X-BYOS-Client": "webmail",
-            "Authorization": `Bearer ${tempToken}`
+            ...(res.token ? { "Authorization": `Bearer ${res.token}` } : {})
           },
           body: JSON.stringify({
             wrapped_sk_user: healWrapped,
@@ -120,7 +118,6 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
       displayName: res.mailbox_local_part || (res.email ? res.email.split("@")[0] : mail.split("@")[0]),
       role: res.role || "member",
       privacyMode: res.mailbox_mode || "private",
-      sessionToken: res.token || "",
       mailboxSkHex: skHex,
       searchKeyHex: searchKeyHex,
       signingSeedHex,
@@ -163,16 +160,12 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
         mailboxSk: skHex || null,
         signingSeed: signingSeedHex || null,
         xwingSeed: xwingSeedHex || null,
+        searchKey: searchKeyHex || null,
       });
       sessionStorage.removeItem("byos_mailbox_sk_" + mailboxId);
       sessionStorage.removeItem("byos_signing_seed_" + mailboxId);
       sessionStorage.removeItem("byos_xwing_seed_" + mailboxId);
-      if (searchKeyHex) {
-        sessionStorage.setItem("byos_mailbox_skey_" + mailboxId, searchKeyHex);
-      }
-    }
-    if (newAccount.sessionToken && !sessionStorage.getItem("byos_active_session_token")) {
-      sessionStorage.setItem("byos_active_session_token", newAccount.sessionToken);
+      sessionStorage.removeItem("byos_mailbox_skey_" + mailboxId);
     }
 
     resetForm();
@@ -193,8 +186,17 @@ export const AddMailboxModal: Component<AddMailboxModalProps> = (props) => {
     setError(null);
 
     try {
-      // 1. Authenticate credentials with backend
-      const res = await login(mail, pass);
+      // 1. Authenticate secondary account credentials and link to active session server-side
+      let res: LoginResponse;
+      try {
+        res = await linkAccount(mail, pass);
+      } catch (linkErr: any) {
+        if (linkErr?.status === 404 || linkErr?.status === 405) {
+          res = await login(mail, pass);
+        } else {
+          throw linkErr;
+        }
+      }
 
       // Check if 2FA challenge is required
       if (res.two_factor_required) {

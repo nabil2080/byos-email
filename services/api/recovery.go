@@ -411,8 +411,11 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			validMFA := false
-			if hasActiveTOTP && validateTOTP(*totpSecret, mfaCode) {
-				validMFA = true
+			if hasActiveTOTP {
+				consumed, err := verifyAndConsumeTOTP(ctx, conn, userID, *totpSecret, mfaCode)
+				if err == nil && consumed {
+					validMFA = true
+				}
 			}
 			if !validMFA {
 				var chID string

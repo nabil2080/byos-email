@@ -60,6 +60,11 @@ func mailboxSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
+
 	// Validate user and mailbox belong to same org
 	var userOrgID, mailboxOrgID, mailboxLocalPart, userDisplayName string
 	err = conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(display_name, '') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userDisplayName)

@@ -484,14 +484,19 @@ func importMessageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
+	// Verify session authorization for target mailbox
+	if status, errMsg, authOk := verifyUserMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
+
 	var domainID string
 	var mailboxSKVersion int
 	err = conn.QueryRow(ctx, `
 		SELECT m.domain_id::text, m.mailbox_sk_version
 		FROM mailboxes m
-		JOIN users u ON u.org_id = m.org_id
-		WHERE m.id = $1 AND u.id = $2 AND u.is_active = true AND m.is_active = true
-	`, mailboxID, userID).Scan(&domainID, &mailboxSKVersion)
+		WHERE m.id = $1 AND m.is_active = true
+	`, mailboxID).Scan(&domainID, &mailboxSKVersion)
 	if err != nil {
 		http.Error(w, "forbidden or mailbox not found", http.StatusForbidden)
 		return
@@ -854,13 +859,9 @@ func importJobListHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	var authID string
-	err = conn.QueryRow(ctx, `
-		SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id
-		WHERE m.id=$1 AND u.id=$2 AND u.is_active=true AND m.is_active=true
-	`, mailboxID, userID).Scan(&authID)
-	if err != nil {
-		http.Error(w, "forbidden or mailbox not found", http.StatusForbidden)
+	// Verify session authorization for target mailbox
+	if status, errMsg, authOk := verifyUserMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
 		return
 	}
 
@@ -935,7 +936,7 @@ func mailboxStorageStoreHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID, ok := getAuthenticatedUserID(r)
-	if !ok {
+	if !ok && r.Header.Get("X-Internal-Key") == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -959,13 +960,9 @@ func mailboxStorageStoreHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	var authID string
-	err = conn.QueryRow(ctx, `
-		SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id
-		WHERE m.id=$1 AND u.id=$2 AND u.is_active=true AND m.is_active=true
-	`, mailboxID, userID).Scan(&authID)
-	if err != nil {
-		http.Error(w, "forbidden or mailbox not found", http.StatusForbidden)
+	// Authorize storage access: accepts storage-worker credential ("storage") or session-authorized user
+	if status, errMsg, authOk := verifyMailboxScopedAccess(r, userID, mailboxID, "storage", conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
 		return
 	}
 
@@ -1021,7 +1018,7 @@ func mailboxStorageRetrieveHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID, ok := getAuthenticatedUserID(r)
-	if !ok {
+	if !ok && r.Header.Get("X-Internal-Key") == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1045,13 +1042,9 @@ func mailboxStorageRetrieveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	var authID string
-	err = conn.QueryRow(ctx, `
-		SELECT m.id::text FROM mailboxes m JOIN users u ON u.org_id=m.org_id
-		WHERE m.id=$1 AND u.id=$2 AND u.is_active=true AND m.is_active=true
-	`, mailboxID, userID).Scan(&authID)
-	if err != nil {
-		http.Error(w, "forbidden or mailbox not found", http.StatusForbidden)
+	// Authorize storage access: accepts storage-worker credential ("storage") or session-authorized user
+	if status, errMsg, authOk := verifyMailboxScopedAccess(r, userID, mailboxID, "storage", conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
 		return
 	}
 

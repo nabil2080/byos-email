@@ -121,7 +121,7 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
         settings.signature_html ||
         settings.signature_plain?.replace(/\n/g, "<br/>") ||
         "";
-      setSignatureHtml(DOMPurify.sanitize(initialHtml, { ADD_TAGS: ['style', 'head', 'meta'], FORCE_BODY: true }));
+      setSignatureHtml(DOMPurify.sanitize(initialHtml, { FORCE_BODY: true, FORBID_TAGS: ['style', 'head', 'meta'] }));
       setInsertOnReply(settings.insert_signature_on_reply);
       setAliases(aliasList);
       setSelectedSenderIdentity(primaryEmail());
@@ -385,7 +385,7 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
                   <div class="text-[#878A8E] dark:text-[#71717A] text-xs">--</div>
                   <div
                     class="reading-pane-content prose prose-xs max-w-none text-xs text-[#1A1B1E] dark:text-[#F3F4F6] leading-relaxed break-words"
-                    innerHTML={DOMPurify.sanitize(signatureHtml(), { ADD_TAGS: ['style', 'head', 'meta'], FORCE_BODY: true }) || "<span class='text-[#878A8E] italic'>No signature configured</span>"}
+                    innerHTML={DOMPurify.sanitize(signatureHtml(), { FORCE_BODY: true, FORBID_TAGS: ['style', 'head', 'meta'] }) || "<span class='text-[#878A8E] italic'>No signature configured</span>"}
                   />
                 </div>
               </div>

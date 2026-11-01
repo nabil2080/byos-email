@@ -167,5 +167,17 @@ export async function runComposerSanitizerTests(): Promise<{ passed: number; fai
     assert(cleaned.includes("clean link"), "Preserved link text");
   });
 
+  await test("test_sanitize_does_not_leak_hooks_across_calls", () => {
+    const inputRemote = `<p>Test:</p><img src="https://tracker.example.com/pixel.gif" alt="tracker" />`;
+    // First run with allowRemoteImages: false
+    const blockedResult = sanitizeOnReceive(inputRemote, { allowRemoteImages: false });
+    assert(blockedResult.hasBlockedImages, "First run blocks remote image");
+
+    // Second run with allowRemoteImages: true
+    const allowedResult = sanitizeOnReceive(inputRemote, { allowRemoteImages: true });
+    assert(!allowedResult.hasBlockedImages, "Second run with allowRemoteImages=true must not be blocked by leaked hook");
+    assert(allowedResult.sanitized.includes("src=\"https://tracker.example.com/pixel.gif\""), "Remote image src preserved");
+  });
+
   return { passed, failed };
 }
