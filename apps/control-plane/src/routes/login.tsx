@@ -105,7 +105,8 @@ const LoginPage: Component = () => {
         type: c.type as PublicKeyCredentialType,
       }));
 
-      const effectiveRpId = options.rpId || window.location.hostname;
+      const currentHost = window.location.hostname;
+      const effectiveRpId = (options.rpId && (options.rpId === currentHost || currentHost.endsWith("." + options.rpId))) ? options.rpId : currentHost;
 
       const credential = (await navigator.credentials.get({
         publicKey: {

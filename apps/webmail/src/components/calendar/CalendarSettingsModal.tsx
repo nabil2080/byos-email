@@ -17,7 +17,6 @@ interface CalendarSettingsModalProps {
   onOpenSubscribeFromUrl?: () => void;
   onDeleteCalendar?: (calId: string) => Promise<void>;
   onUnsubscribeCalendar?: (cal: UserCalendar) => void;
-  onOpenAppointmentsManager?: () => void;
 }
 
 export const CalendarSettingsModal: Component<CalendarSettingsModalProps> = (props) => {
@@ -58,7 +57,6 @@ export const CalendarSettingsModal: Component<CalendarSettingsModalProps> = (pro
             onOpenSubscribeFromUrl={props.onOpenSubscribeFromUrl}
             onDeleteCalendar={props.onDeleteCalendar}
             onUnsubscribeCalendar={props.onUnsubscribeCalendar}
-            onOpenAppointmentsManager={props.onOpenAppointmentsManager}
           />
         </div>
       </div>

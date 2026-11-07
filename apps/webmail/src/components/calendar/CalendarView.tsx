@@ -41,8 +41,8 @@ import {
 import { expandEventOccurrences, EventExceptionInput } from "../../utils/calendarRrule";
 import { generateIcs } from "../../utils/calendarIcs";
 import { CalendarSidebar, DecryptedEventRecord } from "./CalendarSidebar";
-import { getMailboxKeyFor } from "../../session_isolation";
 import { CalendarToolbar, CalendarViewMode } from "./CalendarToolbar";
+import { getMailboxKeyFor } from "../../session_isolation";
 
 export type { CalendarViewMode };
 import { TopFixedBar, AppModule } from "../TopFixedBar";
@@ -51,6 +51,9 @@ import { DayView } from "./DayView";
 import { MonthView } from "./MonthView";
 import { YearView } from "./YearView";
 import { AgendaView } from "./AgendaView";
+import { MobileCalendarHeader } from "./MobileCalendarHeader";
+import { MobileCalendarFab } from "./MobileCalendarFab";
+import { MobileMonthSplitView } from "./MobileMonthSplitView";
 import { EventModal } from "./EventModal";
 import { CalendarModal } from "./CalendarModal";
 import { ShareCalendarModal } from "./ShareCalendarModal";
@@ -82,14 +85,6 @@ import {
 } from "./url/urlCalendarStore";
 import { SubscribeFromUrlModal } from "./url/SubscribeFromUrlModal";
 import { detectBrowserTimeZone } from "../../utils/calendarTimezones";
-import { TaskItem } from "./tasks/taskTypes";
-import { getTasks, toggleTaskComplete } from "./tasks/taskStore";
-import { TaskModal } from "./tasks/TaskModal";
-import { TasksSidebarPanel } from "./tasks/TasksSidebarPanel";
-import { AppointmentSchedule, BookedAppointment } from "./appointments/appointmentTypes";
-import { AppointmentScheduleModal } from "./appointments/AppointmentScheduleModal";
-import { AppointmentsManagerModal } from "./appointments/AppointmentsManagerModal";
-import { BookingPageView } from "./appointments/BookingPageView";
 import { generateContactBirthdayEvents } from "../../utils/calendarContactsIntegration";
 import {
   ActiveCalendarReminderAlert,
@@ -159,11 +154,22 @@ interface CalendarViewProps {
 
 export const CalendarView: Component<CalendarViewProps> = (props) => {
   const [currentDate, setCurrentDate] = createSignal(new Date());
-  const [viewMode, setViewMode] = createSignal<CalendarViewMode>(props.savedViewMode || "year");
+  const getInitialViewMode = (): CalendarViewMode => {
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
+      if (!props.savedViewMode || props.savedViewMode === "year" || props.savedViewMode === "week") {
+        return "agenda";
+      }
+      return props.savedViewMode;
+    }
+    return props.savedViewMode && props.savedViewMode !== "year" ? props.savedViewMode : "week";
+  };
+  const [viewMode, setViewMode] = createSignal<CalendarViewMode>(getInitialViewMode());
   const changeViewMode = (mode: CalendarViewMode) => {
     setViewMode(mode);
     props.onViewModeChange?.(mode);
   };
+
+  const hourHeight = createMemo(() => 56);
   const [searchQuery, setSearchQuery] = createSignal("");
   createEffect(() => {
     if (props.externalSearchQuery !== undefined) {
@@ -193,10 +199,16 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
   });
 
   onMount(() => {
-    if (props.savedViewMode) {
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
+      if (!props.savedViewMode || props.savedViewMode === "year" || props.savedViewMode === "week") {
+        setViewMode("agenda");
+      } else {
+        setViewMode(props.savedViewMode);
+      }
+    } else if (props.savedViewMode && props.savedViewMode !== "year") {
       setViewMode(props.savedViewMode);
     } else {
-      setViewMode("year");
+      setViewMode("week");
     }
 
     const updateOnline = () => {
@@ -255,46 +267,6 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
     }
   }
 
-  // Tasks state (Category 11)
-  const [tasks, setTasks] = createSignal<TaskItem[]>([]);
-  const [isTasksSidebarOpen, setIsTasksSidebarOpen] = createSignal(false);
-  const [isTaskModalOpen, setIsTaskModalOpen] = createSignal(false);
-  const [taskToEdit, setTaskToEdit] = createSignal<TaskItem | null>(null);
-  const [taskInitialDueDate, setTaskInitialDueDate] = createSignal<string>("");
-  const [taskInitialDueTime, setTaskInitialDueTime] = createSignal<string>("");
-
-  function loadTasks() {
-    if (props.mailboxId) {
-      setTasks(getTasks(props.mailboxId, props.mailboxKey));
-    }
-  }
-
-  function handleToggleTaskComplete(taskId: string) {
-    if (props.mailboxId) {
-      toggleTaskComplete(props.mailboxId, taskId, props.mailboxKey);
-      loadTasks();
-    }
-  }
-
-  function handleSelectTask(task: TaskItem) {
-    setTaskToEdit(task);
-    setIsTaskModalOpen(true);
-  }
-
-  function handleOpenNewTaskModal(dueDate?: string, dueTime?: string) {
-    setTaskToEdit(null);
-    setTaskInitialDueDate(dueDate || "");
-    setTaskInitialDueTime(dueTime || "");
-    setIsTaskModalOpen(true);
-  }
-
-  // Appointment Scheduling state (Category 12)
-  const [isAppointmentsManagerOpen, setIsAppointmentsManagerOpen] = createSignal(false);
-  const [isAppointmentScheduleModalOpen, setIsAppointmentScheduleModalOpen] = createSignal(false);
-  const [scheduleToEdit, setScheduleToEdit] = createSignal<AppointmentSchedule | null>(null);
-  const [isBookingPreviewOpen, setIsBookingPreviewOpen] = createSignal(false);
-  const [previewSchedule, setPreviewSchedule] = createSignal<AppointmentSchedule | null>(null);
-
   const [pendingOpenEventId, setPendingOpenEventId] = createSignal<string | null>(null);
 
   createEffect(() => {
@@ -311,10 +283,8 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
   onMount(() => {
     loadHolidaySubs();
     loadUrlSubs();
-    loadTasks();
     const handleSubsUpdated = () => loadHolidaySubs();
     const handleUrlSubsUpdated = () => loadUrlSubs();
-    const handleTasksUpdated = () => loadTasks();
     const handleOpenCalEvent = (e: any) => {
       const eventId = e.detail?.eventId;
       if (!eventId) return;
@@ -334,14 +304,12 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
     const handleEventsUpdated = () => loadEvents();
     window.addEventListener("byos_holiday_subs_updated", handleSubsUpdated);
     window.addEventListener("byos_url_subs_updated", handleUrlSubsUpdated);
-    window.addEventListener("byos_tasks_updated", handleTasksUpdated);
     window.addEventListener("byos_open_calendar_event", handleOpenCalEvent);
     window.addEventListener("byos_open_email_message", handleOpenEmailMsg);
     window.addEventListener("byos_calendar_events_updated", handleEventsUpdated);
     onCleanup(() => {
       window.removeEventListener("byos_holiday_subs_updated", handleSubsUpdated);
       window.removeEventListener("byos_url_subs_updated", handleUrlSubsUpdated);
-      window.removeEventListener("byos_tasks_updated", handleTasksUpdated);
       window.removeEventListener("byos_open_calendar_event", handleOpenCalEvent);
       window.removeEventListener("byos_open_email_message", handleOpenEmailMsg);
       window.removeEventListener("byos_calendar_events_updated", handleEventsUpdated);
@@ -766,6 +734,22 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
       });
     }
 
+    if (mode === "3days") {
+      const start = new Date(curr);
+      const end = new Date(curr);
+      end.setDate(curr.getDate() + 2);
+
+      const startMonth = start.toLocaleDateString("en-US", { month: "short" });
+      const endMonth = end.toLocaleDateString("en-US", { month: "short" });
+      const year = end.getFullYear();
+
+      if (startMonth === endMonth) {
+        return `${startMonth} ${start.getDate()} – ${end.getDate()}, ${year}`;
+      } else {
+        return `${startMonth} ${start.getDate()} – ${endMonth} ${end.getDate()}, ${year}`;
+      }
+    }
+
     if (mode === "week") {
       const startOfWeek = new Date(curr);
       startOfWeek.setDate(curr.getDate() - curr.getDay());
@@ -801,6 +785,8 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
     const curr = new Date(currentDate());
     if (mode === "day") {
       curr.setDate(curr.getDate() - 1);
+    } else if (mode === "3days") {
+      curr.setDate(curr.getDate() - 3);
     } else if (mode === "week") {
       curr.setDate(curr.getDate() - 7);
     } else if (mode === "month") {
@@ -818,6 +804,8 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
     const curr = new Date(currentDate());
     if (mode === "day") {
       curr.setDate(curr.getDate() + 1);
+    } else if (mode === "3days") {
+      curr.setDate(curr.getDate() + 3);
     } else if (mode === "week") {
       curr.setDate(curr.getDate() + 7);
     } else if (mode === "month") {
@@ -871,9 +859,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
       isShareModalOpen() ||
       isCalendarSettingsOpen() ||
       isTrashModalOpen() ||
-      isShortcutsModalOpen() ||
-      isAppointmentsManagerOpen() ||
-      isAppointmentScheduleModalOpen()
+      isShortcutsModalOpen()
     ) {
       return;
     }
@@ -950,12 +936,6 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
         searchInput.focus();
         searchInput.select();
       }
-      return;
-    }
-
-    if (e.key === "b") {
-      e.preventDefault();
-      setIsAppointmentsManagerOpen(true);
       return;
     }
   }
@@ -1715,7 +1695,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
       data-testid="calendar-view"
     >
       {/* ── Desktop Left Sidebar (Matching Mailbox Sidebar Container) ── */}
-      <div class="hidden md:flex flex-shrink-0 h-full">
+      <div class="hidden lg:flex flex-shrink-0 h-full">
         <CalendarSidebar
           currentUser={props.currentUser}
           selectedMailbox={props.selectedMailbox}
@@ -1775,13 +1755,13 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
         />
       </div>
 
-      {/* ── Mobile Sidebar Drawer ── */}
+      {/* ── Mobile & Tablet Sidebar Drawer (< lg) ── */}
       <Show when={mobileSidebarOpen()}>
         <div
-          class="fixed inset-0 bg-black/40 z-50 md:hidden"
+          class="fixed inset-0 bg-black/40 z-50 lg:hidden"
           onClick={() => setMobileSidebarOpen(false)}
         />
-        <div class="fixed inset-y-0 left-0 w-64 bg-[#F0EEE9] dark:bg-[#18191D] z-50 md:hidden shadow-xl flex flex-col">
+        <div class="fixed inset-y-0 left-0 w-72 bg-[#F0EEE9] dark:bg-[#18191D] z-50 lg:hidden shadow-xl flex flex-col">
           <CalendarSidebar
             currentUser={props.currentUser}
             selectedMailbox={props.selectedMailbox}
@@ -1867,58 +1847,77 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
               props.onOpenSettings?.();
               setMobileSidebarOpen(false);
             }}
+            currentViewMode={viewMode()}
+            onChangeViewMode={(mode) => {
+              changeViewMode(mode);
+              setMobileSidebarOpen(false);
+            }}
           />
         </div>
       </Show>
 
       {/* ── Right Content Column beside CalendarSidebar ── */}
-      <div class="flex-1 flex flex-col min-w-0 h-full overflow-hidden gap-1.5 sm:gap-2">
-        {/* Top Fixed Bar (Beside CalendarSidebar, not on top of it) */}
-        <TopFixedBar
-          activeModule="calendar"
-          onSwitchModule={props.onSwitchModule || (() => {})}
+      <div class="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden gap-0 md:gap-2 pb-0">
+        {/* Mobile Google Calendar Top Header (< md) */}
+        <MobileCalendarHeader
+          periodTitle={periodTitle()}
+          selectedDate={currentDate()}
+          onSelectDate={(d) => setCurrentDate(d)}
+          onToday={handleToday}
+          onOpenSidebar={() => setMobileSidebarOpen(true)}
           searchQuery={searchQuery()}
           onSearchChange={(q) => {
             setSearchQuery(q);
             props.onSearchChange?.(q);
           }}
-          onOpenContacts={props.onOpenContacts || (() => {})}
-          onOpenMobileMenu={() => setMobileSidebarOpen(true)}
-          isOnline={props.isOnline ?? isOnline()}
-          isCustomizerOpen={props.isCustomizerOpen}
-          onToggleCustomizer={props.onToggleCustomizer}
-          theme={props.theme}
-          onToggleTheme={props.onToggleTheme}
+          profilePhotoUrl={props.profilePhotoUrl}
+          currentUserEmail={props.currentUserEmail}
         />
 
-        {/* ── Main Workspace Card (Matching Email List Section Radius & Card Styling) ── */}
-        <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex flex-col min-w-0 h-full">
+        {/* Top Fixed Bar (Desktop only, >= md) */}
+        <div class="hidden md:block">
+          <TopFixedBar
+            activeModule="calendar"
+            onSwitchModule={props.onSwitchModule || (() => {})}
+            searchQuery={searchQuery()}
+            onSearchChange={(q) => {
+              setSearchQuery(q);
+              props.onSearchChange?.(q);
+            }}
+            onOpenContacts={props.onOpenContacts || (() => {})}
+            onOpenMobileMenu={() => setMobileSidebarOpen(true)}
+            isOnline={props.isOnline ?? isOnline()}
+            isCustomizerOpen={props.isCustomizerOpen}
+            onToggleCustomizer={props.onToggleCustomizer}
+            theme={props.theme}
+            onToggleTheme={props.onToggleTheme}
+          />
+        </div>
+
+        {/* ── Main Workspace Card ── */}
+        <div class="flex-1 rounded-none sm:rounded-2xl border-0 sm:border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex flex-col min-w-0 min-h-0">
           {/* Toolbar */}
           <CalendarToolbar
-          hideRedundantTopBarItems={true}
-          viewMode={viewMode()}
-          onChangeViewMode={changeViewMode}
-          periodTitle={periodTitle()}
-          onToday={handleToday}
-          onPrev={handlePrev}
-          onNext={handleNext}
-          searchQuery={searchQuery()}
-          onSearchChange={setSearchQuery}
-          onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
-          onSwitchToMail={props.onSwitchToMail}
-          onOpenSettings={() => {
-            setSettingsInitialSection("general");
-            setIsCalendarSettingsOpen(true);
-          }}
-          onToggleTasks={() => setIsTasksSidebarOpen(!isTasksSidebarOpen())}
-          onOpenAppointments={() => setIsAppointmentsManagerOpen(true)}
-          isOnline={isOnline()}
-          offlineQueueCount={offlineQueueCount()}
-          onSyncOffline={handleSyncOffline}
-          onPrint={() => window.print()}
-          onOpenTrash={() => setIsTrashModalOpen(true)}
-          onOpenShortcuts={() => setIsShortcutsModalOpen(true)}
-        />
+            hideRedundantTopBarItems={true}
+            viewMode={viewMode()}
+            onChangeViewMode={changeViewMode}
+            periodTitle={periodTitle()}
+            onToday={handleToday}
+            onPrev={handlePrev}
+            onNext={handleNext}
+            searchQuery={searchQuery()}
+            onSearchChange={setSearchQuery}
+            onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
+            onSwitchToMail={props.onSwitchToMail}
+            onOpenSettings={() => {
+              setSettingsInitialSection("general");
+              setIsCalendarSettingsOpen(true);
+            }}
+            isOnline={isOnline()}
+            offlineQueueCount={offlineQueueCount()}
+            onSyncOffline={handleSyncOffline}
+            onOpenTrash={() => setIsTrashModalOpen(true)}
+          />
 
         {/* Upgrade Banner for Legacy Events */}
         <Show when={legacyEvents().length > 0}>
@@ -1999,30 +1998,32 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
           </div>
         </Show>
 
-        {/* Travel / Timezone Update Consent Banner (Category 05) */}
+        {/* Travel / Timezone Update Consent Banner (Category 05 - BYOS Warm Brand System) */}
         <Show when={showTravelBanner()}>
           <div
             data-testid="calendar-travel-timezone-banner"
-            class="flex items-center justify-between gap-3 px-4 py-2.5 bg-sky-50 dark:bg-sky-950/40 border-b border-sky-200 dark:border-sky-800 text-sky-900 dark:text-sky-200 text-xs font-medium transition-all"
+            class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 px-4 py-3 bg-[#FAF9F5] dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2A2D35] text-[#18191D] dark:text-[#ECEBE8] text-xs font-medium transition-all"
           >
-            <div class="flex items-center gap-2 min-w-0">
-              <svg class="w-4 h-4 text-sky-600 dark:text-sky-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="2" y1="12" x2="22" y2="12" />
-                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-              </svg>
-              <span class="truncate">
-                Your device appears to be in <strong>{detectedBrowserTz()}</strong>. Would you like to update your primary calendar time zone from {calendarSettings.settings().primaryTimeZone}?
+            <div class="flex items-center gap-2.5 min-w-0">
+              <div class="w-7 h-7 rounded-lg bg-[#FAF0E6] dark:bg-[#2A221E] flex items-center justify-center shrink-0 border border-[#E2DFD8] dark:border-[#382B24]">
+                <svg class="w-4 h-4 text-[#9E725F] dark:text-[#D4A38F] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="2" y1="12" x2="22" y2="12" />
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                </svg>
+              </div>
+              <span class="leading-relaxed">
+                Your device appears to be in <strong class="font-bold text-[#9E725F] dark:text-[#D4A38F]">{detectedBrowserTz()}</strong>. Would you like to update your primary calendar time zone from {calendarSettings.settings().primaryTimeZone}?
               </span>
             </div>
-            <div class="flex items-center gap-2 shrink-0">
+            <div class="flex items-center gap-2 shrink-0 self-end sm:self-auto">
               <button
                 type="button"
                 onClick={async () => {
                   await calendarSettings.updateSetting("primaryTimeZone", detectedBrowserTz());
                   setTravelBannerDismissed(true);
                 }}
-                class="px-2.5 py-1 bg-sky-600 hover:bg-sky-700 text-white rounded text-xs font-semibold shadow-xs cursor-pointer"
+                class="px-3 py-1.5 bg-[#9E725F] hover:bg-[#865E4D] text-white rounded-xl text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
                 data-testid="accept-travel-tz-btn"
               >
                 Update to {detectedBrowserTz()}
@@ -2030,7 +2031,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
               <button
                 type="button"
                 onClick={() => setTravelBannerDismissed(true)}
-                class="px-2.5 py-1 bg-white dark:bg-[#1E1F23] hover:bg-[#F0EEE9] text-[#6F7173] dark:text-[#878A8E] rounded text-xs font-semibold border border-[#E2DFD8] dark:border-[#2A2D35] cursor-pointer"
+                class="px-3 py-1.5 bg-[#F0EEE9] dark:bg-[#202227] hover:bg-[#E8E5DF] text-[#3C3D3E] dark:text-[#ECEBE8] rounded-xl text-xs font-semibold border border-[#E2DFD8] dark:border-[#2A2D35] transition-colors cursor-pointer"
                 data-testid="dismiss-travel-tz-btn"
               >
                 Keep {calendarSettings.settings().primaryTimeZone}
@@ -2044,7 +2045,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
           class="flex-1 min-h-0 flex overflow-hidden"
           data-density={calendarSettings.settings().density || "comfortable"}
         >
-          <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <div class="flex-1 min-h-0 flex flex-col overflow-hidden animate-view-fade">
             {/* Print-only header (Category 15) */}
             <div class="hidden print:block p-4 border-b border-black/20 text-black">
               <h1 class="text-xl font-bold">{periodTitle()}</h1>
@@ -2059,6 +2060,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
                 events={filteredEvents()}
                 onSelectEvent={handleSelectEvent}
                 onSlotClick={handleSlotClick}
+                hourHeight={hourHeight()}
                 timeFormat={calendarSettings.settings().timeFormat}
                 weekStart={calendarSettings.settings().weekStart}
                 showWeekends={calendarSettings.settings().showWeekends}
@@ -2072,10 +2074,8 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
                 secondaryTimeZone={calendarSettings.settings().secondaryTimeZone}
                 secondaryTimeZoneLabel={calendarSettings.settings().secondaryTimeZoneLabel}
                 calendarSettings={calendarSettings.settings()}
-                tasks={tasks()}
-                showTasks={calendarSettings.settings().showTasksInCalendar}
-                onToggleTaskComplete={handleToggleTaskComplete}
-                onSelectTask={handleSelectTask}
+                onPrev={handlePrev}
+                onNext={handleNext}
               />
             </Show>
 
@@ -2086,6 +2086,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
                 events={filteredEvents()}
                 onSelectEvent={handleSelectEvent}
                 onSlotClick={handleSlotClick}
+                hourHeight={hourHeight()}
                 timeFormat={calendarSettings.settings().timeFormat}
                 workingHoursEnabled={calendarSettings.settings().workingHoursEnabled}
                 workingDays={calendarSettings.settings().workingDays}
@@ -2097,34 +2098,77 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
                 secondaryTimeZone={calendarSettings.settings().secondaryTimeZone}
                 secondaryTimeZoneLabel={calendarSettings.settings().secondaryTimeZoneLabel}
                 calendarSettings={calendarSettings.settings()}
-                tasks={tasks()}
-                showTasks={calendarSettings.settings().showTasksInCalendar}
-                onToggleTaskComplete={handleToggleTaskComplete}
-                onSelectTask={handleSelectTask}
+                onPrev={handlePrev}
+                onNext={handleNext}
               />
             </Show>
 
-            <Show when={viewMode() === "month"}>
-              <MonthView
+            <Show when={viewMode() === "3days"}>
+              <WeekView
+                numDays={3}
                 currentDate={currentDate()}
                 calendars={allCalendars()}
                 events={filteredEvents()}
                 onSelectEvent={handleSelectEvent}
-                onSelectDate={(d) => {
-                  setCurrentDate(d);
-                  changeViewMode("day");
-                }}
                 onSlotClick={handleSlotClick}
-                weekStart={calendarSettings.settings().weekStart}
-                showWeekNumbers={calendarSettings.settings().showWeekNumbers}
-                firstWeekOfYear={calendarSettings.settings().firstWeekOfYear}
+                hourHeight={hourHeight()}
+                timeFormat={calendarSettings.settings().timeFormat}
+                workingHoursEnabled={calendarSettings.settings().workingHoursEnabled}
+                workingDays={calendarSettings.settings().workingDays}
+                workHoursStart={calendarSettings.settings().workHoursStart}
+                workHoursEnd={calendarSettings.settings().workHoursEnd}
                 alternateCalendar={calendarSettings.settings().alternateCalendar}
                 primaryTimeZone={calendarSettings.settings().primaryTimeZone}
-                tasks={tasks()}
-                showTasks={calendarSettings.settings().showTasksInCalendar}
-                onToggleTaskComplete={handleToggleTaskComplete}
-                onSelectTask={handleSelectTask}
+                showSecondaryTimeZone={calendarSettings.settings().showSecondaryTimeZone}
+                secondaryTimeZone={calendarSettings.settings().secondaryTimeZone}
+                secondaryTimeZoneLabel={calendarSettings.settings().secondaryTimeZoneLabel}
+                calendarSettings={calendarSettings.settings()}
+                onPrev={handlePrev}
+                onNext={handleNext}
               />
+            </Show>
+
+            <Show when={viewMode() === "month"}>
+              {/* Mobile: Google Calendar Split Month View */}
+              <div class="md:hidden flex-1 flex flex-col min-h-0">
+                <MobileMonthSplitView
+                  currentDate={currentDate()}
+                  onSelectDate={(d) => setCurrentDate(d)}
+                  calendars={allCalendars()}
+                  events={filteredEvents()}
+                  onSelectEvent={handleSelectEvent}
+                  onOpenCreateEvent={() => {
+                    setEventToEdit(null);
+                    setSlotStartDate(currentDate());
+                    setSlotEndDate(new Date(currentDate().getTime() + 60 * 60 * 1000));
+                    setIsEventModalOpen(true);
+                  }}
+                  onSlotClick={handleSlotClick}
+                  weekStart={calendarSettings.settings().weekStart}
+                  onPrev={handlePrev}
+                  onNext={handleNext}
+                />
+              </div>
+
+              {/* Desktop: Full Month Grid View */}
+              <div class="hidden md:flex flex-1 flex-col min-h-0">
+                <MonthView
+                  currentDate={currentDate()}
+                  calendars={allCalendars()}
+                  events={filteredEvents()}
+                  onSelectEvent={handleSelectEvent}
+                  onSelectDate={(d) => {
+                    setCurrentDate(d);
+                    changeViewMode("day");
+                  }}
+                  onSlotClick={handleSlotClick}
+                  weekStart={calendarSettings.settings().weekStart}
+                  showWeekNumbers={calendarSettings.settings().showWeekNumbers}
+                  firstWeekOfYear={calendarSettings.settings().firstWeekOfYear}
+                  alternateCalendar={calendarSettings.settings().alternateCalendar}
+                  primaryTimeZone={calendarSettings.settings().primaryTimeZone}
+                />
+              </div>
             </Show>
 
             <Show when={viewMode() === "year"}>
@@ -2149,29 +2193,57 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
 
             <Show when={viewMode() === "agenda"}>
               <AgendaView
+                currentDate={currentDate()}
                 calendars={allCalendars()}
                 events={filteredEvents()}
                 onSelectEvent={handleSelectEvent}
-                onOpenCreateEvent={() => {
+                onOpenCreateEvent={(d) => {
                   setEventToEdit(null);
+                  const target = d || currentDate();
+                  const start = new Date(target);
+                  const now = new Date();
+                  if (
+                    start.getFullYear() === now.getFullYear() &&
+                    start.getMonth() === now.getMonth() &&
+                    start.getDate() === now.getDate()
+                  ) {
+                    start.setHours(now.getHours() + 1, 0, 0, 0);
+                  } else {
+                    start.setHours(9, 0, 0, 0);
+                  }
+                  const end = new Date(start.getTime() + (calendarSettings.settings().defaultDuration || 60) * 60 * 1000);
+                  setSlotStartDate(start);
+                  setSlotEndDate(end);
                   setIsEventModalOpen(true);
                 }}
               />
             </Show>
           </div>
-
-          {/* Tasks Sidebar Panel (Category 11) */}
-          <TasksSidebarPanel
-            mailboxId={props.mailboxId || ""}
-            isOpen={isTasksSidebarOpen()}
-            onClose={() => setIsTasksSidebarOpen(false)}
-            onEditTask={handleSelectTask}
-            onOpenNewTaskModal={() => handleOpenNewTaskModal()}
-            primaryTimeZone={calendarSettings.settings().primaryTimeZone}
-          />
         </div>
       </div>
       </div>
+
+      {/* ── Mobile Google Calendar Floating Action Button ── */}
+      <MobileCalendarFab
+        onOpenCreateEvent={() => {
+          setEventToEdit(null);
+          const start = new Date(currentDate());
+          const now = new Date();
+          if (
+            start.getFullYear() === now.getFullYear() &&
+            start.getMonth() === now.getMonth() &&
+            start.getDate() === now.getDate()
+          ) {
+            start.setHours(now.getHours() + 1, 0, 0, 0);
+          } else {
+            start.setHours(9, 0, 0, 0);
+          }
+          const end = new Date(start.getTime() + (calendarSettings.settings().defaultDuration || 60) * 60 * 1000);
+          setSlotStartDate(start);
+          setSlotEndDate(end);
+          setIsEventModalOpen(true);
+        }}
+      />
 
       {/* ── Modals ── */}
       <EventModal
@@ -2246,10 +2318,6 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
         }}
         onDeleteCalendar={handleDeleteCalendar}
         onUnsubscribeCalendar={handleUnsubscribeCalendar}
-        onOpenAppointmentsManager={() => {
-          setIsCalendarSettingsOpen(false);
-          setIsAppointmentsManagerOpen(true);
-        }}
       />
 
       <SubscribeFromUrlModal
@@ -2297,138 +2365,6 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
           </button>
         </div>
       </Show>
-
-      {/* ── Task Creation & Edit Modal (Category 11) ── */}
-      <TaskModal
-        isOpen={isTaskModalOpen()}
-        onClose={() => {
-          setIsTaskModalOpen(false);
-          setTaskToEdit(null);
-        }}
-        mailboxId={props.mailboxId || ""}
-        taskToEdit={taskToEdit()}
-        initialDueDate={taskInitialDueDate()}
-        initialDueTime={taskInitialDueTime()}
-        onSaved={() => loadTasks()}
-        onDeleted={() => loadTasks()}
-      />
-
-      {/* ── Appointment Scheduling Manager Modal (Category 12) ── */}
-      <AppointmentsManagerModal
-        isOpen={isAppointmentsManagerOpen()}
-        onClose={() => setIsAppointmentsManagerOpen(false)}
-        mailboxId={props.mailboxId || ""}
-        calendars={allCalendars()}
-        primaryTimeZone={calendarSettings.settings().primaryTimeZone}
-        onOpenNewScheduleModal={() => {
-          setScheduleToEdit(null);
-          setIsAppointmentScheduleModalOpen(true);
-        }}
-        onEditSchedule={(sched) => {
-          setScheduleToEdit(sched);
-          setIsAppointmentScheduleModalOpen(true);
-        }}
-        onPreviewBookingPage={(sched) => {
-          setPreviewSchedule(sched);
-          setIsBookingPreviewOpen(true);
-        }}
-        onCancelBooking={async (booking) => {
-          if (booking.calendarEventId) {
-            try {
-              await handleDeleteEvent(booking.calendarEventId, "series");
-            } catch (err) {
-              console.warn("[CalendarView] Failed to cancel calendar event on booking cancellation:", err);
-            }
-          }
-        }}
-      />
-
-      {/* ── Appointment Schedule Creation & Edit Modal (Category 12) ── */}
-      <AppointmentScheduleModal
-        isOpen={isAppointmentScheduleModalOpen()}
-        onClose={() => {
-          setIsAppointmentScheduleModalOpen(false);
-          setScheduleToEdit(null);
-        }}
-        scheduleToEdit={scheduleToEdit()}
-        mailboxId={props.mailboxId || ""}
-        calendars={allCalendars()}
-        primaryTimeZone={calendarSettings.settings().primaryTimeZone}
-      />
-
-      {/* ── Booking Page Preview Modal (Category 12) ── */}
-      <Show when={isBookingPreviewOpen() && previewSchedule()}>
-        <div
-          class="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 md:p-6 transition-opacity overflow-y-auto"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Public Booking Page Preview"
-          data-testid="booking-page-modal"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsBookingPreviewOpen(false);
-          }}
-        >
-          <div class="w-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
-            <BookingPageView
-              schedule={previewSchedule()!}
-              mailboxId={props.mailboxId || ""}
-              existingEvents={allDecryptedEvents()}
-              settings={calendarSettings.settings()}
-              hostEmail={props.currentUserEmail}
-              onClose={() => setIsBookingPreviewOpen(false)}
-              onBookingConfirmed={async (appt, eventPayload) => {
-                // Insert confirmed appointment into calendar if key is unlocked
-                if (props.mailboxKey && props.mailboxKey instanceof Uint8Array && props.mailboxKey.length === 32) {
-                  try {
-                    const targetCalId = previewSchedule()?.targetCalendarId || allCalendars()[0]?.id;
-                    if (targetCalId) {
-                      await handleSaveEvent({
-                        calendarId: targetCalId,
-                        details: eventPayload,
-                        startTime: new Date(appt.startUtc),
-                        endTime: new Date(appt.endUtc),
-                        isAllDay: false,
-                        status: "confirmed",
-                      });
-                    }
-                  } catch (err) {
-                    console.warn("[CalendarView] Failed to auto-insert booked appointment to calendar:", err);
-                  }
-                }
-                // Send confirmation email / invitation if handler available
-                if (props.onSendInvitation) {
-                  try {
-                    const ics = generateIcs({
-                      uid: appt.calendarEventId || appt.id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : "booking-" + Date.now()),
-                      title: eventPayload.title,
-                      description: eventPayload.description,
-                      startTime: new Date(appt.startUtc),
-                      endTime: new Date(appt.endUtc),
-                      location: eventPayload.location,
-                      organizer: eventPayload.organizer || { email: props.currentUserEmail || "host@byos.local", name: "Host" },
-                      attendees: eventPayload.attendees,
-                    });
-                    await props.onSendInvitation(appt.attendeeEmail, ics, `Confirmed: ${eventPayload.title}`);
-                  } catch (err) {
-                    console.warn("[CalendarView] Failed to send booking invitation email:", err);
-                  }
-                }
-              }}
-              onBookingCancelled={async (appt) => {
-                if (appt.calendarEventId) {
-                  try {
-                    await handleDeleteEvent(appt.calendarEventId, "series");
-                  } catch (err) {
-                    console.warn("[CalendarView] Failed to cancel calendar event on booking cancellation:", err);
-                  }
-                }
-              }}
-            />
-          </div>
-        </div>
-      </Show>
-
-
 
       {/* ── Calendar Trash Bin Modal (Category 15) ── */}
       <CalendarTrashModal

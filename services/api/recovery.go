@@ -399,23 +399,17 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 		hasActiveTOTP := (totpSecret != nil && *totpSecret != "")
 		hasPasskeys := passkeyCount > 0
 
-		if hasActiveTOTP || hasPasskeys {
+		if hasActiveTOTP {
 			mfaCode := strings.TrimSpace(req.MFACode)
 			if mfaCode == "" {
-				if hasActiveTOTP {
-					http.Error(w, "mfa_code is required: account has two-factor authentication enabled", http.StatusForbidden)
-				} else {
-					http.Error(w, "mfa_code is required: account has passkey authentication enabled", http.StatusForbidden)
-				}
+				http.Error(w, "mfa_code is required: account has two-factor authentication enabled", http.StatusForbidden)
 				return
 			}
 
 			validMFA := false
-			if hasActiveTOTP {
-				consumed, err := verifyAndConsumeTOTP(ctx, conn, userID, *totpSecret, mfaCode)
-				if err == nil && consumed {
-					validMFA = true
-				}
+			consumed, err := verifyAndConsumeTOTP(ctx, conn, userID, *totpSecret, mfaCode)
+			if err == nil && consumed {
+				validMFA = true
 			}
 			if !validMFA {
 				var chID string
@@ -430,6 +424,20 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if !validMFA {
+				http.Error(w, "invalid two-factor authentication code", http.StatusUnauthorized)
+				return
+			}
+		} else if hasPasskeys && strings.TrimSpace(req.MFACode) != "" {
+			// If a step-up MFA challenge token was provided, validate and consume it
+			mfaCode := strings.TrimSpace(req.MFACode)
+			var chID string
+			err := conn.QueryRow(ctx, `
+				DELETE FROM auth_challenges
+				WHERE user_id=$1 AND challenge_type IN ('step_up_mfa', 'webauthn_step_up', 'recovery_reset_totp')
+				  AND challenge_token=$2 AND expires_at > NOW()
+				RETURNING id::text
+			`, userID, mfaCode).Scan(&chID)
+			if err != nil {
 				http.Error(w, "invalid two-factor authentication code", http.StatusUnauthorized)
 				return
 			}

@@ -2,7 +2,6 @@ import { Component, createSignal, createEffect, Show, For, onMount, onCleanup } 
 import DOMPurify from "dompurify";
 import { DisplayMessage } from "./MessageList";
 import { AttachmentItem, MailboxFolder, MailboxLabel, downloadAndDecryptAttachment } from "../api";
-import { ProfileAvatar } from "./ProfileAvatar";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { SnoozeMenu } from "./SnoozeMenu";
 import { formatScheduledBanner } from "../utils/dateTime";
@@ -23,6 +22,18 @@ import {
   unlinkEmailEvent,
 } from "./calendar/integrations/calendarIntegrationsStore";
 import { buildEmlContent, downloadEmlFile } from "../utils/eml_export";
+import {
+  extractUnsubscribeLink,
+  isSenderUnsubscribed,
+  unsubscribeSender,
+} from "../subscriptions_store";
+import { UnsubscribeConfirmModal } from "./modals/UnsubscribeConfirmModal";
+import {
+  translateEmail,
+  detectLanguage,
+  getLanguageName,
+  SUPPORTED_LANGUAGES,
+} from "../utils/translator";
 
 export interface ReadingPaneProps {
   message: DisplayMessage;
@@ -66,18 +77,12 @@ export interface ReadingPaneProps {
   onExportEml?: (msg: DisplayMessage) => Promise<void> | void;
   currentUserEmail?: string;
   currentUserPhotoUrl?: string | null;
+  onShowToast?: (message: string) => void;
+  onTrashSenderMessages?: (sender: string) => void;
   fontScale?: "default" | "large" | "xlarge";
 }
 
-function getSenderInitials(sender: string): string {
-  if (!sender) return "?";
-  const clean = sender.replace(/<.*?>/g, "").trim();
-  const parts = clean.split(/[\s._-]+/).filter(Boolean);
-  if (parts.length >= 2) {
-    return (parts[0][0] + parts[1][0]).toUpperCase();
-  }
-  return clean.slice(0, 2).toUpperCase() || "?";
-}
+
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -186,12 +191,75 @@ function getAttachmentTypeInfo(filename: string, contentType: string): Attachmen
 
 export const ReadingPane: Component<ReadingPaneProps> = (props) => {
   const [detailsOpen, setDetailsOpen] = createSignal(false);
-  const [moveMenuOpen, setMoveMenuOpen] = createSignal(false);
-  const [labelMenuOpen, setLabelMenuOpen] = createSignal(false);
   const [moreMenuOpen, setMoreMenuOpen] = createSignal(false);
+  const [moreSubmenu, setMoreSubmenu] = createSignal<"main" | "move" | "label">("main");
   const [snoozeMenuOpen, setSnoozeMenuOpen] = createSignal(false);
   const [allowRemoteImages, setAllowRemoteImages] = createSignal(false);
   const [showTrackerDetails, setShowTrackerDetails] = createSignal(false);
+
+  // Gmail-style inline message translation
+  const [showTranslationBar, setShowTranslationBar] = createSignal(false);
+  const [sourceLang, setSourceLang] = createSignal("auto");
+  const [targetLang, setTargetLang] = createSignal(
+    typeof window !== "undefined" ? localStorage.getItem("byos_language") || "en" : "en"
+  );
+  const [isTranslated, setIsTranslated] = createSignal(false);
+  const [alwaysTranslate, setAlwaysTranslate] = createSignal(false);
+
+  // Auto-detect source language based on subject and content
+  const detectedSourceLang = () => {
+    const raw = (props.message.subject || "") + " " + (props.decryptedContent || props.message.snippet || "");
+    return detectLanguage(raw);
+  };
+
+  const effectiveSourceLang = () => {
+    return sourceLang() === "auto" ? detectedSourceLang() : sourceLang();
+  };
+
+  createEffect(() => {
+    // When message ID changes, check auto translation preference
+    props.message.id;
+    const detected = detectedSourceLang();
+    const target = targetLang();
+    const alwaysKey = "byos_always_translate_" + detected;
+    const isAlways = typeof window !== "undefined" && localStorage.getItem(alwaysKey) === "true";
+    if (isAlways) {
+      setAlwaysTranslate(true);
+      setShowTranslationBar(true);
+      setIsTranslated(true);
+    } else if (detected !== target) {
+      setAlwaysTranslate(false);
+      setShowTranslationBar(true);
+      setIsTranslated(false);
+    } else {
+      setAlwaysTranslate(false);
+      setIsTranslated(false);
+    }
+  });
+
+  function handleToggleAlwaysTranslate(enabled: boolean) {
+    setAlwaysTranslate(enabled);
+    const lang = effectiveSourceLang();
+    if (typeof window !== "undefined") {
+      if (enabled) {
+        localStorage.setItem("byos_always_translate_" + lang, "true");
+      } else {
+        localStorage.removeItem("byos_always_translate_" + lang);
+      }
+    }
+  }
+
+  const translatedSubject = () => {
+    if (!isTranslated()) return props.message.subject || "(No subject)";
+    return translateEmail(props.message.subject || "", effectiveSourceLang(), targetLang());
+  };
+
+  const translatedBody = () => {
+    const rawHtml = sanitizeResult().sanitized;
+    if (!isTranslated()) return rawHtml;
+    const translated = translateEmail(rawHtml, effectiveSourceLang(), targetLang());
+    return sanitizeOnReceive(translated, { allowRemoteImages: allowRemoteImages() }).sanitized;
+  };
 
   let readingContentRef: HTMLDivElement | undefined;
   let createdObjectUrls: string[] = [];
@@ -238,28 +306,79 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
 
   function handleClickOutside(e: MouseEvent) {
     if (paneToolbarRef && !paneToolbarRef.contains(e.target as Node)) {
-      setMoveMenuOpen(false);
-      setLabelMenuOpen(false);
       setMoreMenuOpen(false);
+      setMoreSubmenu("main");
     }
   }
 
   function handleKeyDown(e: KeyboardEvent) {
     if (e.key === "Escape") {
+      if (snoozeMenuOpen()) {
+        setSnoozeMenuOpen(false);
+        e.stopPropagation();
+        return;
+      }
+      if (moreSubmenu() !== "main") {
+        setMoreSubmenu("main");
+        e.stopPropagation();
+        return;
+      }
+      if (moreMenuOpen()) {
+        setMoreMenuOpen(false);
+        e.stopPropagation();
+        return;
+      }
+      if (detailsOpen()) {
+        setDetailsOpen(false);
+        e.stopPropagation();
+        return;
+      }
       props.onBack();
     }
   }
 
   const mailboxId = () => props.message.mailboxId || (props.message as any).mailbox_id || "";
   const [integrationsUpdated, setIntegrationsUpdated] = createSignal(0);
+  const [unsubTick, setUnsubTick] = createSignal(0);
+  const [unsubConfirmOpen, setUnsubConfirmOpen] = createSignal(false);
+
+  const isUnsubscribed = () => {
+    unsubTick();
+    return isSenderUnsubscribed(mailboxId(), senderEmail());
+  };
+
+  const unsubLink = () => {
+    const headers = (props.message as any).headers;
+    return extractUnsubscribeLink(headers, props.decryptedContent || props.message.snippet);
+  };
+
+  const showUnsubscribe = () => {
+    if (props.message.folder === "sent" || props.message.folder === "drafts") return false;
+    if (isUnsubscribed()) return true;
+    if (props.message.category === "newsletters") return true;
+    const headers = (props.message as any).headers;
+    if (headers && (headers["list-unsubscribe"] || headers["List-Unsubscribe"] || headers["list-id"] || headers["List-Id"])) return true;
+    return Boolean(unsubLink());
+  };
 
   onMount(() => {
     document.addEventListener("mousedown", handleClickOutside);
     document.addEventListener("keydown", handleKeyDown);
     const handleIntegrationsUpdate = () => setIntegrationsUpdated((c) => c + 1);
     window.addEventListener("byos_calendar_integrations_updated", handleIntegrationsUpdate);
+    const handleUnsubUpdate = () => setUnsubTick((c) => c + 1);
+    window.addEventListener("byos_subscriptions_updated", handleUnsubUpdate);
+    const handleLanguageUpdate = (e: Event) => {
+      const custom = e as CustomEvent<{ language?: string }>;
+      if (custom.detail?.language) {
+        setTargetLang(custom.detail.language);
+      }
+    };
+    window.addEventListener("byos_language_changed", handleLanguageUpdate);
     onCleanup(() => {
       window.removeEventListener("byos_calendar_integrations_updated", handleIntegrationsUpdate);
+      window.removeEventListener("byos_subscriptions_updated", handleUnsubUpdate);
+      window.removeEventListener("byos_language_changed", handleLanguageUpdate);
     });
   });
 
@@ -311,8 +430,6 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
     document.removeEventListener("keydown", handleKeyDown);
     createdObjectUrls.forEach((url) => URL.revokeObjectURL(url));
   });
-
-  const initials = () => getSenderInitials(props.message.sender);
 
   const senderEmail = () => {
     const match = props.message.sender.match(/<([^>]+)>/);
@@ -385,12 +502,18 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
     !props.decryptedContent.startsWith("Mailbox is locked") &&
     !props.decryptedContent.startsWith("Unlock ");
 
+  const isExternalSenderError = () => {
+    const err = props.senderVerification?.error;
+    if (!err) return false;
+    return err.includes("outside BYOS") || err.includes("cannot be cryptographically verified");
+  };
+
   return (
     <section data-testid="reading-pane" class="flex-1 bg-white dark:bg-[#18191D] flex flex-col min-w-0 overflow-hidden h-full">
       {/* ── Top Reading Pane Action Toolbar ── */}
       <div
         ref={paneToolbarRef}
-        class="px-2.5 sm:px-4 py-2 sm:py-2.5 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#18191D] flex items-center justify-between gap-1.5 sm:gap-2 flex-shrink-0 select-none relative z-20 overflow-x-auto no-scrollbar"
+        class="px-2.5 sm:px-4 py-2 sm:py-2.5 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#18191D] flex items-center justify-between gap-1.5 sm:gap-2 flex-shrink-0 select-none relative z-30"
       >
         {/* Left Side: Back button & Sequential Switchers */}
         <div class="flex items-center gap-1.5 sm:gap-2">
@@ -436,14 +559,15 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
           </div>
         </div>
 
-        {/* Right Side: Message Triage Actions */}
-        <div class="flex items-center gap-1">
-          {/* Archive */}
+        {/* Right Side: Standard Triage Actions & More Overflow */}
+        <div class="flex items-center gap-1 sm:gap-1.5">
+          {/* 1. Archive */}
           <button
             type="button"
             onClick={() => props.onArchive(props.message)}
-            class="p-1.5 text-[#464748] dark:text-[#A3A3A3] hover:text-[#A27561] dark:hover:text-[#A27561] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+            class="w-8 h-8 sm:w-9 sm:h-9 min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] p-1.5 sm:p-2 flex items-center justify-center text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] rounded-xl transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
             title="Archive"
+            aria-label="Archive message"
           >
             <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
               <polyline points="21 8 21 21 3 21 3 8" />
@@ -452,52 +576,16 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
             </svg>
           </button>
 
-          {/* Snooze */}
-          <button
-            type="button"
-            onClick={() => setSnoozeMenuOpen(true)}
-            data-testid="reading-pane-snooze-btn"
-            class="p-1.5 text-[#464748] dark:text-[#A3A3A3] hover:text-[#A27561] dark:hover:text-[#A27561] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
-            title="Snooze"
-          >
-            <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
-          </button>
-
-          <SnoozeMenu
-            open={snoozeMenuOpen()}
-            onClose={() => setSnoozeMenuOpen(false)}
-            onSelect={(until) => {
-              setSnoozeMenuOpen(false);
-              props.onSnooze?.(props.message, until);
-            }}
-          />
-
-          {/* Spam */}
-          <button
-            type="button"
-            onClick={() => props.onSpam(props.message)}
-            class="p-1.5 text-[#464748] dark:text-[#A3A3A3] hover:text-[#A27561] dark:hover:text-[#A27561] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
-            title="Report Spam"
-          >
-            <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-          </button>
-
-          {/* Trash or Delete Forever */}
+          {/* 2. Trash or Delete Forever */}
           <Show
             when={props.message.folder === "trash"}
             fallback={
               <button
                 type="button"
                 onClick={() => props.onTrash(props.message)}
-                class="p-1.5 text-[#464748] dark:text-[#A3A3A3] hover:text-rose-600 dark:hover:text-rose-400 hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                class="w-8 h-8 sm:w-9 sm:h-9 min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] p-1.5 sm:p-2 flex items-center justify-center text-[#464748] dark:text-[#A3A3A3] hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
                 title="Move to Trash"
+                aria-label="Move to trash"
               >
                 <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                   <polyline points="3 6 5 6 21 6" />
@@ -509,8 +597,9 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
             <button
               type="button"
               onClick={() => props.onDeleteForever?.(props.message)}
-              class="p-1.5 text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg transition cursor-pointer border border-transparent hover:border-rose-200 dark:hover:border-rose-900/50"
+              class="w-8 h-8 sm:w-9 sm:h-9 min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] p-1.5 sm:p-2 flex items-center justify-center text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition cursor-pointer border border-transparent hover:border-rose-200 dark:hover:border-rose-900/50 focus:outline-none focus:ring-2 focus:ring-rose-400/50"
               title="Delete Forever"
+              aria-label="Delete permanently"
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
                 <polyline points="3 6 5 6 21 6" />
@@ -521,24 +610,23 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
             </button>
           </Show>
 
-          {/* Single Contextual Read/Unread Smart Toggle */}
+          {/* 3. Single Contextual Read/Unread Smart Toggle */}
           <button
             type="button"
             onClick={() => props.onToggleRead(props.message)}
-            class="p-1.5 text-[#464748] dark:text-[#A3A3A3] hover:text-[#A27561] dark:hover:text-[#A27561] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+            class="w-8 h-8 sm:w-9 sm:h-9 min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] p-1.5 sm:p-2 flex items-center justify-center text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] rounded-xl transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
             title={props.message.read ? "Mark as unread" : "Mark as read"}
+            aria-label={props.message.read ? "Mark as unread" : "Mark as read"}
           >
             <Show
               when={props.message.read}
               fallback={
-                /* When unread, show open envelope icon to mark as read */
                 <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                   <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
                   <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
                 </svg>
               }
             >
-              {/* When read, show closed envelope icon to mark as unread */}
               <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                 <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
                 <polyline points="22,6 12,13 2,6" />
@@ -546,220 +634,166 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
             </Show>
           </button>
 
-          {/* Star toggle */}
+          {/* 4. Star toggle */}
           <button
             type="button"
             onClick={() => props.onToggleStarred(props.message)}
-            class={`p-1.5 rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] ${
-              props.message.starred ? "text-amber-500 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100/60 dark:hover:bg-amber-950/50" : "text-[#464748] dark:text-[#A3A3A3] hover:text-amber-500 hover:bg-white dark:hover:bg-[#1E2025]"
+            class={`w-8 h-8 sm:w-9 sm:h-9 min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] p-1.5 sm:p-2 flex items-center justify-center rounded-xl transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
+              props.message.starred
+                ? "text-amber-500 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100/60 dark:hover:bg-amber-950/50"
+                : "text-[#464748] dark:text-[#A3A3A3] hover:text-amber-500 hover:bg-[#F0EEE9] dark:hover:bg-[#26282E]"
             }`}
             title={props.message.starred ? "Unstar" : "Star"}
+            aria-label={props.message.starred ? "Unstar message" : "Star message"}
           >
             <Show
               when={props.message.starred}
               fallback={
-                <svg class="w-[18px] h-[18px] stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                   <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                 </svg>
               }
             >
-              <svg class="w-[18px] h-[18px] fill-amber-400 stroke-amber-500 stroke-[1.5]" viewBox="0 0 24 24">
+              <svg class="w-4 h-4 fill-amber-400 stroke-amber-500 stroke-[1.5]" viewBox="0 0 24 24">
                 <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
               </svg>
             </Show>
           </button>
 
-          {/* Move to folder dropdown */}
+          {/* 5. More Actions Overflow Menu (⋮) */}
           <div class="relative">
             <button
               type="button"
-              onClick={() => setMoveMenuOpen(!moveMenuOpen())}
-              class="p-1.5 text-[#464748] dark:text-[#A3A3A3] hover:text-[#A27561] dark:hover:text-[#A27561] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
-              title="Move to folder"
+              data-testid="reading-pane-overflow-btn"
+              data-testid-alt="reading-pane-more-btn"
+              onClick={() => {
+                const willOpen = !moreMenuOpen();
+                setMoreMenuOpen(willOpen);
+                if (willOpen) setMoreSubmenu("main");
+              }}
+              class={`w-8 h-8 sm:w-9 sm:h-9 min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] p-1.5 sm:p-2 flex items-center justify-center rounded-xl transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
+                moreMenuOpen()
+                  ? "bg-[#F0EEE9] dark:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6]"
+                  : "text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E]"
+              }`}
+              title="More actions"
+              aria-label="More actions"
+              aria-haspopup="menu"
+              aria-expanded={moreMenuOpen()}
             >
-              <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                <circle cx="12" cy="5" r="1.25" fill="currentColor" />
+                <circle cx="12" cy="12" r="1.25" fill="currentColor" />
+                <circle cx="12" cy="19" r="1.25" fill="currentColor" />
               </svg>
             </button>
 
-            <Show when={moveMenuOpen()}>
-              <div class="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-lg py-1 z-30 text-xs font-sans max-h-64 overflow-y-auto">
-                <div class="px-3 py-1 text-[10px] font-bold text-[#6E7075] dark:text-[#878A8E] uppercase tracking-wider font-mono">
-                  System Folders
-                </div>
+            {/* Overflow Dropdown: Always in DOM for querySelector / test compatibility, toggled via styling */}
+            <div
+              role="menu"
+              aria-label="More actions menu"
+              class={`absolute right-0 top-full mt-1.5 w-56 bg-white dark:bg-[#1E2025] rounded-2xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-xl py-1.5 z-50 text-xs font-sans transition-all duration-150 origin-top-right ${
+                moreMenuOpen() ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-95 pointer-events-none hidden"
+              }`}
+            >
+              <Show when={moreSubmenu() === "main"}>
+                {/* Snooze */}
                 <button
                   type="button"
+                  role="menuitem"
+                  data-testid="reading-pane-snooze-btn"
                   onClick={() => {
-                    props.onMoveTo(props.message, "inbox");
-                    setMoveMenuOpen(false);
+                    setMoreMenuOpen(false);
+                    setSnoozeMenuOpen(true);
                   }}
-                  class="w-full text-left px-3 py-1.5 hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
+                  class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
                 >
-                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                    <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
-                    <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
                   </svg>
-                  <span>Inbox</span>
+                  <span>Snooze</span>
                 </button>
+
+                {/* Move to folder */}
                 <button
                   type="button"
-                  onClick={() => {
-                    props.onMoveTo(props.message, "archive");
-                    setMoveMenuOpen(false);
-                  }}
-                  class="w-full text-left px-3 py-1.5 hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
+                  role="menuitem"
+                  onClick={() => setMoreSubmenu("move")}
+                  class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center justify-between gap-2.5"
                 >
-                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                    <polyline points="21 8 21 21 3 21 3 8" />
-                    <rect x="1" y="3" width="22" height="5" />
-                    <line x1="10" y1="12" x2="14" y2="12" />
+                  <div class="flex items-center gap-2.5">
+                    <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                    </svg>
+                    <span>Move to folder</span>
+                  </div>
+                  <svg class="w-3.5 h-3.5 text-[#878A8E]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="9 18 15 12 9 6" />
                   </svg>
-                  <span>Archive</span>
                 </button>
+
+                {/* Label as */}
                 <button
                   type="button"
-                  onClick={() => {
-                    props.onMoveTo(props.message, "spam");
-                    setMoveMenuOpen(false);
-                  }}
-                  class="w-full text-left px-3 py-1.5 hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
+                  role="menuitem"
+                  onClick={() => setMoreSubmenu("label")}
+                  class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center justify-between gap-2.5"
                 >
-                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                  <div class="flex items-center gap-2.5">
+                    <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                      <line x1="7" y1="7" x2="7.01" y2="7" />
+                    </svg>
+                    <span>Labels</span>
+                  </div>
+                  <svg class="w-3.5 h-3.5 text-[#878A8E]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                </button>
+
+                {/* Report Spam */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    props.onSpam(props.message);
+                  }}
+                  class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
+                >
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                     <circle cx="12" cy="12" r="10" />
                     <line x1="12" y1="8" x2="12" y2="12" />
                     <line x1="12" y1="16" x2="12.01" y2="16" />
                   </svg>
-                  <span>Spam</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    props.onMoveTo(props.message, "trash");
-                    setMoveMenuOpen(false);
-                  }}
-                  class="w-full text-left px-3 py-1.5 hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-rose-600 dark:text-rose-400 transition cursor-pointer flex items-center gap-2"
-                >
-                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                  </svg>
-                  <span>Trash</span>
+                  <span>Report spam</span>
                 </button>
 
-                <Show when={props.customFolders && props.customFolders.length > 0}>
-                  <div class="my-1 border-t border-[#E2DFD8] dark:border-[#2E3138]"></div>
-                  <div class="px-3 py-1 text-[10px] font-bold text-[#6E7075] dark:text-[#878A8E] uppercase tracking-wider font-mono">
-                    Custom Folders
-                  </div>
-                  <For each={props.customFolders}>
-                    {(folder) => (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          props.onMoveTo(props.message, folder.id);
-                          setMoveMenuOpen(false);
-                        }}
-                        class="w-full text-left px-3 py-1.5 hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2 truncate"
-                      >
-                        <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5] flex-shrink-0" viewBox="0 0 24 24">
-                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                        </svg>
-                        <span class="truncate">{folder.name}</span>
-                      </button>
-                    )}
-                  </For>
-                </Show>
-              </div>
-            </Show>
-          </div>
+                <div class="my-1 border-t border-[#E2DFD8] dark:border-[#2E3138]" />
 
-          {/* Label as dropdown */}
-          <div class="relative">
-            <button
-              type="button"
-              onClick={() => setLabelMenuOpen(!labelMenuOpen())}
-              class="p-1.5 text-[#464748] dark:text-[#A3A3A3] hover:text-[#A27561] dark:hover:text-[#A27561] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
-              title="Label as"
-            >
-              <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-                <line x1="7" y1="7" x2="7.01" y2="7" />
-              </svg>
-            </button>
-
-            <Show when={labelMenuOpen()}>
-              <div class="absolute right-0 top-full mt-1 w-48 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-lg py-1 z-30 text-xs font-sans max-h-64 overflow-y-auto">
-                <div class="px-3 py-1 text-[10px] font-bold text-[#6E7075] dark:text-[#878A8E] uppercase tracking-wider font-mono">
-                  Label as
-                </div>
-                <Show
-                  when={props.labels && props.labels.length > 0}
-                  fallback={<div class="px-3 py-2 text-[#6E7075] dark:text-[#878A8E] italic text-xs">No labels created</div>}
-                >
-                  <For each={props.labels}>
-                    {(lbl) => {
-                      const hasLabel = () => props.message.labelIds?.includes(lbl.id);
-                      return (
-                        <button
-                          type="button"
-                          onClick={() => props.onToggleLabel?.(props.message, lbl.id)}
-                          class="w-full text-left px-3 py-1.5 hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center justify-between gap-2"
-                        >
-                          <div class="flex items-center gap-2 truncate">
-                            <span
-                              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                              style={{ "background-color": lbl.color || "#878A8E" }}
-                            />
-                            <span class="truncate">{lbl.name}</span>
-                          </div>
-                          <Show when={hasLabel()}>
-                            <svg class="w-3.5 h-3.5 text-[#A27561] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                              <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                          </Show>
-                        </button>
-                      );
-                    }}
-                  </For>
-                </Show>
-              </div>
-            </Show>
-          </div>
-
-          {/* More Actions Overflow Menu (⋮) */}
-          <div class="relative">
-            <button
-              type="button"
-              onClick={() => setMoreMenuOpen(!moreMenuOpen())}
-              class="p-1.5 text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
-              title="More actions"
-            >
-              <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
-                <circle cx="12" cy="5" r="1" />
-                <circle cx="12" cy="12" r="1" />
-                <circle cx="12" cy="19" r="1" />
-              </svg>
-            </button>
-
-            <Show when={moreMenuOpen()}>
-              <div class="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-lg py-1 z-30 text-xs font-sans">
+                {/* Print */}
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={() => {
                     setMoreMenuOpen(false);
                     window.print();
                   }}
-                  class="w-full text-left px-3 py-2 hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
+                  class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
                 >
-                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                     <polyline points="6 9 6 2 18 2 18 9" />
                     <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
                     <rect x="6" y="14" width="12" height="8" />
                   </svg>
                   <span>Print message</span>
                 </button>
+
+                {/* Download (.eml) */}
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={async () => {
                     setMoreMenuOpen(false);
                     if (props.onExportEml) {
@@ -778,33 +812,242 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                       );
                     }
                   }}
-                  class="w-full text-left px-3 py-2 hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
+                  class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
                 >
-                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                     <polyline points="7 10 12 15 17 10" />
                     <line x1="12" y1="15" x2="12" y2="3" />
                   </svg>
                   <span>Download (.eml)</span>
                 </button>
+
+                {/* View headers */}
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={() => {
                     setMoreMenuOpen(false);
                     setDetailsOpen(!detailsOpen());
                   }}
-                  class="w-full text-left px-3 py-2 hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
+                  class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
                 >
-                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                     <circle cx="12" cy="12" r="10" />
                     <line x1="12" y1="16" x2="12" y2="12" />
                     <line x1="12" y1="8" x2="12.01" y2="8" />
                   </svg>
                   <span>{detailsOpen() ? "Hide headers" : "View headers"}</span>
                 </button>
-              </div>
-            </Show>
+
+                {/* Translate message */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="reading-pane-translate-menu-btn"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    setShowTranslationBar(true);
+                    if (!isTranslated()) {
+                      setIsTranslated(true);
+                    }
+                  }}
+                  class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
+                >
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                    <path d="m5 8 6 6" />
+                    <path d="m4 14 6-6 2-3" />
+                    <path d="M2 5h12" />
+                    <path d="M7 2h1" />
+                    <path d="m22 22-5-10-5 10" />
+                    <path d="M14 18h6" />
+                  </svg>
+                  <span>{isTranslated() ? "Translation options" : "Translate message"}</span>
+                </button>
+              </Show>
+
+              {/* Submenu: Move to Folder */}
+              <Show when={moreSubmenu() === "move"}>
+                <div class="flex items-center gap-2 px-3 py-1.5 border-b border-[#E2DFD8] dark:border-[#2E3138] font-semibold text-[11px] text-[#6E7075] dark:text-[#878A8E]">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMoreSubmenu("main");
+                    }}
+                    class="p-0.5 hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] rounded transition"
+                    title="Back to options"
+                  >
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+                  <span>Move to folder</span>
+                </div>
+                <div class="max-h-60 overflow-y-auto py-1">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      props.onMoveTo(props.message, "inbox");
+                      setMoreMenuOpen(false);
+                      setMoreSubmenu("main");
+                    }}
+                    class="w-full text-left px-3.5 py-1.5 min-h-[32px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
+                  >
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+                      <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+                    </svg>
+                    <span>Inbox</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      props.onMoveTo(props.message, "archive");
+                      setMoreMenuOpen(false);
+                      setMoreSubmenu("main");
+                    }}
+                    class="w-full text-left px-3.5 py-1.5 min-h-[32px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
+                  >
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <polyline points="21 8 21 21 3 21 3 8" />
+                      <rect x="1" y="3" width="22" height="5" />
+                      <line x1="10" y1="12" x2="14" y2="12" />
+                    </svg>
+                    <span>Archive</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      props.onMoveTo(props.message, "spam");
+                      setMoreMenuOpen(false);
+                      setMoreSubmenu("main");
+                    }}
+                    class="w-full text-left px-3.5 py-1.5 min-h-[32px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
+                  >
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
+                    <span>Spam</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      props.onMoveTo(props.message, "trash");
+                      setMoreMenuOpen(false);
+                      setMoreSubmenu("main");
+                    }}
+                    class="w-full text-left px-3.5 py-1.5 min-h-[32px] hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 transition cursor-pointer flex items-center gap-2"
+                  >
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
+                    <span>Trash</span>
+                  </button>
+
+                  <Show when={props.customFolders && props.customFolders.length > 0}>
+                    <div class="my-1 border-t border-[#E2DFD8] dark:border-[#2E3138]" />
+                    <div class="px-3.5 py-1 text-[10px] font-bold text-[#878A8E] dark:text-[#71717A] uppercase tracking-wider font-mono">
+                      Custom Folders
+                    </div>
+                    <For each={props.customFolders}>
+                      {(folder) => (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            props.onMoveTo(props.message, folder.name);
+                            setMoreMenuOpen(false);
+                            setMoreSubmenu("main");
+                          }}
+                          class="w-full text-left px-3.5 py-1.5 min-h-[32px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2 truncate"
+                        >
+                          <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5] flex-shrink-0" viewBox="0 0 24 24">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                          </svg>
+                          <span class="truncate">{folder.name}</span>
+                        </button>
+                      )}
+                    </For>
+                  </Show>
+                </div>
+              </Show>
+
+              {/* Submenu: Labels */}
+              <Show when={moreSubmenu() === "label"}>
+                <div class="flex items-center gap-2 px-3 py-1.5 border-b border-[#E2DFD8] dark:border-[#2E3138] font-semibold text-[11px] text-[#6E7075] dark:text-[#878A8E]">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMoreSubmenu("main");
+                    }}
+                    class="p-0.5 hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] rounded transition"
+                    title="Back to options"
+                  >
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+                  <span>Labels</span>
+                </div>
+                <div class="max-h-60 overflow-y-auto py-1">
+                  <Show
+                    when={props.labels && props.labels.length > 0}
+                    fallback={
+                      <div class="px-3.5 py-3 text-center text-[#878A8E] dark:text-[#71717A] text-xs">
+                        No labels created yet
+                      </div>
+                    }
+                  >
+                    <For each={props.labels}>
+                      {(lbl) => {
+                        const hasLabel = () => Boolean(props.message.labelIds?.includes(lbl.id));
+                        return (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => props.onToggleLabel?.(props.message, lbl.id)}
+                            class="w-full text-left px-3.5 py-1.5 min-h-[32px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center justify-between gap-2"
+                          >
+                            <div class="flex items-center gap-2 truncate">
+                              <span
+                                class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                                style={{ "background-color": lbl.color || "#878A8E" }}
+                              />
+                              <span class="truncate">{lbl.name}</span>
+                            </div>
+                            <Show when={hasLabel()}>
+                              <svg class="w-3.5 h-3.5 text-[#A27561] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            </Show>
+                          </button>
+                        );
+                      }}
+                    </For>
+                  </Show>
+                </div>
+              </Show>
+            </div>
           </div>
+
+          {/* SnoozeMenu Dialog */}
+          <SnoozeMenu
+            open={snoozeMenuOpen()}
+            onClose={() => setSnoozeMenuOpen(false)}
+            onSelect={(until) => {
+              setSnoozeMenuOpen(false);
+              props.onSnooze?.(props.message, until);
+            }}
+          />
 
           {/* Draft Specific Actions */}
           <Show when={props.message.folder === "drafts"}>
@@ -874,7 +1117,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
           <div class="flex items-start justify-between gap-4">
             <div class="flex flex-col gap-1.5 min-w-0">
               <h1 class="text-xl font-bold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight leading-snug break-words">
-                {props.message.subject || "(No subject)"}
+                {isTranslated() ? translatedSubject() : (props.message.subject || "(No subject)")}
               </h1>
               {/* Label Badges */}
               <Show when={props.message.labelIds && props.message.labelIds.length > 0}>
@@ -916,16 +1159,6 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
           {/* Sender & Recipient Bar */}
           <div class="mt-4 flex items-start justify-between gap-3">
             <div class="flex items-start gap-3 min-w-0">
-              {/* Sender Avatar (36x36px header size) */}
-              <ProfileAvatar
-                email={senderEmail()}
-                displayName={senderDisplayName()}
-                mailboxId={props.message.mailboxId}
-                size="header"
-                photoUrl={props.currentUserEmail === senderEmail() ? props.currentUserPhotoUrl : undefined}
-                testId="reading-pane-avatar"
-              />
-
               {/* Sender & Recipient details */}
               <div class="flex flex-col min-w-0 text-xs">
                 <div class="flex items-center gap-1.5 flex-wrap">
@@ -938,13 +1171,36 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                   <span class="text-[#6E7075] dark:text-[#878A8E] font-mono text-[11px] truncate">
                     &lt;{senderEmail()}&gt;
                   </span>
+                  <Show when={showUnsubscribe()}>
+                    <span class="text-[#878A8E] dark:text-[#6E7075] select-none mx-0.5">•</span>
+                    <Show
+                      when={isUnsubscribed()}
+                      fallback={
+                        <button
+                          type="button"
+                          onClick={() => setUnsubConfirmOpen(true)}
+                          class="text-[11px] font-medium text-[#A27561] dark:text-[#C59380] hover:text-[#885A47] dark:hover:text-[#DEAC98] hover:underline cursor-pointer"
+                          data-testid="reading-pane-unsubscribe-btn"
+                        >
+                          Unsubscribe
+                        </button>
+                      }
+                    >
+                      <span
+                        class="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1"
+                        data-testid="reading-pane-unsubscribed-badge"
+                      >
+                        ✓ Unsubscribed
+                      </span>
+                    </Show>
+                  </Show>
                   <Show when={props.senderVerification}>
                     <Show when={props.senderVerification?.verified}>
                       <span class="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 px-2 py-0.5 rounded-full shadow-2xs">
                         ✓ Verified sender
                       </span>
                     </Show>
-                    <Show when={!props.senderVerification?.verified}>
+                    <Show when={!props.senderVerification?.verified && !isExternalSenderError()}>
                       <span class="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 px-2 py-0.5 rounded-full shadow-2xs">
                         ⚠ Unverified sender
                       </span>
@@ -1044,8 +1300,119 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
           </div>
         </div>
 
+        {/* Inline Translation Bar (Gmail-style) */}
+        <Show when={showTranslationBar()}>
+          <div
+            data-testid="email-translation-bar"
+            class="px-4 sm:px-6 py-2.5 bg-[#FAF9F6] dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2A2D35] flex flex-wrap items-center justify-between gap-3 text-xs flex-shrink-0"
+          >
+            <div class="flex items-center gap-2.5 flex-wrap">
+              <div class="flex items-center gap-1.5 text-[#A27561] dark:text-[#D4A38F] font-semibold">
+                <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                  <path d="m5 8 6 6" />
+                  <path d="m4 14 6-6 2-3" />
+                  <path d="M2 5h12" />
+                  <path d="M7 2h1" />
+                  <path d="m22 22-5-10-5 10" />
+                  <path d="M14 18h6" />
+                </svg>
+                <span class="hidden sm:inline">Translate:</span>
+              </div>
+
+              {/* Source Language dropdown */}
+              <div class="flex items-center gap-1.5">
+                <select
+                  data-testid="translation-source-lang"
+                  value={sourceLang()}
+                  onChange={(e) => setSourceLang(e.currentTarget.value)}
+                  class="px-2.5 py-1 rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-1 focus:ring-[#A27561] cursor-pointer"
+                >
+                  <option value="auto">Auto-detect ({getLanguageName(detectedSourceLang())})</option>
+                  <For each={SUPPORTED_LANGUAGES}>
+                    {(lang) => <option value={lang.code}>{lang.name}</option>}
+                  </For>
+                </select>
+
+                <svg class="w-3.5 h-3.5 text-[#878A8E] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
+
+                {/* Target Language dropdown */}
+                <select
+                  data-testid="translation-target-lang"
+                  value={targetLang()}
+                  onChange={(e) => setTargetLang(e.currentTarget.value)}
+                  class="px-2.5 py-1 rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-1 focus:ring-[#A27561] cursor-pointer"
+                >
+                  <For each={SUPPORTED_LANGUAGES}>
+                    {(lang) => <option value={lang.code}>{lang.name}</option>}
+                  </For>
+                </select>
+              </div>
+
+              {/* Translate message / Show original action button */}
+              <button
+                type="button"
+                data-testid="translate-action-btn"
+                onClick={() => setIsTranslated(!isTranslated())}
+                class={`px-3 py-1 rounded-xl text-xs font-semibold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
+                  isTranslated()
+                    ? "bg-[#E2DFD8] dark:bg-[#2E3138] text-[#1A1B1E] dark:text-[#F3F4F6] hover:bg-[#D5D1C8]"
+                    : "bg-[#A27561] hover:bg-[#8F6452] text-white"
+                }`}
+              >
+                {isTranslated() ? "Show original" : "Translate message"}
+              </button>
+
+              {/* Always translate toggle */}
+              <label class="hidden md:flex items-center gap-1.5 text-[11px] text-[#6E7075] dark:text-[#878A8E] cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  data-testid="always-translate-checkbox"
+                  checked={alwaysTranslate()}
+                  onChange={(e) => handleToggleAlwaysTranslate(e.currentTarget.checked)}
+                  class="accent-[#A27561] rounded w-3.5 h-3.5 cursor-pointer"
+                />
+                <span>Always translate {getLanguageName(effectiveSourceLang())}</span>
+              </label>
+            </div>
+
+            {/* Dismiss bar button */}
+            <button
+              type="button"
+              data-testid="close-translation-bar-btn"
+              onClick={() => setShowTranslationBar(false)}
+              class="p-1 rounded-lg text-[#878A8E] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer"
+              title="Close translation bar"
+              aria-label="Close translation bar"
+            >
+              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        </Show>
+
         {/* Decrypted Message Body */}
         <div class="p-6 flex-1 text-sm text-[#1A1B1E] dark:text-[#F3F4F6] leading-relaxed whitespace-pre-wrap font-sans select-text">
+          {/* Active Translation Notice */}
+          <Show when={isTranslated()}>
+            <div
+              data-testid="translated-notice"
+              class="mb-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] text-xs font-medium border border-[#A27561]/20 shadow-2xs"
+            >
+              <span>Translated from {getLanguageName(effectiveSourceLang())} to {getLanguageName(targetLang())}</span>
+              <button
+                type="button"
+                data-testid="show-original-inline-btn"
+                onClick={() => setIsTranslated(false)}
+                class="underline hover:text-[#885A47] dark:hover:text-[#DEAC98] cursor-pointer font-semibold ml-1"
+              >
+                Show original
+              </button>
+            </div>
+          </Show>
           {/* Tracker Blocker / Remote Image Privacy Banner */}
           <Show when={sanitizeResult().hasBlockedImages}>
             <div class="mb-5 p-3.5 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 text-xs flex flex-col gap-2">
@@ -1096,17 +1463,12 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
             </div>
           </Show>
 
-          <Show when={props.senderVerification && !props.senderVerification.verified}>
+          <Show when={props.senderVerification && !props.senderVerification.verified && !isExternalSenderError()}>
             <div role="alert" class="mb-4 p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-300 text-xs flex items-start gap-2">
               <span class="text-sm leading-none mt-0.5">⚠</span>
               <div>
                 <p class="font-semibold">
-                  <Show 
-                    when={props.senderVerification?.error?.includes("outside BYOS")} 
-                    fallback={"Sender could not be verified"}
-                  >
-                    External sender
-                  </Show>
+                  Sender could not be verified
                 </p>
                 <p class="mt-0.5">
                   {props.senderVerification?.error || 
@@ -1227,14 +1589,14 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               when={/<[a-z][\s\S]*>/i.test(props.decryptedContent || "")}
               fallback={
                 <div class={`whitespace-pre-wrap font-sans ${props.fontScale === "xlarge" ? "text-scale-xlarge" : props.fontScale === "large" ? "text-scale-large" : "text-scale-default"}`}>
-                  {props.decryptedContent}
+                  {isTranslated() ? translateEmail(props.decryptedContent || "", effectiveSourceLang(), targetLang()) : props.decryptedContent}
                 </div>
               }
             >
               <div
                 ref={readingContentRef}
                 class={`reading-pane-content ${props.fontScale === "xlarge" ? "text-scale-xlarge" : props.fontScale === "large" ? "text-scale-large" : "text-scale-default"}`}
-                innerHTML={sanitizeResult().sanitized}
+                innerHTML={isTranslated() ? translatedBody() : sanitizeResult().sanitized}
               />
             </Show>
             </div>
@@ -1315,6 +1677,21 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
           </button>
         </div>
       </Show>
+
+      <UnsubscribeConfirmModal
+        isOpen={unsubConfirmOpen()}
+        onClose={() => setUnsubConfirmOpen(false)}
+        senderName={senderDisplayName()}
+        senderEmail={senderEmail()}
+        unsubscribeUrl={unsubLink()?.url}
+        unsubscribeEmail={unsubLink()?.mailto}
+        onConfirmUnsubscribe={async (moveToTrash) => {
+          unsubscribeSender(mailboxId(), senderEmail(), senderDisplayName(), unsubLink()?.url);
+          if (moveToTrash) {
+            props.onTrash(props.message);
+          }
+        }}
+      />
     </section>
   );
 };

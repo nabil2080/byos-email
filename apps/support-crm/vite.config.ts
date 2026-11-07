@@ -7,6 +7,7 @@ export default defineConfig({
   server: {
     port: 3003,
     host: process.env.VITE_HOST || "0.0.0.0",
+    allowedHosts: true,
     proxy: {
       "/admin/v1": process.env.VITE_ADMIN_API_URL || "http://127.0.0.1:8087",
     },

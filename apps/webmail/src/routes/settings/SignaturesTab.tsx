@@ -8,7 +8,6 @@ import {
   fetchMailboxAliases,
 } from "../../api";
 import { saveSignature, saveSignatureHtml } from "../../signature";
-import { ProfileAvatar } from "../../components/ProfileAvatar";
 import { RichTextEditor } from "../../components/RichTextEditor";
 import DOMPurify from "dompurify";
 
@@ -24,88 +23,15 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
   const [error, setError] = createSignal<string | null>(null);
 
   const [displayName, setDisplayName] = createSignal("");
-  const [avatarUrl, setAvatarUrl] = createSignal("");
-  const [avatarInputUrl, setAvatarInputUrl] = createSignal("");
   const [signaturePlain, setSignaturePlain] = createSignal("");
   const [signatureHtml, setSignatureHtml] = createSignal("");
   const [insertOnReply, setInsertOnReply] = createSignal(true);
   const [aliases, setAliases] = createSignal<MailboxAlias[]>([]);
   const [selectedSenderIdentity, setSelectedSenderIdentity] = createSignal("");
-
-  let fileInputRef: HTMLInputElement | undefined;
-
   const primaryEmail = () => {
     const domain = props.currentUser?.email.split("@")[1] || "byos.local";
     return `${props.mailbox.local_part}@${domain}`;
   };
-
-  function saveAvatarLocally(url: string) {
-    const email = primaryEmail().toLowerCase().trim();
-    if (url) {
-      localStorage.setItem("byos_avatar_" + email, url);
-      localStorage.setItem("byos_avatar_" + props.mailbox.id, url);
-    } else {
-      localStorage.removeItem("byos_avatar_" + email);
-      localStorage.removeItem("byos_avatar_" + props.mailbox.id);
-    }
-    // Notify same-window listeners
-    window.dispatchEvent(new Event("storage"));
-  }
-
-  function handleAvatarFileUpload(e: Event) {
-    const input = e.target as HTMLInputElement;
-    if (!input.files || input.files.length === 0) return;
-    const file = input.files[0];
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const src = event.target?.result as string;
-      if (!src) return;
-
-      const img = new Image();
-      img.onload = () => {
-        const maxDim = 128;
-        let w = img.width;
-        let h = img.height;
-        if (w > maxDim || h > maxDim) {
-          if (w > h) {
-            h = Math.round((h * maxDim) / w);
-            w = maxDim;
-          } else {
-            w = Math.round((w * maxDim) / h);
-            h = maxDim;
-          }
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, w, h);
-          const downscaled = canvas.toDataURL("image/jpeg", 0.85);
-          setAvatarUrl(downscaled);
-          setAvatarInputUrl(downscaled.startsWith("data:") ? "" : downscaled);
-          saveAvatarLocally(downscaled);
-        }
-      };
-      img.src = src;
-    };
-    reader.readAsDataURL(file);
-    input.value = "";
-  }
-
-  function handleAvatarUrlChange(url: string) {
-    const trimmed = url.trim();
-    setAvatarInputUrl(trimmed);
-    setAvatarUrl(trimmed);
-    saveAvatarLocally(trimmed);
-  }
-
-  function removeAvatar() {
-    setAvatarUrl("");
-    setAvatarInputUrl("");
-    saveAvatarLocally("");
-  }
 
   onMount(async () => {
     try {
@@ -126,19 +52,6 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
       setAliases(aliasList);
       setSelectedSenderIdentity(primaryEmail());
 
-      // Load avatar from settings or local storage
-      const email = primaryEmail().toLowerCase().trim();
-      const localAvatar =
-        settings.avatar_url ||
-        localStorage.getItem("byos_avatar_" + email) ||
-        localStorage.getItem("byos_avatar_" + props.mailbox.id) ||
-        "";
-      if (localAvatar) {
-        setAvatarUrl(localAvatar);
-        if (!localAvatar.startsWith("data:")) {
-          setAvatarInputUrl(localAvatar);
-        }
-      }
     } catch (err: any) {
       setError(err?.message || "Failed to load mailbox settings.");
     } finally {
@@ -151,13 +64,11 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
     setSaving(true);
     setError(null);
     try {
-      saveAvatarLocally(avatarUrl());
       await updateMailboxSettings(props.mailbox.id, {
         display_name: displayName().trim(),
         signature_plain: signaturePlain(),
         signature_html: DOMPurify.sanitize(signatureHtml()),
         insert_signature_on_reply: insertOnReply(),
-        avatar_url: avatarUrl(),
       });
       saveSignature(props.mailbox.id, signaturePlain());
       saveSignatureHtml(props.mailbox.id, DOMPurify.sanitize(signatureHtml()));
@@ -173,9 +84,9 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
   return (
     <div class="space-y-6">
       <div>
-        <h3 class="text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Identities, Photo & Signatures</h3>
-        <p class="text-xs text-[#55575B] dark:text-[#A1A1AA] mt-1">
-          Customize your sender profile picture, display name, and rich email signature.
+        <h3 class="text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Identities & Signatures</h3>
+        <p class="text-xs text-[#6E7075] dark:text-[#878A8E] mt-1">
+          Customize your display name, sender aliases, and rich email signatures.
         </p>
       </div>
 
@@ -213,71 +124,6 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
 
       <Show when={!loading()}>
         <form onSubmit={handleSave} class="space-y-6">
-          {/* Profile Photo Card */}
-          <div class="bg-white dark:bg-[#1E2025] rounded-2xl p-6 border border-[#E2DFD8] dark:border-[#2E3138] shadow-xs space-y-4">
-            <h4 class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6] uppercase tracking-wider font-mono">
-              Profile Photo
-            </h4>
-
-            <div class="flex flex-col sm:flex-row items-start sm:items-center gap-5">
-              <ProfileAvatar
-                email={primaryEmail()}
-                displayName={displayName()}
-                avatarUrl={avatarUrl()}
-                size="lg"
-                class="ring-4 ring-[#F2E8E2] dark:ring-[#2D2522] shadow-sm flex-shrink-0"
-              />
-
-              <div class="flex-1 space-y-3 min-w-0 w-full">
-                <div class="flex flex-wrap items-center gap-2.5">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp,image/gif"
-                    onChange={handleAvatarFileUpload}
-                    class="hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef?.click()}
-                    class="px-3.5 py-1.5 rounded-xl bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold transition cursor-pointer shadow-2xs flex items-center gap-1.5"
-                  >
-                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="17 8 12 3 7 8" />
-                      <line x1="12" y1="3" x2="12" y2="15" />
-                    </svg>
-                    <span>Upload Photo</span>
-                  </button>
-
-                  <Show when={avatarUrl()}>
-                    <button
-                      type="button"
-                      onClick={removeAvatar}
-                      class="px-3 py-1.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer"
-                    >
-                      Remove Photo
-                    </button>
-                  </Show>
-                </div>
-
-                <div class="flex items-center gap-2 max-w-md">
-                  <input
-                    type="url"
-                    placeholder="Or paste image URL (e.g. https://…)"
-                    value={avatarInputUrl()}
-                    onInput={(e) => handleAvatarUrlChange(e.currentTarget.value)}
-                    class="flex-1 px-3 py-1.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-[#F8F7F4] dark:bg-[#18191D] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] placeholder-[#878A8E] dark:placeholder-[#71717A] focus:outline-none focus:ring-1 focus:ring-[#A27561]"
-                  />
-                </div>
-
-                <p class="text-[11px] text-[#55575B] dark:text-[#A1A1AA]">
-                  Uploaded photos are automatically optimized to 128x128px (~20KB) for sovereign local rendering.
-                </p>
-              </div>
-            </div>
-          </div>
-
           {/* Sender Identity Card */}
           <div class="bg-white dark:bg-[#1E2025] rounded-2xl p-6 border border-[#E2DFD8] dark:border-[#2E3138] shadow-xs space-y-4">
             <h4 class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6] uppercase tracking-wider font-mono">

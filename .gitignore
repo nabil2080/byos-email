@@ -59,5 +59,9 @@ tests/browser/*.png
 tests/browser/artifacts/*.png
 apps/webmail/*.png
 .agents/teamwork/
+agents/teamwork/
+CURRENT_TUNNEL_URL.txt
+*.exe~
+
 
 

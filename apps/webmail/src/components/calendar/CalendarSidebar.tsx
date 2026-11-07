@@ -6,6 +6,7 @@ import { CalendarEventPlaintext } from "../../calendar_crypto";
 import { WorldClockCity } from "./settings/calendarSettingsStore";
 import { getWorldClockCityTime } from "../../utils/calendarTimezones";
 import { AccountSwitcher } from "../AccountSwitcher";
+import { CalendarViewMode } from "./CalendarToolbar";
 
 export interface DecryptedEventRecord {
   id: string;
@@ -73,6 +74,8 @@ interface CalendarSidebarProps {
   onOpenWorldClockSettings?: () => void;
   onOpenContacts?: () => void;
   onOpenSettings?: () => void;
+  currentViewMode?: CalendarViewMode;
+  onChangeViewMode?: (mode: CalendarViewMode) => void;
 }
 
 export const CalendarSidebar: Component<CalendarSidebarProps> = (props) => {
@@ -197,11 +200,128 @@ export const CalendarSidebar: Component<CalendarSidebarProps> = (props) => {
       {/* ── MIDDLE SCROLLABLE SECTION: Mini Month Picker, Calendars List, World Clock ── */}
       <div class="flex-1 min-h-0 overflow-y-auto px-2 py-1 space-y-3 custom-scrollbar">
 
-      {/* Mini Month Picker */}
-      <MiniMonthPicker
-        selectedDate={props.selectedDate}
-        onSelectDate={props.onSelectDate}
-      />
+        {/* ── Mobile Google Calendar View Switcher (Drawer) ── */}
+        <Show when={props.onChangeViewMode}>
+          <div class="px-1 py-1 space-y-0.5 border-b border-[#E2DFD8] dark:border-[#2A2D35] pb-2 mb-2" role="navigation" aria-label="Calendar view switcher">
+            <button
+              type="button"
+              data-testid="drawer-view-agenda"
+              onClick={() => {
+                props.onChangeViewMode?.("agenda");
+                props.onCloseMobile?.();
+              }}
+              class={`w-full flex items-center gap-3.5 px-3.5 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                props.currentViewMode === "agenda"
+                  ? "bg-[#F2E8E2] dark:bg-[#3D2C24] text-[#9E725F] dark:text-[#E2B7A3] font-bold shadow-2xs"
+                  : "text-[#3C3D3E] dark:text-[#ECEBE8] hover:bg-[#E8E5DF] dark:hover:bg-[#2A2D35]"
+              }`}
+            >
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="15" y2="12" />
+                <line x1="3" y1="18" x2="18" y2="18" />
+              </svg>
+              <span>Schedule</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="drawer-view-day"
+              onClick={() => {
+                props.onChangeViewMode?.("day");
+                props.onCloseMobile?.();
+              }}
+              class={`w-full flex items-center gap-3.5 px-3.5 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                props.currentViewMode === "day"
+                  ? "bg-[#F2E8E2] dark:bg-[#3D2C24] text-[#9E725F] dark:text-[#E2B7A3] font-bold shadow-2xs"
+                  : "text-[#3C3D3E] dark:text-[#ECEBE8] hover:bg-[#E8E5DF] dark:hover:bg-[#2A2D35]"
+              }`}
+            >
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                <line x1="16" y1="2" x2="16" y2="6" />
+                <line x1="8" y1="2" x2="8" y2="6" />
+                <line x1="3" y1="10" x2="21" y2="10" />
+              </svg>
+              <span>Day</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="drawer-view-3days"
+              onClick={() => {
+                props.onChangeViewMode?.("3days");
+                props.onCloseMobile?.();
+              }}
+              class={`w-full flex items-center gap-3.5 px-3.5 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                props.currentViewMode === "3days"
+                  ? "bg-[#F2E8E2] dark:bg-[#3D2C24] text-[#9E725F] dark:text-[#E2B7A3] font-bold shadow-2xs"
+                  : "text-[#3C3D3E] dark:text-[#ECEBE8] hover:bg-[#E8E5DF] dark:hover:bg-[#2A2D35]"
+              }`}
+            >
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                <line x1="9" y1="4" x2="9" y2="22" />
+                <line x1="15" y1="4" x2="15" y2="22" />
+              </svg>
+              <span>3 Days</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="drawer-view-week"
+              onClick={() => {
+                props.onChangeViewMode?.("week");
+                props.onCloseMobile?.();
+              }}
+              class={`w-full flex items-center gap-3.5 px-3.5 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                props.currentViewMode === "week"
+                  ? "bg-[#F2E8E2] dark:bg-[#3D2C24] text-[#9E725F] dark:text-[#E2B7A3] font-bold shadow-2xs"
+                  : "text-[#3C3D3E] dark:text-[#ECEBE8] hover:bg-[#E8E5DF] dark:hover:bg-[#2A2D35]"
+              }`}
+            >
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                <line x1="7" y1="4" x2="7" y2="22" />
+                <line x1="11" y1="4" x2="11" y2="22" />
+                <line x1="15" y1="4" x2="15" y2="22" />
+                <line x1="19" y1="4" x2="19" y2="22" />
+              </svg>
+              <span>Week</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="drawer-view-month"
+              onClick={() => {
+                props.onChangeViewMode?.("month");
+                props.onCloseMobile?.();
+              }}
+              class={`w-full flex items-center gap-3.5 px-3.5 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                props.currentViewMode === "month"
+                  ? "bg-[#F2E8E2] dark:bg-[#3D2C24] text-[#9E725F] dark:text-[#E2B7A3] font-bold shadow-2xs"
+                  : "text-[#3C3D3E] dark:text-[#ECEBE8] hover:bg-[#E8E5DF] dark:hover:bg-[#2A2D35]"
+              }`}
+            >
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                <line x1="3" y1="10" x2="21" y2="10" />
+                <line x1="3" y1="16" x2="21" y2="16" />
+                <line x1="9" y1="4" x2="9" y2="22" />
+                <line x1="15" y1="4" x2="15" y2="22" />
+              </svg>
+              <span>Month</span>
+            </button>
+          </div>
+        </Show>
+
+        {/* Mini Month Picker (Desktop only, mobile uses top header dropdown) */}
+        <Show when={!props.onCloseMobile}>
+          <MiniMonthPicker
+            selectedDate={props.selectedDate}
+            onSelectDate={props.onSelectDate}
+          />
+        </Show>
 
       {/* My Calendars */}
       <div class="px-1">

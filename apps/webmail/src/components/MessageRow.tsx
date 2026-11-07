@@ -1,7 +1,6 @@
 import { Component, Show, For, createSignal } from "solid-js";
 import { DisplayMessage } from "./MessageList";
 import { MailboxLabel } from "../api";
-import { ProfileAvatar } from "./ProfileAvatar";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { FocusedCategory } from "../focused_inbox";
 
@@ -33,13 +32,16 @@ export function formatAddress(raw: string): string {
   const trimmed = raw.trim();
   const match = trimmed.match(/^["']?([^"'<]+)["']?\s*<([^>]+)>/);
   if (match && match[1].trim()) {
-    return match[1].trim();
+    const name = match[1].trim().replace(/^["']+|["']+$/g, "").trim();
+    if (name.length > 0) {
+      return name;
+    }
   }
-  const angleMatch = trimmed.match(/^<([^>]+)>$/);
+  const angleMatch = trimmed.match(/<([^>]+)>/);
   if (angleMatch && angleMatch[1].trim()) {
     return angleMatch[1].trim();
   }
-  return trimmed;
+  return trimmed.replace(/^["']+|["']+$/g, "").trim();
 }
 
 export function getDisplayParty(message: DisplayMessage, folder?: Folder): string {
@@ -61,6 +63,9 @@ export function getDisplayParty(message: DisplayMessage, folder?: Folder): strin
     }
     const first = formatAddress(recipients[0]);
     return recipients.length > 1 ? `${first} +${recipients.length - 1}` : first;
+  }
+  if (message.senderName && message.senderName.trim()) {
+    return message.senderName.trim();
   }
   return formatAddress(message.sender);
 }
@@ -190,29 +195,114 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
     setContextMenuPos(null);
   };
 
+  let pressTimer: ReturnType<typeof setTimeout> | null = null;
+  let isLongPressTriggered = false;
+  let startX = 0;
+  let startY = 0;
+
+  function clearHoldTimer() {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+  }
+
+  function handleTouchStart(e: TouchEvent) {
+    isLongPressTriggered = false;
+    const touch = e.touches[0];
+    startX = touch.clientX;
+    startY = touch.clientY;
+    clearHoldTimer();
+    pressTimer = setTimeout(() => {
+      isLongPressTriggered = true;
+      props.onToggleCheck(props.message, !props.isChecked);
+      if (typeof navigator !== "undefined" && navigator.vibrate) {
+        navigator.vibrate(40);
+      }
+    }, 450);
+  }
+
+  function handleTouchMove(e: TouchEvent) {
+    if (!pressTimer) return;
+    const touch = e.touches[0];
+    if (Math.hypot(touch.clientX - startX, touch.clientY - startY) > 10) {
+      clearHoldTimer();
+    }
+  }
+
+  function handleTouchEnd() {
+    clearHoldTimer();
+  }
+
+  function handleMouseDown(e: MouseEvent) {
+    if (e.button !== 0) return;
+    isLongPressTriggered = false;
+    startX = e.clientX;
+    startY = e.clientY;
+    clearHoldTimer();
+    pressTimer = setTimeout(() => {
+      isLongPressTriggered = true;
+      props.onToggleCheck(props.message, !props.isChecked);
+    }, 450);
+  }
+
+  function handleMouseMove(e: MouseEvent) {
+    if (!pressTimer) return;
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > 10) {
+      clearHoldTimer();
+    }
+  }
+
+  function handleMouseUp() {
+    clearHoldTimer();
+  }
+
+  function handleClick(e: MouseEvent) {
+    if (isLongPressTriggered) {
+      e.preventDefault();
+      e.stopPropagation();
+      isLongPressTriggered = false;
+      return;
+    }
+    // If in multi-select mode (one or more items already selected), tapping row toggles selection
+    if ((props.selectedIds?.size || 0) > 0) {
+      props.onToggleCheck(props.message, !props.isChecked);
+    } else {
+      props.onSelect(props.message);
+    }
+  }
+
   return (
     <div
-      draggable={true}
+      draggable={!props.isSplit}
       onDragStart={handleDragStart}
-      onClick={() => props.onSelect(props.message)}
+      onClick={handleClick}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
       onContextMenu={handleContextMenu}
       data-testid="message-row"
       data-message-id={props.message.id}
-      class={`group relative cursor-pointer border-b border-[#E2DFD8]/60 dark:border-[#2A2D35] transition-colors duration-150 select-none min-w-0 overflow-hidden ${densityPadding()} ${
+      class={`group relative cursor-pointer border-b border-[#E2DFD8]/60 dark:border-[#2A2D35] transition-colors duration-150 select-none min-w-0 overflow-hidden ${
+        props.isSplit ? "p-3 sm:px-4 py-2.5" : densityPadding()
+      } ${
         props.isSelected
           ? "bg-[#F3ECE8] dark:bg-[#2D2522] border-l-[3px] border-l-[#A27561]"
           : props.isChecked
-          ? "bg-[#F8F5F2] dark:bg-[#26282E]"
-          : props.message.read
-          ? "bg-white dark:bg-[#1E2025] hover:bg-[#FAF9F6] dark:hover:bg-[#252830]"
-          : "bg-white dark:bg-[#1E2025] hover:bg-[#FAF9F6] dark:hover:bg-[#252830]"
+          ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-l-4 border-[#A27561]"
+          : isUnread()
+          ? "bg-white dark:bg-[#18191D] hover:bg-[#FAF9F6] dark:hover:bg-[#202227]"
+          : "bg-[#FAF9F6]/80 dark:bg-[#18191D]/80 hover:bg-white dark:hover:bg-[#202227]"
       }`}
     >
       <Show
         when={props.isSplit}
         fallback={
           /* ── Full-Width Mode: Streamlined Single-Line Layout ── */
-          <div class="flex items-center gap-3 min-w-0 overflow-hidden h-7">
+          <div class="flex items-center gap-3 min-w-0 overflow-hidden h-8">
             {/* Selection Checkbox */}
             <div
               onClick={(e) => {
@@ -265,7 +355,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
               ></span>
             </Show>
 
-            {/* Display Party Column with ProfileAvatar */}
+            {/* Display Party Column (Clean typography, avatar system wiped) */}
             <div class="w-28 sm:w-48 md:w-56 min-w-0 flex-shrink-0 flex items-center gap-2 truncate">
               <Show when={props.message.accountColor}>
                 <span
@@ -275,15 +365,8 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                   data-testid="account-chip"
                 />
               </Show>
-              <ProfileAvatar
-                email={partyEmail()}
-                displayName={partyLabel()}
-                mailboxId={props.message.mailboxId}
-                size="row"
-                photoUrl={props.currentUserEmail === partyEmail() ? props.currentUserPhotoUrl : undefined}
-                testId="message-row-avatar"
-              />
               <span
+                data-testid="message-sender-name"
                 class={`truncate font-sans text-sm tracking-tight ${
                   isUnread()
                     ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
@@ -306,7 +389,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     return (
                       <Show when={lbl()}>
                         <span
-                          class="text-[10px] font-semibold text-white px-2 py-0.5 rounded-full shadow-2xs truncate max-w-[140px]"
+                          class="text-xs font-semibold text-white px-2 py-0.5 rounded-full shadow-2xs truncate max-w-[150px]"
                           style={{ "background-color": lbl()!.color }}
                           title={lbl()!.path || lbl()!.name}
                         >
@@ -322,7 +405,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
             {/* Streamlined Subject Line */}
             <div class="flex-1 min-w-0 overflow-hidden text-sm flex items-center gap-2">
               <Show when={props.message.sendFailed}>
-                <span class="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900/60 px-1.5 py-0.5 rounded flex-shrink-0">
+                <span class="inline-flex items-center gap-1 text-xs font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900/60 px-1.5 py-0.5 rounded flex-shrink-0">
                   <svg class="w-2.5 h-2.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
                     <circle cx="12" cy="12" r="10" />
                     <line x1="12" y1="8" x2="12" y2="12" />
@@ -332,6 +415,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                 </span>
               </Show>
               <span
+                data-testid="message-subject"
                 class={`truncate block ${
                   isUnread()
                     ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
@@ -359,7 +443,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
               </span>
 
               {/* Floating Hover Action Pill (Gmail style) */}
-              <div class="absolute right-0 opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 pointer-events-none group-hover:pointer-events-auto transition-all duration-150 ease-out flex items-center gap-1 bg-white/95 dark:bg-[#202227]/95 backdrop-blur-md px-1.5 py-0.5 rounded-xl border border-[#E2DFD8] dark:border-[#333640] shadow-xs z-10">
+              <div class="absolute right-0 opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 pointer-events-none group-hover:pointer-events-auto transition-[transform,opacity] duration-150 ease-out flex items-center gap-1 bg-white/95 dark:bg-[#202227]/95 backdrop-blur-md px-1.5 py-0.5 rounded-xl border border-[#E2DFD8] dark:border-[#333640] shadow-xs z-10">
                 {/* Single Contextual Read/Unread Smart Toggle */}
                 <button
                   type="button"
@@ -374,14 +458,14 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     when={props.message.read}
                     fallback={
                       /* Open Envelope icon when message is unread -> clicking marks as read */
-                      <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                         <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
                         <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
                       </svg>
                     }
                   >
                     {/* Closed Envelope icon when message is read -> clicking marks as unread */}
-                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                    <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                       <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
                       <polyline points="22,6 12,13 2,6" />
                     </svg>
@@ -398,7 +482,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                   class="p-1 hover:bg-[#F3ECE8] rounded-lg text-[#5E6063] hover:text-[#A27561] transition cursor-pointer"
                   title="Archive"
                 >
-                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                     <polyline points="21 8 21 21 3 21 3 8" />
                     <rect x="1" y="3" width="22" height="5" />
                     <line x1="10" y1="12" x2="14" y2="12" />
@@ -418,7 +502,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                       class="p-1 hover:bg-rose-50 rounded-lg text-[#5E6063] hover:text-rose-600 transition cursor-pointer"
                       title="Move to Trash"
                     >
-                      <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                         <polyline points="3 6 5 6 21 6" />
                         <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                       </svg>
@@ -434,7 +518,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     class="p-1 hover:bg-rose-50 rounded-lg text-rose-600 hover:text-rose-700 transition cursor-pointer"
                     title="Delete Forever"
                   >
-                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                    <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
                       <polyline points="3 6 5 6 21 6" />
                       <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                       <line x1="10" y1="11" x2="14" y2="15" />
@@ -447,234 +531,111 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
           </div>
         }
       >
-        {/* ── Split-Pane Mode: Stacked Compact Card Layout ── */}
-        <div class="flex flex-col gap-0.5 min-w-0 overflow-hidden text-xs">
-          {/* Top Line: Checkbox, Star, Sender, and Date/Actions */}
-          <div class="flex items-center justify-between min-w-0 gap-2">
-            <div class="flex items-center gap-2 min-w-0 overflow-hidden">
-              {/* Selection Checkbox */}
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  props.onToggleCheck(props.message, !props.isChecked);
-                }}
-                class="flex items-center justify-center p-1 cursor-pointer flex-shrink-0"
-                title={props.isChecked ? "Deselect" : "Select"}
-              >
-                <input
-                  type="checkbox"
-                  checked={props.isChecked}
-                  onChange={() => {}}
-                  class="accent-[#A27561] w-3.5 h-3.5 cursor-pointer rounded pointer-events-none"
-                />
-              </div>
+        {/* ── Mobile / Tablet View: Full-Width Typography Layout (Wiped Circular Avatar Silhouette) ── */}
+        <div class="flex items-start gap-2.5 min-w-0 overflow-hidden w-full">
+          {/* Active selection checkmark badge (visible ONLY when item is selected) */}
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onToggleCheck(props.message, !props.isChecked);
+            }}
+            class={props.isChecked
+              ? "w-6 h-6 rounded-full bg-[#A27561] text-white flex items-center justify-center shrink-0 shadow-xs cursor-pointer select-none transition-colors duration-150 mt-0.5"
+              : "hidden"}
+            data-testid="message-mobile-select-btn"
+            title={props.isChecked ? "Deselect" : "Select"}
+          >
+            <svg class="w-4 h-4 stroke-white fill-none stroke-[2.5]" viewBox="0 0 24 24">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          </div>
 
-              {/* Star Icon (Enlarged SVG) */}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  props.onToggleStarred(props.message);
-                }}
-                class="transition flex-shrink-0 cursor-pointer p-1 text-[#878A8E] hover:text-amber-500 flex items-center justify-center"
-                title={props.message.starred ? "Unstar" : "Star"}
-              >
-                <Show
-                  when={props.message.starred}
-                  fallback={
-                    <svg class="w-4 h-4 stroke-current fill-none stroke-[1.6] text-[#878A8E] hover:text-amber-500 transition" viewBox="0 0 24 24">
-                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                    </svg>
-                  }
-                >
-                  <svg class="w-4 h-4 text-amber-500 fill-amber-400 stroke-amber-500 stroke-[1.4] transition" viewBox="0 0 24 24">
-                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                  </svg>
-                </Show>
-              </button>
-
-              {/* Unread Dot */}
-              <Show
-                when={isUnread()}
-                fallback={<span class="w-1.5 h-1.5 flex-shrink-0"></span>}
-              >
-                <span
-                  class="w-1.5 h-1.5 rounded-full bg-[#A27561] flex-shrink-0"
-                  title="Unread"
-                ></span>
-              </Show>
-
-              {/* Display Party with ProfileAvatar */}
-              <div class="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+          {/* 2. Middle & Right 3-Row Content */}
+          <div class="flex-1 min-w-0 flex flex-col gap-0.5">
+            {/* Row 1: Sender Name + Date */}
+            <div class="flex items-baseline justify-between gap-2 min-w-0">
+              <div class="flex items-center gap-1.5 min-w-0 truncate">
                 <Show when={props.message.accountColor}>
                   <span
                     class="w-1.5 h-1.5 rounded-full flex-shrink-0"
                     style={{ "background-color": props.message.accountColor }}
                     title={props.message.accountEmail || "Connected Account"}
-                    data-testid="account-chip"
                   />
                 </Show>
-                <ProfileAvatar
-                  email={partyEmail()}
-                  displayName={partyLabel()}
-                  mailboxId={props.message.mailboxId}
-                  size="row"
-                  photoUrl={props.currentUserEmail === partyEmail() ? props.currentUserPhotoUrl : undefined}
-                  testId="message-row-avatar"
-                />
                 <span
-                  class={`truncate min-w-0 font-sans text-sm ${
+                  class={`truncate text-sm tracking-tight ${
                     isUnread()
-                      ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
-                      : "font-normal text-[#878A8E] dark:text-[#8A8E94]"
+                      ? "font-bold text-[#1A1B1E] dark:text-[#F3F4F6]"
+                      : "font-semibold text-[#444746] dark:text-[#C4C7C5]"
                   }`}
+                  data-testid="message-sender-name"
                 >
                   <Show when={isSent()}>
                     <span class="text-[#878A8E] dark:text-[#8A8E94] font-normal mr-0.5">To: </span>
                   </Show>
                   {partyLabel()}
                 </span>
-              </div>
-            </div>
-
-            {/* Date & Hover Micro Actions */}
-            <div class="relative flex items-center justify-end flex-shrink-0 min-w-[70px]">
-              <span class="font-mono text-[11px] text-[#55575B] dark:text-[#9CA3AF] group-hover:invisible transition">
-                {formattedDate()}
-              </span>
-
-              {/* Floating Hover Action Pill */}
-              <div class="absolute right-0 opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 pointer-events-none group-hover:pointer-events-auto transition-all duration-150 ease-out flex items-center gap-0.5 bg-white/95 dark:bg-[#202227]/95 backdrop-blur-md px-1 py-0.5 rounded-lg border border-[#E2DFD8] dark:border-[#333640] shadow-xs z-10">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    props.onToggleRead(props.message);
-                  }}
-                  class="p-1 hover:bg-[#F3ECE8] dark:hover:bg-[#32353E] rounded text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] transition cursor-pointer"
-                  title={props.message.read ? "Mark as unread" : "Mark as read"}
-                >
-                  <Show
-                    when={props.message.read}
-                    fallback={
-                      <svg class="w-3 h-3 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                        <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
-                        <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
-                      </svg>
-                    }
-                  >
-                    <svg class="w-3 h-3 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-                      <polyline points="22,6 12,13 2,6" />
+                <Show when={props.message.hasAttachments || (props.message.attachmentCount && props.message.attachmentCount > 0)}>
+                  <span class="text-[#878A8E] flex-shrink-0 ml-0.5">
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                     </svg>
-                  </Show>
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    props.onArchive(props.message);
-                  }}
-                  class="p-1 hover:bg-[#F3ECE8] dark:hover:bg-[#32353E] rounded text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] transition cursor-pointer"
-                  title="Archive"
-                >
-                  <svg class="w-3 h-3 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                    <polyline points="21 8 21 21 3 21 3 8" />
-                    <rect x="1" y="3" width="22" height="5" />
-                    <line x1="10" y1="12" x2="14" y2="12" />
-                  </svg>
-                </button>
-                {/* Quick Trash or Delete Forever */}
-                <Show
-                  when={props.message.folder === "trash" && props.onDeleteForever}
-                  fallback={
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        props.onTrash(props.message);
-                      }}
-                      class="p-1 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded text-[#464748] dark:text-[#A1A1AA] hover:text-rose-600 dark:hover:text-rose-400 transition cursor-pointer"
-                      title="Move to Trash"
-                    >
-                      <svg class="w-3 h-3 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                      </svg>
-                    </button>
-                  }
-                >
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      props.onDeleteForever?.(props.message);
-                    }}
-                    class="p-1 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 transition cursor-pointer"
-                    title="Delete Forever"
-                  >
-                    <svg class="w-3 h-3 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
-                      <polyline points="3 6 5 6 21 6" />
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                      <line x1="10" y1="11" x2="14" y2="15" />
-                      <line x1="14" y1="11" x2="10" y2="15" />
-                    </svg>
-                  </button>
+                  </span>
                 </Show>
               </div>
-            </div>
-          </div>
 
-          {/* Middle Line: Subject & Attachment */}
-          <div class="flex items-center justify-between gap-2 min-w-0 overflow-hidden pl-7">
-            <div class="flex items-center gap-1.5 min-w-0 overflow-hidden flex-1">
-              <Show when={props.message.labelIds && props.message.labelIds.length > 0}>
-                <div class="flex items-center gap-1 flex-shrink-0">
-                  <For each={props.message.labelIds}>
-                    {(lid) => {
-                      const lbl = () => props.labels?.find((l) => l.id === lid);
-                      return (
-                        <Show when={lbl()}>
-                          <span
-                            class="text-[9px] font-semibold text-white px-1.5 py-0.2 rounded-full shadow-2xs truncate max-w-[110px]"
-                            style={{ "background-color": lbl()!.color }}
-                            title={lbl()!.path || lbl()!.name}
-                          >
-                            {lbl()!.path || lbl()!.name}
-                          </span>
-                        </Show>
-                      );
-                    }}
-                  </For>
-                </div>
-              </Show>
-              <Show when={props.message.sendFailed}>
-                <span class="inline-flex items-center gap-1 text-[9px] font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900/60 px-1.5 py-0.2 rounded flex-shrink-0">
-                  Send failed
-                </span>
-              </Show>
+              {/* Date */}
+              <span class="font-mono text-xs text-[#80868B] dark:text-[#8E918F] flex-shrink-0 ml-2">
+                {formattedDate()}
+              </span>
+            </div>
+
+            {/* Row 2: Subject */}
+            <div class="truncate text-[13px] leading-snug">
               <span
-                class={`truncate min-w-0 text-[13px] flex-1 ${
+                data-testid="message-subject"
+                class={`truncate block ${
                   isUnread()
-                    ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]"
-                    : "font-normal text-[#2B2C2D] dark:text-[#E2DFD8]"
+                    ? "font-semibold text-[#1F1F1F] dark:text-[#E3E3E3]"
+                    : "font-normal text-[#55575B] dark:text-[#A8AAAA]"
                 }`}
               >
                 {props.message.subject || "(no subject)"}
               </span>
             </div>
-            <Show when={props.message.hasAttachments || (props.message.attachmentCount && props.message.attachmentCount > 0)}>
-              <AttachmentBadge
-                category={(props.message.attachmentTypes || [])[0]}
-                count={props.message.attachmentCount}
-                size="xs"
-              />
-            </Show>
-          </div>
 
-          {/* Bottom Line: Snippet */}
-          <div class="text-xs text-[#6E7075] dark:text-[#A1A1AA] font-normal truncate min-w-0 pl-7 leading-snug">
-            {props.message.snippet || "Empty message body"}
+            {/* Row 3: Snippet + Star Button */}
+            <div class="flex items-center justify-between gap-2 mt-0.5">
+              <span class="truncate text-xs text-[#75777B] dark:text-[#8E918F] flex-1">
+                {props.message.snippet || "(No content preview)"}
+              </span>
+
+              {/* Star Button */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onToggleStarred(props.message);
+                }}
+                class="w-11 h-11 min-w-[44px] min-h-[44px] flex items-center justify-center p-2.5 -mr-2 text-[#878A8E] hover:text-amber-500 flex-shrink-0 transition cursor-pointer"
+                title={props.message.starred ? "Unstar" : "Star"}
+                aria-label={props.message.starred ? "Unstar message" : "Star message"}
+                data-testid="message-mobile-star"
+              >
+                <Show
+                  when={props.message.starred}
+                  fallback={
+                    <svg class="w-4 h-4 stroke-current fill-none stroke-[1.6]" viewBox="0 0 24 24">
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                    </svg>
+                  }
+                >
+                  <svg class="w-4 h-4 text-amber-500 fill-amber-400 stroke-amber-500 stroke-[1.4]" viewBox="0 0 24 24">
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                  </svg>
+                </Show>
+              </button>
+            </div>
           </div>
         </div>
       </Show>
@@ -689,7 +650,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div class="px-3 py-1.5 text-[10px] uppercase font-bold text-[#878A8E] dark:text-[#6E7075] border-b border-[#E2DFD8]/60 dark:border-[#2E3138]">
+          <div class="px-3 py-1.5 text-xs uppercase font-bold text-[#878A8E] dark:text-[#6E7075] border-b border-[#E2DFD8]/60 dark:border-[#2E3138]">
             Move to category
           </div>
           <button
@@ -705,19 +666,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
             <span class="w-2 h-2 rounded-full bg-blue-500"></span>
             Primary
           </button>
-          <button
-            type="button"
-            data-testid="move-to-notifications"
-            onClick={(e) => {
-              e.stopPropagation();
-              closeContextMenu();
-              props.onMoveToCategory?.(props.message, "notifications");
-            }}
-            class="w-full text-left px-3 py-2 hover:bg-[#F3ECE8] dark:hover:bg-[#2D2522] hover:text-[#A27561] flex items-center gap-2 cursor-pointer transition"
-          >
-            <span class="w-2 h-2 rounded-full bg-amber-500"></span>
-            Notifications
-          </button>
+
           <button
             type="button"
             data-testid="move-to-newsletters"

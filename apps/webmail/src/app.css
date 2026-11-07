@@ -41,6 +41,14 @@
   color-scheme: dark;
 }
 
+html, body, #root {
+  height: 100%;
+  height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   background-color: var(--canvas-bg);
   color: var(--text-main);
@@ -274,6 +282,100 @@ html.high-contrast {
 html.dark.high-contrast {
   --border-hairline: #4B4F58;
 }
+
+/* Smooth, clean module switching animation */
+@keyframes moduleTransition {
+  from {
+    opacity: 0.9;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-module-transition {
+  animation: moduleTransition 0.16s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Crisp view mode fade for calendar */
+@keyframes viewFade {
+  from {
+    opacity: 0.85;
+    transform: scale(0.998);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-view-fade {
+  animation: viewFade 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Reading pane smooth entrance */
+@keyframes paneFade {
+  from {
+    opacity: 0.9;
+    transform: translateX(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-pane-fade {
+  animation: paneFade 0.16s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+
+/* ==========================================================================
+   Mobile Month Navigation Transitions (Infrastructure Archetype)
+   ========================================================================== */
+@keyframes monthSlideNext {
+  from {
+    opacity: 0.35;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes monthSlidePrev {
+  from {
+    opacity: 0.35;
+    transform: translateX(-28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-month-slide-next {
+  animation: monthSlideNext 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-month-slide-prev {
+  animation: monthSlidePrev 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* ── Reduced Motion Fallback ── */
+@media (prefers-reduced-motion: reduce) {
+  .animate-month-slide-next,
+  .animate-month-slide-prev {
+    animation: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+    filter: none !important;
+  }
+}
+
 
 
 

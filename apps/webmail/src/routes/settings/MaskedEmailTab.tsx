@@ -245,7 +245,7 @@ export const MaskedEmailTab: Component<MaskedEmailTabProps> = (props) => {
   }
 
   return (
-    <div class="p-4 sm:p-8 max-w-5xl mx-auto space-y-6">
+    <div class="space-y-6">
       {/* Header section */}
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-[#E2DFD8] dark:border-[#2E3138]">
         <div>

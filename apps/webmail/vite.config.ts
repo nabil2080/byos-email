@@ -12,6 +12,7 @@ export default defineConfig({
   server: {
     port: 3001,
     host: process.env.VITE_HOST || "0.0.0.0",
+    allowedHosts: true,
     proxy: {
       "/v1": process.env.VITE_API_URL || "http://127.0.0.1:8080",
       "/api/v1": process.env.VITE_API_URL || "http://127.0.0.1:8080",

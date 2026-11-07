@@ -15,6 +15,7 @@ export interface DisplayMessage {
   folderId?: string | null;
   labelIds?: string[];
   sender: string;
+  senderName?: string;
   recipient: string;
   recipients?: string[];
   subject: string;
@@ -104,6 +105,7 @@ interface MessageListProps {
   categoryCounts?: Record<FocusedCategory, { total: number; unread: number }>;
   focusedInboxEnabled?: boolean;
   onMoveToCategory?: (msg: DisplayMessage, category: FocusedCategory) => void;
+  onLoadMore?: () => void;
   currentUserEmail?: string;
   currentUserPhotoUrl?: string | null;
   activeModule?: AppModule;
@@ -112,33 +114,13 @@ interface MessageListProps {
   isOnline?: boolean;
   isCustomizerOpen?: boolean;
   onToggleCustomizer?: () => void;
+  onOpenSubscriptions?: () => void;
   activeLabel?: MailboxLabel | null;
   onClearActiveLabel?: () => void;
   getSubtreeLabelIds?: (id: string, labels: MailboxLabel[]) => string[];
 }
 
 export const MessageList: Component<MessageListProps> = (props) => {
-  // Morphing sliding indicator for Focused Inbox category tabs
-  const [tabPillStyle, setTabPillStyle] = createSignal<{ left: number; width: number; opacity: number }>({
-    left: 0,
-    width: 0,
-    opacity: 0,
-  });
-  const tabRefs = new Map<string, HTMLButtonElement>();
-
-  createEffect(() => {
-    const cat = props.focusedCategory || "primary";
-    const el = tabRefs.get(cat);
-    if (el) {
-      setTabPillStyle({
-        left: el.offsetLeft,
-        width: el.offsetWidth,
-        opacity: 1,
-      });
-    } else {
-      setTabPillStyle((prev) => ({ ...prev, opacity: 0 }));
-    }
-  });
 
   const folderNames: Record<Folder, string> = {
     inbox: "Inbox",
@@ -161,7 +143,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
   return (
     <div
       data-testid="message-list"
-      class="w-full bg-[#FAF9F6] dark:bg-[#1E2025] flex flex-col min-w-0 overflow-hidden h-full"
+      class="w-full bg-[#FAF9F6] dark:bg-[#1E2025] flex flex-col min-w-0 min-h-0 overflow-hidden"
     >
       {/* Label Filter Chip Row */}
       <Show when={props.activeLabel}>
@@ -254,30 +236,11 @@ export const MessageList: Component<MessageListProps> = (props) => {
       {/* Focused Inbox Tabs (Inbox view only, when enabled) */}
       <Show when={props.currentFolder === "inbox" && props.focusedInboxEnabled !== false && props.onSelectCategory}>
         <div
-          class="relative flex items-center gap-1 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#1A1B20] px-2.5 py-1.5 overflow-x-auto no-scrollbar flex-shrink-0"
+          class="relative hidden md:flex items-center gap-1 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#1A1B20] px-2.5 py-1.5 overflow-x-auto no-scrollbar flex-shrink-0"
           role="tablist"
           aria-label="Focused Inbox Categories"
           data-testid="focused-inbox-tabs"
         >
-          {/* Morphing Sliding Background Pill */}
-          <div
-            class="absolute top-1.5 bottom-1.5 rounded-xl bg-white dark:bg-[#252830] shadow-2xs border border-[#E2DFD8]/80 dark:border-[#2E3138] transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] pointer-events-none z-0"
-            style={{
-              left: `${tabPillStyle().left}px`,
-              width: `${tabPillStyle().width}px`,
-              opacity: tabPillStyle().opacity,
-            }}
-          />
-          {/* Morphing Sliding Accent Underline */}
-          <div
-            class="absolute bottom-0 h-0.5 bg-[#9E725F] rounded-full transition-all duration-250 ease-[cubic-bezier(0.2,0,0,1)] pointer-events-none z-10"
-            style={{
-              left: `${tabPillStyle().left}px`,
-              width: `${tabPillStyle().width}px`,
-              opacity: tabPillStyle().opacity,
-            }}
-          />
-
           <For
             each={[
               {
@@ -287,16 +250,6 @@ export const MessageList: Component<MessageListProps> = (props) => {
                   <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
                     <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
                     <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
-                  </svg>
-                ),
-              },
-              {
-                id: "notifications" as FocusedCategory,
-                label: "Notifications",
-                icon: (
-                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
-                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
                   </svg>
                 ),
               },
@@ -329,30 +282,29 @@ export const MessageList: Component<MessageListProps> = (props) => {
               const unreadCount = () => props.categoryCounts?.[cat.id]?.unread || 0;
               return (
                 <button
-                  ref={(el) => { if (el) tabRefs.set(cat.id, el); }}
                   type="button"
                   role="tab"
                   aria-selected={isActive()}
                   data-category={cat.id}
                   data-testid={`category-tab-${cat.id}`}
                   onClick={() => props.onSelectCategory?.(cat.id)}
-                  class={`relative z-10 flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-xl transition-colors duration-150 cursor-pointer whitespace-nowrap focus:outline-none focus:ring-1 focus:ring-[#9E725F]/40 bg-transparent ${
+                  class={`relative flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-xl transition-all duration-150 cursor-pointer whitespace-nowrap select-none focus:outline-none focus:ring-1 focus:ring-[#A27561]/40 ${
                     isActive()
-                      ? "text-[#1A1B1E] dark:text-[#F3F4F6] font-semibold"
-                      : "text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6]"
+                      ? "bg-[#F2E8E2] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-semibold shadow-2xs"
+                      : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
                   }`}
                 >
-                  <span class={`flex-shrink-0 ${isActive() ? "text-[#9E725F]" : "text-[#6F7173] dark:text-[#A1A1AA]"}`}>
+                  <span class={`flex-shrink-0 ${isActive() ? "text-[#A27561] dark:text-[#D4A38F]" : "text-[#6F7173] dark:text-[#878A8E]"}`}>
                     {cat.icon}
                   </span>
                   <span>{cat.label}</span>
                   <Show when={unreadCount() > 0}>
                     <span
                       data-testid={`category-badge-${cat.id}`}
-                      class={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      class={`text-[11px] font-mono tabular-nums px-1.5 py-0.5 rounded-full ${
                         isActive()
-                          ? "bg-[#9E725F] text-white"
-                          : "bg-stone-200 dark:bg-stone-700 text-[#3C3D3E] dark:text-[#F3F4F6]"
+                          ? "bg-[#A27561] text-white font-semibold"
+                          : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
                       }`}
                     >
                       {unreadCount()}
@@ -362,6 +314,22 @@ export const MessageList: Component<MessageListProps> = (props) => {
               );
             }}
           </For>
+
+          {/* Manage Subscriptions Shortcut Button */}
+          <Show when={props.focusedCategory === "newsletters" && props.onOpenSubscriptions}>
+            <button
+              type="button"
+              onClick={props.onOpenSubscriptions}
+              data-testid="manage-subscriptions-btn"
+              class="ml-auto relative z-10 flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-[#A27561] hover:text-[#885d4b] dark:text-[#C49B89] bg-[#F2E8E2]/80 dark:bg-[#2D2522] hover:bg-[#EBDDD5] dark:hover:bg-[#362C28] rounded-xl border border-[#E2DFD8] dark:border-[#3E3430] transition cursor-pointer shadow-2xs whitespace-nowrap"
+            >
+              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+              <span>Manage Subscriptions</span>
+            </button>
+          </Show>
         </div>
       </Show>
 
@@ -389,7 +357,15 @@ export const MessageList: Component<MessageListProps> = (props) => {
       </Show>
 
       {/* Messages Scroll Area */}
-      <div class="flex-1 overflow-y-auto min-w-0 overflow-x-hidden custom-scrollbar">
+      <div
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          if (el.scrollHeight - el.scrollTop - el.clientHeight < 300) {
+            props.onLoadMore?.();
+          }
+        }}
+        class="flex-1 min-h-0 overflow-y-auto min-w-0 overflow-x-hidden custom-scrollbar"
+      >
         <Show when={props.isLoading}>
           <div class="p-4 space-y-2">
             <div class="h-12 rounded-lg bg-[#E2DFD8]/50 dark:bg-[#2A2D35]/50 animate-pulse" />

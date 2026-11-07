@@ -1,6 +1,7 @@
 import { Component, Show, For, createSignal, createEffect, onMount, onCleanup } from "solid-js";
 import { UserMe, Mailbox, ConnectedAccount, MailboxFolder, MailboxLabel, getAccountColor } from "../api";
 import { AccountSwitcher } from "./AccountSwitcher";
+import { FocusedCategory } from "../focused_inbox";
 import {
   buildLabelTree,
   flattenVisibleLabelTree,
@@ -58,6 +59,11 @@ interface SidebarProps {
   accountUnreadCounts?: Record<string, number>;
   excludedAccountIds?: Set<string> | string[];
   onToggleAccountInclusion?: (accountId: string, included?: boolean) => void;
+  focusedInboxEnabled?: boolean;
+  focusedCategory?: FocusedCategory;
+  onSelectCategory?: (cat: FocusedCategory) => void;
+  categoryCounts?: Record<FocusedCategory, { total: number; unread: number }>;
+  onOpenSubscriptions?: () => void;
   profilePhotoUrl?: string | null;
   photoUrls?: Record<string, string>;
 }
@@ -93,6 +99,9 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
   const activeFolderKey = () => {
     if (props.activeLabelId || props.activeFolderId) return null;
+    if (props.focusedCategory && props.focusedCategory !== "primary" && props.currentFolder === "inbox") {
+      return null;
+    }
     if (props.activeAccountId === "__all__" || props.currentFolder === "unified_inbox") {
       return "unified_inbox";
     }
@@ -344,11 +353,11 @@ export const Sidebar: Component<SidebarProps> = (props) => {
             <button
               type="button"
               onClick={props.onCloseMobile}
-              class="md:hidden flex items-center justify-center w-8 h-8 rounded-lg text-[#6F7173] dark:text-[#878A8E] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF] dark:hover:bg-[#26282E] transition cursor-pointer"
+              class="md:hidden flex items-center justify-center w-11 h-11 min-w-[44px] min-h-[44px] rounded-xl text-[#6F7173] dark:text-[#878A8E] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF] dark:hover:bg-[#26282E] transition cursor-pointer"
               title="Close navigation menu"
               aria-label="Close navigation menu"
             >
-              <svg class="w-4 h-4 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+              <svg class="w-5 h-5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
                 <line x1="18" y1="6" x2="6" y2="18" />
                 <line x1="6" y1="6" x2="18" y2="18" />
               </svg>
@@ -395,7 +404,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               props.onCompose();
               props.onCloseMobile?.();
             }}
-            class="w-full bg-gradient-to-b from-[#A27561] via-[#986A57] to-[#8E6351] hover:from-[#966855] hover:to-[#825746] text-white text-[13px] tracking-wide font-semibold py-2.5 px-3.5 min-h-[40px] rounded-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_2px_4px_rgba(162,117,97,0.25)] hover:shadow-[inset_0_1px_1px_rgba(255,255,255,0.35),0_3px_8px_rgba(162,117,97,0.3)] transition-all duration-150 flex items-center justify-between cursor-pointer active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/40"
+            class="w-full bg-gradient-to-b from-[#A27561] via-[#986A57] to-[#8E6351] hover:from-[#966855] hover:to-[#825746] text-white text-[13px] tracking-wide font-semibold py-2.5 px-4 min-h-[44px] rounded-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_2px_4px_rgba(162,117,97,0.25)] hover:shadow-[inset_0_1px_1px_rgba(255,255,255,0.35),0_3px_8px_rgba(162,117,97,0.3)] transition-all duration-150 flex items-center justify-between cursor-pointer active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/40"
           >
             <div class="flex items-center gap-2">
               <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24">
@@ -404,7 +413,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               </svg>
               <span>New Message</span>
             </div>
-            <kbd class="hidden sm:inline-block text-[10px] font-mono text-white/80 bg-black/20 px-1.5 py-0.5 rounded border border-white/15 leading-none">C</kbd>
+            <kbd class="hidden sm:inline-block text-xs font-mono text-white/80 bg-black/20 px-1.5 py-0.5 rounded border border-white/15 leading-none">C</kbd>
           </button>
         </div>
       </div>
@@ -444,6 +453,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                   }
                 } else {
                   props.onSelectFolder("inbox");
+                  props.onSelectCategory?.("primary");
                 }
                 props.onCloseMobile?.();
               }}
@@ -458,10 +468,10 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 }
               }}
               onDrop={(e) => handleDrop(e, isAllInboxes() ? "unified_inbox" : "inbox", false)}
-              class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all duration-150 cursor-pointer select-none bg-transparent ${
+              class={`relative z-10 w-full flex items-center justify-between px-3 py-2 min-h-[36px] text-sm rounded-xl transition-all duration-150 cursor-pointer select-none bg-transparent ${
                 dragOverTarget() === (isAllInboxes() ? "unified_inbox" : "inbox")
                   ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
-                  : (isAllInboxes() ? props.currentFolder === "unified_inbox" : props.currentFolder === "inbox")
+                  : (isAllInboxes() ? props.currentFolder === "unified_inbox" : (props.currentFolder === "inbox" && (!props.focusedCategory || props.focusedCategory === "primary")))
                   ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
                   : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
               }`}
@@ -478,8 +488,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               <div class="flex items-center gap-1.5">
                 <Show when={(isAllInboxes() ? (props.unifiedUnreadCount || 0) : (props.folderCounts?.inbox || 0)) > 0}>
                   <span
-                    class={`text-xs font-mono px-1.5 py-0.2 rounded-full ${
-                      (isAllInboxes() ? props.currentFolder === "unified_inbox" : props.currentFolder === "inbox")
+                    class={`text-xs font-mono px-1.5 py-0.5 rounded-full ${
+                      (isAllInboxes() ? props.currentFolder === "unified_inbox" : (props.currentFolder === "inbox" && (!props.focusedCategory || props.focusedCategory === "primary")))
                         ? "bg-[#A27561] text-white font-semibold"
                         : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
                     }`}
@@ -512,7 +522,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
             <Show when={isAllInboxes() && showUnifiedConfig()}>
               <div class="absolute left-2 right-2 top-full mt-1 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-xl p-2.5 z-50 text-xs space-y-2">
                 <div class="flex items-center justify-between">
-                  <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] text-[10px] uppercase tracking-wider font-mono">
+                  <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] text-xs uppercase tracking-wider font-mono">
                     Included Accounts
                   </span>
                   <button
@@ -557,6 +567,92 @@ export const Sidebar: Component<SidebarProps> = (props) => {
             </Show>
           </div>
 
+          {/* Focused Inbox Independent Folders (Only in Tab and Phone View: Newsletters & Social) */}
+          <Show when={(props.focusedInboxEnabled ?? true) && props.onSelectCategory}>
+            <div
+              data-testid="sidebar-focused-inbox-folders"
+              data-testid-alt="sidebar-focused-inbox-subfolders"
+              class="lg:hidden space-y-1"
+            >
+              <For
+                each={[
+                  {
+                    id: "newsletters" as FocusedCategory,
+                    label: "Newsletters",
+                    icon: (
+                      <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                        <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+                        <polyline points="22,6 12,13 2,6" />
+                      </svg>
+                    ),
+                  },
+                  {
+                    id: "social" as FocusedCategory,
+                    label: "Social",
+                    icon: (
+                      <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                        <circle cx="9" cy="7" r="4" />
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                      </svg>
+                    ),
+                  },
+                ]}
+              >
+                {(cat) => {
+                  const isCatActive = () => props.currentFolder === "inbox" && (props.focusedCategory || "primary") === cat.id;
+                  const unread = () => props.categoryCounts?.[cat.id]?.unread || 0;
+                  return (
+                    <button
+                      type="button"
+                      data-testid={`sidebar-focused-tab-${cat.id}`}
+                      onClick={() => {
+                        props.onSelectFolder("inbox");
+                        props.onSelectCategory?.(cat.id);
+                        props.onCloseMobile?.();
+                      }}
+                      class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all duration-150 cursor-pointer select-none bg-transparent ${
+                        isCatActive()
+                          ? "text-[#A27561] dark:text-[#D4A38F] font-semibold bg-[#F2E8E2]/60 dark:bg-[#2D2522]/60"
+                          : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
+                      }`}
+                    >
+                      <div class="flex items-center gap-2.5">
+                        {cat.icon}
+                        <span>{cat.label}</span>
+                      </div>
+                      <Show when={unread() > 0}>
+                        <span class={`text-xs font-mono tabular-nums px-1.5 py-0.5 rounded-full ${isCatActive() ? "bg-[#A27561] text-white font-semibold" : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"}`}>
+                          {unread()}
+                        </span>
+                      </Show>
+                    </button>
+                  );
+                }}
+              </For>
+              <Show when={props.onOpenSubscriptions}>
+                <button
+                  type="button"
+                  data-testid="sidebar-manage-subscriptions-btn"
+                  onClick={() => {
+                    props.onOpenSubscriptions?.();
+                    props.onCloseMobile?.();
+                  }}
+                  class="w-full flex items-center justify-between px-3 py-2 min-h-[36px] text-xs sm:text-sm rounded-xl text-[#75777B] dark:text-[#A1A1AA] hover:text-[#A27561] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium cursor-pointer transition-colors"
+                >
+                  <div class="flex items-center gap-2 pl-6">
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                      <path d="M12 20h9" />
+                      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                    </svg>
+                    <span>Manage Subscriptions</span>
+                  </div>
+                </button>
+              </Show>
+            </div>
+          </Show>
+
           {/* Remaining Folders */}
           <For each={(["sent", "scheduled", "drafts", "snoozed", "archive", "spam", "trash"] as Folder[])}>
             {(f) => {
@@ -580,7 +676,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                     if (dragOverTarget() === f) setDragOverTarget(null);
                   }}
                   onDrop={(e) => handleDrop(e, f, false)}
-                  class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all duration-150 cursor-pointer select-none bg-transparent ${
+                  class={`relative z-10 w-full flex items-center justify-between px-3 py-2 min-h-[36px] text-sm rounded-xl transition-all duration-150 cursor-pointer select-none bg-transparent ${
                     isDropTarget()
                       ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-2 border-[#A27561] border-dashed rounded-xl scale-[1.02]"
                       : isActive()
@@ -593,8 +689,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                     {renderFolderIcon(f)}
                     <span>{folderLabels[f]}</span>
                   </div>
-                  <Show when={count() > 0}>
-                    <span class={`text-xs font-mono tabular-nums px-1.5 py-0.2 rounded-full ${isActive() ? "bg-[#A27561] text-white font-semibold" : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"}`}>
+                  <Show when={f !== "sent" && count() > 0}>
+                    <span class={`text-xs font-mono tabular-nums px-1.5 py-0.5 rounded-full ${isActive() ? "bg-[#A27561] text-white font-semibold" : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"}`}>
                       {count()}
                     </span>
                   </Show>
@@ -606,11 +702,11 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
         {/* Custom Folders Section */}
         <div class="px-2 pt-2 border-t border-[#E2DFD8]/50 dark:border-[#2E3138]">
-          <div class="flex items-center justify-between px-2 py-1 text-[10px] font-semibold text-[#878A8E] uppercase tracking-widest font-mono">
+          <div class="flex items-center justify-between px-2 py-1 text-xs font-semibold text-[#878A8E] uppercase tracking-wider font-mono">
             <span>Folders</span>
             <button
               onClick={() => props.onOpenCreateFolder?.()}
-              class="w-5 h-5 flex items-center justify-center rounded-md hover:bg-[#E8E5DF] dark:hover:bg-[#26282E] text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] cursor-pointer transition"
+              class="w-7 h-7 min-w-[28px] min-h-[28px] flex items-center justify-center rounded-md hover:bg-[#E8E5DF] dark:hover:bg-[#26282E] text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] cursor-pointer transition"
               title="Create folder"
             >
               <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -730,18 +826,18 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               }}
             </For>
             <Show when={!props.customFolders || props.customFolders.length === 0}>
-              <div class="px-3 py-1 text-[11px] text-[#878A8E] italic">No folders</div>
+              <div class="px-3 py-1 text-xs text-[#878A8E] italic">No folders</div>
             </Show>
           </div>
         </div>
 
         {/* Labels Section */}
         <div class="px-2 pt-2 border-t border-[#E2DFD8]/50 dark:border-[#2E3138]">
-          <div class="flex items-center justify-between px-2 py-1 text-[10px] font-semibold text-[#878A8E] uppercase tracking-widest font-mono">
+          <div class="flex items-center justify-between px-2 py-1 text-xs font-semibold text-[#878A8E] uppercase tracking-wider font-mono">
             <span>Labels</span>
             <button
               onClick={() => props.onOpenCreateLabel?.()}
-              class="w-5 h-5 flex items-center justify-center rounded-md hover:bg-[#E8E5DF] dark:hover:bg-[#26282E] text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] cursor-pointer transition"
+              class="w-7 h-7 min-w-[28px] min-h-[28px] flex items-center justify-center rounded-md hover:bg-[#E8E5DF] dark:hover:bg-[#26282E] text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] cursor-pointer transition"
               title="Create label"
             >
               <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -939,7 +1035,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               }}
             </For>
             <Show when={!props.labels || props.labels.length === 0}>
-              <div class="px-3 py-1 text-[11px] text-[#878A8E] italic">No labels</div>
+              <div class="px-3 py-1 text-xs text-[#878A8E] italic">No labels</div>
             </Show>
           </div>
         </div>
@@ -960,7 +1056,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               data-testid="sidebar-contacts-btn"
               data-testid-secondary="contacts-nav-btn"
               aria-label="Contacts"
-              class="w-full flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none"
+              class="w-full h-9 min-h-[36px] flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none"
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -972,7 +1068,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
             </button>
             <div
               role="tooltip"
-              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-[11px] font-medium shadow-md whitespace-nowrap"
+              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-xs font-medium shadow-md whitespace-nowrap"
             >
               Contacts
               <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1E2025] dark:border-t-[#2A2D35]" />
@@ -991,7 +1087,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               }}
               data-testid="sidebar-settings-btn"
               aria-label="Settings"
-              class="w-full flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none"
+              class="w-full h-9 min-h-[36px] flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none"
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="3" />
@@ -1001,7 +1097,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
             </button>
             <div
               role="tooltip"
-              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-[11px] font-medium shadow-md whitespace-nowrap"
+              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-xs font-medium shadow-md whitespace-nowrap"
             >
               Settings
               <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1E2025] dark:border-t-[#2A2D35]" />
@@ -1017,7 +1113,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               onClick={() => props.onLogout?.(props.selectedMailbox?.id, false)}
               data-testid="sidebar-signout-btn"
               aria-label="Sign out"
-              class="w-full flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/15 transition-all duration-150 cursor-pointer select-none"
+              class="w-full h-9 min-h-[36px] flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/15 transition-all duration-150 cursor-pointer select-none"
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -1028,7 +1124,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
             </button>
             <div
               role="tooltip"
-              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-[11px] font-medium shadow-md whitespace-nowrap"
+              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-xs font-medium shadow-md whitespace-nowrap"
             >
               Sign out
               <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1E2025] dark:border-t-[#2A2D35]" />

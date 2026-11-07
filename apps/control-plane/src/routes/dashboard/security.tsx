@@ -411,7 +411,8 @@ const SecurityPage: Component = () => {
         if (typeof window !== "undefined" && window.PublicKeyCredential) {
           try {
             const opts = await fetchPasskeyStepUpOptions();
-            const effectiveRpId = opts.rpId || window.location.hostname;
+            const currentHost = window.location.hostname;
+            const effectiveRpId = (opts.rpId && (opts.rpId === currentHost || currentHost.endsWith("." + opts.rpId))) ? opts.rpId : currentHost;
             const allowCreds = opts.allowCredentials?.map((c) => ({
               id: base64URLToBuffer(c.id),
               type: "public-key" as const,
@@ -624,7 +625,8 @@ const SecurityPage: Component = () => {
     try {
       const opts = await fetchPasskeyRegisterOptions();
 
-      const effectiveRpId = opts.rp?.id || window.location.hostname;
+      const currentHost = window.location.hostname;
+      const effectiveRpId = (opts.rp?.id && (opts.rp.id === currentHost || currentHost.endsWith("." + opts.rp.id))) ? opts.rp.id : currentHost;
 
       const cred = (await navigator.credentials.create({
         publicKey: {

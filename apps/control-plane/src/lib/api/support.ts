@@ -57,7 +57,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${apiBase()}${path}`, { credentials: "include", ...init, headers });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    const err = new Error(text || `Request failed ${res.status}`) as Error & { status: number };
+    let errorMsg = `Request failed ${res.status}`;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed.error === "string") {
+        errorMsg = parsed.error;
+      }
+    } catch {
+      if (text) errorMsg = text;
+    }
+    const err = new Error(errorMsg) as Error & { status: number };
     err.status = res.status;
     throw err;
   }

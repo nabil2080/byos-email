@@ -8,7 +8,7 @@ export interface ProfileAvatarProps {
   photoUrl?: string | null;
   avatarUrl?: string | null;
   isAll?: boolean;
-  size?: "dropdown" | "chip" | "row" | "header" | "xs" | "sm" | "md" | "lg";
+  size?: "dropdown" | "chip" | "row" | "header" | "xs" | "sm" | "md" | "lg" | "card";
   class?: string;
   testId?: string;
 }
@@ -56,6 +56,8 @@ export const ProfileAvatar: Component<ProfileAvatarProps> = (props) => {
       case "header":
       case "lg":
         return "w-9 h-9 min-w-9 min-h-9 text-sm"; // 36x36
+      case "card":
+        return "w-10 h-10 min-w-10 min-h-10 text-sm font-semibold"; // 40x40
       case "md":
       default:
         return "w-7 h-7 min-w-7 min-h-7 text-xs"; // default 28x28
@@ -81,7 +83,7 @@ export const ProfileAvatar: Component<ProfileAvatarProps> = (props) => {
     >
       <Show
         when={resolvedPhotoUrl() && !imgError()}
-        fallback={<span data-testid="avatar-fallback-initial" class="leading-none select-none">{initial()}</span>}
+        fallback={<span data-testid="avatar-fallback-initial" class="leading-none select-none flex items-center justify-center w-full h-full">{initial() === "?" ? <svg class="w-1/2 h-1/2 fill-current opacity-90 select-none pointer-events-none" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" /></svg> : initial()}</span>}
       >
         <img
           src={resolvedPhotoUrl()!}

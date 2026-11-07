@@ -14,10 +14,10 @@ interface InboxToolbarProps {
   onSortChange: (order: SortOrder) => void;
   searchQuery?: string;
   onSearchChange?: (q: string) => void;
-  currentPage: number;
-  pageSize: number;
-  onPrevPage: () => void;
-  onNextPage: () => void;
+  currentPage?: number;
+  pageSize?: number;
+  onPrevPage?: () => void;
+  onNextPage?: () => void;
   onBatchArchive: () => void;
   onBatchSpam: () => void;
   onBatchTrash: () => void;
@@ -93,8 +93,9 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
   const isAllSelected = () =>
     props.totalVisibleCount > 0 && props.selectedCount >= props.totalVisibleCount;
 
-  const pageStart = () => (props.totalCount === 0 ? 0 : (props.currentPage - 1) * props.pageSize + 1);
-  const pageEnd = () => Math.min(props.currentPage * props.pageSize, props.totalCount);
+  const pageStart = () =>
+    props.totalCount === 0 ? 0 : ((props.currentPage ?? 1) - 1) * (props.pageSize ?? 50) + 1;
+  const pageEnd = () => Math.min((props.currentPage ?? 1) * (props.pageSize ?? 50), props.totalCount);
 
   const renderMasterCheckbox = () => (
     <div class="relative flex items-center bg-white dark:bg-[#1E2025] rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] p-0.5 shadow-2xs">
@@ -214,7 +215,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
           e.stopPropagation();
           toggleMenu("move");
         }}
-        class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+        class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
         title="Move to folder"
       >
         <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -227,7 +228,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
           onClick={(e) => e.stopPropagation()}
           class={`absolute ${alignment} top-full mt-1.5 w-48 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-xl py-1 z-50 text-xs font-sans max-h-64 overflow-y-auto`}
         >
-          <div class="px-3 py-1 text-[10px] font-bold text-[#878A8E] dark:text-[#71717A] uppercase tracking-wider font-mono">
+          <div class="px-3 py-1 text-xs font-bold text-[#878A8E] dark:text-[#71717A] uppercase tracking-wider font-mono">
             System Folders
           </div>
           <button
@@ -291,7 +292,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
 
           <Show when={props.customFolders && props.customFolders.length > 0}>
             <div class="my-1 border-t border-[#E2DFD8] dark:border-[#2E3138]"></div>
-            <div class="px-3 py-1 text-[10px] font-bold text-[#878A8E] dark:text-[#71717A] uppercase tracking-wider font-mono">
+            <div class="px-3 py-1 text-xs font-bold text-[#878A8E] dark:text-[#71717A] uppercase tracking-wider font-mono">
               Custom Folders
             </div>
             <For each={props.customFolders}>
@@ -325,7 +326,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
           e.stopPropagation();
           toggleMenu("label");
         }}
-        class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+        class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
         title="Label as"
       >
         <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -339,7 +340,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
           onClick={(e) => e.stopPropagation()}
           class={`absolute ${alignment} top-full mt-1.5 w-48 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] shadow-xl py-1 z-50 text-xs font-sans max-h-64 overflow-y-auto`}
         >
-          <div class="px-3 py-1 text-[10px] font-bold text-[#878A8E] dark:text-[#71717A] uppercase tracking-wider font-mono">
+          <div class="px-3 py-1 text-xs font-bold text-[#878A8E] dark:text-[#71717A] uppercase tracking-wider font-mono">
             Labels
           </div>
           <For each={props.labels || []}>
@@ -363,7 +364,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
             )}
           </For>
           <Show when={!props.labels || props.labels.length === 0}>
-            <div class="px-3 py-1.5 text-[#878A8E] dark:text-[#71717A] text-[11px] italic">
+            <div class="px-3 py-1.5 text-[#878A8E] dark:text-[#71717A] text-xs italic">
               No labels created
             </div>
           </Show>
@@ -459,7 +460,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
         when={props.isSplit && props.selectedCount > 0}
         fallback={
           /* Single-Row Toolbar for Full-Width or Unselected Split Mode */
-          <div class="flex items-center justify-between min-h-[32px] flex-nowrap whitespace-nowrap gap-2 relative">
+          <div class="flex items-center justify-between min-h-[36px] flex-nowrap whitespace-nowrap gap-2 relative">
             {/* Left Side: Checkbox & Contextual Actions */}
             <div class="flex items-center gap-1 sm:gap-2 min-w-0">
               {renderMasterCheckbox()}
@@ -476,7 +477,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                         props.onRefresh();
                         setTimeout(() => setIsSpinning(false), 800);
                       }}
-                      class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                      class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                       title="Refresh mail"
                     >
                       <svg
@@ -499,7 +500,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                           e.stopPropagation();
                           toggleMenu("sort");
                         }}
-                        class="px-2 py-1 text-xs text-[#55575B] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] flex items-center gap-1 font-medium"
+                        class="h-9 min-h-[36px] px-2.5 text-xs text-[#55575B] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] flex items-center gap-1 font-medium"
                         title="Sort order"
                       >
                         <span class="capitalize">{props.sortOrder}</span>
@@ -579,7 +580,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                       <button
                         type="button"
                         onClick={props.onToggleViewMode}
-                        class="px-2 py-1 text-xs text-[#55575B] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] flex items-center gap-1 font-medium"
+                        class="h-9 min-h-[36px] px-2.5 text-xs text-[#55575B] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] flex items-center gap-1 font-medium"
                         title={props.viewMode === "threads" ? "Switch to flat view" : "Switch to thread view"}
                       >
                         <svg class="w-3.5 h-3.5 text-[#878A8E] dark:text-[#71717A] stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
@@ -614,7 +615,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                   <button
                     type="button"
                     onClick={props.onBatchArchive}
-                    class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                    class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                     title="Archive selected"
                   >
                     <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -628,7 +629,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                   <button
                     type="button"
                     onClick={props.onBatchSpam}
-                    class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                    class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                     title="Report Spam"
                   >
                     <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -645,7 +646,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                       <button
                         type="button"
                         onClick={props.onBatchTrash}
-                        class="p-1.5 text-[#464748] dark:text-[#A1A1AA] hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                        class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#464748] dark:text-[#A1A1AA] hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                         title="Move to Trash"
                       >
                         <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -658,7 +659,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                     <button
                       type="button"
                       onClick={props.onBatchDeleteForever}
-                      class="p-1.5 text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition cursor-pointer border border-transparent hover:border-rose-200 dark:hover:border-rose-900/50"
+                      class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition cursor-pointer border border-transparent hover:border-rose-200 dark:hover:border-rose-900/50"
                       title="Delete Forever"
                     >
                       <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
@@ -674,7 +675,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                   <button
                     type="button"
                     onClick={() => props.onBatchToggleRead(!props.isAllSelectedRead)}
-                    class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                    class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                     title={props.isAllSelectedRead ? "Mark as unread" : "Mark as read"}
                   >
                     <Show
@@ -697,7 +698,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                   <button
                     type="button"
                     onClick={() => props.onBatchToggleStarred(true)}
-                    class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-amber-500 hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                    class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-amber-500 hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                     title="Add star"
                   >
                     <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -711,35 +712,45 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
               </Show>
             </div>
 
-            {/* Right Side: Pagination */}
+            {/* Right Side: Progressive Message Count & Desktop PC Pagination (Hidden on Phone and Tablet) */}
             <div class="flex items-center gap-1.5 text-xs text-[#878A8E] dark:text-[#71717A] font-mono">
-              <span>
-                {pageStart()}–{pageEnd()} of {props.totalCount}
+              <span data-testid="inbox-message-count">
+                {props.totalCount === 0
+                  ? "0 messages"
+                  : `${pageStart()}–${pageEnd()} of ${props.totalCount}`}
               </span>
-              <div class="flex items-center gap-0.5">
-                <button
-                  type="button"
-                  onClick={props.onPrevPage}
-                  disabled={props.currentPage <= 1}
-                  class="p-1 rounded text-[#55575B] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-white dark:hover:bg-[#1E2025] disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
-                  title="Previous page"
-                >
-                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="15 18 9 12 15 6" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  onClick={props.onNextPage}
-                  disabled={pageEnd() >= props.totalCount}
-                  class="p-1 rounded text-[#55575B] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] hover:bg-white dark:hover:bg-[#1E2025] disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
-                  title="Next page"
-                >
-                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="9 18 15 12 9 6" />
-                  </svg>
-                </button>
-              </div>
+
+              {/* PC-Only Pagination Chevrons (Strictly hidden on Phone and Tablet) */}
+              <Show when={props.totalCount > (props.pageSize ?? 50) && props.onPrevPage && props.onNextPage}>
+                <div class="hidden lg:flex items-center gap-0.5 ml-1">
+                  <button
+                    type="button"
+                    onClick={props.onPrevPage}
+                    disabled={(props.currentPage ?? 1) <= 1}
+                    class="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white dark:hover:bg-[#1E2025] text-[#55575B] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                    title="Previous 50"
+                    aria-label="Previous 50 messages"
+                    data-testid="inbox-pagination-prev"
+                  >
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                      <polyline points="15 18 9 12 15 6" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={props.onNextPage}
+                    disabled={pageEnd() >= props.totalCount}
+                    class="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white dark:hover:bg-[#1E2025] text-[#55575B] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                    title="Next 50"
+                    aria-label="Next 50 messages"
+                    data-testid="inbox-pagination-next"
+                  >
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                  </button>
+                </div>
+              </Show>
             </div>
           </div>
         }
@@ -747,7 +758,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
         {/* Two-Row Toolbar for Split View when items are selected */}
         <div class="flex flex-col gap-1.5 p-1 bg-[#FAF9F6] dark:bg-[#18191D] relative z-20">
           {/* Row 1: Selection Status & Deselect */}
-          <div class="flex items-center justify-between min-h-[32px]">
+          <div class="flex items-center justify-between min-h-[36px]">
             <div class="flex items-center gap-2">
               {renderMasterCheckbox()}
               <span class="text-xs font-semibold text-[#A27561] dark:text-[#D4A38F] bg-[#F2E8E2] dark:bg-[#2D2522] px-2 py-0.5 rounded-md font-mono">
@@ -769,7 +780,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
               <button
                 type="button"
                 onClick={props.onBatchArchive}
-                class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                 title="Archive selected"
               >
                 <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -784,7 +795,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                   <button
                     type="button"
                     onClick={props.onBatchTrash}
-                    class="p-1.5 text-[#464748] dark:text-[#A1A1AA] hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:border-[#2E3138]"
+                    class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#464748] dark:text-[#A1A1AA] hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:border-[#2E3138]"
                     title="Move to Trash"
                   >
                     <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
@@ -797,7 +808,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                 <button
                   type="button"
                   onClick={props.onBatchDeleteForever}
-                  class="p-1.5 text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition cursor-pointer border border-transparent hover:border-rose-200 dark:hover:border-rose-900/50"
+                  class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition cursor-pointer border border-transparent hover:border-rose-200 dark:hover:border-rose-900/50"
                   title="Delete Forever"
                 >
                   <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
@@ -811,7 +822,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
               <button
                 type="button"
                 onClick={() => props.onBatchToggleRead(!props.isAllSelectedRead)}
-                class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                 title={props.isAllSelectedRead ? "Mark as unread" : "Mark as read"}
               >
                 <Show
@@ -832,7 +843,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
               <button
                 type="button"
                 onClick={() => props.onBatchToggleStarred(true)}
-                class="p-1.5 text-[#55575B] dark:text-[#A1A1AA] hover:text-amber-500 hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-amber-500 hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
                 title="Add star"
               >
                 <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">

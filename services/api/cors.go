@@ -22,12 +22,12 @@ func isAllowedOrigin(origin string, allowedList string) bool {
 			return true
 		}
 	}
-	// In non-production environments, permit any localhost / 127.0.0.1 port
+	// In non-production environments, permit any localhost / 127.0.0.1 or local network port
 	if os.Getenv("BYOS_ENV") != "production" {
 		u, err := url.Parse(origin)
 		if err == nil && (u.Scheme == "http" || u.Scheme == "https") {
 			hostname := u.Hostname()
-			if hostname == "localhost" || hostname == "127.0.0.1" {
+			if hostname == "localhost" || hostname == "127.0.0.1" || strings.HasPrefix(hostname, "192.168.") || strings.HasPrefix(hostname, "10.") || strings.HasPrefix(hostname, "172.") || strings.HasSuffix(hostname, ".trycloudflare.com") {
 				return true
 			}
 		}

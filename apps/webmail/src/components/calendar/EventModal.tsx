@@ -12,6 +12,8 @@ import {
 import { parseRRule, buildRRuleString, ParsedRRule } from "../../utils/calendarRrule";
 import { SUPPORTED_TIMEZONES, zonedTimeToUtc, utcToZonedParts } from "../../utils/calendarTimezones";
 import { generateVideoMeetingUrl } from "./integrations/calendarIntegrationsStore";
+import { detectCategory } from "./kashcalParser";
+import { KashcalCategoryIcon } from "./KashcalCategoryIcon";
 
 export const EVENT_COLOR_PALETTE = [
   { id: "default", label: "Calendar default", hex: "default" },
@@ -108,6 +110,7 @@ export const EventModal: Component<EventModalProps> = (props) => {
   const [recurrenceUntil, setRecurrenceUntil] = createSignal<string>("");
   const [showCustomRecurrence, setShowCustomRecurrence] = createSignal(false);
   const [editScope, setEditScope] = createSignal<"occurrence" | "series">("occurrence");
+  const [showMoreOptions, setShowMoreOptions] = createSignal(false);
 
   const WEEKDAY_OPTIONS = [
     { code: "SU", label: "S", title: "Sunday" },
@@ -308,8 +311,19 @@ export const EventModal: Component<EventModalProps> = (props) => {
         setShowCustomRecurrence(false);
       }
       setEditScope(ev.isOccurrence ? "occurrence" : "series");
+      const hasSecondary = Boolean(
+        ev.details.location ||
+        ev.details.description ||
+        (ev.details.attendees && ev.details.attendees.length > 0) ||
+        ev.rrule ||
+        (ev.details.reminders && ev.details.reminders.length > 0) ||
+        ev.details.meetingUrl ||
+        ev.details.eventType !== "default"
+      );
+      setShowMoreOptions(hasSecondary);
     } else {
       // New event defaults
+      setShowMoreOptions(false);
       setTitle("");
       setColor("default");
       setVisibility(props.defaultVisibility || "default");
@@ -642,13 +656,13 @@ export const EventModal: Component<EventModalProps> = (props) => {
   return (
     <Show when={props.isOpen}>
       <div
-        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-150"
+        class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-150"
         onClick={(e) => {
           if (e.target === e.currentTarget) props.onClose();
         }}
       >
         <div
-          class="w-full max-w-lg bg-white dark:bg-[#1E1F23] rounded-2xl shadow-xl border border-[#E2DFD8] dark:border-[#2A2D35] overflow-hidden flex flex-col max-h-[90vh]"
+          class="w-full max-w-lg bg-white dark:bg-[#1E1F23] rounded-t-2xl sm:rounded-2xl shadow-xl border border-[#E2DFD8] dark:border-[#2A2D35] overflow-hidden flex flex-col h-[92vh] sm:h-auto sm:max-h-[90vh]"
           data-testid="event-modal"
         >
           {/* Header */}
@@ -710,7 +724,16 @@ export const EventModal: Component<EventModalProps> = (props) => {
             </Show>
 
             {/* Event Title (Google Calendar / Tuta Archetype) */}
-            <div class="relative">
+            <div class="relative flex items-center gap-2">
+              <Show when={title().trim()}>
+                <div
+                  class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F5] dark:bg-[#18191D] animate-in fade-in duration-100"
+                  style={{ color: color() !== "default" ? color() : "#9E725F" }}
+                  title={`Detected Category: ${detectCategory(title())}`}
+                >
+                  <KashcalCategoryIcon category={detectCategory(title())} class="w-4 h-4 stroke-current fill-none stroke-[2]" />
+                </div>
+              </Show>
               <input
                 ref={titleInputRef}
                 type="text"
@@ -718,249 +741,11 @@ export const EventModal: Component<EventModalProps> = (props) => {
                 value={title()}
                 onInput={(e) => setTitle(e.currentTarget.value)}
                 disabled={isReadOnly()}
-                class="w-full text-lg sm:text-xl font-medium px-1 py-1.5 border-b-2 border-[#E2DFD8] dark:border-[#2A2D35] focus:border-[#9E725F] bg-transparent text-[#2B2C2D] dark:text-[#ECEBE8] placeholder-[#9E9E9E] dark:placeholder-[#6F7173] outline-none transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                class="flex-1 text-lg sm:text-xl font-medium px-1 py-1.5 border-b-2 border-[#E2DFD8] dark:border-[#2A2D35] focus:border-[#9E725F] bg-transparent text-[#2B2C2D] dark:text-[#ECEBE8] placeholder-[#9E9E9E] dark:placeholder-[#6F7173] outline-none transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 data-testid="event-title-input"
                 required
               />
             </div>
-
-            {/* Event Type Pills */}
-            <div
-              class="grid grid-cols-2 sm:grid-cols-4 gap-1 p-1 rounded-xl bg-[#FAF9F5] dark:bg-[#18191D] border border-[#E2DFD8]/80 dark:border-[#2A2D35]/80 shrink-0 min-h-[38px]"
-              data-testid="event-type-tabs"
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  setEventType("default");
-                  if (status() === "out_of_office") setStatus("busy");
-                }}
-                disabled={isReadOnly()}
-                class={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
-                  eventType() === "default"
-                    ? "bg-white dark:bg-[#2A2D35] text-[#2B2C2D] dark:text-[#ECEBE8] shadow-xs border border-[#E2DFD8] dark:border-[#383C44]"
-                    : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#F0EEE9] dark:hover:bg-[#24262B] border border-transparent"
-                }`}
-                data-testid="event-type-tab-default"
-              >
-                <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
-                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                  <line x1="16" y1="2" x2="16" y2="6" />
-                  <line x1="8" y1="2" x2="8" y2="6" />
-                  <line x1="3" y1="10" x2="21" y2="10" />
-                </svg>
-                <span>Event</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setEventType("focus_time");
-                  if (!title() || title() === "Out of office" || title() === "Working Location") setTitle("Focus time");
-                  setStatus("busy");
-                  setVisibility("private");
-                }}
-                disabled={isReadOnly()}
-                class={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
-                  eventType() === "focus_time"
-                    ? "bg-[#3D5A80] dark:bg-[#4A607A] text-white shadow-xs border border-transparent"
-                    : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#F0EEE9] dark:hover:bg-[#24262B] border border-transparent"
-                }`}
-                data-testid="event-type-tab-focus"
-              >
-                <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="10" />
-                  <circle cx="12" cy="12" r="6" />
-                  <circle cx="12" cy="12" r="2" />
-                </svg>
-                <span>Focus time</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setEventType("out_of_office");
-                  if (!title() || title() === "Focus time" || title() === "Working Location") setTitle("Out of office");
-                  setStatus("out_of_office");
-                  setAutoDeclineMode("new_invitations");
-                }}
-                disabled={isReadOnly()}
-                class={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
-                  eventType() === "out_of_office"
-                    ? "bg-[#8C3B4A] dark:bg-[#A84B5D] text-white shadow-xs border border-transparent"
-                    : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#F0EEE9] dark:hover:bg-[#24262B] border border-transparent"
-                }`}
-                data-testid="event-type-tab-ooo"
-              >
-                <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
-                  <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
-                  <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
-                </svg>
-                <span>Out of office</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setEventType("working_location");
-                  if (!title() || title() === "Focus time" || title() === "Out of office") setTitle("Working Location");
-                  setIsAllDay(true);
-                  setStatus("free");
-                }}
-                disabled={isReadOnly()}
-                class={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
-                  eventType() === "working_location"
-                    ? "bg-[#9E725F] dark:bg-[#865E4D] text-white shadow-xs border border-transparent"
-                    : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35] border border-transparent"
-                }`}
-                data-testid="event-type-tab-location"
-              >
-                <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
-                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-                  <circle cx="12" cy="10" r="3" />
-                </svg>
-                <span>Working location</span>
-              </button>
-            </div>
-
-            {/* Event Template Minimal Inline Dropdown */}
-            <Show when={!props.eventToEdit}>
-              <div class="flex items-center gap-2 px-1">
-                <span class="text-[11px] font-semibold text-[#6F7173] dark:text-[#878A8E] shrink-0">Template:</span>
-                <select
-                  value={selectedTemplate()}
-                  onChange={(e) => handleSelectTemplate(e.currentTarget.value)}
-                  disabled={isReadOnly()}
-                  class="text-xs px-2.5 py-1 rounded-lg border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E1F23] text-[#2B2C2D] dark:text-[#ECEBE8] focus:outline-none focus:ring-1 focus:ring-[#9E725F] cursor-pointer"
-                  data-testid="event-template-select"
-                >
-                  <For each={EVENT_TEMPLATES}>
-                    {(tpl) => <option value={tpl.id}>{tpl.label}</option>}
-                  </For>
-                </select>
-              </div>
-            </Show>
-
-            {/* Out of Office Settings Card (Category 10) */}
-            <Show when={eventType() === "out_of_office"}>
-              <div
-                class="p-3.5 rounded-xl bg-[#FAF9F5] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2A2D35] space-y-2 animate-in fade-in duration-100"
-                data-testid="ooo-options-panel"
-              >
-                <div class="flex items-center gap-2">
-                  <svg class="w-4 h-4 text-[#8C3B4A] stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
-                    <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
-                    <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
-                  </svg>
-                  <span class="text-xs font-bold text-[#8C3B4A] dark:text-[#D48B97]">Out of Office Settings</span>
-                </div>
-                <label class="flex items-center gap-2 cursor-pointer text-xs text-[#2B2C2D] dark:text-[#ECEBE8]">
-                  <input
-                    type="checkbox"
-                    checked={autoDeclineMode() !== "none"}
-                    onChange={(e) => setAutoDeclineMode(e.currentTarget.checked ? "new_invitations" : "none")}
-                    disabled={isReadOnly()}
-                    class="rounded border-[#E2DFD8] text-[#8C3B4A] focus:ring-[#8C3B4A]"
-                    data-testid="ooo-auto-decline-checkbox"
-                  />
-                  <span>Automatically decline new invitations during this time</span>
-                </label>
-                <Show when={autoDeclineMode() !== "none"}>
-                  <textarea
-                    rows={2}
-                    value={autoDeclineMessage()}
-                    onInput={(e) => setAutoDeclineMessage(e.currentTarget.value)}
-                    disabled={isReadOnly()}
-                    class="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E1F23] text-[#2B2C2D] dark:text-[#ECEBE8] focus:outline-none focus:ring-1 focus:ring-[#8C3B4A] resize-none"
-                    data-testid="ooo-decline-message-input"
-                  />
-                </Show>
-              </div>
-            </Show>
-
-            {/* Working Location Settings Card (Category 10) */}
-            <Show when={eventType() === "working_location"}>
-              <div
-                class="p-3 rounded-xl bg-[#FAF9F5] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between gap-3 animate-in fade-in duration-100"
-                data-testid="working-location-panel"
-              >
-                <div class="flex items-center gap-2 shrink-0">
-                  <svg class="w-4 h-4 text-[#9E725F] stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
-                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-                    <circle cx="12" cy="10" r="3" />
-                  </svg>
-                  <label class="text-xs font-bold text-[#9E725F] dark:text-[#D1A796]">Working Location</label>
-                </div>
-                <select
-                  value={workingLocation()}
-                  onChange={(e) => setWorkingLocation(e.currentTarget.value)}
-                  disabled={isReadOnly()}
-                  class="flex-1 max-w-xs text-xs px-2.5 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E1F23] text-[#2B2C2D] dark:text-[#ECEBE8] focus:outline-none focus:ring-1 focus:ring-[#9E725F]"
-                  data-testid="working-location-select"
-                >
-                  <option value="office">Office</option>
-                  <option value="home">Home</option>
-                  <option value="remote">Remote</option>
-                  <option value="custom">Other (Custom)</option>
-                </select>
-              </div>
-            </Show>
-
-            {/* Email Provenance Card (Category 13) */}
-            <Show when={sourceEmailId() || sourceConfirmationCode()}>
-              <div
-                class="p-3 rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F5] dark:bg-[#1E1F23] flex items-center justify-between gap-3"
-                data-testid="event-email-provenance-card"
-              >
-                <div class="min-w-0">
-                  <div class="flex items-center gap-1.5 flex-wrap">
-                    <span class="text-[10px] font-bold uppercase tracking-wider text-[#9E725F] dark:text-[#D1A796]">
-                      Source Email
-                    </span>
-                    <Show when={sourceCategory()}>
-                      <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#F0EEE9] dark:bg-[#2A2D35] text-[#2B2C2D] dark:text-[#ECEBE8] capitalize">
-                        {sourceCategory()}
-                      </span>
-                    </Show>
-                    <Show when={sourceProvider()}>
-                      <span class="text-[10px] text-[#6F7173] dark:text-[#878A8E]">
-                        via {sourceProvider()}
-                      </span>
-                    </Show>
-                  </div>
-                  <p class="text-xs font-semibold text-[#2B2C2D] dark:text-[#ECEBE8] truncate max-w-sm mt-0.5">
-                    {sourceMessageSubject() || "Linked message"}
-                  </p>
-                  <Show when={sourceConfirmationCode()}>
-                    <p class="text-[11px] text-[#6F7173] dark:text-[#878A8E] mt-0.5">
-                      Confirmation Code: <span class="font-mono font-bold text-[#2B2C2D] dark:text-[#ECEBE8]">{sourceConfirmationCode()}</span>
-                    </p>
-                  </Show>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    props.onClose();
-                    if (typeof window !== "undefined") {
-                      window.dispatchEvent(
-                        new CustomEvent("byos_open_email_message", {
-                          detail: { messageId: sourceEmailId() },
-                        })
-                      );
-                    }
-                  }}
-                  class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-[#9E725F] dark:text-[#D1A796] hover:bg-[#9E725F]/10 border border-[#9E725F]/30 transition flex items-center gap-1 flex-shrink-0 cursor-pointer"
-                  data-testid="open-source-email-btn"
-                >
-                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-                    <polyline points="22,6 12,13 2,6" />
-                  </svg>
-                  <span>Open Email</span>
-                </button>
-              </div>
-            </Show>
 
             {/* Recurring Series / Occurrence Scope Choice */}
             <Show when={props.eventToEdit && (props.eventToEdit.rrule || props.eventToEdit.isOccurrence)}>
@@ -1071,6 +856,36 @@ export const EventModal: Component<EventModalProps> = (props) => {
                   />
                 </Show>
               </div>
+
+              {/* KashCal Duration Shortcut Chips */}
+              <Show when={!isAllDay()}>
+                <div class="flex items-center gap-1.5 flex-wrap pt-0.5" data-testid="kashcal-duration-chips">
+                  <span class="text-[10px] text-[#6F7173] dark:text-[#878A8E] font-medium mr-0.5">Length:</span>
+                  <For each={[15, 30, 45, 60, 90, 120]}>
+                    {(mins) => {
+                      const label = mins < 60 ? `${mins}m` : mins === 60 ? "1h" : mins === 90 ? "1.5h" : `${mins / 60}h`;
+                      return (
+                        <button
+                          type="button"
+                          disabled={isReadOnly()}
+                          onClick={() => {
+                            if (!startDateStr() || !startTimeStr()) return;
+                            const [sh, sm] = startTimeStr().split(":").map(Number);
+                            const startDt = new Date();
+                            startDt.setHours(sh, sm, 0, 0);
+                            const endDt = new Date(startDt.getTime() + mins * 60000);
+                            const pad = (n: number) => String(n).padStart(2, "0");
+                            setEndTimeStr(`${pad(endDt.getHours())}:${pad(endDt.getMinutes())}`);
+                          }}
+                          class="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white dark:bg-[#1E1F23] hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35] border border-[#E2DFD8] dark:border-[#2A2D35] text-[#3C3D3E] dark:text-[#ECEBE8] hover:text-[#9E725F] transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          {label}
+                        </button>
+                      );
+                    }}
+                  </For>
+                </div>
+              </Show>
 
               {/* Timezone & Recurrence selectors in one clean row */}
               <div class="pt-2 border-t border-[#E2DFD8]/60 dark:border-[#2A2D35]/60 flex items-center justify-between gap-2 flex-wrap">
@@ -1257,8 +1072,297 @@ export const EventModal: Component<EventModalProps> = (props) => {
               </Show>
             </div>
 
-            {/* ── Location & Video Call Row ── */}
-            <div class="flex flex-col gap-2 p-3 rounded-2xl bg-[#FAF9F5] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2A2D35]">
+            {/* Compact Calendar Selector Card */}
+            <div class="flex items-center gap-2 p-3 rounded-2xl bg-[#FAF9F5] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2A2D35]" data-testid="compact-calendar-card">
+              <svg class="w-4 h-4 text-[#6F7173] dark:text-[#878A8E] stroke-current fill-none stroke-[1.8] shrink-0" viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                <line x1="16" y1="2" x2="16" y2="6" />
+                <line x1="8" y1="2" x2="8" y2="6" />
+                <line x1="3" y1="10" x2="21" y2="10" />
+              </svg>
+              <span class="text-xs font-semibold text-[#6F7173] dark:text-[#878A8E] shrink-0">Calendar:</span>
+              <select
+                value={calendarId()}
+                onChange={(e) => setCalendarId(e.currentTarget.value)}
+                disabled={isReadOnly()}
+                class="flex-1 min-w-0 text-xs px-2.5 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E1F23] text-[#2B2C2D] dark:text-[#ECEBE8] focus:outline-none focus:ring-1 focus:ring-[#9E725F] cursor-pointer"
+                data-testid="event-calendar-select"
+              >
+                <For each={props.calendars}>
+                  {(cal) => (
+                    <option value={cal.id}>
+                      {cal.name} {cal.is_default ? "(Default)" : ""}
+                    </option>
+                  )}
+                </For>
+              </select>
+            </div>
+
+            {/* "More options" Toggle Button */}
+            <button
+              type="button"
+              onClick={() => setShowMoreOptions(!showMoreOptions())}
+              class="flex items-center gap-1.5 text-xs font-semibold text-[#9E725F] dark:text-[#D1A796] hover:text-[#865E4D] py-1 px-1 cursor-pointer transition-colors select-none self-start"
+              data-testid="toggle-more-options-btn"
+              aria-expanded={showMoreOptions()}
+            >
+              <span>{showMoreOptions() ? "Fewer options" : "More options"}</span>
+              <svg
+                class={`w-3.5 h-3.5 stroke-current fill-none stroke-[2] transition-transform duration-150 ${showMoreOptions() ? "rotate-180" : ""}`}
+                viewBox="0 0 24 24"
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+
+            {/* Collapsible Secondary Fields Container */}
+            <div
+              data-testid="more-options-container"
+              class={`flex flex-col gap-4 overflow-hidden transition-all duration-200 ${
+                showMoreOptions() ? "max-h-[3000px] opacity-100" : "max-h-0 opacity-0 pointer-events-none"
+              }`}
+              onFocusIn={() => setShowMoreOptions(true)}
+            >
+              {/* Event Type Pills */}
+              <div
+                class="grid grid-cols-2 sm:grid-cols-4 gap-1 p-1 rounded-xl bg-[#FAF9F5] dark:bg-[#18191D] border border-[#E2DFD8]/80 dark:border-[#2A2D35]/80 shrink-0 min-h-[38px]"
+                data-testid="event-type-tabs"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEventType("default");
+                    if (status() === "out_of_office") setStatus("busy");
+                  }}
+                  disabled={isReadOnly()}
+                  class={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
+                    eventType() === "default"
+                      ? "bg-white dark:bg-[#2A2D35] text-[#2B2C2D] dark:text-[#ECEBE8] shadow-xs border border-[#E2DFD8] dark:border-[#383C44]"
+                      : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#F0EEE9] dark:hover:bg-[#24262B] border border-transparent"
+                  }`}
+                  data-testid="event-type-tab-default"
+                >
+                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                    <line x1="16" y1="2" x2="16" y2="6" />
+                    <line x1="8" y1="2" x2="8" y2="6" />
+                    <line x1="3" y1="10" x2="21" y2="10" />
+                  </svg>
+                  <span>Event</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEventType("focus_time");
+                    if (!title() || title() === "Out of office" || title() === "Working Location") setTitle("Focus time");
+                    setStatus("busy");
+                    setVisibility("private");
+                  }}
+                  disabled={isReadOnly()}
+                  class={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
+                    eventType() === "focus_time"
+                      ? "bg-[#3D5A80] dark:bg-[#4A607A] text-white shadow-xs border border-transparent"
+                      : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#F0EEE9] dark:hover:bg-[#24262B] border border-transparent"
+                  }`}
+                  data-testid="event-type-tab-focus"
+                >
+                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" />
+                    <circle cx="12" cy="12" r="6" />
+                    <circle cx="12" cy="12" r="2" />
+                  </svg>
+                  <span>Focus time</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEventType("out_of_office");
+                    if (!title() || title() === "Focus time" || title() === "Working Location") setTitle("Out of office");
+                    setStatus("out_of_office");
+                    setAutoDeclineMode("new_invitations");
+                  }}
+                  disabled={isReadOnly()}
+                  class={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
+                    eventType() === "out_of_office"
+                      ? "bg-[#8C3B4A] dark:bg-[#A84B5D] text-white shadow-xs border border-transparent"
+                      : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#F0EEE9] dark:hover:bg-[#24262B] border border-transparent"
+                  }`}
+                  data-testid="event-type-tab-ooo"
+                >
+                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
+                    <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+                    <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+                  </svg>
+                  <span>Out of office</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEventType("working_location");
+                    if (!title() || title() === "Focus time" || title() === "Out of office") setTitle("Working Location");
+                    setIsAllDay(true);
+                    setStatus("free");
+                  }}
+                  disabled={isReadOnly()}
+                  class={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${
+                    eventType() === "working_location"
+                      ? "bg-[#9E725F] dark:bg-[#865E4D] text-white shadow-xs border border-transparent"
+                      : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35] border border-transparent"
+                  }`}
+                  data-testid="event-type-tab-location"
+                >
+                  <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2] flex-shrink-0" viewBox="0 0 24 24">
+                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                    <circle cx="12" cy="10" r="3" />
+                  </svg>
+                  <span>Working location</span>
+                </button>
+              </div>
+
+              {/* Event Template Minimal Inline Dropdown */}
+              <Show when={!props.eventToEdit}>
+                <div class="flex items-center gap-2 px-1">
+                  <span class="text-[11px] font-semibold text-[#6F7173] dark:text-[#878A8E] shrink-0">Template:</span>
+                  <select
+                    value={selectedTemplate()}
+                    onChange={(e) => handleSelectTemplate(e.currentTarget.value)}
+                    disabled={isReadOnly()}
+                    class="text-xs px-2.5 py-1 rounded-lg border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E1F23] text-[#2B2C2D] dark:text-[#ECEBE8] focus:outline-none focus:ring-1 focus:ring-[#9E725F] cursor-pointer"
+                    data-testid="event-template-select"
+                  >
+                    <For each={EVENT_TEMPLATES}>
+                      {(tpl) => <option value={tpl.id}>{tpl.label}</option>}
+                    </For>
+                  </select>
+                </div>
+              </Show>
+
+              {/* Out of Office Settings Card (Category 10) */}
+              <Show when={eventType() === "out_of_office"}>
+                <div
+                  class="p-3.5 rounded-xl bg-[#FAF9F5] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2A2D35] space-y-2 animate-in fade-in duration-100"
+                  data-testid="ooo-options-panel"
+                >
+                  <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-[#8C3B4A] stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                      <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+                      <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+                    </svg>
+                    <span class="text-xs font-bold text-[#8C3B4A] dark:text-[#D48B97]">Out of Office Settings</span>
+                  </div>
+                  <label class="flex items-center gap-2 cursor-pointer text-xs text-[#2B2C2D] dark:text-[#ECEBE8]">
+                    <input
+                      type="checkbox"
+                      checked={autoDeclineMode() !== "none"}
+                      onChange={(e) => setAutoDeclineMode(e.currentTarget.checked ? "new_invitations" : "none")}
+                      disabled={isReadOnly()}
+                      class="rounded border-[#E2DFD8] text-[#8C3B4A] focus:ring-[#8C3B4A]"
+                      data-testid="ooo-auto-decline-checkbox"
+                    />
+                    <span>Automatically decline new invitations during this time</span>
+                  </label>
+                  <Show when={autoDeclineMode() !== "none"}>
+                    <textarea
+                      rows={2}
+                      value={autoDeclineMessage()}
+                      onInput={(e) => setAutoDeclineMessage(e.currentTarget.value)}
+                      disabled={isReadOnly()}
+                      class="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E1F23] text-[#2B2C2D] dark:text-[#ECEBE8] focus:outline-none focus:ring-1 focus:ring-[#8C3B4A] resize-none"
+                      data-testid="ooo-decline-message-input"
+                    />
+                  </Show>
+                </div>
+              </Show>
+
+              {/* Working Location Settings Card (Category 10) */}
+              <Show when={eventType() === "working_location"}>
+                <div
+                  class="p-3 rounded-xl bg-[#FAF9F5] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between gap-3 animate-in fade-in duration-100"
+                  data-testid="working-location-panel"
+                >
+                  <div class="flex items-center gap-2 shrink-0">
+                    <svg class="w-4 h-4 text-[#9E725F] stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                      <circle cx="12" cy="10" r="3" />
+                    </svg>
+                    <label class="text-xs font-bold text-[#9E725F] dark:text-[#D1A796]">Working Location</label>
+                  </div>
+                  <select
+                    value={workingLocation()}
+                    onChange={(e) => setWorkingLocation(e.currentTarget.value)}
+                    disabled={isReadOnly()}
+                    class="flex-1 max-w-xs text-xs px-2.5 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E1F23] text-[#2B2C2D] dark:text-[#ECEBE8] focus:outline-none focus:ring-1 focus:ring-[#9E725F]"
+                    data-testid="working-location-select"
+                  >
+                    <option value="office">Office</option>
+                    <option value="home">Home</option>
+                    <option value="remote">Remote</option>
+                    <option value="custom">Other (Custom)</option>
+                  </select>
+                </div>
+              </Show>
+
+              {/* Email Provenance Card (Category 13) */}
+              <Show when={sourceEmailId() || sourceConfirmationCode()}>
+                <div
+                  class="p-3 rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F5] dark:bg-[#1E1F23] flex items-center justify-between gap-3"
+                  data-testid="event-email-provenance-card"
+                >
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                      <span class="text-[10px] font-bold uppercase tracking-wider text-[#9E725F] dark:text-[#D1A796]">
+                        Source Email
+                      </span>
+                      <Show when={sourceCategory()}>
+                        <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#F0EEE9] dark:bg-[#2A2D35] text-[#2B2C2D] dark:text-[#ECEBE8] capitalize">
+                          {sourceCategory()}
+                        </span>
+                      </Show>
+                      <Show when={sourceProvider()}>
+                        <span class="text-[10px] text-[#6F7173] dark:text-[#878A8E]">
+                          via {sourceProvider()}
+                        </span>
+                      </Show>
+                    </div>
+                    <p class="text-xs font-semibold text-[#2B2C2D] dark:text-[#ECEBE8] truncate max-w-sm mt-0.5">
+                      {sourceMessageSubject() || "Linked message"}
+                    </p>
+                    <Show when={sourceConfirmationCode()}>
+                      <p class="text-[11px] text-[#6F7173] dark:text-[#878A8E] mt-0.5">
+                        Confirmation Code: <span class="font-mono font-bold text-[#2B2C2D] dark:text-[#ECEBE8]">{sourceConfirmationCode()}</span>
+                      </p>
+                    </Show>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      props.onClose();
+                      if (typeof window !== "undefined") {
+                        window.dispatchEvent(
+                          new CustomEvent("byos_open_email_message", {
+                            detail: { messageId: sourceEmailId() },
+                          })
+                        );
+                      }
+                    }}
+                    class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-[#9E725F] dark:text-[#D1A796] hover:bg-[#9E725F]/10 border border-[#9E725F]/30 transition flex items-center gap-1 flex-shrink-0 cursor-pointer"
+                    data-testid="open-source-email-btn"
+                  >
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+                      <polyline points="22,6 12,13 2,6" />
+                    </svg>
+                    <span>Open Email</span>
+                  </button>
+                </div>
+              </Show>
+
+              {/* ── Location & Video Call Row ── */}
+              <div class="flex flex-col gap-2 p-3 rounded-2xl bg-[#FAF9F5] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2A2D35]">
               {/* Location */}
               <div class="flex items-center gap-2.5">
                 <svg class="w-4 h-4 text-[#6F7173] dark:text-[#878A8E] stroke-current fill-none stroke-[1.8] shrink-0" viewBox="0 0 24 24">
@@ -1461,40 +1565,16 @@ export const EventModal: Component<EventModalProps> = (props) => {
               </div>
             </div>
 
-            {/* ── Calendar & Settings Metadata ── */}
+            {/* ── Settings Metadata (Visibility, Status, Color, Reminders) ── */}
             <div class="p-3 rounded-2xl bg-[#FAF9F5] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2A2D35] flex flex-col gap-2.5">
               <div class="flex items-center justify-between gap-2 flex-wrap">
-                {/* Calendar selector */}
-                <div class="flex items-center gap-2 flex-1 min-w-[140px]">
-                  <svg class="w-4 h-4 text-[#6F7173] dark:text-[#878A8E] stroke-current fill-none stroke-[1.8] shrink-0" viewBox="0 0 24 24">
-                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                    <line x1="16" y1="2" x2="16" y2="6" />
-                    <line x1="8" y1="2" x2="8" y2="6" />
-                    <line x1="3" y1="10" x2="21" y2="10" />
-                  </svg>
-                  <select
-                    value={calendarId()}
-                    onChange={(e) => setCalendarId(e.currentTarget.value)}
-                    class="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E1F23] text-[#2B2C2D] dark:text-[#ECEBE8] focus:outline-none focus:ring-1 focus:ring-[#9E725F] cursor-pointer"
-                    data-testid="event-calendar-select"
-                  >
-                    <For each={props.calendars}>
-                      {(cal) => (
-                        <option value={cal.id}>
-                          {cal.name} {cal.is_default ? "(Default)" : ""}
-                        </option>
-                      )}
-                    </For>
-                  </select>
-                </div>
-
                 {/* Visibility */}
-                <div class="flex items-center gap-1.5">
+                <div class="flex items-center gap-1.5 flex-1 min-w-[140px]">
                   <select
                     value={visibility()}
                     onChange={(e) => setVisibility(e.currentTarget.value as any)}
                     disabled={isReadOnly()}
-                    class="text-xs px-2.5 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E1F23] text-[#6F7173] dark:text-[#878A8E] focus:outline-none focus:ring-1 focus:ring-[#9E725F] cursor-pointer"
+                    class="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E1F23] text-[#6F7173] dark:text-[#878A8E] focus:outline-none focus:ring-1 focus:ring-[#9E725F] cursor-pointer"
                     data-testid="event-visibility-select"
                   >
                     <option value="default">Default visibility</option>
@@ -1647,8 +1727,9 @@ export const EventModal: Component<EventModalProps> = (props) => {
                 </div>
               </Show>
             </div>
+          </div>
 
-            {/* Actions Footer */}
+          {/* Actions Footer */}
             <div class="flex items-center justify-between pt-3 border-t border-[#E2DFD8] dark:border-[#2A2D35] mt-auto flex-wrap gap-2">
               <Show
                 when={props.eventToEdit && !isReadOnly()}
@@ -1727,14 +1808,14 @@ export const EventModal: Component<EventModalProps> = (props) => {
                   type="button"
                   onClick={props.onClose}
                   disabled={isSaving()}
-                  class="px-3.5 py-1.5 text-xs font-medium text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] rounded-lg transition-colors cursor-pointer"
+                  class="px-4 py-2.5 sm:py-1.5 min-h-[44px] sm:min-h-0 text-xs font-medium text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] rounded-xl transition-colors cursor-pointer flex items-center justify-center"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving() || isReadOnly()}
-                  class={`px-5 py-1.5 text-white text-xs font-semibold rounded-full shadow-xs transition-colors flex items-center gap-1.5 ${
+                  class={`px-5 py-2.5 sm:py-1.5 min-h-[44px] sm:min-h-0 text-white text-xs font-semibold rounded-full shadow-xs transition-colors flex items-center justify-center gap-1.5 ${
                     isReadOnly()
                       ? "bg-[#B3B1AC] dark:bg-[#464748] cursor-not-allowed opacity-60"
                       : "bg-[#9E725F] hover:bg-[#865E4D] cursor-pointer"

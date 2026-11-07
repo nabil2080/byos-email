@@ -47,6 +47,11 @@ func (u *WebAuthnUser) WebAuthnCredentials() []webauthn.Credential {
 // Local development strictly requires RP ID "localhost" and allowed origins on ports 3000 and 3001.
 // Production requires strict HTTPS origins, no wildcard origins, and registered domain RP ID.
 func getWebAuthnConfig() (*webauthn.Config, error) {
+	return getWebAuthnConfigForRequest(nil)
+}
+
+// getWebAuthnConfigForRequest resolves Relying Party configuration with dynamic dev host support.
+func getWebAuthnConfigForRequest(r *http.Request) (*webauthn.Config, error) {
 	env := strings.ToLower(strings.TrimSpace(os.Getenv("BYOS_ENV")))
 	rpIDEnv := strings.TrimSpace(os.Getenv("WEBAUTHN_RP_ID"))
 	originsEnv := strings.TrimSpace(os.Getenv("WEBAUTHN_ORIGINS"))
@@ -94,10 +99,6 @@ func getWebAuthnConfig() (*webauthn.Config, error) {
 
 	// Local Development / Test Configuration
 	rpID := rpIDEnv
-	if rpID == "" || rpID == "127.0.0.1" || strings.Contains(rpID, "127.0.0.1") {
-		rpID = "localhost"
-	}
-
 	origins := []string{"http://localhost:3000", "http://localhost:3001", "http://localhost:5173", "http://localhost:8080"}
 	if originsEnv != "" {
 		for _, o := range strings.Split(originsEnv, ",") {
@@ -106,6 +107,41 @@ func getWebAuthnConfig() (*webauthn.Config, error) {
 				origins = append(origins, o)
 			}
 		}
+	}
+
+	if r != nil {
+		reqOrigin := r.Header.Get("Origin")
+		if reqOrigin == "" {
+			reqOrigin = r.Header.Get("Referer")
+		}
+		if reqOrigin != "" {
+			if u, err := url.Parse(reqOrigin); err == nil && u.Hostname() != "" {
+				host := u.Hostname()
+				if host != "127.0.0.1" && host != "localhost" {
+					if rpIDEnv == "" {
+						rpID = host
+					}
+					normOrigin := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+					origins = append(origins, normOrigin)
+				}
+			}
+		}
+		if fwdHost := r.Header.Get("X-Forwarded-Host"); fwdHost != "" {
+			fwdHost = strings.TrimSpace(strings.Split(fwdHost, ",")[0])
+			if strings.Contains(fwdHost, ":") {
+				fwdHost = strings.Split(fwdHost, ":")[0]
+			}
+			if fwdHost != "127.0.0.1" && fwdHost != "localhost" {
+				if rpIDEnv == "" {
+					rpID = fwdHost
+				}
+				origins = append(origins, "https://"+fwdHost, "http://"+fwdHost)
+			}
+		}
+	}
+
+	if rpID == "" || rpID == "127.0.0.1" || strings.Contains(rpID, "127.0.0.1") {
+		rpID = "localhost"
 	}
 
 	return &webauthn.Config{
@@ -121,8 +157,12 @@ func getWebAuthnConfig() (*webauthn.Config, error) {
 }
 
 // getWebAuthn instantiates the WebAuthn engine with validated configuration.
-func getWebAuthn() (*webauthn.WebAuthn, error) {
-	cfg, err := getWebAuthnConfig()
+func getWebAuthn(r ...*http.Request) (*webauthn.WebAuthn, error) {
+	var req *http.Request
+	if len(r) > 0 {
+		req = r[0]
+	}
+	cfg, err := getWebAuthnConfigForRequest(req)
 	if err != nil {
 		return nil, err
 	}

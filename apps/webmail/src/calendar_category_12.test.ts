@@ -465,8 +465,12 @@ export async function runCalendarCategory12Tests(): Promise<{ passed: number; fa
     // 8. Cancellation and Rescheduling Lifecycle
     runTest("Cat 12.8: Cancellation and rescheduling lifecycle with participant updates", () => {
       const schedule = saveAppointmentSchedule(mailboxId, createDefaultAppointmentSchedule(mailboxId, "UTC"));
-      const slot1 = "2026-11-06T10:00:00.000Z";
-      const slot2 = "2026-11-06T11:00:00.000Z";
+      // Use dynamic dates 3 days in the future to avoid "minimum notice" validation failures
+      const futureBase = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+      futureBase.setUTCHours(10, 0, 0, 0);
+      const slot1 = futureBase.toISOString();
+      const slot2Future = new Date(futureBase.getTime() + 60 * 60 * 1000);
+      const slot2 = slot2Future.toISOString();
 
       const { appointment: initialBooking } = createBookingRecord(
         schedule,

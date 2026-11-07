@@ -25,6 +25,42 @@ import { autoUnwrapKeys } from "./message_crypto";
 import { cryptoWorkerBridge } from "./crypto_worker_bridge";
 
 export const SESSION_GENERATION_KEY = "byos_session_generation";
+export const SESSION_VAULT_KEY = "byos_session_vault";
+
+export interface AccountVaultEntry {
+  mailboxSkHex?: string;
+  signingSeedHex?: string;
+  xwingSeedHex?: string;
+  searchKeyHex?: string;
+}
+
+export type SessionVault = Record<string, AccountVaultEntry>;
+
+export function readVault(storage?: Storage): SessionVault {
+  const store = storage || (typeof sessionStorage !== "undefined" ? sessionStorage : null);
+  if (!store) return {};
+  try {
+    const raw = store.getItem(SESSION_VAULT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function writeVault(vault: SessionVault, storage?: Storage): void {
+  const store = storage || (typeof sessionStorage !== "undefined" ? sessionStorage : null);
+  if (!store) return;
+  try {
+    const keys = Object.keys(vault);
+    if (keys.length === 0) {
+      store.removeItem(SESSION_VAULT_KEY);
+    } else {
+      store.setItem(SESSION_VAULT_KEY, JSON.stringify(vault));
+    }
+  } catch {}
+}
 
 /** Generate a cryptographically random session generation ID. */
 export function newSessionGeneration(): string {
@@ -38,6 +74,7 @@ export function newSessionGeneration(): string {
  * These must NEVER go to localStorage.
  */
 const SENSITIVE_PREFIXES = [
+  SESSION_VAULT_KEY,
   "byos_mailbox_sk_",
   "byos_mailbox_skey_",
   "byos_xwing_seed_",
@@ -79,72 +116,104 @@ export function setAccountKeys(
     signingSeed?: Uint8Array | string | null;
     xwingSeed?: Uint8Array | string | null;
     searchKey?: string | null;
-  }
+  },
+  storage?: Storage
 ): void {
   if (!accountId) return;
   const existing = inMemoryKeys.get(accountId) || {};
+  const vault = readVault(storage);
+  const vaultEntry: AccountVaultEntry = vault[accountId] || {};
+
   if (keys.mailboxSk !== undefined) {
     if (keys.mailboxSk) {
       existing.mailboxSk = toBytes(keys.mailboxSk);
+      vaultEntry.mailboxSkHex = Array.from(existing.mailboxSk, (b) => b.toString(16).padStart(2, "0")).join("");
     } else {
       if (existing.mailboxSk) existing.mailboxSk.fill(0);
       delete existing.mailboxSk;
+      delete vaultEntry.mailboxSkHex;
     }
   }
   if (keys.signingSeed !== undefined) {
     if (keys.signingSeed) {
       existing.signingSeed = toBytes(keys.signingSeed);
+      vaultEntry.signingSeedHex = Array.from(existing.signingSeed, (b) => b.toString(16).padStart(2, "0")).join("");
     } else {
       if (existing.signingSeed) existing.signingSeed.fill(0);
       delete existing.signingSeed;
+      delete vaultEntry.signingSeedHex;
     }
   }
   if (keys.xwingSeed !== undefined) {
     if (keys.xwingSeed) {
       existing.xwingSeed = toBytes(keys.xwingSeed);
+      vaultEntry.xwingSeedHex = Array.from(existing.xwingSeed, (b) => b.toString(16).padStart(2, "0")).join("");
     } else {
       if (existing.xwingSeed) existing.xwingSeed.fill(0);
       delete existing.xwingSeed;
+      delete vaultEntry.xwingSeedHex;
     }
   }
   if (keys.searchKey !== undefined) {
     if (keys.searchKey) {
       existing.searchKey = keys.searchKey;
+      vaultEntry.searchKeyHex = keys.searchKey;
     } else {
       delete existing.searchKey;
+      delete vaultEntry.searchKeyHex;
     }
   }
   inMemoryKeys.set(accountId, existing);
+
+  if (Object.keys(vaultEntry).length > 0) {
+    vault[accountId] = vaultEntry;
+  } else {
+    delete vault[accountId];
+  }
+  writeVault(vault, storage);
 }
 
-export function setSearchKeyFor(accountId: string, searchKey: string | null): void {
-  setAccountKeys(accountId, { searchKey });
+export function setSearchKeyFor(accountId: string, searchKey: string | null, storage?: Storage): void {
+  setAccountKeys(accountId, { searchKey }, storage);
 }
 
 export function getSearchKeyFor(accountId: string, storage?: Storage): string | null {
   if (!accountId) return null;
   const inMem = inMemoryKeys.get(accountId)?.searchKey;
   if (inMem) return inMem;
+  const vault = readVault(storage);
+  if (vault[accountId]?.searchKeyHex) {
+    const sKey = vault[accountId].searchKeyHex!;
+    const entry = inMemoryKeys.get(accountId) || {};
+    entry.searchKey = sKey;
+    inMemoryKeys.set(accountId, entry);
+    return sKey;
+  }
   const store = storage || (typeof sessionStorage !== "undefined" ? sessionStorage : null);
   return store?.getItem("byos_mailbox_skey_" + accountId) || null;
 }
 
-export function setMailboxKeyFor(accountId: string, key: Uint8Array | string | null): void {
-  setAccountKeys(accountId, { mailboxSk: key });
+export function setMailboxKeyFor(accountId: string, key: Uint8Array | string | null, storage?: Storage): void {
+  setAccountKeys(accountId, { mailboxSk: key }, storage);
 }
 
-export function setSigningSeedFor(accountId: string, seed: Uint8Array | string | null): void {
-  setAccountKeys(accountId, { signingSeed: seed });
+export function setSigningSeedFor(accountId: string, seed: Uint8Array | string | null, storage?: Storage): void {
+  setAccountKeys(accountId, { signingSeed: seed }, storage);
 }
 
-export function setXWingSeedFor(accountId: string, seed: Uint8Array | string | null): void {
-  setAccountKeys(accountId, { xwingSeed: seed });
+export function setXWingSeedFor(accountId: string, seed: Uint8Array | string | null, storage?: Storage): void {
+  setAccountKeys(accountId, { xwingSeed: seed }, storage);
 }
 
-export function isAccountUnlocked(accountId: string): boolean {
+export function isAccountUnlocked(accountId: string, storage?: Storage): boolean {
   if (!accountId) return false;
   const entry = inMemoryKeys.get(accountId);
-  return Boolean(entry?.mailboxSk && entry.mailboxSk.length > 0);
+  if (entry?.mailboxSk && entry.mailboxSk.length > 0) return true;
+  const key = getMailboxKeyFor(accountId, storage);
+  if (key && key.length > 0) return true;
+  const xwing = getXWingSeedFor(accountId, storage);
+  if (xwing && xwing.length > 0) return true;
+  return false;
 }
 
 export function getMailboxKeyHexFor(accountId: string, storage?: Storage): string | null {
@@ -181,11 +250,29 @@ export function zeroizeKeys(accountId?: string, storage?: Storage): void {
       delete entry.searchKey;
       inMemoryKeys.delete(accountId);
     }
+    const vault = readVault(storage);
+    if (vault[accountId]) {
+      delete vault[accountId];
+      writeVault(vault, storage);
+    }
+    if (typeof sessionStorage !== "undefined" && storage && storage !== sessionStorage) {
+      const globalVault = readVault(sessionStorage);
+      if (globalVault[accountId]) {
+        delete globalVault[accountId];
+        writeVault(globalVault, sessionStorage);
+      }
+    }
     if (store) {
       store.removeItem("byos_mailbox_sk_" + accountId);
       store.removeItem("byos_mailbox_skey_" + accountId);
       store.removeItem("byos_signing_seed_" + accountId);
       store.removeItem("byos_xwing_seed_" + accountId);
+    }
+    if (typeof sessionStorage !== "undefined" && storage && storage !== sessionStorage) {
+      sessionStorage.removeItem("byos_mailbox_sk_" + accountId);
+      sessionStorage.removeItem("byos_mailbox_skey_" + accountId);
+      sessionStorage.removeItem("byos_signing_seed_" + accountId);
+      sessionStorage.removeItem("byos_xwing_seed_" + accountId);
     }
   } else {
     for (const [_, entry] of inMemoryKeys) {
@@ -196,6 +283,7 @@ export function zeroizeKeys(accountId?: string, storage?: Storage): void {
     }
     inMemoryKeys.clear();
     if (store) {
+      store.removeItem(SESSION_VAULT_KEY);
       const toRemove: string[] = [];
       for (let i = 0; i < store.length; i++) {
         const key = store.key(i);
@@ -213,16 +301,33 @@ export function zeroizeKeys(accountId?: string, storage?: Storage): void {
         store.removeItem(k);
       }
     }
+    if (typeof sessionStorage !== "undefined" && storage && storage !== sessionStorage) {
+      sessionStorage.removeItem(SESSION_VAULT_KEY);
+    }
   }
+}
+
+/**
+ * Zeroizes all in-memory buffers in JS heap without wiping sessionStorage.
+ * Used during window unload/reload so persistent session state survives page refresh.
+ */
+export function zeroizeInMemoryOnly(): void {
+  for (const [_, entry] of inMemoryKeys) {
+    if (entry.mailboxSk) entry.mailboxSk.fill(0);
+    if (entry.signingSeed) entry.signingSeed.fill(0);
+    if (entry.xwingSeed) entry.xwingSeed.fill(0);
+    delete entry.searchKey;
+  }
+  inMemoryKeys.clear();
 }
 
 // Window unload and beforeunload lifecycle hook to zeroize in-memory keys
 if (typeof window !== "undefined") {
   window.addEventListener("unload", () => {
-    zeroizeKeys();
+    zeroizeInMemoryOnly();
   });
   window.addEventListener("beforeunload", () => {
-    zeroizeKeys();
+    zeroizeInMemoryOnly();
   });
 }
 
@@ -394,6 +499,22 @@ export function getSigningSeedFor(accountId: string, storage?: Storage): Uint8Ar
       return mem;
     }
   }
+  const vault = readVault(storage);
+  const vaultEntry = vault[accountId];
+  if (vaultEntry?.signingSeedHex) {
+    try {
+      const matches = vaultEntry.signingSeedHex.match(/.{1,2}/g);
+      if (matches) {
+        const buf = new Uint8Array(matches.map((b) => parseInt(b, 16)));
+        if (!isCustomStorage) {
+          const entry = inMemoryKeys.get(accountId) || {};
+          entry.signingSeed = buf;
+          inMemoryKeys.set(accountId, entry);
+        }
+        return buf;
+      }
+    } catch {}
+  }
   const store = storage || (typeof sessionStorage !== "undefined" ? sessionStorage : null);
   if (!store) return null;
   const hex = store.getItem("byos_signing_seed_" + accountId);
@@ -403,7 +524,7 @@ export function getSigningSeedFor(accountId: string, storage?: Storage): Uint8Ar
     if (!matches) return null;
     const buf = new Uint8Array(matches.map((b) => parseInt(b, 16)));
     if (!isCustomStorage) {
-      setSigningSeedFor(accountId, buf);
+      setSigningSeedFor(accountId, buf, storage);
       store.removeItem("byos_signing_seed_" + accountId);
     }
     return buf;
@@ -425,6 +546,22 @@ export function getMailboxKeyFor(accountId: string, storage?: Storage): Uint8Arr
       return mem;
     }
   }
+  const vault = readVault(storage);
+  const vaultEntry = vault[accountId];
+  if (vaultEntry?.mailboxSkHex) {
+    try {
+      const matches = vaultEntry.mailboxSkHex.match(/.{1,2}/g);
+      if (matches) {
+        const buf = new Uint8Array(matches.map((b) => parseInt(b, 16)));
+        if (!isCustomStorage) {
+          const entry = inMemoryKeys.get(accountId) || {};
+          entry.mailboxSk = buf;
+          inMemoryKeys.set(accountId, entry);
+        }
+        return buf;
+      }
+    } catch {}
+  }
   const store = storage || (typeof sessionStorage !== "undefined" ? sessionStorage : null);
   if (!store) return null;
   const hex = store.getItem("byos_mailbox_sk_" + accountId);
@@ -434,7 +571,7 @@ export function getMailboxKeyFor(accountId: string, storage?: Storage): Uint8Arr
     if (!matches) return null;
     const buf = new Uint8Array(matches.map((b) => parseInt(b, 16)));
     if (!isCustomStorage) {
-      setMailboxKeyFor(accountId, buf);
+      setMailboxKeyFor(accountId, buf, storage);
       store.removeItem("byos_mailbox_sk_" + accountId);
     }
     return buf;
@@ -456,6 +593,22 @@ export function getXWingSeedFor(accountId: string, storage?: Storage): Uint8Arra
       return mem;
     }
   }
+  const vault = readVault(storage);
+  const vaultEntry = vault[accountId];
+  if (vaultEntry?.xwingSeedHex) {
+    try {
+      const matches = vaultEntry.xwingSeedHex.match(/.{1,2}/g);
+      if (matches) {
+        const buf = new Uint8Array(matches.map((b) => parseInt(b, 16)));
+        if (!isCustomStorage) {
+          const entry = inMemoryKeys.get(accountId) || {};
+          entry.xwingSeed = buf;
+          inMemoryKeys.set(accountId, entry);
+        }
+        return buf;
+      }
+    } catch {}
+  }
   const store = storage || (typeof sessionStorage !== "undefined" ? sessionStorage : null);
   if (!store) return null;
   const hex = store.getItem("byos_xwing_seed_" + accountId);
@@ -465,7 +618,7 @@ export function getXWingSeedFor(accountId: string, storage?: Storage): Uint8Arra
     if (!matches) return null;
     const buf = new Uint8Array(matches.map((b) => parseInt(b, 16)));
     if (!isCustomStorage) {
-      setXWingSeedFor(accountId, buf);
+      setXWingSeedFor(accountId, buf, storage);
       store.removeItem("byos_xwing_seed_" + accountId);
     }
     return buf;
@@ -491,7 +644,7 @@ export function sanitizeConnectedAccounts<T extends Record<string, any>>(account
 
 /**
  * Shared key unseal function for both login and switch/unlock flows.
- * Rule 3 & Rule 6: Single shared unseal function persisting keys strictly in-memory.
+ * Rule 3 & Rule 6: Single shared unseal function persisting keys strictly in-memory and session vault.
  */
 export async function unsealAccountKeys(
   accountId: string,
@@ -510,17 +663,21 @@ export async function unsealAccountKeys(
   const unwrapped = await cryptoWorkerBridge.autoUnwrapKeys(password, wrappedSkUser);
   const searchKeyHex = unwrapped.searchKeyHex;
 
-  // Store private keys strictly in-memory
-  setAccountKeys(accountId, {
-    mailboxSk: unwrapped.mailboxSk,
-    signingSeed: unwrapped.signingSeed,
-    xwingSeed: unwrapped.xwingSeed,
-    searchKey: searchKeyHex,
-  });
+  // Store private keys in-memory and in session vault
+  setAccountKeys(
+    accountId,
+    {
+      mailboxSk: unwrapped.mailboxSk,
+      signingSeed: unwrapped.signingSeed,
+      xwingSeed: unwrapped.xwingSeed,
+      searchKey: searchKeyHex,
+    },
+    storage,
+  );
 
   const store = storage || (typeof sessionStorage !== "undefined" ? sessionStorage : null);
   if (store) {
-    // Purge any raw private keys, seeds, or search keys from sessionStorage
+    // Purge any raw legacy keys from sessionStorage
     store.removeItem("byos_mailbox_sk_" + accountId);
     store.removeItem("byos_signing_seed_" + accountId);
     store.removeItem("byos_xwing_seed_" + accountId);

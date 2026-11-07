@@ -46,7 +46,7 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
               <circle cx="12" cy="7" r="4" />
             </svg>
           ),
-          description: "Profile photo and account preferences",
+          description: "Language, display, and account preferences",
         },
         {
           id: "security",
@@ -143,23 +143,30 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
   return (
     <div
       data-testid="settings-layout"
-      class="h-screen w-screen bg-[#F0EEE9] dark:bg-[#121316] text-[#1A1B1E] dark:text-[#F3F4F6] flex flex-col overflow-hidden font-sans"
+      class="h-screen w-screen bg-[#FAF9F6] dark:bg-[#18191D] text-[#1A1B1E] dark:text-[#F3F4F6] flex flex-col overflow-hidden font-sans"
     >
       {/* Settings Top Bar */}
-      <header class="h-14 bg-white dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2E3138] px-6 flex items-center justify-between flex-shrink-0">
+      <header class="h-14 bg-[#FAF9F6] dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2A2D35] px-4 sm:px-6 flex items-center justify-between flex-shrink-0 select-none">
         <div class="flex items-center gap-4">
           <button
+            type="button"
             onClick={props.onClose}
             data-testid="settings-back-to-inbox-btn"
-            class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] text-xs font-medium text-[#464748] dark:text-[#E2DFD8] hover:bg-[#F0EEE9] dark:hover:bg-[#252830] transition cursor-pointer"
+            class="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-xs font-semibold text-[#1A1B1E] dark:text-[#E2DFD8] hover:bg-[#F0EEE9] dark:hover:bg-[#252830] transition shadow-2xs cursor-pointer"
           >
-            <span>←</span>
+            <svg class="w-4 h-4 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+              <line x1="19" y1="12" x2="5" y2="12" />
+              <polyline points="12 19 5 12 12 5" />
+            </svg>
             <span>Back to Inbox</span>
           </button>
-          <div class="h-4 w-px bg-[#E2DFD8] dark:bg-[#2E3138]"></div>
-          <div class="flex items-center gap-2">
-            <span class="text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight">BYOS</span>
-            <span class="text-[11px] uppercase tracking-widest bg-[#A27561] text-white px-2 py-0.5 rounded font-mono font-medium">
+          <div class="h-4 w-px bg-[#E2DFD8] dark:bg-[#2A2D35]"></div>
+          <div class="flex items-center gap-2.5">
+            <div class="w-6 h-6 rounded-xl bg-[#A27561] flex items-center justify-center text-white font-bold text-xs shadow-2xs tracking-wider ring-1 ring-[#A27561]/30">
+              B
+            </div>
+            <span class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight">BYOS Mail</span>
+            <span class="text-[11px] font-mono font-medium px-2 py-0.5 rounded-full bg-[#F2E8E2] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] border border-[#A27561]/20">
               Settings
             </span>
           </div>
@@ -170,11 +177,11 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
             <div class="text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">
               {props.selectedMailbox?.local_part}@{props.currentUser?.email.split("@")[1] || "byos.local"}
             </div>
-            <div class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA] font-mono capitalize">
+            <div class="text-[10px] text-[#6E7075] dark:text-[#878A8E] font-mono capitalize">
               {props.selectedMailbox?.mode === "private" ? "Private Mailbox" : "Org-Managed"}
             </div>
           </div>
-          <div class="w-8 h-8 rounded-full bg-[#A27561] text-white flex items-center justify-center font-bold text-xs">
+          <div class="w-8 h-8 rounded-xl bg-[#A27561] text-white flex items-center justify-center font-bold text-xs shadow-2xs ring-1 ring-[#A27561]/30">
             {(props.currentUser?.email?.[0] || "U").toUpperCase()}
           </div>
         </div>
@@ -185,10 +192,10 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
         {/* Categorized Navigation Sidebar */}
         <aside
           data-testid="settings-sidebar"
-          class="w-full md:w-72 bg-white dark:bg-[#18191D] border-b md:border-b-0 md:border-r border-[#E2DFD8] dark:border-[#2E3138] flex flex-col p-2.5 sm:p-4 flex-shrink-0"
+          class="w-full md:w-68 bg-[#F0EEE9] dark:bg-[#18191D] border-b md:border-b-0 md:border-r border-[#E2DFD8] dark:border-[#2A2D35] flex flex-col p-2.5 sm:p-4 flex-shrink-0 select-none"
         >
           <div class="px-2 py-1 mb-1 hidden md:block">
-            <h2 class="text-xs font-bold text-[#6E7075] dark:text-[#A1A1AA] uppercase tracking-wider font-mono">
+            <h2 class="text-xs font-bold text-[#6E7075] dark:text-[#878A8E] uppercase tracking-wider font-mono">
               Settings Categories
             </h2>
           </div>
@@ -197,7 +204,7 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
             <For each={categories}>
               {(cat) => (
                 <div class="flex flex-row md:flex-col gap-1 md:gap-1 shrink-0 md:shrink">
-                  <div class="hidden md:block px-2.5 pt-2 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-[#878A8E] dark:text-[#A1A1AA]">
+                  <div class="hidden md:block px-2.5 pt-2 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-[#878A8E] dark:text-[#878A8E]">
                     {cat.category}
                   </div>
                   <For each={cat.tabs}>
@@ -208,18 +215,18 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
                           type="button"
                           onClick={() => props.onTabChange(tab.id)}
                           data-testid={`settings-tab-${tab.id}`}
-                          class={`flex-shrink-0 md:w-full text-left px-3 py-2 md:p-2.5 rounded-xl transition flex items-center md:items-start gap-2 md:gap-2.5 border cursor-pointer min-h-[36px] ${
+                          class={`flex-shrink-0 md:w-full text-left px-3 py-2 md:p-2.5 rounded-xl transition-all duration-150 flex items-center md:items-start gap-2 md:gap-2.5 cursor-pointer min-h-[36px] ${
                             isActive()
-                              ? "bg-[#F3ECE8] dark:bg-[#2D2522] border-[#A27561] text-[#A27561] dark:text-[#D4A38F] shadow-xs"
-                              : "bg-transparent border-transparent text-[#464748] dark:text-[#E2DFD8] hover:bg-[#F0EEE9] dark:hover:bg-[#252830]"
+                              ? "bg-[#F2E8E2] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-semibold shadow-2xs"
+                              : "bg-transparent text-[#464748] dark:text-[#878A8E] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#2A2D35]/50 font-medium"
                           }`}
                         >
-                          <span class={`flex-shrink-0 mt-0.5 ${isActive() ? "text-[#A27561] dark:text-[#D4A38F]" : "text-[#6E7075] dark:text-[#A1A1AA]"}`}>
+                          <span class={`flex-shrink-0 mt-0.5 ${isActive() ? "text-[#A27561] dark:text-[#D4A38F]" : "text-[#6E7075] dark:text-[#878A8E]"}`}>
                             {tab.icon}
                           </span>
                           <div class="min-w-0">
                             <div class="text-xs font-semibold truncate leading-snug whitespace-nowrap md:whitespace-normal">{tab.label}</div>
-                            <div class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA] truncate leading-tight mt-0.5 hidden md:block">
+                            <div class="text-[10px] text-[#6E7075] dark:text-[#878A8E] truncate leading-tight mt-0.5 hidden md:block">
                               {tab.description}
                             </div>
                           </div>
@@ -232,15 +239,15 @@ export const SettingsLayout: Component<SettingsLayoutProps> = (props) => {
             </For>
           </nav>
 
-          <div class="hidden md:block p-3 mt-3 bg-[#F8F7F4] dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-[11px] text-[#6E7075] dark:text-[#A1A1AA]">
+          <div class="hidden md:block p-3 mt-3 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] text-[11px] text-[#6E7075] dark:text-[#878A8E] shadow-2xs">
             <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] block mb-0.5">Security & Encryption</span>
             Client-side keys protect your privacy. Settings are encrypted and isolated per mailbox.
           </div>
         </aside>
 
         {/* Tab Content Panel */}
-        <main class="flex-1 bg-[#F0EEE9] dark:bg-[#121316] overflow-y-auto p-3 sm:p-6 md:p-8">
-          <div class="max-w-3xl mx-auto">{props.children}</div>
+        <main class="flex-1 bg-[#FAF9F6] dark:bg-[#18191D] overflow-y-auto p-3 sm:p-6 md:p-8 custom-scrollbar">
+          <div class="max-w-4xl mx-auto">{props.children}</div>
         </main>
       </div>
     </div>

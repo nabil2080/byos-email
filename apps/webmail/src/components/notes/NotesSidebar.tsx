@@ -217,7 +217,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
 
         {/* ── LABELS SECTION HEADER ── */}
         <div class="pt-3 pb-1 px-3 flex items-center justify-between">
-          <span class="text-[11px] font-semibold text-[#6F7173] dark:text-[#878A8E] uppercase tracking-wider font-mono">
+          <span class="text-xs font-semibold text-[#6F7173] dark:text-[#878A8E] uppercase tracking-wider font-mono">
             Labels
           </span>
           {/* 3. Edit labels button matching options */}
@@ -229,7 +229,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
             }}
             data-testid="notes-nav-edit-labels"
             title="Edit labels"
-            class="p-1 rounded-md text-[#6F7173] hover:text-[#9E725F] dark:hover:text-[#D4A38F] hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+            class="w-9 h-9 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-[#6F7173] hover:text-[#9E725F] dark:hover:text-[#D4A38F] hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
           >
             <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M12 20h9" />
@@ -277,7 +277,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           )}
         </For>
         <Show when={!props.labels || props.labels.length === 0}>
-          <div class="px-3 py-1 text-[11px] text-[#878A8E] italic">No labels</div>
+          <div class="px-3 py-1 text-xs text-[#878A8E] italic">No labels</div>
         </Show>
 
         {/* ── SYSTEM SEPARATOR ── */}
@@ -371,7 +371,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
               data-testid="sidebar-contacts-btn"
               data-testid-secondary="contacts-nav-btn"
               aria-label="Contacts"
-              class="w-full flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none"
+              class="w-full h-9 min-h-[36px] flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none"
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -383,7 +383,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
             </button>
             <div
               role="tooltip"
-              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-[11px] font-medium shadow-md whitespace-nowrap"
+              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-xs font-medium shadow-md whitespace-nowrap"
             >
               Contacts
               <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1E2025] dark:border-t-[#2A2D35]" />
@@ -402,7 +402,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
               }}
               data-testid="sidebar-settings-btn"
               aria-label="Settings"
-              class="w-full flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none"
+              class="w-full h-9 min-h-[36px] flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none"
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="3" />
@@ -412,7 +412,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
             </button>
             <div
               role="tooltip"
-              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-[11px] font-medium shadow-md whitespace-nowrap"
+              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-xs font-medium shadow-md whitespace-nowrap"
             >
               Settings
               <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1E2025] dark:border-t-[#2A2D35]" />
@@ -428,7 +428,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
               onClick={() => props.onLogout?.(props.selectedMailbox?.id, false)}
               data-testid="sidebar-signout-btn"
               aria-label="Sign out"
-              class="w-full flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/15 transition-all duration-150 cursor-pointer select-none"
+              class="w-full h-9 min-h-[36px] flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/15 transition-all duration-150 cursor-pointer select-none"
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -439,7 +439,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
             </button>
             <div
               role="tooltip"
-              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-[11px] font-medium shadow-md whitespace-nowrap"
+              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-xs font-medium shadow-md whitespace-nowrap"
             >
               Sign out
               <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1E2025] dark:border-t-[#2A2D35]" />

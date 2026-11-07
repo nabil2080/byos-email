@@ -1,0 +1,161 @@
+[
+  {
+    "id": "CH1.1_desktop",
+    "name": "Zero-Scroll & Containment on desktop (1280x800)",
+    "passed": true,
+    "details": {
+      "scrollY": 0,
+      "scrollX": 0,
+      "docScrollH": 800,
+      "docClientH": 800,
+      "docScrollW": 1280,
+      "docClientW": 1280,
+      "bodyOverflow": "hidden"
+    },
+    "timestamp": "2026-11-07T07:23:12.321Z"
+  },
+  {
+    "id": "CH1.2_desktop_toolbar_spill",
+    "name": "Desktop Toolbar Horizontal Boundary Containment",
+    "passed": true,
+    "details": {
+      "toolbarScrollWidth": 582,
+      "toolbarClientWidth": 582,
+      "toolbarRectWidth": 582
+    },
+    "timestamp": "2026-11-07T07:23:12.322Z"
+  },
+  {
+    "id": "CH1.1_tablet",
+    "name": "Zero-Scroll & Containment on tablet (768x1024)",
+    "passed": true,
+    "details": {
+      "scrollY": 0,
+      "scrollX": 0,
+      "docScrollH": 1024,
+      "docClientH": 1024,
+      "docScrollW": 768,
+      "docClientW": 768,
+      "bodyOverflow": "hidden"
+    },
+    "timestamp": "2026-11-07T07:23:12.963Z"
+  },
+  {
+    "id": "CH1.1_mobile",
+    "name": "Zero-Scroll & Containment on mobile (375x667)",
+    "passed": true,
+    "details": {
+      "scrollY": 0,
+      "scrollX": 0,
+      "docScrollH": 667,
+      "docClientH": 667,
+      "docScrollW": 375,
+      "docClientW": 375,
+      "bodyOverflow": "hidden"
+    },
+    "timestamp": "2026-11-07T07:23:13.601Z"
+  },
+  {
+    "id": "CH2.1_dropdown_extends_past_toolbar",
+    "name": "Dropdown Extends Downward Past Toolbar Bottom Edge",
+    "passed": true,
+    "details": {
+      "toolbarBottom": 144,
+      "menuBottom": 411,
+      "verticalSpillDistance": 267
+    },
+    "timestamp": "2026-11-07T07:23:14.467Z"
+  },
+  {
+    "id": "CH2.2_toolbar_no_clipping_overflow",
+    "name": "Toolbar Establishes No Clipping Boundary (overflow is visible/relative)",
+    "passed": true,
+    "details": {
+      "computedOverflowX": "visible",
+      "computedOverflowY": "visible"
+    },
+    "timestamp": "2026-11-07T07:23:14.467Z"
+  },
+  {
+    "id": "CH2.3_dropdown_elementFromPoint_hit_test",
+    "name": "Dropdown Renders Above Content & Is Not Vertically Cropped (Hit-Test)",
+    "passed": true,
+    "details": {
+      "hitTestCoords": "(1127, 169)",
+      "hitElement": "<BUTTON> \"Snooze\"",
+      "isMenuContains": true
+    },
+    "timestamp": "2026-11-07T07:23:14.467Z"
+  },
+  {
+    "id": "CH2.4_all_secondary_actions_present",
+    "name": "All 7 Secondary Actions Consolidated Inside Overflow Menu",
+    "passed": true,
+    "details": {
+      "hasSnooze": true,
+      "hasMove": true,
+      "hasLabel": true,
+      "hasSpam": true,
+      "hasPrint": true,
+      "hasDownload": true,
+      "hasHeaders": true,
+      "totalItemsFound": 7
+    },
+    "timestamp": "2026-11-07T07:23:14.467Z"
+  },
+  {
+    "id": "CH3.1_move_to_folder_submenu",
+    "name": "Nested 'Move to folder' Submenu Renders with Back Navigation",
+    "passed": true,
+    "details": {
+      "hasTitle": true,
+      "hasBackBtn": true,
+      "folderCount": 5
+    },
+    "timestamp": "2026-11-07T07:23:14.783Z"
+  },
+  {
+    "id": "CH3.2_label_as_submenu",
+    "name": "Nested 'Label as' Submenu Renders with Back Navigation",
+    "passed": true,
+    "details": {
+      "hasTitle": true,
+      "hasBackBtn": true
+    },
+    "timestamp": "2026-11-07T07:23:15.398Z"
+  },
+  {
+    "id": "CH4.1_escape_closes_menu_not_pane",
+    "name": "Escape Dismisses Overflow Menu While ReadingPane Remains Open",
+    "passed": true,
+    "details": {
+      "readingPaneStillOpen": true,
+      "overflowAriaExpanded": "false",
+      "isMenuHidden": true
+    },
+    "timestamp": "2026-11-07T07:23:16.129Z"
+  },
+  {
+    "id": "CH5.1_snooze_dom_click_backward_compatibility",
+    "name": "Direct [data-testid='reading-pane-snooze-btn'].click() Launches Snooze Dialog",
+    "passed": true,
+    "details": {
+      "snoozeBtnClicked": true,
+      "dialogFound": true,
+      "presetCount": 6,
+      "hasTomorrow": true,
+      "hasLaterToday": true
+    },
+    "timestamp": "2026-11-07T07:23:16.784Z"
+  },
+  {
+    "id": "CH5.2_escape_closes_snooze_not_pane",
+    "name": "Escape Closes Snooze Dialog While ReadingPane Remains Open",
+    "passed": true,
+    "details": {
+      "dialogClosed": true,
+      "readingPaneStillOpen": true
+    },
+    "timestamp": "2026-11-07T07:23:17.199Z"
+  }
+]

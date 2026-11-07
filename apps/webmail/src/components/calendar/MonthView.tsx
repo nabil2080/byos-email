@@ -3,8 +3,8 @@ import { UserCalendar } from "../../api";
 import { DecryptedEventRecord } from "./CalendarSidebar";
 import { AlternateCalendarSystem, formatAlternateDate } from "../../utils/alternateCalendar";
 import { getWeekNumber } from "../../utils/calendarTimezones";
-import { TaskItem } from "./tasks/taskTypes";
-import { getTasksForDate, isTaskOverdue } from "./tasks/taskStore";
+import { detectCategory } from "./kashcalParser";
+import { KashcalCategoryIcon } from "./KashcalCategoryIcon";
 
 interface MonthViewProps {
   currentDate: Date;
@@ -18,10 +18,6 @@ interface MonthViewProps {
   firstWeekOfYear?: "four_day_week" | "first_day" | "full_week";
   alternateCalendar?: AlternateCalendarSystem;
   primaryTimeZone?: string;
-  tasks?: TaskItem[];
-  showTasks?: boolean;
-  onToggleTaskComplete?: (taskId: string) => void;
-  onSelectTask?: (task: TaskItem) => void;
 }
 
 interface MonthCell {
@@ -119,7 +115,7 @@ export const MonthView: Component<MonthViewProps> = (props) => {
       </div>
 
       {/* ── Month Grid ── */}
-      <div class="grid grid-cols-7 flex-1 auto-rows-fr overflow-y-auto custom-scrollbar">
+      <div class="grid grid-cols-7 flex-1 min-h-0 auto-rows-fr overflow-y-auto custom-scrollbar">
         <For each={monthDays()}>
           {(cell, idx) => {
             const cellEvents = () =>
@@ -154,6 +150,21 @@ export const MonthView: Component<MonthViewProps> = (props) => {
                     >
                       {cell.dayNum}
                     </span>
+                    <button
+                      type="button"
+                      class="opacity-0 group-hover:opacity-100 w-4 h-4 rounded hover:bg-[#A27561]/15 text-[#A27561] flex items-center justify-center transition-opacity duration-150 cursor-pointer"
+                      title="Add event"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const s = new Date(cell.date);
+                        s.setHours(9, 0, 0, 0);
+                        const end = new Date(cell.date);
+                        end.setHours(10, 0, 0, 0);
+                        props.onSlotClick(s, end);
+                      }}
+                    >
+                      <svg class="w-2.5 h-2.5 stroke-current fill-none stroke-[2.5]" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    </button>
                     <Show when={props.showWeekNumbers && idx() % 7 === 0}>
                       <span
                         class="text-[9px] font-mono px-1 py-0.2 rounded bg-[#F0EEE9] dark:bg-[#2A2D35] text-[#6F7173] dark:text-[#878A8E] font-semibold"
@@ -200,7 +211,7 @@ export const MonthView: Component<MonthViewProps> = (props) => {
                             e.stopPropagation();
                             props.onSelectEvent(ev);
                           }}
-                          class={`flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[11px] font-medium truncate text-left shadow-2xs hover:opacity-90 cursor-pointer ${
+                          class={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[11px] font-medium truncate text-left shadow-2xs hover:opacity-90 hover:scale-[1.01] transition-all cursor-pointer ${
                             isDeclined ? "line-through opacity-50 italic" : ""
                           }`}
                           style={{
@@ -208,7 +219,11 @@ export const MonthView: Component<MonthViewProps> = (props) => {
                             "border-left": `3px solid ${calColor}`,
                           }}
                         >
-                          <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ "background-color": calColor }} />
+                          <KashcalCategoryIcon
+                            category={detectCategory(ev.details.title)}
+                            class="w-3 h-3 shrink-0 stroke-current fill-none stroke-[2]"
+                            style={{ color: calColor }}
+                          />
                           <Show when={ev.details.visibility === "private" || ev.details.visibility === "confidential"}>
                             <svg class="w-2.5 h-2.5 shrink-0 stroke-current fill-none stroke-[2.5]" style={{ color: calColor }} viewBox="0 0 24 24">
                               <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
@@ -249,48 +264,6 @@ export const MonthView: Component<MonthViewProps> = (props) => {
                       );
                     }}
                   </For>
-
-                  {/* Tasks in this day (Category 11) */}
-                  <Show when={props.showTasks !== false && (props.tasks || []).length > 0}>
-                    <For each={getTasksForDate(props.tasks || [], cell.date, props.primaryTimeZone || "UTC")}>
-                      {(task) => {
-                        const overdue = () => isTaskOverdue(task, new Date(), props.primaryTimeZone || "UTC");
-                        return (
-                          <div
-                            class={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border border-[#E2DFD8] dark:border-[#2A2D35] transition-all cursor-pointer ${
-                              task.completed
-                                ? "bg-neutral-100 dark:bg-neutral-900 text-[#6F7173] opacity-60"
-                                : overdue()
-                                ? "bg-red-50 dark:bg-red-950/20 border-red-300 dark:border-red-800 text-red-700 dark:text-red-300"
-                                : "bg-white dark:bg-[#1E1F23] hover:border-[#9E725F] text-[#2B2C2D] dark:text-[#ECEBE8]"
-                            }`}
-                            data-testid="calendar-task-item"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={task.completed}
-                              onChange={(e) => {
-                                e.stopPropagation();
-                                props.onToggleTaskComplete?.(task.id);
-                              }}
-                              class="w-3 h-3 rounded text-[#9E725F] focus:ring-[#9E725F] cursor-pointer"
-                              data-testid="calendar-task-checkbox"
-                              title={task.completed ? "Reopen task" : "Mark as completed"}
-                            />
-                            <span
-                              class={`truncate flex-1 ${task.completed ? "line-through text-[#6F7173]" : ""}`}
-                              onClick={() => props.onSelectTask?.(task)}
-                            >
-                              {task.title}
-                            </span>
-                            <Show when={overdue()}>
-                              <span class="text-[8px] font-bold text-red-600 dark:text-red-400" data-testid="task-overdue-badge">!</span>
-                            </Show>
-                          </div>
-                        );
-                      }}
-                    </For>
-                  </Show>
 
                   {/* Overflow indicator */}
                   <Show when={cellEvents().length > 3}>

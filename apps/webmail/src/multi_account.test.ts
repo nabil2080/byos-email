@@ -222,7 +222,7 @@ export async function runMultiAccountTests() {
     ss.setItem("byos_mailbox_sk_" + accB.id, "b-key-bytes");
 
     // Mock token probe where token-b returns 401
-    const mockProbe = async (token: string) => {
+    const mockProbe = async (token?: string) => {
       if (token === "token-b") {
         const err = new Error("Unauthorized") as Error & { status: number };
         err.status = 401;

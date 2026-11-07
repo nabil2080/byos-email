@@ -129,9 +129,21 @@ func TestSecurityHeaders(t *testing.T) {
 	if rec.Header().Get("Content-Security-Policy") == "" {
 		t.Errorf("expected Content-Security-Policy header to be present")
 	}
-	if rec.Header().Get("Strict-Transport-Security") != "max-age=63072000; includeSubDomains; preload" {
-		t.Errorf("expected Strict-Transport-Security header, got: %s", rec.Header().Get("Strict-Transport-Security"))
+	// HSTS must NOT be sent over plain HTTP (dev/LAN) - only in production/HTTPS.
+	// Sending it on plain HTTP poisons Chrome's HSTS cache causing ERR_TOO_MANY_RETRIES.
+	// The test runs without BYOS_ENV=production so HSTS must be absent.
+	if sts := rec.Header().Get("Strict-Transport-Security"); sts != "" {
+		t.Errorf("HSTS must not be sent over plain HTTP (dev mode); got: %s", sts)
 	}
+	// Verify HSTS IS present in production mode.
+	t.Run("ProductionHSTS", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "production")
+		rec2 := httptest.NewRecorder()
+		wrapped(rec2, req)
+		if sts := rec2.Header().Get("Strict-Transport-Security"); sts != "max-age=63072000; includeSubDomains; preload" {
+			t.Errorf("expected HSTS in production mode, got: %s", sts)
+		}
+	})
 }
 
 func TestAdminAllowedOrigins(t *testing.T) {

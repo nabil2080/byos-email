@@ -34,7 +34,7 @@ type UserPasskey struct {
 }
 
 func getRPID(r *http.Request) string {
-	cfg, err := getWebAuthnConfig()
+	cfg, err := getWebAuthnConfigForRequest(r)
 	if err == nil && cfg != nil && cfg.RPID != "" {
 		return cfg.RPID
 	}
@@ -126,7 +126,7 @@ func passkeyRegisterOptionsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wa, err := getWebAuthn()
+	wa, err := getWebAuthn(r)
 	if err != nil {
 		http.Error(w, "webauthn configuration error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -286,7 +286,7 @@ func passkeyRegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wa, err := getWebAuthn()
+	wa, err := getWebAuthn(r)
 	if err != nil {
 		http.Error(w, "webauthn configuration error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -374,7 +374,7 @@ func passkeyLoginOptionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	wa, err := getWebAuthn()
+	wa, err := getWebAuthn(r)
 	if err != nil {
 		http.Error(w, "webauthn configuration error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -504,7 +504,7 @@ func passkeyLoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wa, err := getWebAuthn()
+	wa, err := getWebAuthn(r)
 	if err != nil {
 		http.Error(w, "webauthn configuration error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -701,7 +701,7 @@ func passkeyStepUpOptionsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wa, err := getWebAuthn()
+	wa, err := getWebAuthn(r)
 	if err != nil {
 		http.Error(w, "webauthn configuration error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -822,7 +822,7 @@ func passkeyStepUpVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wa, err := getWebAuthn()
+	wa, err := getWebAuthn(r)
 	if err != nil {
 		http.Error(w, "webauthn configuration error: "+err.Error(), http.StatusInternalServerError)
 		return

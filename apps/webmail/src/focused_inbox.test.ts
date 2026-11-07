@@ -98,9 +98,9 @@ export function runFocusedInboxTests(): { passed: number; failed: number } {
     assert(subCat === "social", `Expected social for sub.linkedin.com, got ${subCat}`);
   });
 
-  // 4. Notifications Classification
-  test("4. TestNotificationsClassificationSignals", () => {
-    // Transactional subjects
+  // 4. Notifications removed from Focused Categories: Transactional & System notifications classify into Primary
+  test("4. TestTransactionalAndNotificationsClassifyIntoPrimary", () => {
+    // Transactional subjects now route to Primary (notifications category removed)
     const subjects = [
       "Your order confirmation #12345",
       "Here is your receipt",
@@ -118,27 +118,27 @@ export function runFocusedInboxTests(): { passed: number; failed: number } {
         subject: sub,
         headers: {},
       });
-      assert(cat === "notifications", `Expected notifications for subject "${sub}", got ${cat}`);
+      assert(cat === "primary", `Expected primary for transactional subject "${sub}", got ${cat}`);
     }
 
-    // Precedence: bulk with no-reply sender
+    // Precedence: bulk with no-reply sender now routes to primary
     const bulkNoReply = classifyMessage({
       senderEmail: "no-reply@store.com",
       subject: "Account update",
       headers: { precedence: "bulk" },
     });
-    assert(bulkNoReply === "notifications", `Expected notifications for Precedence: bulk + no-reply, got ${bulkNoReply}`);
+    assert(bulkNoReply === "primary", `Expected primary for Precedence: bulk + no-reply, got ${bulkNoReply}`);
 
-    // Auto-Submitted: auto-generated (without newsletter sender)
+    // Auto-Submitted: auto-generated (without newsletter sender) now routes to primary
     const autoGen = classifyMessage({
       senderEmail: "system@cloud.com",
       subject: "CPU threshold alert",
       headers: { "auto-submitted": "auto-generated" },
     });
-    assert(autoGen === "notifications", `Expected notifications for Auto-Submitted auto-generated, got ${autoGen}`);
+    assert(autoGen === "primary", `Expected primary for Auto-Submitted auto-generated, got ${autoGen}`);
   });
 
-  // 5. Precedence Order: Newsletters wins before Social, Social wins before Notifications
+  // 5. Precedence Order: Newsletters wins before Social, Social wins before Primary
   test("5. TestClassificationPrecedenceOrder", () => {
     // Social domain with List-Unsubscribe should classify as newsletters (Rule 1 > Rule 2)
     const socialNewsletter = classifyMessage({
@@ -148,13 +148,13 @@ export function runFocusedInboxTests(): { passed: number; failed: number } {
     });
     assert(socialNewsletter === "newsletters", `Expected newsletters to win over social, got ${socialNewsletter}`);
 
-    // Social domain with notification subject should classify as social (Rule 2 > Rule 3)
+    // Social domain with password reset subject should classify as social (Rule 2 > Rule 3)
     const socialNotification = classifyMessage({
       senderEmail: "security@twitter.com",
       subject: "Password reset for your account",
       headers: {},
     });
-    assert(socialNotification === "social", `Expected social to win over notifications, got ${socialNotification}`);
+    assert(socialNotification === "social", `Expected social for social domain, got ${socialNotification}`);
   });
 
   // 6. Overrides: Session Manual Override and Server Rule Override
@@ -183,20 +183,24 @@ export function runFocusedInboxTests(): { passed: number; failed: number } {
       let cat = resolveMessageCategory(msgId, null, input);
       assert(cat === "primary", `Expected primary, got ${cat}`);
 
-      // Server override -> notifications
+      // Legacy Server override "notifications" maps to primary
       cat = resolveMessageCategory(msgId, "notifications", input);
-      assert(cat === "notifications", `Expected server override notifications, got ${cat}`);
+      assert(cat === "primary", `Expected legacy server override notifications to map to primary, got ${cat}`);
+
+      // Server override -> newsletters
+      cat = resolveMessageCategory(msgId, "newsletters", input);
+      assert(cat === "newsletters", `Expected server override newsletters, got ${cat}`);
 
       // Manual override -> social (beats server override and classifier)
       setMessageCategoryOverride(msgId, "social");
       assert(getMessageCategoryOverride(msgId) === "social", "Manual override should be saved");
-      cat = resolveMessageCategory(msgId, "notifications", input);
+      cat = resolveMessageCategory(msgId, "newsletters", input);
       assert(cat === "social", `Expected manual override social to beat server override, got ${cat}`);
 
       // Clear manual override -> back to server override
       clearMessageCategoryOverride(msgId);
-      cat = resolveMessageCategory(msgId, "notifications", input);
-      assert(cat === "notifications", `Expected server override after clear, got ${cat}`);
+      cat = resolveMessageCategory(msgId, "newsletters", input);
+      assert(cat === "newsletters", `Expected server override after clear, got ${cat}`);
     } finally {
       (globalThis as any).window = originalWindow;
     }

@@ -1,6 +1,7 @@
-import { Component, createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
-import { Mailbox, updateMailboxSettings } from "../api";
+import { Component, createSignal, onMount, onCleanup, For, Show } from "solid-js";
+import { Mailbox, MailboxSettings, updateMailboxSettings } from "../api";
 import { getFocusedInboxEnabled, setFocusedInboxEnabled } from "../focused_inbox";
+import { SUPPORTED_LANGUAGES } from "../utils/translator";
 
 export interface QuickSettingsPanelProps {
   mailbox: Mailbox | null;
@@ -34,47 +35,71 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
   const [savedSuccess, setSavedSuccess] = createSignal(false);
   const [lastSavedTime, setLastSavedTime] = createSignal<string>("Just now");
 
-  // Local mirror signals for immediate reactivity
-  const [density, setDensity] = createSignal<"compact" | "cozy" | "comfortable">(props.currentDensity || "cozy");
-  const [layoutMode, setLayoutMode] = createSignal<"split" | "full">(props.currentLayout || "split");
-  const [theme, setTheme] = createSignal<"cloud_dancer" | "dark">(props.currentTheme || "cloud_dancer");
-  const [timeFormat, setTimeFormat] = createSignal<"12h" | "24h">(props.currentTimeFormat || "12h");
-  const [language, setLanguage] = createSignal<string>(props.currentLanguage || "en");
-  const [weekStart, setWeekStart] = createSignal<"sunday" | "monday" | "saturday">(props.currentWeekStart || "sunday");
-  const [focusedInboxState, setFocusedInboxState] = createSignal<boolean>(
-    props.focusedInboxEnabled !== undefined ? props.focusedInboxEnabled : getFocusedInboxEnabled()
-  );
-  const [fontScale, setFontScale] = createSignal<"default" | "large" | "xlarge">(props.fontScale || "default");
-  const [highContrast, setHighContrast] = createSignal<boolean>(props.highContrast || false);
+  // Direct reactive property accessors (F8)
+  const density = () => props.currentDensity || "cozy";
+  const layoutMode = () => props.currentLayout || "split";
+  const theme = () => props.currentTheme || "cloud_dancer";
+  const timeFormat = () => props.currentTimeFormat || "12h";
+  const language = () => props.currentLanguage || "en";
+  const weekStart = () => props.currentWeekStart || "sunday";
+  const focusedInboxState = () =>
+    props.focusedInboxEnabled !== undefined ? props.focusedInboxEnabled : getFocusedInboxEnabled();
+  const fontScale = () => props.fontScale || "default";
+  const highContrast = () => props.highContrast ?? false;
 
-  // Sync with props
-  createEffect(() => {
-    if (props.currentDensity) setDensity(props.currentDensity);
-  });
-  createEffect(() => {
-    if (props.currentLayout) setLayoutMode(props.currentLayout);
-  });
-  createEffect(() => {
-    if (props.currentTheme) setTheme(props.currentTheme);
-  });
-  createEffect(() => {
-    if (props.currentTimeFormat) setTimeFormat(props.currentTimeFormat);
-  });
-  createEffect(() => {
-    if (props.currentLanguage) setLanguage(props.currentLanguage);
-  });
-  createEffect(() => {
-    if (props.currentWeekStart) setWeekStart(props.currentWeekStart);
-  });
-  createEffect(() => {
-    if (props.focusedInboxEnabled !== undefined) setFocusedInboxState(props.focusedInboxEnabled);
-  });
-  createEffect(() => {
-    if (props.fontScale) setFontScale(props.fontScale);
-  });
-  createEffect(() => {
-    if (props.highContrast !== undefined) setHighContrast(props.highContrast);
-  });
+  // Debounced persistence accumulator (F9)
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  let pendingSettings: Partial<MailboxSettings> = {};
+
+  function queueDebouncedSave(updates: Partial<MailboxSettings>) {
+    pendingSettings = { ...pendingSettings, ...updates };
+
+    // Immediate localStorage sync for offline & refresh consistency
+    if (typeof window !== "undefined") {
+      if (updates.density) localStorage.setItem("byos_density", updates.density);
+      if (updates.layout_mode) {
+        localStorage.setItem("byos_layout", updates.layout_mode);
+        localStorage.setItem("byos_layout_mode", updates.layout_mode);
+      }
+      if (updates.theme) localStorage.setItem("byos_theme", updates.theme);
+      if (updates.language) localStorage.setItem("byos_language", updates.language);
+      if (updates.time_format) localStorage.setItem("byos_time_format", updates.time_format);
+      if (updates.week_start) localStorage.setItem("byos_week_start", updates.week_start);
+    }
+
+    setSaving(true);
+    setSavedSuccess(false);
+
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+    }
+
+    debounceTimer = setTimeout(async () => {
+      const mailboxId = props.mailbox?.id;
+      const payload = { ...pendingSettings };
+      pendingSettings = {};
+      debounceTimer = undefined;
+
+      if (!mailboxId) {
+        setSaving(false);
+        return;
+      }
+
+      try {
+        await updateMailboxSettings(mailboxId, payload);
+        setSavedSuccess(true);
+        const d = new Date();
+        setLastSavedTime(
+          d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })
+        );
+        setTimeout(() => setSavedSuccess(false), 2000);
+      } catch (err) {
+        console.warn("Failed to persist UI settings to backend:", err);
+      } finally {
+        setSaving(false);
+      }
+    }, 400);
+  }
 
   // Handle escape key to close cleanly
   function handleKeyDown(e: KeyboardEvent) {
@@ -90,89 +115,49 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
 
   onCleanup(() => {
     window.removeEventListener("keydown", handleKeyDown);
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = undefined;
+      if (props.mailbox?.id && Object.keys(pendingSettings).length > 0) {
+        updateMailboxSettings(props.mailbox.id, pendingSettings).catch((err) =>
+          console.warn("Failed to flush settings on unmount:", err)
+        );
+        pendingSettings = {};
+      }
+    }
   });
 
-  async function triggerSave(
-    newDensity = density(),
-    newLayout = layoutMode(),
-    newTheme = theme(),
-    newLanguage = language(),
-    newTimeFormat = timeFormat(),
-    newWeekStart = weekStart()
-  ) {
-    setSaving(true);
-    try {
-      if (typeof window !== "undefined") {
-        localStorage.setItem("byos_density", newDensity);
-        localStorage.setItem("byos_layout", newLayout);
-        localStorage.setItem("byos_theme", newTheme);
-        localStorage.setItem("byos_language", newLanguage);
-        localStorage.setItem("byos_time_format", newTimeFormat);
-        localStorage.setItem("byos_week_start", newWeekStart);
-      }
-
-      if (props.mailbox?.id) {
-        await updateMailboxSettings(props.mailbox.id, {
-          density: newDensity,
-          layout_mode: newLayout,
-          theme: newTheme,
-          language: newLanguage,
-          time_format: newTimeFormat,
-          week_start: newWeekStart,
-        });
-      }
-
-      setSavedSuccess(true);
-      const d = new Date();
-      setLastSavedTime(
-        d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })
-      );
-      setTimeout(() => setSavedSuccess(false), 2000);
-    } catch (err) {
-      console.warn("Failed to persist UI settings to backend:", err);
-    } finally {
-      setSaving(false);
-    }
-  }
-
   function handleDensitySelect(d: "compact" | "cozy" | "comfortable") {
-    setDensity(d);
     props.onDensityChange(d);
-    triggerSave(d, layoutMode(), theme(), language(), timeFormat(), weekStart());
+    queueDebouncedSave({ density: d });
   }
 
   function handleLayoutSelect(l: "split" | "full") {
-    setLayoutMode(l);
     props.onLayoutChange(l);
-    triggerSave(density(), l, theme(), language(), timeFormat(), weekStart());
+    queueDebouncedSave({ layout_mode: l });
   }
 
   function handleThemeSelect(t: "cloud_dancer" | "dark") {
-    setTheme(t);
     props.onThemeChange(t);
-    triggerSave(density(), layoutMode(), t, language(), timeFormat(), weekStart());
+    queueDebouncedSave({ theme: t });
   }
 
   function handleTimeFormatSelect(tf: "12h" | "24h") {
-    setTimeFormat(tf);
     props.onTimeFormatChange(tf);
-    triggerSave(density(), layoutMode(), theme(), language(), tf, weekStart());
+    queueDebouncedSave({ time_format: tf });
   }
 
   function handleLanguageSelect(lang: string) {
-    setLanguage(lang);
     props.onLanguageChange(lang);
-    triggerSave(density(), layoutMode(), theme(), lang, timeFormat(), weekStart());
+    queueDebouncedSave({ language: lang });
   }
 
   function handleWeekStartSelect(ws: "sunday" | "monday" | "saturday") {
-    setWeekStart(ws);
     props.onWeekStartChange(ws);
-    triggerSave(density(), layoutMode(), theme(), language(), timeFormat(), ws);
+    queueDebouncedSave({ week_start: ws });
   }
 
   function handleFocusedInboxToggle(enabled: boolean) {
-    setFocusedInboxState(enabled);
     setFocusedInboxEnabled(enabled);
     props.onToggleFocusedInbox?.(enabled);
     if (typeof window !== "undefined") {
@@ -181,7 +166,6 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
   }
 
   function handleFontScaleSelect(scale: "default" | "large" | "xlarge") {
-    setFontScale(scale);
     props.onFontScaleChange?.(scale);
     if (typeof window !== "undefined") {
       localStorage.setItem("byos_font_scale", scale);
@@ -189,7 +173,6 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
   }
 
   function handleHighContrastToggle(enabled: boolean) {
-    setHighContrast(enabled);
     props.onHighContrastChange?.(enabled);
     if (typeof window !== "undefined") {
       localStorage.setItem("byos_high_contrast", enabled ? "true" : "false");
@@ -202,16 +185,15 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
   }
 
   function handleRestoreDefaults() {
-    handleThemeSelect("cloud_dancer");
-    handleLayoutSelect("split");
-    handleDensitySelect("cozy");
-    handleFontScaleSelect("default");
-    handleTimeFormatSelect("12h");
-    handleWeekStartSelect("sunday");
-    handleLanguageSelect("en");
-    handleHighContrastToggle(false);
-    handleFocusedInboxToggle(true);
     props.onResetDefaults?.();
+    queueDebouncedSave({
+      density: "cozy",
+      layout_mode: "split",
+      theme: "cloud_dancer",
+      time_format: "12h",
+      language: "en",
+      week_start: "sunday",
+    });
   }
 
   const densityList: {
@@ -445,13 +427,15 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                     type="button"
                     onClick={() => handleDensitySelect(opt.id)}
                     data-testid={`quick-density-${opt.id}`}
-                    class={`w-full p-2.5 rounded-xl border text-left transition flex items-center justify-between cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
+                    id={`density-${opt.id}-btn`}
+                    class={`relative w-full p-2.5 rounded-xl border text-left transition flex items-center justify-between cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
                       isSelected()
                         ? "border-[#9E725F] bg-[#F3ECE8] dark:bg-[#2D2522] shadow-2xs ring-1 ring-[#9E725F]"
                         : "border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] hover:bg-[#F8F7F4] dark:hover:bg-[#252830]"
                     }`}
                   >
-                    <div class="flex items-center gap-2.5">
+                    <span data-testid={`density-${opt.id}-btn`} class="absolute inset-0" aria-hidden="true" />
+                    <div class="relative z-10 flex items-center gap-2.5">
                       <span
                         class={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
                           isSelected()
@@ -468,7 +452,7 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                     </div>
 
                     {/* Miniature live row snippet */}
-                    <div class={`w-20 ${opt.lineH} bg-stone-100 dark:bg-stone-800 rounded px-1.5 flex items-center justify-between border border-stone-200 dark:border-stone-700`}>
+                    <div class={`relative z-10 w-20 ${opt.lineH} bg-stone-100 dark:bg-stone-800 rounded px-1.5 flex items-center justify-between border border-stone-200 dark:border-stone-700`}>
                       <div class="w-8 h-1.5 bg-stone-400 dark:bg-stone-500 rounded" />
                       <div class="w-3 h-1.5 bg-stone-300 dark:bg-stone-600 rounded" />
                     </div>
@@ -661,12 +645,15 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
               value={language()}
               onChange={(e) => handleLanguageSelect(e.currentTarget.value)}
               data-testid="quick-language-select"
-              class="w-full px-2.5 py-1.5 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 cursor-pointer"
+              class="w-full px-2.5 py-1.5 rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 cursor-pointer"
             >
-              <option value="en">English (US)</option>
-              <option value="es">Español</option>
-              <option value="fr">Français</option>
-              <option value="de">Deutsch</option>
+              <For each={SUPPORTED_LANGUAGES}>
+                {(l) => (
+                  <option value={l.code}>
+                    {l.nativeName} ({l.name})
+                  </option>
+                )}
+              </For>
             </select>
           </div>
         </section>

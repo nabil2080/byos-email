@@ -52,12 +52,39 @@ async function runCrmVerification() {
   assert(bodyText.includes('Organizations'), `Organizations tab rendered`);
   assert(bodyText.includes('Audit Logs'), `Audit Logs tab rendered`);
 
+  // Assert no database query failed or runtime errors
+  assert(!bodyText.includes('Runtime Error'), 'No Runtime Error on page load');
+  assert(!bodyText.includes('Support System Connection Alert'), 'No Connection Alert banner present');
+  assert(bodyText.includes('Customer Ticket Queue'), 'Customer Ticket Queue rendered');
+  assert(bodyText.includes('TK-'), 'Database tickets successfully rendered');
+
   // Assert sliding highlight pill
   const pillExists = await page.$('[data-testid="sidebar-nav-pill"]');
   assert(pillExists !== null, 'Sliding highlight pill ([data-testid="sidebar-nav-pill"]) is present');
 
   await page.screenshot({ path: path.join(artifactsDir, 'support_crm_tickets_initial.png') });
   console.log('Saved support_crm_tickets_initial.png');
+
+  // 2b. Test clicking a ticket to verify ticket detail & message panel
+  console.log('Testing ticket selection and message conversation view...');
+  const clickedTicket = await page.evaluate(() => {
+    const leaf = Array.from(document.querySelectorAll('*')).find(
+      (el) => el.children.length === 0 && el.innerText && el.innerText.startsWith('TK-')
+    );
+    if (leaf) {
+      (leaf.closest('[role="button"]') || leaf.closest('.cursor-pointer') || leaf.parentElement)?.click();
+      return true;
+    }
+    return false;
+  });
+  assert(clickedTicket, 'Found and clicked a ticket in the queue');
+
+  await sleep(1000);
+  const detailText = await page.evaluate(() => document.body.innerText);
+  assert(detailText.includes('Customer Account Context'), 'Ticket customer account context rendered');
+  assert(detailText.includes('Send Public Reply') || detailText.includes('Public Reply'), 'Ticket reply composer rendered');
+  await page.screenshot({ path: path.join(artifactsDir, 'support_crm_ticket_detail.png') });
+  console.log('Saved support_crm_ticket_detail.png');
 
   // 3. Switch to Organizations Tab
   console.log('Switching to Organizations tab...');

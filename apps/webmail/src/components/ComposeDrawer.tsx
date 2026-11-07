@@ -59,6 +59,26 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
   const [drawerMode, setDrawerMode] = createSignal<DrawerMode>("docked");
   const [showScheduleInput, setShowScheduleInput] = createSignal(false);
   const [showCcBcc, setShowCcBcc] = createSignal(false);
+  const [mounted, setMounted] = createSignal(props.isOpen);
+  const [animating, setAnimating] = createSignal(false);
+
+  createEffect(() => {
+    if (props.isOpen) {
+      setMounted(true);
+      const r1 = requestAnimationFrame(() => {
+        const r2 = requestAnimationFrame(() => {
+          setAnimating(true);
+        });
+      });
+      return () => cancelAnimationFrame(r1);
+    } else {
+      setAnimating(false);
+      const timer = setTimeout(() => {
+        setMounted(false);
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  });
 
   const readiness = () => validateAttachmentSendReadiness(props.attachments);
 
@@ -129,33 +149,50 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
   }
 
   function handleClose() {
-    props.onClose();
-    setDrawerMode("docked");
+    setAnimating(false);
+    setTimeout(() => {
+      props.onClose();
+      setDrawerMode("docked");
+    }, 280);
   }
 
   return (
-    <Show when={props.isOpen}>
-      {/* Backdrop only when maximized */}
-      <Show when={drawerMode() === "maximized"}>
-        <div
-          onClick={() => setDrawerMode("docked")}
-          class="fixed inset-0 bg-black/30 backdrop-blur-xs z-40 transition-opacity"
-        ></div>
-      </Show>
+    <Show when={mounted()}>
+      {/* Backdrop overlay for mobile/tablet bottom sheet and maximized desktop */}
+      <div
+        onClick={handleClose}
+        class={`fixed inset-0 z-40 bg-black/40 backdrop-blur-xs transition-opacity duration-300 ${
+          animating() ? "opacity-100" : "opacity-0 pointer-events-none"
+        } ${drawerMode() === "minimized" ? "hidden" : "block md:hidden " + (drawerMode() === "maximized" ? "md:block" : "")}`}
+      />
 
       {/* Main Compose Drawer Container with tactile spring cubic-bezier */}
       <div
+        data-testid="compose-drawer"
+        role="region"
+        aria-label="Compose message drawer"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") handleClose();
+        }}
         class={`fixed z-50 bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] shadow-2xl flex flex-col overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          !animating()
+            ? "translate-y-full opacity-0 pointer-events-none"
+            : "translate-y-0 opacity-100"
+        } ${
           drawerMode() === "minimized"
             ? "bottom-0 right-6 sm:right-10 w-80 h-12 rounded-t-xl cursor-pointer"
             : drawerMode() === "docked"
-            ? "inset-0 w-full h-full rounded-none md:inset-auto md:bottom-0 md:right-10 md:w-[580px] md:h-[560px] md:max-w-[calc(100vw-24px)] md:max-h-[calc(100vh-64px)] md:rounded-t-2xl"
+            ? "inset-x-0 bottom-0 max-h-[92vh] h-[90vh] rounded-t-3xl border-t border-x md:inset-auto md:bottom-0 md:right-10 md:w-[580px] md:h-[560px] md:max-w-[calc(100vw-24px)] md:max-h-[calc(100vh-64px)] md:rounded-t-2xl"
             : "inset-0 w-full h-full rounded-none md:inset-x-0 md:top-8 md:bottom-6 md:mx-auto md:w-[860px] md:max-w-[95vw] md:h-[calc(100vh-56px)] md:rounded-2xl"
         }`}
         onClick={() => {
           if (drawerMode() === "minimized") setDrawerMode("docked");
         }}
       >
+        {/* Mobile Pull Handle */}
+        <div class="md:hidden flex justify-center pt-2.5 pb-1 bg-[#2B2C2D] dark:bg-[#18191D]">
+          <div class="w-10 h-1 rounded-full bg-white/30" />
+        </div>
         {/* Drawer Title Bar / Controls */}
         <header class="h-12 bg-[#2B2C2D] dark:bg-[#18191D] text-white px-4 flex items-center justify-between flex-shrink-0 select-none cursor-default border-b border-[#1E1F20] dark:border-[#2E3138]">
           <div class="flex items-center gap-2 min-w-0">

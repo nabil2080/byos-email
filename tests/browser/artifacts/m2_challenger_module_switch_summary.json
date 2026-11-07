@@ -1,0 +1,115 @@
+{
+  "verdict": "CONFIRMED CORRECT",
+  "totalTests": 15,
+  "passed": 15,
+  "failed": 0,
+  "pageErrors": [],
+  "results": [
+    {
+      "category": "Structural",
+      "testName": "Page-turn classes and keyframe elimination",
+      "passed": true,
+      "details": "hasPageTurnClass=false, remainingRules=[]",
+      "timestamp": "2026-11-06T05:14:40.747Z"
+    },
+    {
+      "category": "MorphingPill",
+      "testName": "Pill position in Mail mode (translateX 0% & delta < 2px)",
+      "passed": true,
+      "details": "transformStyle=translateX(0%), deltaToMail=0.00px, scrollLeaking=false",
+      "timestamp": "2026-11-06T05:14:40.752Z"
+    },
+    {
+      "category": "MorphingPill",
+      "testName": "Pill position in Calendar mode (translateX 100% & delta < 2px)",
+      "passed": true,
+      "details": "transformStyle=translateX(100%), deltaToCal=0.02px, hasCal=true, hasMail=false",
+      "timestamp": "2026-11-06T05:14:41.224Z"
+    },
+    {
+      "category": "MorphingPill",
+      "testName": "Pill position in Notes mode (translateX 200% & delta < 2px)",
+      "passed": true,
+      "details": "transformStyle=translateX(200%), deltaToNotes=0.03px, hasNotes=true",
+      "timestamp": "2026-11-06T05:14:41.637Z"
+    },
+    {
+      "category": "MorphingPill",
+      "testName": "Pill return to Mail mode (translateX 0% & delta < 2px)",
+      "passed": true,
+      "details": "transformStyle=translateX(0%), deltaToMail=0.00px",
+      "timestamp": "2026-11-06T05:14:42.025Z"
+    },
+    {
+      "category": "RapidStress",
+      "testName": "45-Hop Module Switch Burst Zero-Error & Zero-Scroll",
+      "passed": true,
+      "details": "jumpsExecuted=45, newErrors=0, scrollBreaches=0, duplicateMainErrors=0",
+      "timestamp": "2026-11-06T05:14:46.288Z"
+    },
+    {
+      "category": "RapidStress",
+      "testName": "Final Pill Alignment after 45 Jumps (Settled at Mail)",
+      "passed": true,
+      "details": "transformStyle=translateX(0%), deltaToMail=0.00px",
+      "timestamp": "2026-11-06T05:14:46.288Z"
+    },
+    {
+      "category": "RapidStress",
+      "testName": "DOM Cleanliness after 45 Jumps (Only Mail active)",
+      "passed": true,
+      "details": "mainCount=1, hasMail=true, hasCal=false, hasNotes=false",
+      "timestamp": "2026-11-06T05:14:46.288Z"
+    },
+    {
+      "category": "ConcurrentStress",
+      "testName": "Synchronous Click Flood Handled Without Exception",
+      "passed": true,
+      "details": "newErrors=0, pillTransformImmediate=translateX(100%)",
+      "timestamp": "2026-11-06T05:14:46.695Z"
+    },
+    {
+      "category": "ConcurrentStress",
+      "testName": "Post-Flood Settle on Calendar (translateX 100% & Single DOM Mount)",
+      "passed": true,
+      "details": "transformStyle=translateX(100%), hasCalendar=true, hasMailList=false, isLeaking=false",
+      "timestamp": "2026-11-06T05:14:46.695Z"
+    },
+    {
+      "category": "PanelCollision",
+      "testName": "Customizer Panel Auto-Closes on Module Switch to Calendar",
+      "passed": true,
+      "details": "panelOpenBefore=true, calPanelMounted=false",
+      "timestamp": "2026-11-06T05:14:48.175Z"
+    },
+    {
+      "category": "PanelCollision",
+      "testName": "Appearance Button Restores Clean Closed State on Return to Mail",
+      "passed": true,
+      "details": "appearanceBtnMounted=true, isExpanded=false, panelMounted=false",
+      "timestamp": "2026-11-06T05:14:48.175Z"
+    },
+    {
+      "category": "MobileStress",
+      "testName": "Mobile Bottom Bar Rapid Module Switching (21 Hops)",
+      "passed": true,
+      "details": "hops=21, newErrors=0, scrollBreaches=0",
+      "timestamp": "2026-11-06T05:14:51.435Z"
+    },
+    {
+      "category": "ResourceAudit",
+      "testName": "Zero Stuck/Runaway Animations After Settling",
+      "passed": true,
+      "details": "totalAnimations=0, runningAnimations=0",
+      "timestamp": "2026-11-06T05:14:52.006Z"
+    },
+    {
+      "category": "DeepScrollIsolation",
+      "testName": "Deep Internal List Scrolling Leaves Outer Document at 0px Across All Module Switches",
+      "passed": true,
+      "details": "mailDeepLeaking=false, calLeaking=false, notesLeaking=false, mailReturnLeaking=false",
+      "timestamp": "2026-11-06T05:14:53.525Z"
+    }
+  ],
+  "timestamp": "2026-11-06T05:14:53.812Z"
+}

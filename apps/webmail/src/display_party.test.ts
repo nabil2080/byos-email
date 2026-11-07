@@ -5,6 +5,14 @@ import {
   getDisplayParty,
   getDisplayPartyEmail,
 } from "./components/MessageRow.js";
+import {
+  setAccountKeys,
+  getMailboxKeyFor,
+  isAccountUnlocked,
+  zeroizeKeys,
+  zeroizeInMemoryOnly,
+  SESSION_VAULT_KEY,
+} from "./session_isolation.js";
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -379,5 +387,106 @@ export function runDisplayPartyTests(): { passed: number; failed: number } {
       "Sent message row must never have unread styling"
     );
   });
+
+  // 10. Sender Name Display: Shows Name if available, else clean email
+  test("10. Sender Display Logic: shows display name if available, else clean email", () => {
+    // 10a. Name in quotes
+    assertEquals(
+      formatAddress('"Alice Smith" <alice@example.com>'),
+      "Alice Smith",
+      "quoted name extracted"
+    );
+    // 10b. Unquoted name
+    assertEquals(
+      formatAddress("Bob Jones <bob@example.com>"),
+      "Bob Jones",
+      "unquoted name extracted"
+    );
+    // 10c. Bare email
+    assertEquals(
+      formatAddress("charlie@example.com"),
+      "charlie@example.com",
+      "bare email cleanly returned"
+    );
+    // 10d. Angle brackets only
+    assertEquals(
+      formatAddress("<dave@example.com>"),
+      "dave@example.com",
+      "angle brackets stripped"
+    );
+    // 10e. Empty name with angle brackets
+    assertEquals(
+      formatAddress('"" <eve@example.com>'),
+      "eve@example.com",
+      "empty quoted name falls back to email"
+    );
+    // 10f. Message with explicit senderName property
+    const msgWithSenderName: DisplayMessage = {
+      id: "m-sender-name",
+      folder: "inbox",
+      sender: "frank@example.com",
+      senderName: "Frank Sinatra",
+      recipient: "me@byos.local",
+      subject: "Music",
+      snippet: "New song",
+      encryptedBody: "enc",
+      date: "Today",
+      read: true,
+      starred: false,
+    };
+    assertEquals(
+      getDisplayParty(msgWithSenderName, "inbox"),
+      "Frank Sinatra",
+      "senderName property takes precedence"
+    );
+    // 10g. Message without senderName falls back to formatted sender address
+    const msgWithoutSenderName: DisplayMessage = {
+      ...msgWithSenderName,
+      senderName: undefined,
+      sender: "frank@example.com",
+    };
+    assertEquals(
+      getDisplayParty(msgWithoutSenderName, "inbox"),
+      "frank@example.com",
+      "fallback to clean email when senderName not present"
+    );
+  });
+
+  // 11. Mailbox Unlock Persistence Across Refresh
+  test("11. Mailbox Unlock Persistence Across Refresh preserves keys in session vault", () => {
+    const accountId = "box-refresh-persistence-test";
+    const testKey = new Uint8Array(32).fill(0x55);
+
+    // Initial unlock sets keys in memory and sessionStorage vault
+    setAccountKeys(accountId, {
+      mailboxSk: testKey,
+      searchKey: "test-skey-hex",
+    });
+
+    assert(isAccountUnlocked(accountId), "account should be unlocked immediately");
+    const initialKey = getMailboxKeyFor(accountId);
+    assert(initialKey !== null && initialKey[0] === 0x55, "initial key is present");
+
+    // Simulate page reload: wipe in-memory custody (simulating new JS context)
+    // while sessionStorage is preserved by browser
+    zeroizeInMemoryOnly();
+
+    // Verify key still exists in session vault
+    assert(typeof sessionStorage !== "undefined", "sessionStorage must exist");
+    const rawVault = sessionStorage.getItem(SESSION_VAULT_KEY);
+    assert(rawVault !== null, "session vault must be present in sessionStorage");
+    assert(Boolean(rawVault && rawVault.includes("555555")), "vault must contain serialized key material");
+
+    // Key must be restored from session vault on simulated reload
+    assert(isAccountUnlocked(accountId), "account is recognized as unlocked from session vault");
+    const retrievedKey = getMailboxKeyFor(accountId);
+    assert(retrievedKey !== null && retrievedKey[0] === 0x55, "key restored from session vault on simulated reload");
+
+    // Cleanup: explicit zeroizeKeys purges session vault
+    zeroizeKeys(accountId);
+    assert(!isAccountUnlocked(accountId), "account is recognized as locked after zeroizeKeys");
+    assert(getMailboxKeyFor(accountId) === null, "zeroizeKeys purges account from vault");
+  });
+
   return { passed, failed };
 }

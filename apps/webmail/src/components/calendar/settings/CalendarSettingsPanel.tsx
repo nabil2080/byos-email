@@ -68,8 +68,6 @@ import {
   getTimeZoneAbbr,
   getWorldClockCityTime,
 } from "../../../utils/calendarTimezones";
-import { getAppointmentSchedules } from "../appointments/appointmentStore";
-import { AppointmentSchedule } from "../appointments/appointmentTypes";
 
 interface CalendarSettingsPanelProps {
   mailboxId?: string;
@@ -85,7 +83,6 @@ interface CalendarSettingsPanelProps {
   onOpenSubscribeFromUrl?: () => void;
   onDeleteCalendar?: (calId: string) => Promise<void>;
   onUnsubscribeCalendar?: (cal: UserCalendar) => void;
-  onOpenAppointmentsManager?: () => void;
 }
 
 export const CalendarSettingsPanel: Component<CalendarSettingsPanelProps> = (props) => {
@@ -1100,20 +1097,6 @@ export const CalendarSettingsPanel: Component<CalendarSettingsPanelProps> = (pro
               <span class="shrink-0">{renderIcon("layers")}</span>
               <span class="truncate">Calendar management</span>
             </button>
-            <button
-              type="button"
-              onClick={() => setActiveSectionId("appointment_schedules")}
-              class={`flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap md:whitespace-normal transition-colors text-left cursor-pointer shrink-0 md:shrink ${
-                activeSectionId() === "appointment_schedules"
-                  ? "bg-[#F2E8E2] dark:bg-[#3D2E28] text-[#9E725F] dark:text-[#D1A796]"
-                  : "text-[#6F7173] dark:text-[#878A8E] hover:text-[#2B2C2D] dark:hover:text-[#ECEBE8] hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35]"
-              }`}
-              data-testid="settings-nav-appointment_schedules"
-              aria-selected={activeSectionId() === "appointment_schedules"}
-            >
-              <span class="shrink-0">{renderIcon("calendar")}</span>
-              <span class="truncate">Appointment scheduling</span>
-            </button>
             <For each={props.calendars || []}>
               {(cal) => {
                 const isCalActive = () => activeSectionId() === `cal_settings_${cal.id}`;
@@ -2022,90 +2005,6 @@ export const CalendarSettingsPanel: Component<CalendarSettingsPanelProps> = (pro
                       )}
                     </For>
                   </div>
-                </div>
-              </div>
-            </Show>
-
-
-                      
-
-            {/* ══════════════════════════════════════════════════════════════════
-                APPOINTMENT SCHEDULING (Category 12)
-               ══════════════════════════════════════════════════════════════════ */}
-            <Show when={!isSearching() && activeSectionId() === "appointment_schedules"}>
-              <div class="space-y-6" data-testid="settings-appointment-schedules-panel">
-                <div class="border-b border-[#E2DFD8] dark:border-[#2A2D35] pb-4 flex items-center justify-between">
-                  <div>
-                    <h2 class="text-lg font-bold text-[#2B2C2D] dark:text-[#ECEBE8]">
-                      Appointment Scheduling & Booking Pages
-                    </h2>
-                    <p class="text-xs text-[#6F7173] dark:text-[#878A8E] mt-1">
-                      Configure shareable booking pages, working hour constraints, buffers, and maximum daily appointments.
-                    </p>
-                  </div>
-                  <Show when={props.onOpenAppointmentsManager}>
-                    <button
-                      type="button"
-                      onClick={() => props.onOpenAppointmentsManager?.()}
-                      class="px-3.5 py-1.5 rounded-xl bg-[#9E725F] text-white text-xs font-semibold hover:bg-[#865E4D] transition-colors cursor-pointer"
-                      data-testid="open-appointments-manager-btn"
-                    >
-                      Manage Schedules
-                    </button>
-                  </Show>
-
-
-                      
-                </div>
-
-                <div class="p-5 rounded-2xl bg-white dark:bg-[#1E1F23] border border-[#E2DFD8] dark:border-[#2A2D35] space-y-4">
-                  <div class="flex items-center justify-between">
-                    <h3 class="text-sm font-bold text-[#2B2C2D] dark:text-[#ECEBE8]">
-                      Configured Schedules
-                    </h3>
-                  </div>
-
-                  {(() => {
-                    const schedules = props.mailboxId ? getAppointmentSchedules(props.mailboxId, settings().primaryTimeZone) : [];
-                    return (
-                      <div class="space-y-2">
-                        <For each={schedules}>
-                          {(sched) => (
-                            <div class="p-3 rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F5]/50 dark:bg-[#141518]/50 flex items-center justify-between">
-                              <div>
-                                <div class="flex items-center gap-2">
-                                  <span class="text-xs font-bold text-[#2B2C2D] dark:text-[#ECEBE8]">
-                                    {sched.title}
-                                  </span>
-                                  <span class="text-[10px] font-semibold text-[#9E725F]">
-                                    {sched.durationMinutes}m
-                                  </span>
-                                  <span class={`text-[10px] font-semibold ${sched.isActive ? "text-emerald-600" : "text-neutral-500"}`}>
-                                    {sched.isActive ? "Active" : "Paused"}
-                                  </span>
-                                </div>
-                                <div class="text-[11px] text-[#6F7173] font-mono mt-0.5">
-                                  /book/{sched.slug}
-                                </div>
-                              </div>
-                              <Show when={props.onOpenAppointmentsManager}>
-                                <button
-                                  type="button"
-                                  onClick={() => props.onOpenAppointmentsManager?.()}
-                                  class="text-xs font-semibold text-[#9E725F] hover:underline cursor-pointer"
-                                >
-                                  Configure
-                                </button>
-                              </Show>
-
-
-                      
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                    );
-                  })()}
                 </div>
               </div>
             </Show>

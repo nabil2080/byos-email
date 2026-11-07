@@ -1,4 +1,4 @@
-import { Component, createSignal, createMemo, For } from "solid-js";
+import { Component, createSignal, createMemo, createEffect, For } from "solid-js";
 
 interface MiniMonthPickerProps {
   selectedDate: Date;
@@ -9,6 +9,12 @@ export const MiniMonthPicker: Component<MiniMonthPickerProps> = (props) => {
   // Navigation month/year state
   const [viewMonth, setViewMonth] = createSignal(props.selectedDate.getMonth());
   const [viewYear, setViewYear] = createSignal(props.selectedDate.getFullYear());
+  let gridRef: HTMLDivElement | undefined;
+
+  createEffect(() => {
+    setViewMonth(props.selectedDate.getMonth());
+    setViewYear(props.selectedDate.getFullYear());
+  });
 
   const monthName = createMemo(() => {
     const d = new Date(viewYear(), viewMonth(), 1);
@@ -22,6 +28,11 @@ export const MiniMonthPicker: Component<MiniMonthPickerProps> = (props) => {
     } else {
       setViewMonth((m) => m - 1);
     }
+    if (gridRef) {
+      gridRef.classList.remove("animate-month-slide-next", "animate-month-slide-prev");
+      void gridRef.offsetWidth;
+      gridRef.classList.add("animate-month-slide-prev");
+    }
   }
 
   function nextMonth() {
@@ -30,6 +41,11 @@ export const MiniMonthPicker: Component<MiniMonthPickerProps> = (props) => {
       setViewYear((y) => y + 1);
     } else {
       setViewMonth((m) => m + 1);
+    }
+    if (gridRef) {
+      gridRef.classList.remove("animate-month-slide-next", "animate-month-slide-prev");
+      void gridRef.offsetWidth;
+      gridRef.classList.add("animate-month-slide-next");
     }
   }
 
@@ -142,7 +158,11 @@ export const MiniMonthPicker: Component<MiniMonthPickerProps> = (props) => {
       </div>
 
       {/* Calendar Grid */}
-      <div class="grid grid-cols-7 gap-1 text-center">
+      <div
+        ref={gridRef}
+        class="grid grid-cols-7 gap-1 text-center"
+        onAnimationEnd={() => gridRef?.classList.remove("animate-month-slide-next", "animate-month-slide-prev")}
+      >
         <For each={daysGrid()}>
           {(day) => (
             <button

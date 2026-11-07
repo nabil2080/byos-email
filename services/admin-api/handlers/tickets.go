@@ -110,6 +110,15 @@ func RegisterTicketRoutes(mux *http.ServeMux, db *pgxpool.Pool, authMiddleware f
 			return
 		}
 
+		if parts[0] == "stats" {
+			if r.Method == http.MethodGet {
+				handleAdminSupportStats(w, r, db)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
 		ticketIDStr := parts[0]
 		ticketUUID, err := uuid.Parse(ticketIDStr)
 		if err != nil {
@@ -178,6 +187,7 @@ func handleAdminListTickets(w http.ResponseWriter, r *http.Request, db *pgxpool.
 	statusFilter := query.Get("status")
 	priorityFilter := query.Get("priority")
 	assignedFilter := query.Get("assigned_to")
+	orgFilter := query.Get("org_id")
 	searchQuery := strings.TrimSpace(query.Get("search"))
 
 	page := 1
@@ -216,6 +226,14 @@ func handleAdminListTickets(w http.ResponseWriter, r *http.Request, db *pgxpool.
 		}
 	}
 
+	if orgFilter != "" && orgFilter != "all" {
+		if orgUUID, err := uuid.Parse(orgFilter); err == nil {
+			whereClauses = append(whereClauses, fmt.Sprintf("t.org_id = $%d", argIdx))
+			args = append(args, orgUUID)
+			argIdx++
+		}
+	}
+
 	if searchQuery != "" {
 		searchPattern := "%" + searchQuery + "%"
 		whereClauses = append(whereClauses, fmt.Sprintf("(t.ticket_number ILIKE $%d OR t.subject ILIKE $%d OR u.email ILIKE $%d)", argIdx, argIdx, argIdx))
@@ -232,7 +250,7 @@ func handleAdminListTickets(w http.ResponseWriter, r *http.Request, db *pgxpool.
 	countSQL := fmt.Sprintf(`
 		SELECT COUNT(*)
 		FROM support_tickets t
-		JOIN users u ON t.customer_user_id = u.id
+		LEFT JOIN users u ON t.customer_user_id = u.id
 		LEFT JOIN organizations o ON t.org_id = o.id
 		LEFT JOIN support_agents a ON t.assigned_agent_id = a.id
 		%s
@@ -249,7 +267,7 @@ func handleAdminListTickets(w http.ResponseWriter, r *http.Request, db *pgxpool.
 	// Fetch page
 	listSQL := fmt.Sprintf(`
 		SELECT 
-			t.id, t.ticket_number, t.customer_user_id, u.email,
+			t.id, t.ticket_number, t.customer_user_id, COALESCE(u.email, ''),
 			t.org_id, o.name,
 			t.subject, t.product_area, t.category, t.priority, t.status,
 			t.assigned_agent_id, a.display_name,
@@ -258,7 +276,7 @@ func handleAdminListTickets(w http.ResponseWriter, r *http.Request, db *pgxpool.
 			COALESCE((SELECT COUNT(*) FROM support_ticket_messages m WHERE m.ticket_id = t.id), 0) AS message_count,
 			COALESCE((SELECT m.body FROM support_ticket_messages m WHERE m.ticket_id = t.id ORDER BY m.created_at ASC LIMIT 1), '') AS snippet
 		FROM support_tickets t
-		JOIN users u ON t.customer_user_id = u.id
+		LEFT JOIN users u ON t.customer_user_id = u.id
 		LEFT JOIN organizations o ON t.org_id = o.id
 		LEFT JOIN support_agents a ON t.assigned_agent_id = a.id
 		%s
@@ -335,7 +353,7 @@ func handleAdminGetTicketDetail(w http.ResponseWriter, r *http.Request, db *pgxp
 
 	ticketSQL := `
 		SELECT 
-			t.id, t.ticket_number, t.customer_user_id, u.email,
+			t.id, t.ticket_number, t.customer_user_id, COALESCE(u.email, ''),
 			t.org_id, o.name,
 			t.subject, t.product_area, t.category, t.priority, t.status,
 			t.assigned_agent_id, a.display_name,
@@ -343,7 +361,7 @@ func handleAdminGetTicketDetail(w http.ResponseWriter, r *http.Request, db *pgxp
 			t.created_at, t.updated_at,
 			(t.customer_typing_at IS NOT NULL AND t.customer_typing_at > now() - interval '6 seconds') AS is_customer_typing
 		FROM support_tickets t
-		JOIN users u ON t.customer_user_id = u.id
+		LEFT JOIN users u ON t.customer_user_id = u.id
 		LEFT JOIN organizations o ON t.org_id = o.id
 		LEFT JOIN support_agents a ON t.assigned_agent_id = a.id
 		WHERE t.id = $1

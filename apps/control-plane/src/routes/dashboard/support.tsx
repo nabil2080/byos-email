@@ -107,6 +107,7 @@ export const SupportPage: Component = () => {
   });
 
   const filteredTickets = () => {
+    if (ticketsData.error) return [];
     const list = ticketsData()?.tickets || [];
     const search = searchFilter().toLowerCase().trim();
     const st = statusFilter();
@@ -319,14 +320,27 @@ export const SupportPage: Component = () => {
 
           {/* Tickets List */}
           <div class="divide-y divide-[#E2DFD8]/60 max-h-[580px] overflow-y-auto custom-scrollbar">
-            <Show when={ticketsData.loading && !ticketsData()}>
+            <Show when={ticketsData.error}>
+              <div class="p-6 my-2 rounded-2xl border border-rose-200 bg-rose-50/50 text-center space-y-2">
+                <p class="text-xs text-rose-800 font-medium">Failed to load support tickets.</p>
+                <button
+                  type="button"
+                  onClick={() => refetchTickets()}
+                  class="px-3 py-1.5 text-xs font-semibold rounded-xl bg-white border border-rose-300 text-rose-700 hover:bg-rose-50 cursor-pointer"
+                >
+                  Retry Connection
+                </button>
+              </div>
+            </Show>
+
+            <Show when={ticketsData.loading && !ticketsData.error && !ticketsData()}>
               <div class="py-12 text-center text-xs text-[#878A8E]">Loading support tickets...</div>
             </Show>
 
             <For
               each={filteredTickets()}
               fallback={
-                <Show when={!ticketsData.loading || Boolean(ticketsData())}>
+                <Show when={(!ticketsData.loading && !ticketsData.error) || (!ticketsData.error && Boolean(ticketsData()))}>
                   <div class="py-12 text-center text-xs text-[#878A8E] space-y-2">
                     <p>No support requests found.</p>
                     <button

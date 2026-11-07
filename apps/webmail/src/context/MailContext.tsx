@@ -30,6 +30,7 @@ export interface DisplayMessage {
   folderId?: string | null;
   labelIds?: string[];
   sender: string;
+  senderName?: string;
   recipient: string;
   recipients?: string[];
   subject: string;

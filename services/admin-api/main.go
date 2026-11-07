@@ -31,7 +31,11 @@ func withSecurityHeaders(next http.HandlerFunc) http.HandlerFunc {
 			csp = "default-src 'self'; connect-src 'self' http://localhost:* http://127.0.0.1:*;"
 		}
 		w.Header().Set("Content-Security-Policy", csp)
-		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		// Only send HSTS in production/HTTPS; over plain HTTP (LAN dev) it poisons the browser's
+		// HSTS cache for the IP, causing ERR_TOO_MANY_RETRIES on mobile devices (Chrome/Android).
+		if os.Getenv("BYOS_ENV") == "production" || os.Getenv("HTTPS_ENABLED") == "true" {
+			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		}
 
 		next(w, r)
 	}
@@ -51,6 +55,13 @@ func isAllowedAdminOrigin(origin string) bool {
 		return false
 	}
 	if os.Getenv("BYOS_DEV_MODE") == "1" || os.Getenv("BYOS_ENV") != "production" {
+		u, err := url.Parse(origin)
+		if err == nil && (u.Scheme == "http" || u.Scheme == "https") {
+			hostname := u.Hostname()
+			if hostname == "localhost" || hostname == "127.0.0.1" || strings.HasPrefix(hostname, "192.168.") || strings.HasPrefix(hostname, "10.") || strings.HasPrefix(hostname, "172.") || strings.HasSuffix(hostname, ".trycloudflare.com") {
+				return true
+			}
+		}
 		devOrigins := []string{
 			"http://127.0.0.1:3003",
 			"http://localhost:3003",

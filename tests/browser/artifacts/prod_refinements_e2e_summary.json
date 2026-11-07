@@ -1,0 +1,209 @@
+{
+  "timestamp": "2026-11-07T08:14:44.478Z",
+  "total": 25,
+  "passed": 25,
+  "failed": 0,
+  "pageErrors": [],
+  "results": [
+    {
+      "tier": "Tier 1",
+      "id": "T1.1a",
+      "name": "Outer document zero-scroll in Email view",
+      "passed": true,
+      "details": "scrollY=0, scrollHeight=800, clientHeight=800, bodyOverflow=hidden",
+      "timestamp": "2026-11-07T08:14:24.836Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.1b",
+      "name": "Outer document zero-scroll in Calendar view",
+      "passed": true,
+      "details": "scrollY=0, scrollHeight=800, clientHeight=800",
+      "timestamp": "2026-11-07T08:14:25.633Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.1c",
+      "name": "Outer document zero-scroll in Notes view",
+      "passed": true,
+      "details": "scrollY=0, scrollHeight=800, clientHeight=800",
+      "timestamp": "2026-11-07T08:14:26.325Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.2",
+      "name": "Internal message list scroll containment",
+      "passed": true,
+      "details": "overflowY=hidden, outerScrollY=0",
+      "timestamp": "2026-11-07T08:14:26.957Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.3",
+      "name": "Email Reading Section Toolbar Simplification (F11)",
+      "passed": true,
+      "details": "hasBack=true, hasOverflowTrigger=true, directButtons=20",
+      "timestamp": "2026-11-07T08:14:27.827Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.4",
+      "name": "Secondary Actions Consolidated into Overflow Menu (F12)",
+      "passed": true,
+      "details": "hasOverflowBtn=true, hasSnoozePreserved=true",
+      "timestamp": "2026-11-07T08:14:27.828Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.5",
+      "name": "3D Book Page-Turn Removal (F4)",
+      "passed": true,
+      "details": "hasPageTurnClass=false",
+      "timestamp": "2026-11-07T08:14:27.829Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.6",
+      "name": "App Switcher Morphing Highlight (F5)",
+      "passed": true,
+      "details": "found=true, transition=transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), translate 0.25s cubic-bezier(0.16, 1, 0.3, 1), scale 0.25s cubic-bezier(0.16, 1, 0.3, 1), rotate 0.25s cubic-bezier(0.16, 1, 0.3, 1)",
+      "timestamp": "2026-11-07T08:14:27.830Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.7",
+      "name": "Customization Icon 90-degree Rotation / Animation (F6)",
+      "passed": true,
+      "details": "isExpanded=true, svgTransform=none",
+      "timestamp": "2026-11-07T08:14:28.422Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.8",
+      "name": "Single QuickSettingsPanel DOM Mounting (F7)",
+      "passed": true,
+      "details": "mountedCount=1 (target: exactly 1)",
+      "timestamp": "2026-11-07T08:14:28.423Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.9",
+      "name": "Direct Reactive Settings Density Toggle (F8)",
+      "passed": true,
+      "details": "clickToRenderLatency=111ms",
+      "timestamp": "2026-11-07T08:14:28.536Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.10",
+      "name": "Debounced Backend Settings Persistence (F9)",
+      "passed": true,
+      "details": "firedRequestsCount=1 after 3 rapid clicks",
+      "timestamp": "2026-11-07T08:14:29.316Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.11",
+      "name": "Row Density Layout Thrash Elimination (F10)",
+      "passed": true,
+      "details": "transitionProperty=color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to",
+      "timestamp": "2026-11-07T08:14:29.731Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.12",
+      "name": "Desktop Accessibility Sizing (>=36px Targets) (F13)",
+      "passed": true,
+      "details": "[\"[data-testid=\\\"top-bar-appearance-btn\\\"]: 36x36\",\"[data-testid=\\\"top-bar-theme-toggle\\\"]: 36x36\",\"[data-testid=\\\"nav-emails-tab\\\"]: 92x36\",\"[data-testid=\\\"nav-calendar-tab\\\"]: 92x36\",\"[data-testid=\\\"nav-notes-tab\\\"]: 92x36\"]",
+      "timestamp": "2026-11-07T08:14:29.732Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.13",
+      "name": "Mobile Accessibility Sizing (>=44px Targets) (F14)",
+      "passed": true,
+      "details": "[\"[data-testid=\\\"top-bar-mobile-menu-btn\\\"]: 44x44\",\"[data-testid=\\\"bottom-nav-mail-tab\\\"]: 114x51\",\"[data-testid=\\\"bottom-nav-calendar-tab\\\"]: 114x51\",\"[data-testid=\\\"bottom-nav-notes-tab\\\"]: 114x51\"]",
+      "timestamp": "2026-11-07T08:14:30.360Z"
+    },
+    {
+      "tier": "Tier 1",
+      "id": "T1.14",
+      "name": "Typography & Micro-text Elimination (>=12px Font) (F15)",
+      "passed": true,
+      "details": "microElementsFound=0, samples=[]",
+      "timestamp": "2026-11-07T08:14:30.362Z"
+    },
+    {
+      "tier": "Tier 2",
+      "id": "T2.1",
+      "name": "Zero-Scroll & Zero-Overflow Across 5 Viewport Boundaries",
+      "passed": true,
+      "details": "[\"Mobile 375px: OK\",\"Tablet Portrait 768px: OK\",\"Tablet Landscape 1024px: OK\",\"Desktop 1280px: OK\",\"Widescreen 1920px: OK\"]",
+      "timestamp": "2026-11-07T08:14:32.860Z"
+    },
+    {
+      "tier": "Tier 2",
+      "id": "T2.2",
+      "name": "Rapid Module Switching Stress & Stability",
+      "passed": true,
+      "details": "newErrors=0",
+      "timestamp": "2026-11-07T08:14:34.221Z"
+    },
+    {
+      "tier": "Tier 2",
+      "id": "T2.3",
+      "name": "Rapid Customizer Toggle & Escape Key Clean Dismissal",
+      "passed": true,
+      "details": "panelOpenAfterEscapes=false",
+      "timestamp": "2026-11-07T08:14:34.224Z"
+    },
+    {
+      "tier": "Tier 2",
+      "id": "T2.4",
+      "name": "Zero-Scroll in Alternate Folder View",
+      "passed": true,
+      "details": "scrollY=0, scrollHeight=800",
+      "timestamp": "2026-11-07T08:14:34.839Z"
+    },
+    {
+      "tier": "Tier 3",
+      "id": "T3.1",
+      "name": "Module Switching While Internal List Scrolled",
+      "passed": true,
+      "details": "calWindowScrollY=0, mailReturnWindowScrollY=0",
+      "timestamp": "2026-11-07T08:14:36.941Z"
+    },
+    {
+      "tier": "Tier 3",
+      "id": "T3.2",
+      "name": "Customizer Panel Operation During Active Email Reading",
+      "passed": true,
+      "details": "readingPaneVisible=true, scrollY=0",
+      "timestamp": "2026-11-07T08:14:38.530Z"
+    },
+    {
+      "tier": "Tier 3",
+      "id": "T3.3",
+      "name": "Density Layout Adaptation Across Display Modes",
+      "passed": true,
+      "details": "Layout preserved without viewport height spill",
+      "timestamp": "2026-11-07T08:14:38.531Z"
+    },
+    {
+      "tier": "Tier 4",
+      "id": "T4.1",
+      "name": "Morning Executive Triage End-to-End Journey (Desktop 1280x800)",
+      "passed": true,
+      "details": "Full cycle through Inbox, Reading Pane, Calendar, Notes, and Return",
+      "timestamp": "2026-11-07T08:14:41.976Z"
+    },
+    {
+      "tier": "Tier 4",
+      "id": "T4.2",
+      "name": "Mobile Field Triage End-to-End Journey (Mobile 375x667)",
+      "passed": true,
+      "details": "Bottom navigation tabs, zero horizontal wobble, zero page scroll",
+      "timestamp": "2026-11-07T08:14:44.477Z"
+    }
+  ]
+}

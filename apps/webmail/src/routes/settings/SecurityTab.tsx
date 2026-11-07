@@ -66,6 +66,16 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
   const [sessions, setSessions] = createSignal<SessionItem[]>([]);
   const [twoFactor, setTwoFactor] = createSignal<TwoFactorStatus | null>(null);
 
+  // Active Sessions Pagination state (10 per page)
+  const SESSIONS_PER_PAGE = 10;
+  const [sessionsPage, setSessionsPage] = createSignal(1);
+  const totalSessionPages = () => Math.max(1, Math.ceil(sessions().length / SESSIONS_PER_PAGE));
+  const paginatedSessions = () => {
+    const page = Math.min(sessionsPage(), totalSessionPages());
+    const start = (page - 1) * SESSIONS_PER_PAGE;
+    return sessions().slice(start, start + SESSIONS_PER_PAGE);
+  };
+
   // Password change form state
   const [changePasswordModalOpen, setChangePasswordModalOpen] = createSignal(false);
   const [currentPasswordInput, setCurrentPasswordInput] = createSignal("");
@@ -189,7 +199,10 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
     try {
       const opts = await fetchPasskeyRegisterOptions();
 
-      const effectiveRpId = opts.rp?.id || window.location.hostname;
+      const currentHost = window.location.hostname;
+      const effectiveRpId = (opts.rp?.id && (opts.rp.id === currentHost || currentHost.endsWith("." + opts.rp.id)))
+        ? opts.rp.id
+        : currentHost;
 
       const cred = (await navigator.credentials.create({
         publicKey: {
@@ -601,7 +614,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
           try {
             const opts = await fetchPasskeyStepUpOptions();
             const effectiveRpId =
-              opts.rpId || (window.location.hostname === "127.0.0.1" ? "localhost" : window.location.hostname);
+              ((opts.rpId && (opts.rpId === window.location.hostname || window.location.hostname.endsWith("." + opts.rpId))) ? opts.rpId : window.location.hostname);
             const allowCreds = opts.allowCredentials?.map((c) => ({
               id: base64URLToBuffer(c.id),
               type: "public-key" as const,
@@ -1107,13 +1120,13 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
               </div>
               <span
                 class={`text-[11px] font-mono font-medium px-2.5 py-1 rounded-full border flex items-center gap-1.5 ${
-                  twoFactor()?.two_factor_enabled
+                  twoFactor()?.has_totp
                     ? "bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800"
                     : "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800"
                 }`}
               >
-                <span class={`w-1.5 h-1.5 rounded-full ${twoFactor()?.two_factor_enabled ? "bg-emerald-500" : "bg-amber-500"}`}></span>
-                <span>{twoFactor()?.two_factor_enabled ? "2FA Active" : "2FA Inactive"}</span>
+                <span class={`w-1.5 h-1.5 rounded-full ${twoFactor()?.has_totp ? "bg-emerald-500" : "bg-amber-500"}`}></span>
+                <span>{twoFactor()?.has_totp ? "TOTP Active" : "TOTP Inactive"}</span>
               </span>
             </div>
 
@@ -1382,7 +1395,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
             </div>
 
             <div class="divide-y divide-[#E2DFD8] dark:divide-[#2E3138] border border-[#E2DFD8] dark:border-[#2E3138] rounded-xl overflow-hidden">
-              <For each={sessions()}>
+              <For each={paginatedSessions()}>
                 {(sess) => (
                   <div class="p-4 flex items-center justify-between hover:bg-[#F8F7F4] dark:hover:bg-[#18191D] transition">
                     <div class="space-y-1">
@@ -1408,6 +1421,36 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
                 )}
               </For>
             </div>
+
+            {/* Sessions Pagination Controls (10 by 10) */}
+            <Show when={sessions().length > SESSIONS_PER_PAGE}>
+              <div class="flex items-center justify-between pt-2 px-1 text-xs text-[#6E7075] dark:text-[#A1A1AA]">
+                <span class="font-mono">
+                  Showing {(sessionsPage() - 1) * SESSIONS_PER_PAGE + 1}–{Math.min(sessionsPage() * SESSIONS_PER_PAGE, sessions().length)} of {sessions().length} sessions
+                </span>
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSessionsPage((p) => Math.max(1, p - 1))}
+                    disabled={sessionsPage() <= 1}
+                    class="px-3 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] disabled:opacity-40 disabled:pointer-events-none transition cursor-pointer font-medium"
+                  >
+                    Previous
+                  </button>
+                  <span class="font-mono px-1">
+                    {sessionsPage()} / {totalSessionPages()}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSessionsPage((p) => Math.min(totalSessionPages(), p + 1))}
+                    disabled={sessionsPage() >= totalSessionPages()}
+                    class="px-3 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] disabled:opacity-40 disabled:pointer-events-none transition cursor-pointer font-medium"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </Show>
           </div>
         </div>
       </Show>
@@ -1501,7 +1544,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
                   />
                 </div>
 
-                <Show when={twoFactor()?.has_totp || passkeys().length > 0}>
+                <Show when={twoFactor()?.has_totp}>
                   <div>
                     <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] mb-1">
                       Two-Factor Authenticator Code (MFA)

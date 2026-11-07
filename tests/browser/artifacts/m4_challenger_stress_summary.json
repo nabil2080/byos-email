@@ -1,0 +1,83 @@
+{
+  "milestone": "M4",
+  "title": "Email Reading Section Toolbar Simplification (R3)",
+  "totalChallenges": 10,
+  "passedChallenges": 10,
+  "failedChallenges": 0,
+  "pageErrors": [],
+  "consoleErrors": [],
+  "results": [
+    {
+      "id": "CH-1.1",
+      "name": "[data-testid=\"reading-pane-snooze-btn\"] DOM queryability while menu closed",
+      "passed": true,
+      "details": "queryable=true, tagName=BUTTON, role=menuitem",
+      "timestamp": "2026-11-07T07:22:50.989Z"
+    },
+    {
+      "id": "CH-1.2",
+      "name": "Direct programmatic .click() on snooze button triggers snooze action",
+      "passed": true,
+      "details": "snoozeModalOpened=true",
+      "timestamp": "2026-11-07T07:22:51.201Z"
+    },
+    {
+      "id": "CH-2.1",
+      "name": "Rapid toggle 15 cycles (<50ms intervals) across Click, Outside Click, and Escape",
+      "passed": true,
+      "details": "cycles=15, btnFailures=0, outsideFailures=0, escFailures=0, avgCycleLatency=88ms",
+      "timestamp": "2026-11-07T07:22:52.528Z"
+    },
+    {
+      "id": "CH-3.1",
+      "name": "Escape key isolation on More menu (closes menu, reading pane remains visible)",
+      "passed": true,
+      "details": "readingPaneStillVisible=true, ariaExpanded=false, hidden=true",
+      "timestamp": "2026-11-07T07:22:53.100Z"
+    },
+    {
+      "id": "CH-3.2",
+      "name": "Escape key isolation on nested Move Submenu (resets submenu, preserves reading pane)",
+      "passed": true,
+      "details": "moveSubmenuOpen=true, readingPaneStillVisible=true, submenuDismissed=true",
+      "timestamp": "2026-11-07T07:22:53.827Z"
+    },
+    {
+      "id": "CH-3.3",
+      "name": "Escape key isolation on Snooze Dialog (dismisses dialog, preserves reading pane)",
+      "passed": true,
+      "details": "snoozeModalOpen=true, readingPaneStillVisible=true, snoozeModalGone=true",
+      "timestamp": "2026-11-07T07:22:54.847Z"
+    },
+    {
+      "id": "CH-4.1",
+      "name": "View/Hide headers toggle from overflow menu executes cleanly",
+      "passed": true,
+      "details": "headersExpandedOnFirstClick=true, pageErrors=0",
+      "timestamp": "2026-11-07T07:22:55.953Z"
+    },
+    {
+      "id": "CH-4.2",
+      "name": "Print message action invoked window.print() without error",
+      "passed": true,
+      "details": "printCalledCount=1",
+      "timestamp": "2026-11-07T07:22:56.381Z"
+    },
+    {
+      "id": "CH-4.3",
+      "name": "Label as submenu entry, rendering, and Back button navigation",
+      "passed": true,
+      "details": "labelSubmenuOpen=true, labelSubmenuReturned=true",
+      "timestamp": "2026-11-07T07:22:57.218Z"
+    },
+    {
+      "id": "CH-5.1",
+      "name": "Direct primary toolbar actions presence and >=36px click target compliance",
+      "passed": true,
+      "details": "hasBack=true, hasReply=true, replyTarget=36x36px, overflowTarget=36x36px",
+      "timestamp": "2026-11-07T07:22:57.220Z"
+    }
+  ],
+  "verdict": "CONFIRMED CORRECT",
+  "timestamp": "2026-11-07T07:22:57.220Z"
+}

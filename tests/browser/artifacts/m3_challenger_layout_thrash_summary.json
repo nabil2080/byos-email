@@ -1,0 +1,136 @@
+{
+  "total": 16,
+  "passed": 16,
+  "failed": 0,
+  "pageErrors": 0,
+  "results": [
+    {
+      "section": "Section 1",
+      "id": "CH-1.1",
+      "name": "Inbox Flat MessageRows Transition Audit",
+      "passed": true,
+      "details": "audited=25, failing=0, sampleProperty=\"color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to\", sampleDuration=\"0.15s\"",
+      "timestamp": "2026-11-06T05:22:09.819Z"
+    },
+    {
+      "section": "Section 1",
+      "id": "CH-1.2",
+      "name": "Sent Folder Flat MessageRows Transition Audit",
+      "passed": true,
+      "details": "audited=25, failing=0, sampleProperty=\"color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to\"",
+      "timestamp": "2026-11-06T05:22:10.704Z"
+    },
+    {
+      "section": "Section 1",
+      "id": "CH-1.3",
+      "name": "Thread View ThreadRows Transition Audit",
+      "passed": true,
+      "details": "audited=45, failing=0, sampleProperty=\"color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to\", sampleDuration=\"0.15s\"",
+      "timestamp": "2026-11-06T05:22:12.520Z"
+    },
+    {
+      "section": "Section 1",
+      "id": "CH-1.4",
+      "name": "Cumulative Row Audit (50+ Target) & Active Transition Audit",
+      "passed": true,
+      "details": "cumulativeRowsAudited=95 (target: 50+), activeTransitionsFound=255, activeTransitionAllFails=0",
+      "timestamp": "2026-11-06T05:22:12.635Z"
+    },
+    {
+      "section": "Section 2",
+      "id": "CH-2.1",
+      "name": "Density Switch Layout Reflow Duration (45 Rows)",
+      "passed": true,
+      "details": "maxReflowDuration=13.9ms (target: <16.0ms), steps=[\"compact:8.8ms\",\"cozy:12.9ms\",\"comfortable:6.9ms\",\"compact:10.6ms\",\"comfortable:13.9ms\",\"cozy:9.5ms\"]",
+      "timestamp": "2026-11-06T05:22:13.930Z"
+    },
+    {
+      "section": "Section 2",
+      "id": "CH-2.2",
+      "name": "High-Load Stress Layout Reflow Duration (135 Rows)",
+      "passed": true,
+      "details": "maxReflowDuration=12.1ms (target: <16.0ms), rows=135, steps=[\"compact:7.9ms\",\"cozy:9.5ms\",\"comfortable:10.4ms\",\"compact:12.1ms\"]",
+      "timestamp": "2026-11-06T05:22:14.337Z"
+    },
+    {
+      "section": "Section 2",
+      "id": "CH-2.3",
+      "name": "Rapid Density Alternation Thrash Stress",
+      "passed": true,
+      "details": "swapsCompleted=12/12, totalElapsed=755.1ms, maxSingleClick=7.30ms",
+      "timestamp": "2026-11-06T05:22:15.094Z"
+    },
+    {
+      "section": "Section 3",
+      "id": "CH-3.1",
+      "name": "QuickSettingsPanel Single Mounting: Mobile (375px)",
+      "passed": true,
+      "details": "viewport=375x667, panelCount=1 (target: exactly 1)",
+      "timestamp": "2026-11-06T05:22:18.208Z"
+    },
+    {
+      "section": "Section 3",
+      "id": "CH-3.2",
+      "name": "QuickSettingsPanel Single Mounting: Tablet Portrait (768px)",
+      "passed": true,
+      "details": "viewport=768x1024, panelCount=1 (target: exactly 1)",
+      "timestamp": "2026-11-06T05:22:18.695Z"
+    },
+    {
+      "section": "Section 3",
+      "id": "CH-3.3",
+      "name": "QuickSettingsPanel Single Mounting: Tablet Landscape (1024px)",
+      "passed": true,
+      "details": "viewport=1024x768, panelCount=1 (target: exactly 1)",
+      "timestamp": "2026-11-06T05:22:19.072Z"
+    },
+    {
+      "section": "Section 3",
+      "id": "CH-3.4",
+      "name": "QuickSettingsPanel Single Mounting: Desktop (1280px)",
+      "passed": true,
+      "details": "viewport=1280x800, panelCount=1 (target: exactly 1)",
+      "timestamp": "2026-11-06T05:22:19.498Z"
+    },
+    {
+      "section": "Section 3",
+      "id": "CH-3.5",
+      "name": "Continuous Live Breakpoint Resizing Panel Invariant",
+      "passed": true,
+      "details": "mountCountsAcrossResizes=[\"1280px:1\",\"1024px:1\",\"768px:1\",\"640px:1\",\"375px:1\",\"500px:1\",\"768px:1\",\"1024px:1\",\"1280px:1\"] (target: all 1)",
+      "timestamp": "2026-11-06T05:22:20.382Z"
+    },
+    {
+      "section": "Section 4",
+      "id": "CH-4.1",
+      "name": "Outer Document Zero-Scroll on Open/Close",
+      "passed": true,
+      "details": "openLeakage={winY:0, docY:0}, closedLeakage={winY:0, docY:0}",
+      "timestamp": "2026-11-06T05:22:21.101Z"
+    },
+    {
+      "section": "Section 4",
+      "id": "CH-4.2",
+      "name": "Outer Document Zero-Scroll Across Density Toggles",
+      "passed": true,
+      "details": "results=[{\"density\":\"compact\",\"winY\":0,\"docY\":0},{\"density\":\"cozy\",\"winY\":0,\"docY\":0},{\"density\":\"comfortable\",\"winY\":0,\"docY\":0},{\"density\":\"cozy\",\"winY\":0,\"docY\":0}]",
+      "timestamp": "2026-11-06T05:22:22.243Z"
+    },
+    {
+      "section": "Section 4",
+      "id": "CH-4.3",
+      "name": "Zero-Scroll Under Deep Internal List Scroll",
+      "passed": true,
+      "details": "internalScrollTop=0, winYBefore=0, winYAfter=0",
+      "timestamp": "2026-11-06T05:22:22.350Z"
+    },
+    {
+      "section": "Section 4",
+      "id": "CH-4.4",
+      "name": "Mobile 375px Slide-Over Drawer Zero-Scroll Invariant",
+      "passed": true,
+      "details": "winY=0, winX=0, docScrollTop=0, heightMatch=true",
+      "timestamp": "2026-11-06T05:22:22.824Z"
+    }
+  ]
+}

@@ -58,11 +58,15 @@ import { runCalendarCategory14Tests } from "./calendar_category_14.test.js";
 import { runCalendarCategory15Tests } from "./calendar_category_15.test.js";
 import { runCalendarLayoutTests } from "./utils/calendarLayout.test.js";
 import { runUnlockAnd2FAPersistenceTests } from "./unlock_and_2fa_persistence.test.js";
+import { runKashcalParserTests } from "./components/calendar/kashcalParser.test.js";
 import { runNotesTests } from "./components/notes/notes.test.js";
 import { runTrack2SecurityTests } from "./track2_security.test.js";
 import { runCalendarTrack3Tests } from "./calendar_track3.test.js";
 import { runTrack4ResilienceTests } from "./track4_resilience.test.js";
 import { runCryptoWorkerTests } from "./crypto_worker.test.js";
+import { runSubscriptionsStoreTests } from "./subscriptions_store.test.js";
+import { runImagePrivacyStoreTests } from "./utils/image_privacy_store.test.js";
+import { runTranslatorTests } from "./translator.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -445,6 +449,30 @@ async function main() {
   const cryptoWorkerRes = await runCryptoWorkerTests();
   totalPassed += cryptoWorkerRes.passed;
   totalFailed += cryptoWorkerRes.failed;
+
+  console.log("Running Subscriptions & Unsubscribe Store Tests...");
+  const subsRes = await runSubscriptionsStoreTests();
+  console.log(`SUBSCRIPTIONS & UNSUBSCRIBE STORE TESTS: ${subsRes.passed} passed, ${subsRes.failed} failed\n`);
+  totalPassed += subsRes.passed;
+  totalFailed += subsRes.failed;
+
+  console.log("Running Image Privacy Store Tests...");
+  const imgPrivRes = await runImagePrivacyStoreTests();
+  console.log(`IMAGE PRIVACY STORE TESTS: ${imgPrivRes.passed} passed, ${imgPrivRes.failed} failed\n`);
+  totalPassed += imgPrivRes.passed;
+  totalFailed += imgPrivRes.failed;
+
+  console.log("Running KashCal Natural Language Event Parser Tests...");
+  const kashcalRes = await runKashcalParserTests();
+  console.log(`KASHCAL PARSER TESTS: ${kashcalRes.passed} passed, ${kashcalRes.failed} failed\n`);
+  totalPassed += kashcalRes.passed;
+  totalFailed += kashcalRes.failed;
+
+  console.log("Running Translator & Localization Tests...");
+  const translatorRes = await runTranslatorTests();
+  console.log(`TRANSLATOR & LOCALIZATION TESTS: ${translatorRes.passed} passed, ${translatorRes.failed} failed\n`);
+  totalPassed += translatorRes.passed;
+  totalFailed += translatorRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

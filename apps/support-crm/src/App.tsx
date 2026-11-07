@@ -90,6 +90,7 @@ export const App: Component = () => {
   const [ticketPriorityFilter, setTicketPriorityFilter] = createSignal<string>("all");
   const [selectedTicketId, setSelectedTicketId] = createSignal<string | null>(null);
   const [ticketOrgFilter, setTicketOrgFilter] = createSignal<string | null>(null);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = createSignal(false);
 
   // Active Ticket Detail Resource
   const [activeTicketDetail, { refetch: refetchActiveDetail, mutate: mutateActiveDetail }] = createResource(
@@ -417,7 +418,7 @@ export const App: Component = () => {
 
   // Filtered Organizations
   const filteredOrgs = () => {
-    let list = organizations() || [];
+    let list = (!organizations.error ? organizations() : []) || [];
     const query = orgSearch().toLowerCase().trim();
     if (query) {
       list = list.filter((o) => o.name.toLowerCase().includes(query) || o.id.toLowerCase().includes(query));
@@ -431,7 +432,7 @@ export const App: Component = () => {
 
   // Filtered Audit Logs
   const filteredAuditLogs = () => {
-    let list = auditLogs() || [];
+    let list = (!auditLogs.error ? auditLogs() : []) || [];
     const query = auditSearch().toLowerCase().trim();
     if (query) {
       list = list.filter(
@@ -469,11 +470,162 @@ export const App: Component = () => {
   return (
     <div class="h-screen flex bg-[#F0EEE9] text-[#3C3D3E] overflow-hidden p-2 sm:p-3 gap-2 sm:gap-3 select-none">
       {/* ─────────────────────────────────────────────────────────────
+          Mobile Navigation Drawer with Backdrop
+         ───────────────────────────────────────────────────────────── */}
+      <Show when={mobileDrawerOpen()}>
+        <div
+          class="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 md:hidden transition-opacity"
+          onClick={() => setMobileDrawerOpen(false)}
+          aria-hidden="true"
+        />
+        <div class="fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-[#F0EEE9] z-50 md:hidden shadow-2xl flex flex-col p-4 transition-transform duration-200">
+          <div class="flex items-center justify-between pb-3 border-b border-[#E2DFD8]">
+            <div class="flex items-center gap-2">
+              <div
+                class="w-7 h-7 rounded-xl bg-gradient-to-b from-[#A27561] via-[#986A57] to-[#8E6351] flex items-center justify-center text-white font-bold text-xs shadow-2xs tracking-wider"
+              >
+                B
+              </div>
+              <div class="flex flex-col">
+                <span class="text-sm font-semibold text-[#1A1B1E] tracking-tight">BYOS Support CRM</span>
+                <span class="text-[9px] font-mono uppercase tracking-widest text-[#9E725F] font-semibold">Staff Console</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileDrawerOpen(false)}
+              class="p-1 rounded-lg text-stone-500 hover:text-stone-800 hover:bg-black/5 cursor-pointer"
+              aria-label="Close menu"
+            >
+              <svg class="w-5 h-5 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+
+          <div class="pt-3 pb-1 text-[11px] font-bold tracking-wider uppercase text-[#878A8E]">
+            Console Desk
+          </div>
+
+          <nav class="mt-1 space-y-1.5 flex-1 overflow-y-auto">
+            <button
+              type="button"
+              onClick={() => {
+                setTicketOrgFilter(null);
+                setCurrentTab("tickets");
+                setMobileDrawerOpen(false);
+              }}
+              class={`w-full flex items-center justify-between rounded-xl text-sm font-medium px-3 py-2.5 transition cursor-pointer ${
+                currentTab() === "tickets"
+                  ? "bg-[#9E725F] text-white font-semibold shadow-xs"
+                  : "text-[#55575B] hover:bg-black/5"
+              }`}
+            >
+              <div class="flex items-center gap-2.5">
+                <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                  <circle cx="12" cy="10" r="0.8" fill="currentColor" />
+                  <circle cx="8" cy="10" r="0.8" fill="currentColor" />
+                  <circle cx="16" cy="10" r="0.8" fill="currentColor" />
+                </svg>
+                <span>Support Tickets</span>
+              </div>
+              <span
+                class={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold ${
+                  currentTab() === "tickets" ? "bg-white/20 text-white" : "bg-[#F2E8E2] text-[#9E725F]"
+                }`}
+              >
+                {supportStats()?.open_tickets ?? (!tickets.error ? (tickets()?.length || 0) : 0)}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setCurrentTab("organizations");
+                setMobileDrawerOpen(false);
+              }}
+              class={`w-full flex items-center justify-between rounded-xl text-sm font-medium px-3 py-2.5 transition cursor-pointer ${
+                currentTab() === "organizations"
+                  ? "bg-[#9E725F] text-white font-semibold shadow-xs"
+                  : "text-[#55575B] hover:bg-black/5"
+              }`}
+            >
+              <div class="flex items-center gap-2.5">
+                <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                  <rect x="3" y="3" width="7" height="9" rx="1.5" />
+                  <rect x="14" y="3" width="7" height="5" rx="1.5" />
+                  <rect x="14" y="12" width="7" height="9" rx="1.5" />
+                  <rect x="3" y="16" width="7" height="5" rx="1.5" />
+                </svg>
+                <span>Organizations</span>
+              </div>
+              <span
+                class={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold ${
+                  currentTab() === "organizations" ? "bg-white/20 text-white" : "bg-black/5 text-[#55575B]"
+                }`}
+              >
+                {(!organizations.error ? organizations() : [])?.length || 0}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setCurrentTab("audit_logs");
+                setMobileDrawerOpen(false);
+              }}
+              class={`w-full flex items-center justify-between rounded-xl text-sm font-medium px-3 py-2.5 transition cursor-pointer ${
+                currentTab() === "audit_logs"
+                  ? "bg-[#9E725F] text-white font-semibold shadow-xs"
+                  : "text-[#55575B] hover:bg-black/5"
+              }`}
+            >
+              <div class="flex items-center gap-2.5">
+                <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                  <polyline points="10 9 9 9 8 9" />
+                </svg>
+                <span>Audit Logs</span>
+              </div>
+              <span
+                class={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold ${
+                  currentTab() === "audit_logs" ? "bg-white/20 text-white" : "bg-black/5 text-[#55575B]"
+                }`}
+              >
+                {(!auditLogs.error ? auditLogs() : [])?.length || 0}
+              </span>
+            </button>
+          </nav>
+
+          <div class="mt-auto pt-3 border-t border-[#E2DFD8]">
+            <div class="flex items-center justify-between text-xs text-[#55575B]">
+              <span class="font-medium truncate max-w-[150px]">sarah.support@byos.local</span>
+              <button
+                type="button"
+                onClick={async () => {
+                  try { await logoutAdmin(); } catch {}
+                  window.location.reload();
+                }}
+                class="text-xs text-rose-600 hover:underline font-semibold cursor-pointer"
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      </Show>
+
+      {/* ─────────────────────────────────────────────────────────────
           1. Desktop Navigation Sidebar (Unified Canvas Architecture)
          ───────────────────────────────────────────────────────────── */}
       <aside
         aria-label="Support CRM navigation"
-        class="shrink-0 bg-[#F0EEE9] flex flex-col justify-between w-64 px-1.5 pt-0 pb-0 h-full"
+        class="hidden md:flex shrink-0 bg-[#F0EEE9] flex-col justify-between w-64 px-1.5 pt-0 pb-0 h-full"
       >
         <div class="space-y-3 flex-1 min-h-0 overflow-y-auto custom-scrollbar px-1">
           {/* Brand Header */}
@@ -555,7 +707,7 @@ export const App: Component = () => {
                         : "bg-[#F2E8E2] text-[#9E725F]"
                     }`}
                   >
-                    {supportStats()?.open_tickets ?? (tickets()?.length || 0)}
+                    {supportStats()?.open_tickets ?? (!tickets.error ? (tickets()?.length || 0) : 0)}
                   </span>
                 </button>
               </li>
@@ -593,7 +745,7 @@ export const App: Component = () => {
                         : "bg-black/5 text-[#55575B]"
                     }`}
                   >
-                    {organizations()?.length || 0}
+                    {(!organizations.error ? organizations() : [])?.length || 0}
                   </span>
                 </button>
               </li>
@@ -632,7 +784,7 @@ export const App: Component = () => {
                         : "bg-black/5 text-[#55575B]"
                     }`}
                   >
-                    {auditLogs()?.length || 0}
+                    {(!auditLogs.error ? auditLogs() : [])?.length || 0}
                   </span>
                 </button>
               </li>
@@ -688,18 +840,33 @@ export const App: Component = () => {
          ───────────────────────────────────────────────────────────── */}
       <div class="flex-1 flex flex-col min-w-0 h-full overflow-hidden gap-1.5 sm:gap-2">
         {/* Top Navbar Header */}
-        <header class="h-12 min-h-[48px] rounded-2xl bg-white border border-[#E2DFD8] px-4 flex items-center justify-between shadow-2xs shrink-0">
-          {/* Dynamic Breadcrumbs */}
-          <div class="flex items-center gap-2 text-xs">
-            <span class="text-[#878A8E] font-medium">Support CRM</span>
-            <span class="text-[#878A8E]">/</span>
-            <span class="text-[#1A1B1E] font-bold capitalize">
-              {currentTab() === "tickets"
-                ? "Support Ticket Queue"
-                : currentTab() === "organizations"
-                ? "Organization Management"
-                : "Immutable Audit Ledger"}
-            </span>
+        <header class="h-12 min-h-[48px] rounded-2xl bg-white border border-[#E2DFD8] px-3 sm:px-4 flex items-center justify-between shadow-2xs shrink-0">
+          {/* Mobile Menu Hamburger Button & Dynamic Breadcrumbs */}
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setMobileDrawerOpen(true)}
+              class="md:hidden p-1.5 -ml-1 text-[#55575B] hover:text-[#1A1B1E] rounded-lg hover:bg-black/5 cursor-pointer focus:outline-none"
+              aria-label="Open mobile navigation drawer"
+              data-testid="crm-mobile-menu-btn"
+            >
+              <svg class="w-5 h-5 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            </button>
+            <div class="flex items-center gap-1.5 sm:gap-2 text-xs">
+              <span class="text-[#878A8E] font-medium hidden xs:inline">Support CRM</span>
+              <span class="text-[#878A8E] hidden xs:inline">/</span>
+              <span class="text-[#1A1B1E] font-bold capitalize truncate max-w-[160px] sm:max-w-none">
+                {currentTab() === "tickets"
+                  ? "Support Ticket Queue"
+                  : currentTab() === "organizations"
+                  ? "Organization Management"
+                  : "Immutable Audit Ledger"}
+              </span>
+            </div>
           </div>
 
           {/* Right Header Status Bar */}
@@ -747,8 +914,31 @@ export const App: Component = () => {
 
         {/* Main Viewport Container */}
         <div class="flex-1 min-h-0 rounded-2xl border border-[#E2DFD8] bg-white shadow-2xs overflow-hidden flex flex-col min-w-0">
-          <main class="flex-1 overflow-y-auto custom-scrollbar p-4 sm:p-5">
-            <ErrorBoundary fallback={(err) => <div class="p-6 text-xs text-rose-600">Runtime Error: {err.message}</div>}>
+          <main class="flex-1 overflow-y-auto custom-scrollbar p-3 sm:p-5 pb-18 md:pb-5">
+            <ErrorBoundary
+              fallback={(err, reset) => (
+                <div class="p-8 my-6 rounded-2xl border border-rose-200 bg-rose-50/40 flex flex-col items-center justify-center text-center space-y-3">
+                  <div class="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center text-rose-600 font-bold text-sm">
+                    ✕
+                  </div>
+                  <div class="space-y-1">
+                    <h3 class="text-sm font-semibold text-rose-900">Support System Connection Alert</h3>
+                    <p class="text-xs text-rose-700 max-w-md">{err.message}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      reset();
+                      refetchTickets();
+                      refetchStats();
+                    }}
+                    class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-white border border-rose-300 text-rose-800 hover:bg-rose-50 shadow-2xs transition-colors cursor-pointer"
+                  >
+                    Retry Connection
+                  </button>
+                </div>
+              )}
+            >
 
               {/* ─────────────────────────────────────────────────────────────
                   TAB 1: SUPPORT TICKETS & REAL-TIME CONVERSATION
@@ -788,7 +978,7 @@ export const App: Component = () => {
                     {/* Left Pane: Ticket Queue List */}
                     <div
                       class={`bg-white rounded-xl border border-[#E2DFD8] p-4 shadow-2xs space-y-3 ${
-                        selectedTicketId() ? "lg:col-span-5" : "lg:col-span-12"
+                        selectedTicketId() ? "hidden lg:block lg:col-span-5" : "col-span-1 lg:col-span-12"
                       }`}
                     >
                       <div class="flex items-center justify-between gap-2">
@@ -847,14 +1037,30 @@ export const App: Component = () => {
 
                       {/* Tickets List */}
                       <div class="divide-y divide-[#E2DFD8]/60 max-h-[580px] overflow-y-auto custom-scrollbar">
-                        <Show when={tickets.loading && !tickets()}>
+                        <Show when={tickets.error}>
+                          <div class="p-6 my-4 rounded-2xl border border-rose-200 bg-rose-50/50 text-center space-y-2">
+                            <div class="w-8 h-8 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto text-xs font-bold">✕</div>
+                            <p class="text-xs text-rose-800 font-medium">
+                              {tickets.error?.message || "Failed to load support tickets from database."}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => refetchTickets()}
+                              class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-white border border-rose-300 text-rose-700 hover:bg-rose-50 shadow-2xs transition-colors cursor-pointer"
+                            >
+                              Retry Connection
+                            </button>
+                          </div>
+                        </Show>
+
+                        <Show when={tickets.loading && !tickets.error}>
                           <div class="py-12 text-center text-xs text-[#878A8E]">Loading tickets...</div>
                         </Show>
 
                         <For
-                          each={tickets()}
+                          each={!tickets.error ? tickets() : []}
                           fallback={
-                            <Show when={!tickets.loading || Boolean(tickets())}>
+                            <Show when={(!tickets.loading && !tickets.error) || (!tickets.error && Boolean(tickets()))}>
                               <div class="py-12 text-center text-xs text-[#878A8E]">
                                 No tickets match the current queue filter.
                               </div>
@@ -863,7 +1069,15 @@ export const App: Component = () => {
                         >
                           {(t) => (
                             <div
+                              role="button"
+                              tabIndex={0}
                               onClick={() => setSelectedTicketId(t.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setSelectedTicketId(t.id);
+                                }
+                              }}
                               class={`p-3 rounded-xl transition-all cursor-pointer space-y-1.5 my-1 border ${
                                 selectedTicketId() === t.id
                                   ? "bg-[#FBF9F6] border-[#9E725F]/50 shadow-2xs"
@@ -919,14 +1133,26 @@ export const App: Component = () => {
 
                     {/* Right Pane: Selected Ticket Detail */}
                     <Show when={selectedTicketId()}>
-                      <div class="bg-white rounded-xl border border-[#E2DFD8] p-4 sm:p-5 shadow-2xs lg:col-span-7 space-y-4">
-                        <Show when={activeTicketDetail.loading && !activeTicketDetail()}>
+                      <div class="bg-white rounded-xl border border-[#E2DFD8] p-4 sm:p-5 shadow-2xs col-span-1 lg:col-span-7 space-y-4">
+                        <Show when={activeTicketDetail.loading && !activeTicketDetail.error && !activeTicketDetail()}>
                           <div class="py-16 text-center text-xs text-[#878A8E]">Loading conversation...</div>
                         </Show>
 
-                        <Show when={activeTicketDetail()}>
+                        <Show when={!activeTicketDetail.error && activeTicketDetail()}>
                           {(detail) => (
                             <div class="space-y-4">
+                              {/* Mobile Back Button to Ticket Queue */}
+                              <button
+                                type="button"
+                                onClick={() => setSelectedTicketId(null)}
+                                class="lg:hidden inline-flex items-center gap-1.5 text-xs text-[#9E725F] hover:text-[#8E6351] font-semibold py-1.5 px-3 rounded-xl bg-[#F2E8E2] mb-1 cursor-pointer transition active:scale-95"
+                                data-testid="crm-mobile-back-to-queue"
+                              >
+                                <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+                                  <polyline points="15 18 9 12 15 6" />
+                                </svg>
+                                <span>Back to Ticket Queue</span>
+                              </button>
                               {/* Ticket Header & Status Controls */}
                               <div class="flex items-start justify-between gap-3 border-b border-[#E2DFD8] pb-3">
                                 <div class="space-y-1">
@@ -1243,7 +1469,7 @@ export const App: Component = () => {
 
                   {/* Organizations Table */}
                   <div class="overflow-x-auto rounded-xl border border-[#E2DFD8]">
-                    <table class="w-full text-left text-xs border-collapse">
+                    <table class="w-full min-w-[650px] text-left text-xs border-collapse">
                       <thead>
                         <tr class="bg-[#F0EEE9]/60 border-b border-[#E2DFD8] text-[11px] font-semibold text-stone-500 uppercase tracking-wider">
                           <th class="py-3 px-4">Organization</th>
@@ -1405,7 +1631,7 @@ export const App: Component = () => {
 
                   {/* Audit Logs Table */}
                   <div class="overflow-x-auto rounded-xl border border-[#E2DFD8]">
-                    <table class="w-full text-left text-xs border-collapse">
+                    <table class="w-full min-w-[700px] text-left text-xs border-collapse">
                       <thead>
                         <tr class="bg-[#F0EEE9]/60 border-b border-[#E2DFD8] text-[11px] font-semibold text-stone-500 uppercase tracking-wider">
                           <th class="py-3 px-4">Timestamp</th>
@@ -1758,6 +1984,57 @@ export const App: Component = () => {
           </div>
         )}
       </Show>
+
+      {/* Mobile Bottom Fixed Bar for CRM */}
+      <nav
+        aria-label="Support CRM Mobile Navigation"
+        data-testid="crm-bottom-nav"
+        class="md:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-md border-t border-[#E2DFD8] px-3 py-1 flex items-center justify-around select-none shadow-[0_-4px_16px_rgba(0,0,0,0.04)] h-14"
+      >
+        <button
+          type="button"
+          onClick={() => {
+            setTicketOrgFilter(null);
+            setCurrentTab("tickets");
+          }}
+          class={`flex flex-col items-center justify-center flex-1 py-1 text-xs cursor-pointer ${
+            currentTab() === "tickets" ? "text-[#9E725F] font-bold" : "text-[#6E7075] font-medium"
+          }`}
+        >
+          <svg class="w-5 h-5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+          <span class="text-[10px] mt-0.5">Tickets</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setCurrentTab("organizations")}
+          class={`flex flex-col items-center justify-center flex-1 py-1 text-xs cursor-pointer ${
+            currentTab() === "organizations" ? "text-[#9E725F] font-bold" : "text-[#6E7075] font-medium"
+          }`}
+        >
+          <svg class="w-5 h-5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+            <rect x="3" y="3" width="7" height="9" rx="1.5" />
+            <rect x="14" y="3" width="7" height="5" rx="1.5" />
+            <rect x="14" y="12" width="7" height="9" rx="1.5" />
+            <rect x="3" y="16" width="7" height="5" rx="1.5" />
+          </svg>
+          <span class="text-[10px] mt-0.5">Orgs</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setCurrentTab("audit_logs")}
+          class={`flex flex-col items-center justify-center flex-1 py-1 text-xs cursor-pointer ${
+            currentTab() === "audit_logs" ? "text-[#9E725F] font-bold" : "text-[#6E7075] font-medium"
+          }`}
+        >
+          <svg class="w-5 h-5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+          <span class="text-[10px] mt-0.5">Audit</span>
+        </button>
+      </nav>
     </div>
   );
 };

@@ -91,7 +91,18 @@ async function adminFetch<T>(endpoint: string, options: RequestInit = {}): Promi
     let errMessage = `Request failed: HTTP ${res.status}`;
     try {
       const errText = await res.text();
-      if (errText) errMessage = errText;
+      if (errText) {
+        try {
+          const parsed = JSON.parse(errText);
+          if (parsed && typeof parsed === "object" && typeof parsed.error === "string") {
+            errMessage = parsed.error;
+          } else {
+            errMessage = errText;
+          }
+        } catch {
+          errMessage = errText;
+        }
+      }
     } catch {
       // ignore
     }
@@ -315,6 +326,7 @@ export interface CustomerMetadata {
 
 export interface TicketDetail {
   id: string;
+  ticket?: any;
   ticket_number: string;
   customer_user_id: string;
   customer_email: string;
@@ -343,6 +355,7 @@ export async function getTickets(params?: {
   priority?: string;
   assigned_to?: string;
   search?: string;
+  org_id?: string;
   page?: number;
   limit?: number;
 }): Promise<{ tickets: TicketListItem[]; total: number; page: number; limit: number }> {
@@ -351,6 +364,7 @@ export async function getTickets(params?: {
   if (params?.priority) q.set("priority", params.priority);
   if (params?.assigned_to) q.set("assigned_to", params.assigned_to);
   if (params?.search) q.set("search", params.search);
+  if (params?.org_id) q.set("org_id", params.org_id);
   if (params?.page) q.set("page", String(params.page));
   if (params?.limit) q.set("limit", String(params.limit));
   const queryStr = q.toString() ? `?${q.toString()}` : "";
@@ -363,6 +377,7 @@ export async function getTicketDetail(ticketId: string): Promise<TicketDetail> {
   const resp = await adminFetch<any>(`/admin/v1/tickets/${ticketId}`);
   if (resp && resp.ticket) {
     return {
+      ticket: resp.ticket,
       ...resp.ticket,
       customer: resp.customer || {},
       messages: resp.messages || [],

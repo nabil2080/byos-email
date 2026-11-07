@@ -1,4 +1,4 @@
-export type FocusedCategory = "primary" | "notifications" | "newsletters" | "social";
+export type FocusedCategory = "primary" | "newsletters" | "social";
 
 export interface ClassifierInput {
   senderEmail: string;
@@ -131,20 +131,7 @@ export function classifyMessage(input: ClassifierInput): FocusedCategory {
     }
   }
 
-  // --- Rule 3: Notifications ---
-  if (autoSubmitted.includes("auto-generated")) {
-    return "notifications";
-  }
-  if (precedence === "bulk" && NOTIFICATION_SENDER_REGEX.test(localPart)) {
-    return "notifications";
-  }
-  for (const pattern of NOTIFICATION_SUBJECT_PATTERNS) {
-    if (subjectLower.includes(pattern)) {
-      return "notifications";
-    }
-  }
-
-  // --- Rule 4: Primary (default) ---
+  // --- Rule 3: Primary (default for direct and notification messages) ---
   return "primary";
 }
 
@@ -154,8 +141,11 @@ const FOCUSED_INBOX_ENABLED_KEY = "byos_focused_inbox_enabled";
 export function getMessageCategoryOverride(messageId: string): FocusedCategory | null {
   if (typeof window === "undefined" || !window.sessionStorage) return null;
   const val = window.sessionStorage.getItem(OVERRIDE_STORAGE_PREFIX + messageId);
-  if (val === "primary" || val === "notifications" || val === "newsletters" || val === "social") {
+  if (val === "primary" || val === "newsletters" || val === "social") {
     return val;
+  }
+  if (val === "notifications") {
+    return "primary";
   }
   return null;
 }
@@ -217,11 +207,13 @@ export function resolveMessageCategory(
   if (
     serverOverride &&
     (serverOverride === "primary" ||
-      serverOverride === "notifications" ||
       serverOverride === "newsletters" ||
       serverOverride === "social")
   ) {
     return serverOverride as FocusedCategory;
+  }
+  if (serverOverride === "notifications") {
+    return "primary";
   }
 
   // 3. If fresh classifier input with decrypted headers is provided, classify and cache
@@ -238,7 +230,6 @@ export function resolveMessageCategory(
     const cached = window.sessionStorage.getItem("byos_msg_category_" + messageId);
     if (
       cached === "primary" ||
-      cached === "notifications" ||
       cached === "newsletters" ||
       cached === "social"
     ) {

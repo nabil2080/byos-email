@@ -1,7 +1,7 @@
 import { Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { ConnectedAccount, getAccountColor } from "../api";
 import { ProfileAvatar } from "./ProfileAvatar";
-import { getMailboxKeyFor, getXWingSeedFor } from "../session_isolation";
+import { getMailboxKeyFor, getXWingSeedFor, isAccountUnlocked } from "../session_isolation";
 
 export interface AccountSwitcherProps {
   currentEmail: string;
@@ -49,10 +49,14 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
     if (typeof window === "undefined" || !id) return false;
     if (id === "__all__") {
       return (props.connectedAccounts || []).some(
-        (a) => !getMailboxKeyFor(a.id) && !getXWingSeedFor(a.id)
+        (a) => (a.isLocked !== undefined ? a.isLocked : !isAccountUnlocked(a.id))
       );
     }
-    return !getMailboxKeyFor(id) && !getXWingSeedFor(id);
+    const acc = (props.connectedAccounts || []).find((a) => a.id === id);
+    if (acc && acc.isLocked !== undefined) {
+      return Boolean(acc.isLocked);
+    }
+    return !isAccountUnlocked(id);
   };
 
   function handleClickOutside(e: MouseEvent) {
@@ -190,7 +194,7 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
           {/* Unread badge if count > 0 */}
           <Show when={currentSelectionUnread() > 0}>
             <span
-              class="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded-full bg-[#A27561] text-white"
+              class="text-xs font-mono font-medium px-1.5 py-0.2 rounded-full bg-[#A27561] text-white"
               data-testid="account-chip-unread"
             >
               {currentSelectionUnread()}
@@ -219,7 +223,7 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
           onKeyDown={handleDropdownKeyDown}
           class="absolute left-0 top-full mt-1.5 w-68 bg-white dark:bg-[#222225] border border-[#E2DFD8] dark:border-[#333336] rounded-2xl shadow-xl z-50 p-1.5 space-y-1 overflow-hidden font-sans outline-none focus:ring-1 focus:ring-[#A27561]/40"
         >
-          <div class="px-2.5 py-1 text-[10px] font-bold text-[#878A8E] uppercase tracking-wider font-mono">
+          <div class="px-2.5 py-1 text-xs font-bold text-[#878A8E] uppercase tracking-wider font-mono">
             Mailbox Context
           </div>
 
@@ -259,14 +263,14 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                     >
                       All Inboxes
                     </span>
-                    <span class="text-[10px] text-[#878A8E]">Aggregated view across mailboxes</span>
+                    <span class="text-xs text-[#878A8E]">Aggregated view across mailboxes</span>
                   </div>
                 </div>
 
                 <div class="flex items-center gap-1.5">
                   <Show when={(props.totalUnifiedUnread || 0) > 0}>
                     <span
-                      class="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-[#A27561] text-white font-medium"
+                      class="text-xs font-mono px-1.5 py-0.2 rounded-full bg-[#A27561] text-white font-medium"
                       data-testid="account-unread-all"
                     >
                       {props.totalUnifiedUnread}
@@ -323,7 +327,7 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                         >
                           {acc.email}
                         </span>
-                        <span class="text-[10px] text-[#878A8E] capitalize">
+                        <span class="text-xs text-[#878A8E] capitalize">
                           {acc.privacyMode === "private" ? "Private Mailbox" : "Org-Managed"}
                         </span>
                       </div>
@@ -332,7 +336,7 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                     <div class="flex items-center gap-1.5">
                       <Show when={isAccountLocked(acc.id)}>
                         <span
-                          class="text-[10px] text-amber-600 dark:text-amber-400 flex items-center gap-0.5"
+                          class="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-0.5"
                           title="Keys locked"
                           data-testid={`account-locked-${acc.id}`}
                         >
@@ -345,7 +349,7 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                       </Show>
                       <Show when={unread() > 0}>
                         <span
-                          class="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-[#A27561] text-white font-medium"
+                          class="text-xs font-mono px-1.5 py-0.2 rounded-full bg-[#A27561] text-white font-medium"
                           data-testid={`account-unread-${acc.id}`}
                         >
                           {unread()}

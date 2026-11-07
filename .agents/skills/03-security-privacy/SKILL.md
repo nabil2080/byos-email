@@ -1,18 +1,25 @@
-Trigger
+---
+name: 03-security-privacy
+description: Security boundaries, tenant isolation, RBAC, and data privacy safeguards. Use for changes involving auth, RBAC, organizations, mailboxes, storage, secrets, recovery, devices, attachments, APIs, or rate limits.
+---
+
+# 03 - Security & Privacy
+
+## Trigger
 
 Any change involving auth, RBAC, organizations, mailboxes, storage, secrets, recovery, devices, attachments, email, APIs, uploads, logging, CORS, or rate limits.
 
-Rules
+## Rules
 
 Always test:
 
-unauthenticated access
-wrong user
-wrong organization
-inactive user
-malformed input
-dependency failure
-direct API bypass
+- unauthenticated access
+- wrong user
+- wrong organization
+- inactive user
+- malformed input
+- dependency failure
+- direct API bypass
 
 Never trust frontend authorization.
 
@@ -24,17 +31,18 @@ Never introduce unsafe storage fallback.
 
 Always preserve tenant isolation.
 
-Stop
+## Stop
 
 STOP for:
 
-plaintext leakage
-auth bypass
-authorization bypass
-cross-tenant access
-secret exposure
-weakened security control
-Output
+- plaintext leakage
+- auth bypass
+- authorization bypass
+- cross-tenant access
+- secret exposure
+- weakened security control
+
+## Output
 SECURITY
 Auth:
 Authorization:

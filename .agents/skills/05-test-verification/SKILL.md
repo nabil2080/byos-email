@@ -1,35 +1,41 @@
-Trigger
+---
+name: 05-test-verification
+description: Rigorous test execution, evidence hierarchy, and runtime verification rules. Use after implementation, bug fixes, infrastructure changes, or before claiming completion.
+---
+
+# 05 - Test Verification
+
+## Trigger
 
 After implementation, bug fixes, infrastructure changes, or before claiming completion.
 
-Evidence levels
-L0: assumption
-L1: static inspection
-L2: build/typecheck
-L3: unit test
-L4: integration
-L5: end-to-end
-L6: production-like
+## Evidence levels
+- L0: assumption
+- L1: static inspection
+- L2: build/typecheck
+- L3: unit test
+- L4: integration
+- L5: end-to-end
+- L6: production-like
 
 Never report stronger evidence than actually exists.
 
-Rules
-Build ≠ feature verification.
-Test file ≠ passing test.
-Skipped test ≠ pass.
-Mock ≠ real provider.
-Browser feature requires browser verification.
-Runtime claims require runtime execution.
+## Rules
+- Build != feature verification.
+- Test file != passing test.
+- Skipped test != pass.
+- Mock != real provider.
+- Browser feature requires browser verification.
+- Runtime claims require runtime execution.
+- Test positive + negative paths.
 
-Test positive + negative paths.
-
-Stop
+## Stop
 
 STOP completion if required tests did not execute.
 
 If infrastructure is unavailable, report BLOCKED, not PASS.
 
-Output
+## Output
 VERIFICATION
 Build:
 Unit:
