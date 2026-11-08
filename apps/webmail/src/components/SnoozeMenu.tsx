@@ -6,6 +6,7 @@ import {
   computeNextWeek,
   formatTime12,
 } from "../snooze";
+import { t } from "../utils/i18n";
 
 export interface SnoozeMenuProps {
   open: boolean;
@@ -54,7 +55,7 @@ export const SnoozeMenu: Component<SnoozeMenuProps> = (props) => {
           class="bg-white dark:bg-[#1E2025] rounded-xl shadow-xl border border-[#E2DFD8] dark:border-[#2E3138] w-72 overflow-hidden text-xs text-[#1A1B1E] dark:text-[#F3F4F6] sm:absolute sm:top-24 sm:right-28 animate-fade-in"
           onClick={(e) => e.stopPropagation()}
           role="dialog"
-          aria-label="Snooze Message"
+          aria-label={t("Snooze")}
         >
           <div class="px-3.5 py-2.5 border-b border-[#E2DFD8]/60 dark:border-[#2E3138] flex items-center justify-between font-semibold">
             <span class="flex items-center gap-2">
@@ -62,7 +63,7 @@ export const SnoozeMenu: Component<SnoozeMenuProps> = (props) => {
                 <circle cx="12" cy="12" r="10" />
                 <polyline points="12 6 12 12 16 14" />
               </svg>
-              Snooze until…
+              {t("Snooze until…")}
             </span>
             <button
               type="button"
@@ -82,7 +83,7 @@ export const SnoozeMenu: Component<SnoozeMenuProps> = (props) => {
               onClick={() => props.onSelect(laterToday())}
               class="w-full text-left px-3 py-2 rounded-lg hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35] flex items-center justify-between transition cursor-pointer"
             >
-              <span>Later today</span>
+              <span>{t("Later today")}</span>
               <span class="text-[#6E7075] dark:text-[#878A8E] text-[11px]">
                 {formatTime12(laterToday())}
               </span>
@@ -93,7 +94,7 @@ export const SnoozeMenu: Component<SnoozeMenuProps> = (props) => {
               onClick={() => props.onSelect(tomorrow())}
               class="w-full text-left px-3 py-2 rounded-lg hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35] flex items-center justify-between transition cursor-pointer"
             >
-              <span>Tomorrow</span>
+              <span>{t("Tomorrow")}</span>
               <span class="text-[#6E7075] dark:text-[#878A8E] text-[11px]">
                 8:00 AM
               </span>
@@ -104,7 +105,7 @@ export const SnoozeMenu: Component<SnoozeMenuProps> = (props) => {
               onClick={() => props.onSelect(thisWeekend())}
               class="w-full text-left px-3 py-2 rounded-lg hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35] flex items-center justify-between transition cursor-pointer"
             >
-              <span>This weekend</span>
+              <span>{t("This weekend")}</span>
               <span class="text-[#6E7075] dark:text-[#878A8E] text-[11px]">
                 Sat, 8:00 AM
               </span>
@@ -115,7 +116,7 @@ export const SnoozeMenu: Component<SnoozeMenuProps> = (props) => {
               onClick={() => props.onSelect(nextWeek())}
               class="w-full text-left px-3 py-2 rounded-lg hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35] flex items-center justify-between transition cursor-pointer"
             >
-              <span>Next week</span>
+              <span>{t("Next week")}</span>
               <span class="text-[#6E7075] dark:text-[#878A8E] text-[11px]">
                 Mon, 8:00 AM
               </span>
@@ -130,7 +131,7 @@ export const SnoozeMenu: Component<SnoozeMenuProps> = (props) => {
                     onClick={() => setShowCustom(true)}
                     class="w-full text-left px-3 py-2 rounded-lg hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35] flex items-center justify-between text-[#A27561] font-medium transition cursor-pointer"
                   >
-                    <span>Pick date & time…</span>
+                    <span>{t("Pick date & time…")}</span>
                     <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
                       <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
                       <line x1="16" y1="2" x2="16" y2="6" />
@@ -155,13 +156,13 @@ export const SnoozeMenu: Component<SnoozeMenuProps> = (props) => {
                       onClick={() => setShowCustom(false)}
                       class="px-2 py-1 rounded-md text-[#6E7075] hover:text-[#1A1B1E] dark:hover:text-white text-xs cursor-pointer"
                     >
-                      Cancel
+                      {t("Cancel")}
                     </button>
                     <button
                       type="submit"
                       class="px-2.5 py-1 rounded-md bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold cursor-pointer"
                     >
-                      Save
+                      {t("Save")}
                     </button>
                   </div>
                 </form>

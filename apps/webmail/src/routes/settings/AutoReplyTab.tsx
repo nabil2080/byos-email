@@ -1,4 +1,5 @@
 import { Component, createSignal, onMount, For, Show } from "solid-js";
+import { t } from "../../utils/i18n";
 import {
   Mailbox,
   AutoReplyRule,
@@ -110,7 +111,7 @@ export const AutoReplyTab: Component<AutoReplyTabProps> = (props) => {
   return (
     <div class="space-y-6">
       <div>
-        <h3 class="text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Automation & Auto-Reply</h3>
+        <h3 class="text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">{t("Automation & Auto-Reply")}</h3>
         <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA] mt-1">
           Configure automated vacation responders with loop prevention.
         </p>

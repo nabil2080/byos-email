@@ -6,6 +6,7 @@ import { ThreadRow } from "./ThreadRow";
 import { MailboxFolder, MailboxLabel, ThreadSummary } from "../api";
 import { FocusedCategory } from "../focused_inbox";
 import { AppModule } from "./TopFixedBar";
+import { t } from "../utils/i18n";
 
 export interface DisplayMessage {
   id: string;
@@ -143,7 +144,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
   return (
     <div
       data-testid="message-list"
-      class="w-full bg-[#FAF9F6] dark:bg-[#1E2025] flex flex-col min-w-0 min-h-0 overflow-hidden"
+      class="w-full h-full bg-[#FAF9F6] dark:bg-[#1E2025] flex flex-col min-w-0 min-h-0 overflow-hidden flex-shrink-0"
     >
       {/* Label Filter Chip Row */}
       <Show when={props.activeLabel}>
@@ -297,7 +298,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
                   <span class={`flex-shrink-0 ${isActive() ? "text-[#A27561] dark:text-[#D4A38F]" : "text-[#6F7173] dark:text-[#878A8E]"}`}>
                     {cat.icon}
                   </span>
-                  <span>{cat.label}</span>
+                  <span>{t(cat.label)}</span>
                   <Show when={unreadCount() > 0}>
                     <span
                       data-testid={`category-badge-${cat.id}`}
@@ -327,7 +328,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
-              <span>Manage Subscriptions</span>
+              <span>{t("Manage Subscriptions")}</span>
             </button>
           </Show>
         </div>
@@ -343,7 +344,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
             <span class="truncate sm:overflow-visible sm:whitespace-normal">
-              Messages that have been in the Bin for more than 30 days will be deleted automatically.
+              {t("Messages that have been in the Bin for more than 30 days will be deleted automatically.")}
             </span>
           </div>
           <button
@@ -351,7 +352,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
             onClick={props.onEmptyTrash}
             class="text-[#A27561] hover:text-[#8F6452] dark:hover:text-[#D4A38F] font-semibold hover:underline cursor-pointer flex-shrink-0 whitespace-nowrap text-xs"
           >
-            Empty Bin now
+            {t("Empty Bin now")}
           </button>
         </div>
       </Show>
@@ -458,7 +459,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
               <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
               <polyline points="22,6 12,13 2,6" />
             </svg>
-            <div class="flex flex-col items-center gap-1"><span>No messages in {folderNames[props.currentFolder]}.</span><span class="text-xs text-[#878A8E]/60">Your messages will appear here</span></div>
+            <div class="flex flex-col items-center gap-1"><span>{t("No messages in {folder}.", { folder: t(folderNames[props.currentFolder] || props.currentFolder) })}</span><span class="text-xs text-[#878A8E]/60">{t("Your messages will appear here")}</span></div>
           </div>
         </Show>
       </div>

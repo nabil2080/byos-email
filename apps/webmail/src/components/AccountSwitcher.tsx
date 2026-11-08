@@ -2,6 +2,7 @@ import { Component, createSignal, For, onCleanup, onMount, Show } from "solid-js
 import { ConnectedAccount, getAccountColor } from "../api";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { getMailboxKeyFor, getXWingSeedFor, isAccountUnlocked } from "../session_isolation";
+import { t } from "../utils/i18n";
 
 export interface AccountSwitcherProps {
   currentEmail: string;
@@ -224,7 +225,7 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
           class="absolute left-0 top-full mt-1.5 w-68 bg-white dark:bg-[#222225] border border-[#E2DFD8] dark:border-[#333336] rounded-2xl shadow-xl z-50 p-1.5 space-y-1 overflow-hidden font-sans outline-none focus:ring-1 focus:ring-[#A27561]/40"
         >
           <div class="px-2.5 py-1 text-xs font-bold text-[#878A8E] uppercase tracking-wider font-mono">
-            Mailbox Context
+            {t("Mailbox Context")}
           </div>
 
           <div class="max-h-64 overflow-y-auto space-y-0.5 custom-scrollbar">
@@ -261,9 +262,9 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                       class="truncate font-medium text-[#2B2C2D] dark:text-[#ECEBE8]"
                       data-testid="account-dropdown-all-label"
                     >
-                      All Inboxes
+                      {t("All Inboxes")}
                     </span>
-                    <span class="text-xs text-[#878A8E]">Aggregated view across mailboxes</span>
+                    <span class="text-xs text-[#878A8E]">{t("Aggregated view across mailboxes")}</span>
                   </div>
                 </div>
 
@@ -328,7 +329,7 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                           {acc.email}
                         </span>
                         <span class="text-xs text-[#878A8E] capitalize">
-                          {acc.privacyMode === "private" ? "Private Mailbox" : "Org-Managed"}
+                          {acc.privacyMode === "private" ? t("Private Mailbox") : t("Org-Managed")}
                         </span>
                       </div>
                     </div>
@@ -337,14 +338,14 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                       <Show when={isAccountLocked(acc.id)}>
                         <span
                           class="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-0.5"
-                          title="Keys locked"
+                          title={t("Keys locked")}
                           data-testid={`account-locked-${acc.id}`}
                         >
                           <svg class="w-3 h-3 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
                             <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                             <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                           </svg>
-                          <span class="hidden sm:inline font-mono">Locked</span>
+                          <span class="hidden sm:inline font-mono">{t("Locked")}</span>
                         </span>
                       </Show>
                       <Show when={unread() > 0}>
@@ -402,7 +403,7 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
               <line x1="12" y1="5" x2="12" y2="19" />
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
-            <span>Add another mailbox</span>
+            <span>{t("Add another mailbox")}</span>
           </button>
 
           {/* Sign Out Actions */}
@@ -422,7 +423,7 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                   <polyline points="16 17 21 12 16 7" />
                   <line x1="21" y1="12" x2="9" y2="12" />
                 </svg>
-                <span>Sign out</span>
+                <span>{t("Sign out")}</span>
               </button>
             }
           >
@@ -439,7 +440,7 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                 <polyline points="16 17 21 12 16 7" />
                 <line x1="21" y1="12" x2="9" y2="12" />
               </svg>
-              <span class="truncate">Sign out of {currentSelectionLabel()}</span>
+              <span class="truncate">{t("Sign out of {account}", { account: currentSelectionLabel() })}</span>
             </button>
             <button
               type="button"
@@ -453,7 +454,7 @@ export const AccountSwitcher: Component<AccountSwitcherProps> = (props) => {
                 <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
                 <line x1="12" y1="2" x2="12" y2="12" />
               </svg>
-              <span>Sign out of all accounts</span>
+              <span>{t("Sign out of all accounts")}</span>
             </button>
           </Show>
         </div>

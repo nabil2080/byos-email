@@ -1,4 +1,5 @@
 import { Component, createSignal, onMount, For, Show } from "solid-js";
+import { t } from "../../utils/i18n";
 import {
   Mailbox,
   MailRule,
@@ -345,7 +346,7 @@ export const FiltersTab: Component<FiltersTabProps> = (props) => {
   return (
     <div class="space-y-6 pb-12">
       <div>
-        <h3 class="text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Filters & Rules</h3>
+        <h3 class="text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">{t("Filters & Rules")}</h3>
         <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA] mt-1">
           Automate message sorting at ingest based on sender, recipient, attachments, and size.
         </p>

@@ -199,6 +199,7 @@ import { formatMessageDate } from "./utils/dateTime";
 import { formatSnoozeTime, checkSnoozeExpirations, isMessageSnoozed } from "./snooze";
 import { buildEmlContent, downloadEmlFile, type EmlAttachment } from "./utils/eml_export";
 import { getSubtreeLabelIds } from "./utils/nested_labels";
+import { setLocale, t } from "./utils/i18n";
 import { GlobalErrorBanner } from "./components/GlobalErrorBanner";
 import { setGlobalError } from "./errors";
 import {
@@ -861,11 +862,27 @@ const AppContent: Component = () => {
         setFocusedInboxEnabledState(getFocusedInboxEnabled());
       }
     };
+    const handleDisplayNameUpdate = (e: any) => {
+      const newName = e?.detail?.displayName;
+      if (typeof newName === "string") {
+        const cur = currentUser();
+        if (cur) {
+          auth.setCurrentUser({ ...cur, display_name: newName });
+        }
+        setConnectedAccounts((prev) =>
+          prev.map((a) =>
+            a.email?.toLowerCase() === cur?.email?.toLowerCase() ? { ...a, displayName: newName } : a
+          )
+        );
+      }
+    };
     window.addEventListener("byos_focused_inbox_changed", handleFocusedInboxChange);
     window.addEventListener("storage", handleFocusedInboxChange);
+    window.addEventListener("byos_display_name_updated", handleDisplayNameUpdate);
     onCleanup(() => {
       window.removeEventListener("byos_focused_inbox_changed", handleFocusedInboxChange);
       window.removeEventListener("storage", handleFocusedInboxChange);
+      window.removeEventListener("byos_display_name_updated", handleDisplayNameUpdate);
     });
   });
 
@@ -1146,7 +1163,9 @@ const AppContent: Component = () => {
     (typeof window !== "undefined" && (localStorage.getItem("byos_week_start") as any)) || "sunday"
   );
 
-  function handleSetLanguage(newLanguage: string, persistToBackend = true) {
+  function handleSetLanguage(newLanguage: string, persistToBackend = true, notify = false) {
+    const prevLanguage = language();
+    setLocale(newLanguage);
     setLanguage(newLanguage);
     if (typeof window !== "undefined") {
       localStorage.setItem("byos_language", newLanguage);
@@ -1169,7 +1188,9 @@ const AppContent: Component = () => {
           : msg.date,
       }))
     );
-    showToast(`Language updated to ${newLanguage.toUpperCase()}`);
+    if (notify && prevLanguage !== newLanguage) {
+      showToast(t("Language updated to {lang}", { lang: newLanguage.toUpperCase() }));
+    }
   }
 
   function handleSetTheme(newTheme: "cloud_dancer" | "dark", persistToBackend = true) {
@@ -8370,6 +8391,11 @@ const AppContent: Component = () => {
             }}
             currentUser={currentUser()}
             selectedMailbox={selectedMailbox()}
+            theme={theme()}
+            onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
+            onSwitchModule={setActiveModule}
+            isOnline={!isOffline()}
+            onOpenContacts={openContacts}
           >
             <Show when={activeSettingsTab() === "account" && selectedMailbox()}>
               <AccountTab
@@ -8377,7 +8403,9 @@ const AppContent: Component = () => {
                 currentUser={currentUser()}
                 mailboxKey={mailboxKey()}
                 currentLanguage={language()}
-                onLanguageChange={handleSetLanguage}
+                onLanguageChange={(l) => handleSetLanguage(l, true, true)}
+                theme={theme()}
+                onThemeChange={(t) => handleSetTheme(t, true)}
                 showToast={showToast}
               />
             </Show>
@@ -8849,7 +8877,7 @@ const AppContent: Component = () => {
                     (layoutMode() === "full" && selectedMsg()) || (isMobile() && selectedMsg())
                       ? "hidden"
                       : selectedMsg()
-                      ? "w-full md:w-[380px] md:min-w-[340px] md:max-w-[420px] md:flex-shrink-0 border-r border-[#E2DFD8] dark:border-[#2A2D35]"
+                      ? "w-full md:w-[380px] md:min-w-[380px] md:max-w-[380px] lg:w-[420px] lg:min-w-[420px] lg:max-w-[420px] flex-shrink-0 border-r border-[#E2DFD8] dark:border-[#2A2D35]"
                       : "w-full flex-1"
                   } transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] min-h-0 overflow-hidden flex flex-col`}
                 >
@@ -9039,7 +9067,7 @@ const AppContent: Component = () => {
                   setTimeFormat(tf);
                   if (typeof window !== "undefined") localStorage.setItem("byos_time_format", tf);
                 }}
-                onLanguageChange={(l) => handleSetLanguage(l, false)}
+                onLanguageChange={(l) => handleSetLanguage(l, false, true)}
                 onWeekStartChange={(ws) => {
                   setWeekStart(ws);
                   if (typeof window !== "undefined") localStorage.setItem("byos_week_start", ws);
@@ -9390,45 +9418,6 @@ const AppContent: Component = () => {
         </div>
       </Show>
 
-      {/* ── Global Notification Toasts ── */}
-      <div
-        class="fixed bottom-6 right-6 z-50 flex flex-col gap-2 pointer-events-none"
-        role="region"
-        aria-label="Notifications"
-      >
-        <For each={toasts()}>
-          {(toast) => (
-            <div
-              role="status"
-              class="pointer-events-auto bg-[#3C3D3E] text-white px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-3 text-xs font-sans border border-[#E2DFD8]/20 animate-fade-in"
-            >
-              <svg class="w-4 h-4 stroke-[#A27561] fill-none stroke-2 flex-shrink-0" viewBox="0 0 24 24">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-              <span>{toast.message}</span>
-              <Show when={toast.action}>
-                <button
-                  type="button"
-                  onClick={toast.action!.onClick}
-                  class="ml-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-[#A27561] hover:bg-[#8F6452] text-white transition focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 cursor-pointer"
-                >
-                  {toast.action!.label}
-                </button>
-              </Show>
-            </div>
-          )}
-        </For>
-      </div>
-
-      {/* ── Active Calendar Reminder Toast Banner (Global) ── */}
-      <CalendarNotificationBanner
-        alerts={calendarAlerts()}
-        defaultSnoozeMinutes={loadCalendarSettings(selectedMailbox()?.id).snoozeDefaultMinutes || 10}
-        onDismiss={handleDismissCalendarAlert}
-        onSnooze={handleSnoozeCalendarAlert}
-        onSelectEvent={handleSelectCalendarEventFromAlert}
-      />
-
       {/* ── Mobile/Tablet Compose Floating Action Button (Gmail-style FAB) ── */}
       <Show when={activeModule() === "mail" && !mobileSidebarOpen()}>
         <button
@@ -9454,6 +9443,45 @@ const AppContent: Component = () => {
       />
       </div>
     </Show>
+
+    {/* ── Global Notification Toasts (Universally Accessible) ── */}
+    <div
+      class="fixed bottom-6 right-6 z-50 flex flex-col gap-2 pointer-events-none"
+      role="region"
+      aria-label="Notifications"
+    >
+      <For each={toasts()}>
+        {(toast) => (
+          <div
+            role="status"
+            class="pointer-events-auto bg-[#3C3D3E] text-white px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-3 text-xs font-sans border border-[#E2DFD8]/20 animate-fade-in"
+          >
+            <svg class="w-4 h-4 stroke-[#A27561] fill-none stroke-2 flex-shrink-0" viewBox="0 0 24 24">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            <span>{toast.message}</span>
+            <Show when={toast.action}>
+              <button
+                type="button"
+                onClick={toast.action!.onClick}
+                class="ml-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-[#A27561] hover:bg-[#8F6452] text-white transition focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 cursor-pointer"
+              >
+                {toast.action!.label}
+              </button>
+            </Show>
+          </div>
+        )}
+      </For>
+    </div>
+
+    {/* ── Active Calendar Reminder Toast Banner (Global) ── */}
+    <CalendarNotificationBanner
+      alerts={calendarAlerts()}
+      defaultSnoozeMinutes={loadCalendarSettings(selectedMailbox()?.id).snoozeDefaultMinutes || 10}
+      onDismiss={handleDismissCalendarAlert}
+      onSnooze={handleSnoozeCalendarAlert}
+      onSelectEvent={handleSelectCalendarEventFromAlert}
+    />
     </Show>
     </Show>
     </>

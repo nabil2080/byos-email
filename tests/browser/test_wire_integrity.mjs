@@ -225,8 +225,15 @@ async function runWireIntegrityTest() {
     const aliceId = sessionAccounts.find(a => a.email.includes('alice'))?.id || "c0000000-0000-0000-0000-000000000001";
     const bobId = sessionAccounts.find(a => a.email.includes('bob'))?.id || "c0000000-0000-0000-0000-000000000002";
 
-    // Verify Bob's keys unsealed in sessionStorage
+    // Verify Bob's keys unsealed in sessionStorage (vault or direct key)
     const bobXwingSeed = await page.evaluate((bId) => {
+      const vaultRaw = sessionStorage.getItem('byos_session_vault');
+      if (vaultRaw) {
+        try {
+          const vault = JSON.parse(vaultRaw);
+          if (vault[bId]?.xwingSeedHex) return vault[bId].xwingSeedHex;
+        } catch {}
+      }
       return sessionStorage.getItem(`byos_xwing_seed_${bId}`) ||
              sessionStorage.getItem(`byos_mailbox_sk_${bId}`);
     }, bobId);
@@ -313,8 +320,15 @@ async function runWireIntegrityTest() {
     console.log(`  Envelope attachment_id: ${envelope.attachment_id}, chunk_count: ${envelope.chunk_count}, size_bytes: ${envelope.size_bytes}`);
     assert(envelope.size_bytes === testAttachmentSize, `Envelope size_bytes equals ${testAttachmentSize}`);
 
-    // Fetch chunk 0 via API using Bob's session token
-    const bobToken = sessionAccounts.find(a => a.id === bobId)?.sessionToken;
+    // Fetch chunk 0 via API using Bob's session token (obtained via real auth)
+    const bobLoginResp = await fetch('http://127.0.0.1:8080/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'bob@byos.local', password: 'test-password-123' }),
+    });
+    assert(bobLoginResp.ok, "Bob authenticated to verify received attachment chunk");
+    const bobLoginData = await bobLoginResp.json();
+    const bobToken = bobLoginData.token;
     const chunkResp = await fetch(
       `http://127.0.0.1:8080/v1/mailboxes/${bobId}/messages/${pathAMessageId}/attachments/${envelope.attachment_id}/chunks/0`,
       { headers: { Authorization: `Bearer ${bobToken}` } }

@@ -3,9 +3,10 @@ import { ThreadSummary, MailboxLabel } from "../api";
 import { DisplayMessage } from "./MessageList";
 import { formatSmartDate, formatAddress, getDisplayParty, getDisplayPartyEmail } from "./MessageRow";
 import { Folder } from "./Sidebar";
+import { t } from "../utils/i18n";
 
 export function formatParticipants(parts: string[]): string {
-  if (!parts || parts.length === 0) return "(no sender)";
+  if (!parts || parts.length === 0) return t("(no sender)");
   if (parts.length === 1) return formatAddress(parts[0]);
   if (parts.length === 2) return `${formatAddress(parts[0])}, ${formatAddress(parts[1])}`;
   return `${formatAddress(parts[0])}, ${formatAddress(parts[1])} +${parts.length - 2}`;
@@ -199,7 +200,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
         }
       }}
       aria-expanded={props.expanded}
-      aria-label={`Thread with ${displayParty()}, ${props.thread.message_count} messages, ${props.subject || "No subject"}`}
+      aria-label={`Thread with ${displayParty()}, ${props.thread.message_count} messages, ${props.subject || t("No subject")}`}
       class={`group relative cursor-pointer border-b border-[#E2DFD8]/60 dark:border-[#2A2D35] transition-colors duration-150 select-none min-w-0 overflow-hidden focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ${
         props.isSplit ? "p-3 sm:px-4 py-2.5" : densityPadding()
       } ${
@@ -223,7 +224,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                 props.onToggleThreadCheck?.(props.thread.thread_id, !isAllChecked());
               }}
               class="flex items-center justify-center p-0.5 cursor-pointer flex-shrink-0"
-              title={isAllChecked() ? "Deselect" : "Select"}
+              title={isAllChecked() ? t("Deselect") : t("Select")}
             >
               <input
                 type="checkbox"
@@ -247,7 +248,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                 }
               }}
               class="transition flex-shrink-0 cursor-pointer p-0.5 text-[#878A8E] hover:text-amber-500 flex items-center justify-center"
-              title={props.thread.is_starred ? "Unstar" : "Star"}
+              title={props.thread.is_starred ? t("Unstar") : t("Star")}
             >
               <Show
                 when={props.thread.is_starred}
@@ -270,7 +271,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
             >
               <span
                 class="w-1.5 h-1.5 rounded-full bg-[#A27561] flex-shrink-0"
-                title="Unread"
+                title={t("Unread")}
               ></span>
             </Show>
 
@@ -289,7 +290,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                 class={`truncate font-sans text-sm ${isUnread() ? "font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]" : "font-normal text-[#6F7173] dark:text-[#8A8E94]"}`}
               >
                 <Show when={isSent()}>
-                  <span class="text-[#6F7173] dark:text-[#8A8E94] font-normal mr-0.5">To: </span>
+                  <span class="text-[#6F7173] dark:text-[#8A8E94] font-normal mr-0.5">{t("To")}: </span>
                 </Show>
                 {displayParty()}
               </span>
@@ -332,7 +333,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                     : "font-normal text-[#2B2C2D] dark:text-[#E2DFD8]"
                 }`}
               >
-                {props.subject || "(Thread conversation)"}
+                {props.subject || t("(Thread conversation)")}
               </span>
               <Show when={props.snippet}>
                 <span class="truncate text-xs text-[#878A8E] hidden sm:inline">
@@ -343,7 +344,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
 
             {/* Attachment indicator */}
             <Show when={props.thread.has_attachments}>
-              <span class="text-[#878A8E] flex-shrink-0" title="Has attachments">
+              <span class="text-[#878A8E] flex-shrink-0" title={t("Has attachments")}>
                 <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                 </svg>
@@ -366,7 +367,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                       props.onToggleRead!(props.targetMessage!);
                     }}
                     class="p-1 hover:bg-[#F3ECE8] dark:hover:bg-[#343842] rounded-lg text-[#5E6063] hover:text-[#A27561] transition cursor-pointer"
-                    title={isUnread() ? "Mark as read" : "Mark as unread"}
+                    title={isUnread() ? t("Mark as read") : t("Mark as unread")}
                   >
                     <Show
                       when={!isUnread()}
@@ -392,7 +393,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                       props.onArchive!(props.targetMessage!);
                     }}
                     class="p-1 hover:bg-[#F3ECE8] dark:hover:bg-[#343842] rounded-lg text-[#5E6063] hover:text-[#A27561] transition cursor-pointer"
-                    title="Archive"
+                    title={t("Archive")}
                   >
                     <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
                       <polyline points="21 8 21 21 3 21 3 8" />
@@ -410,7 +411,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                       props.onTrash!(props.targetMessage!);
                     }}
                     class="p-1 hover:bg-[#F3ECE8] dark:hover:bg-[#343842] rounded-lg text-[#5E6063] hover:text-rose-500 transition cursor-pointer"
-                    title="Move to Trash"
+                    title={t("Move to Trash")}
                   >
                     <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
                       <polyline points="3 6 5 6 21 6" />
@@ -435,7 +436,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
               ? "w-6 h-6 rounded-full bg-[#A27561] text-white flex items-center justify-center shrink-0 shadow-xs cursor-pointer select-none transition-colors duration-150 mt-0.5"
               : "hidden"}
             data-testid="thread-mobile-select-btn"
-            title={isAllChecked() ? "Deselect" : "Select"}
+            title={isAllChecked() ? t("Deselect") : t("Select")}
           >
             <svg class="w-4 h-4 stroke-white fill-none stroke-[2.5]" viewBox="0 0 24 24">
               <polyline points="20 6 9 17 4 12" />
@@ -463,7 +464,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                   data-testid="thread-sender-name"
                 >
                   <Show when={isSent()}>
-                    <span class="text-[#878A8E] dark:text-[#8A8E94] font-normal mr-0.5">To: </span>
+                    <span class="text-[#878A8E] dark:text-[#8A8E94] font-normal mr-0.5">{t("To")}: </span>
                   </Show>
                   {displayParty()}
                 </span>
@@ -497,14 +498,14 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                     : "font-normal text-[#55575B] dark:text-[#A8AAAA]"
                 }`}
               >
-                {props.subject || "(Thread conversation)"}
+                {props.subject || t("(Thread conversation)")}
               </span>
             </div>
 
             {/* Row 3: Snippet + Star Button */}
             <div class="flex items-center justify-between gap-2 mt-0.5">
               <span class="truncate text-xs text-[#75777B] dark:text-[#8E918F] flex-1">
-                {props.snippet || "(No content preview)"}
+                {props.snippet || t("(No content preview)")}
               </span>
 
               {/* Star Button */}
@@ -517,8 +518,8 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                   }
                 }}
                 class="w-11 h-11 min-w-[44px] min-h-[44px] flex items-center justify-center p-2.5 -mr-2 text-[#878A8E] hover:text-amber-500 flex-shrink-0 transition cursor-pointer"
-                title={props.thread.is_starred ? "Unstar" : "Star"}
-                aria-label={props.thread.is_starred ? "Unstar thread" : "Star thread"}
+                title={props.thread.is_starred ? t("Unstar") : t("Star")}
+                aria-label={props.thread.is_starred ? t("Unstar message") : t("Star message")}
                 data-testid="thread-mobile-star"
               >
                 <Show

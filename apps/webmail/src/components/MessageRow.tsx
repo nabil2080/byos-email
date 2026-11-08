@@ -3,6 +3,7 @@ import { DisplayMessage } from "./MessageList";
 import { MailboxLabel } from "../api";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { FocusedCategory } from "../focused_inbox";
+import { t } from "../utils/i18n";
 
 import { Folder } from "./Sidebar";
 
@@ -59,7 +60,7 @@ export function getDisplayParty(message: DisplayMessage, folder?: Folder): strin
         .filter((r) => r.length > 0 && r.toLowerCase() !== "(no recipient)" && r.toLowerCase() !== "no recipient");
     }
     if (recipients.length === 0) {
-      return currentFolder === "drafts" ? "No recipient" : "(no recipient)";
+      return currentFolder === "drafts" ? t("No recipient") : t("(no recipient)");
     }
     const first = formatAddress(recipients[0]);
     return recipients.length > 1 ? `${first} +${recipients.length - 1}` : first;
@@ -310,7 +311,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                 props.onToggleCheck(props.message, !props.isChecked);
               }}
               class="flex items-center justify-center p-0.5 cursor-pointer flex-shrink-0"
-              title={props.isChecked ? "Deselect" : "Select"}
+              title={props.isChecked ? t("Deselect") : t("Select")}
             >
               <input
                 type="checkbox"
@@ -328,7 +329,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                 props.onToggleStarred(props.message);
               }}
               class="transition flex-shrink-0 cursor-pointer p-0.5 text-[#878A8E] hover:text-amber-500 flex items-center justify-center"
-              title={props.message.starred ? "Unstar" : "Star"}
+              title={props.message.starred ? t("Unstar") : t("Star")}
             >
               <Show
                 when={props.message.starred}
@@ -411,7 +412,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     <line x1="12" y1="8" x2="12" y2="12" />
                     <line x1="12" y1="16" x2="12.01" y2="16" />
                   </svg>
-                  Send failed
+                  {t("Send failed")}
                 </span>
               </Show>
               <span
@@ -422,7 +423,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     : "font-normal text-[#2B2C2D] dark:text-[#E2DFD8]"
                 }`}
               >
-                {props.message.subject || "(no subject)"}
+                {props.message.subject || t("(no subject)")}
               </span>
             </div>
 
@@ -452,7 +453,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     props.onToggleRead(props.message);
                   }}
                   class="p-1 hover:bg-[#F3ECE8] rounded-lg text-[#5E6063] hover:text-[#A27561] transition cursor-pointer"
-                  title={props.message.read ? "Mark as unread" : "Mark as read"}
+                  title={props.message.read ? t("Mark as unread") : t("Mark as read")}
                 >
                   <Show
                     when={props.message.read}
@@ -480,7 +481,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     props.onArchive(props.message);
                   }}
                   class="p-1 hover:bg-[#F3ECE8] rounded-lg text-[#5E6063] hover:text-[#A27561] transition cursor-pointer"
-                  title="Archive"
+                  title={t("Archive")}
                 >
                   <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                     <polyline points="21 8 21 21 3 21 3 8" />
@@ -500,7 +501,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                         props.onTrash(props.message);
                       }}
                       class="p-1 hover:bg-rose-50 rounded-lg text-[#5E6063] hover:text-rose-600 transition cursor-pointer"
-                      title="Move to Trash"
+                      title={t("Move to Trash")}
                     >
                       <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                         <polyline points="3 6 5 6 21 6" />
@@ -516,7 +517,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                       props.onDeleteForever?.(props.message);
                     }}
                     class="p-1 hover:bg-rose-50 rounded-lg text-rose-600 hover:text-rose-700 transition cursor-pointer"
-                    title="Delete Forever"
+                    title={t("Delete Forever")}
                   >
                     <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
                       <polyline points="3 6 5 6 21 6" />
@@ -543,7 +544,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
               ? "w-6 h-6 rounded-full bg-[#A27561] text-white flex items-center justify-center shrink-0 shadow-xs cursor-pointer select-none transition-colors duration-150 mt-0.5"
               : "hidden"}
             data-testid="message-mobile-select-btn"
-            title={props.isChecked ? "Deselect" : "Select"}
+            title={props.isChecked ? t("Deselect") : t("Select")}
           >
             <svg class="w-4 h-4 stroke-white fill-none stroke-[2.5]" viewBox="0 0 24 24">
               <polyline points="20 6 9 17 4 12" />
@@ -571,7 +572,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                   data-testid="message-sender-name"
                 >
                   <Show when={isSent()}>
-                    <span class="text-[#878A8E] dark:text-[#8A8E94] font-normal mr-0.5">To: </span>
+                    <span class="text-[#878A8E] dark:text-[#8A8E94] font-normal mr-0.5">{t("To")}: </span>
                   </Show>
                   {partyLabel()}
                 </span>
@@ -600,14 +601,14 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                     : "font-normal text-[#55575B] dark:text-[#A8AAAA]"
                 }`}
               >
-                {props.message.subject || "(no subject)"}
+                {props.message.subject || t("(no subject)")}
               </span>
             </div>
 
             {/* Row 3: Snippet + Star Button */}
             <div class="flex items-center justify-between gap-2 mt-0.5">
               <span class="truncate text-xs text-[#75777B] dark:text-[#8E918F] flex-1">
-                {props.message.snippet || "(No content preview)"}
+                {props.message.snippet || t("(No content preview)")}
               </span>
 
               {/* Star Button */}
@@ -618,8 +619,8 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                   props.onToggleStarred(props.message);
                 }}
                 class="w-11 h-11 min-w-[44px] min-h-[44px] flex items-center justify-center p-2.5 -mr-2 text-[#878A8E] hover:text-amber-500 flex-shrink-0 transition cursor-pointer"
-                title={props.message.starred ? "Unstar" : "Star"}
-                aria-label={props.message.starred ? "Unstar message" : "Star message"}
+                title={props.message.starred ? t("Unstar") : t("Star")}
+                aria-label={props.message.starred ? t("Unstar message") : t("Star message")}
                 data-testid="message-mobile-star"
               >
                 <Show
@@ -651,7 +652,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
           onClick={(e) => e.stopPropagation()}
         >
           <div class="px-3 py-1.5 text-xs uppercase font-bold text-[#878A8E] dark:text-[#6E7075] border-b border-[#E2DFD8]/60 dark:border-[#2E3138]">
-            Move to category
+            {t("Move to category")}
           </div>
           <button
             type="button"
@@ -664,7 +665,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
             class="w-full text-left px-3 py-2 hover:bg-[#F3ECE8] dark:hover:bg-[#2D2522] hover:text-[#A27561] flex items-center gap-2 cursor-pointer transition"
           >
             <span class="w-2 h-2 rounded-full bg-blue-500"></span>
-            Primary
+            {t("Primary")}
           </button>
 
           <button
@@ -678,7 +679,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
             class="w-full text-left px-3 py-2 hover:bg-[#F3ECE8] dark:hover:bg-[#2D2522] hover:text-[#A27561] flex items-center gap-2 cursor-pointer transition"
           >
             <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-            Newsletters
+            {t("Newsletters")}
           </button>
           <button
             type="button"
@@ -691,7 +692,7 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
             class="w-full text-left px-3 py-2 hover:bg-[#F3ECE8] dark:hover:bg-[#2D2522] hover:text-[#A27561] flex items-center gap-2 cursor-pointer transition"
           >
             <span class="w-2 h-2 rounded-full bg-purple-500"></span>
-            Social
+            {t("Social")}
           </button>
         </div>
         <div

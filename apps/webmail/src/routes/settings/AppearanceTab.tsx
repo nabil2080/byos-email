@@ -112,7 +112,6 @@ export const AppearanceTab: Component<AppearanceTabProps> = (props) => {
       }
       if (s.language) {
         setLanguage(s.language);
-        props.onLanguageChange?.(s.language);
       }
       if (s.time_format) {
         setTimeFormat(s.time_format);

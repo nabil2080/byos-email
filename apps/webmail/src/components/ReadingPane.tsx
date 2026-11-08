@@ -34,6 +34,7 @@ import {
   getLanguageName,
   SUPPORTED_LANGUAGES,
 } from "../utils/translator";
+import { t, locale } from "../utils/i18n";
 
 export interface ReadingPaneProps {
   message: DisplayMessage;
@@ -220,19 +221,15 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
     // When message ID changes, check auto translation preference
     props.message.id;
     const detected = detectedSourceLang();
-    const target = targetLang();
     const alwaysKey = "byos_always_translate_" + detected;
     const isAlways = typeof window !== "undefined" && localStorage.getItem(alwaysKey) === "true";
     if (isAlways) {
       setAlwaysTranslate(true);
       setShowTranslationBar(true);
       setIsTranslated(true);
-    } else if (detected !== target) {
-      setAlwaysTranslate(false);
-      setShowTranslationBar(true);
-      setIsTranslated(false);
     } else {
       setAlwaysTranslate(false);
+      setShowTranslationBar(false);
       setIsTranslated(false);
     }
   });
@@ -273,6 +270,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
   createEffect(() => {
     const raw = props.decryptedContent;
     const allow = allowRemoteImages();
+    isTranslated();
     if (!readingContentRef || !raw) return;
 
     // Highlight code blocks
@@ -522,12 +520,13 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
             type="button"
             onClick={props.onBack}
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] hover:text-[#A27561] dark:hover:text-[#A27561] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] transition cursor-pointer border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] shadow-2xs min-h-[36px]"
-            title="Back to messages (Esc)"
+            title={t("Back to messages (Esc)")}
+            aria-label={t("Back to messages")}
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
-            <span>Back</span>
+            <span>{t("Back")}</span>
           </button>
 
           <div class="h-4 w-px bg-[#E2DFD8] dark:bg-[#2E3138] mx-0.5" />
@@ -539,7 +538,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               onClick={props.onPrev}
               disabled={!props.hasPrev}
               class="p-1 rounded text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
-              title="Previous message (Older)"
+              title={t("Previous message (Older)")}
             >
               <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="18 15 12 9 6 15" />
@@ -550,7 +549,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               onClick={props.onNext}
               disabled={!props.hasNext}
               class="p-1 rounded text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
-              title="Next message (Newer)"
+              title={t("Next message (Newer)")}
             >
               <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="6 9 12 15 18 9" />
@@ -566,8 +565,8 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
             type="button"
             onClick={() => props.onArchive(props.message)}
             class="w-8 h-8 sm:w-9 sm:h-9 min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] p-1.5 sm:p-2 flex items-center justify-center text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] rounded-xl transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
-            title="Archive"
-            aria-label="Archive message"
+            title={t("Archive")}
+            aria-label={t("Archive")}
           >
             <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
               <polyline points="21 8 21 21 3 21 3 8" />
@@ -584,8 +583,8 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                 type="button"
                 onClick={() => props.onTrash(props.message)}
                 class="w-8 h-8 sm:w-9 sm:h-9 min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] p-1.5 sm:p-2 flex items-center justify-center text-[#464748] dark:text-[#A3A3A3] hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
-                title="Move to Trash"
-                aria-label="Move to trash"
+                title={t("Move to Trash")}
+                aria-label={t("Move to Trash")}
               >
                 <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                   <polyline points="3 6 5 6 21 6" />
@@ -598,8 +597,8 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               type="button"
               onClick={() => props.onDeleteForever?.(props.message)}
               class="w-8 h-8 sm:w-9 sm:h-9 min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] p-1.5 sm:p-2 flex items-center justify-center text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition cursor-pointer border border-transparent hover:border-rose-200 dark:hover:border-rose-900/50 focus:outline-none focus:ring-2 focus:ring-rose-400/50"
-              title="Delete Forever"
-              aria-label="Delete permanently"
+              title={t("Delete Forever")}
+              aria-label={t("Delete Forever")}
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
                 <polyline points="3 6 5 6 21 6" />
@@ -615,8 +614,8 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
             type="button"
             onClick={() => props.onToggleRead(props.message)}
             class="w-8 h-8 sm:w-9 sm:h-9 min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] p-1.5 sm:p-2 flex items-center justify-center text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] rounded-xl transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
-            title={props.message.read ? "Mark as unread" : "Mark as read"}
-            aria-label={props.message.read ? "Mark as unread" : "Mark as read"}
+            title={props.message.read ? t("Mark as unread") : t("Mark as read")}
+            aria-label={props.message.read ? t("Mark as unread") : t("Mark as read")}
           >
             <Show
               when={props.message.read}
@@ -643,8 +642,8 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                 ? "text-amber-500 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100/60 dark:hover:bg-amber-950/50"
                 : "text-[#464748] dark:text-[#A3A3A3] hover:text-amber-500 hover:bg-[#F0EEE9] dark:hover:bg-[#26282E]"
             }`}
-            title={props.message.starred ? "Unstar" : "Star"}
-            aria-label={props.message.starred ? "Unstar message" : "Star message"}
+            title={props.message.starred ? t("Unstar") : t("Star")}
+            aria-label={props.message.starred ? t("Unstar") : t("Star")}
           >
             <Show
               when={props.message.starred}
@@ -676,8 +675,8 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                   ? "bg-[#F0EEE9] dark:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6]"
                   : "text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E]"
               }`}
-              title="More actions"
-              aria-label="More actions"
+              title={t("More actions")}
+              aria-label={t("More actions")}
               aria-haspopup="menu"
               aria-expanded={moreMenuOpen()}
             >
@@ -712,7 +711,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                     <circle cx="12" cy="12" r="10" />
                     <polyline points="12 6 12 12 16 14" />
                   </svg>
-                  <span>Snooze</span>
+                  <span>{t("Snooze")}</span>
                 </button>
 
                 {/* Move to folder */}
@@ -726,7 +725,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                     <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
                       <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
                     </svg>
-                    <span>Move to folder</span>
+                    <span>{t("Move to folder")}</span>
                   </div>
                   <svg class="w-3.5 h-3.5 text-[#878A8E]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="9 18 15 12 9 6" />
@@ -745,7 +744,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                       <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
                       <line x1="7" y1="7" x2="7.01" y2="7" />
                     </svg>
-                    <span>Labels</span>
+                    <span>{t("Labels")}</span>
                   </div>
                   <svg class="w-3.5 h-3.5 text-[#878A8E]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="9 18 15 12 9 6" />
@@ -767,7 +766,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                     <line x1="12" y1="8" x2="12" y2="12" />
                     <line x1="12" y1="16" x2="12.01" y2="16" />
                   </svg>
-                  <span>Report spam</span>
+                  <span>{t("Report spam")}</span>
                 </button>
 
                 <div class="my-1 border-t border-[#E2DFD8] dark:border-[#2E3138]" />
@@ -787,7 +786,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                     <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
                     <rect x="6" y="14" width="12" height="8" />
                   </svg>
-                  <span>Print message</span>
+                  <span>{t("Print message")}</span>
                 </button>
 
                 {/* Download (.eml) */}
@@ -819,7 +818,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                     <polyline points="7 10 12 15 17 10" />
                     <line x1="12" y1="15" x2="12" y2="3" />
                   </svg>
-                  <span>Download (.eml)</span>
+                  <span>{t("Download (.eml)")}</span>
                 </button>
 
                 {/* View headers */}
@@ -837,7 +836,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                     <line x1="12" y1="16" x2="12" y2="12" />
                     <line x1="12" y1="8" x2="12.01" y2="8" />
                   </svg>
-                  <span>{detailsOpen() ? "Hide headers" : "View headers"}</span>
+                  <span>{detailsOpen() ? t("Hide headers") : t("View headers")}</span>
                 </button>
 
                 {/* Translate message */}
@@ -848,8 +847,12 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                   onClick={() => {
                     setMoreMenuOpen(false);
                     setShowTranslationBar(true);
-                    if (!isTranslated()) {
-                      setIsTranslated(true);
+                    const detected = effectiveSourceLang();
+                    let target = targetLang();
+                    if (detected === target) {
+                      const preferred = locale();
+                      target = preferred && preferred !== detected ? preferred : (detected === "en" ? "es" : "en");
+                      setTargetLang(target);
                     }
                   }}
                   class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
@@ -862,7 +865,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                     <path d="m22 22-5-10-5 10" />
                     <path d="M14 18h6" />
                   </svg>
-                  <span>{isTranslated() ? "Translation options" : "Translate message"}</span>
+                  <span>{isTranslated() ? t("Translation options") : t("Translate message")}</span>
                 </button>
               </Show>
 
@@ -1316,7 +1319,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                   <path d="m22 22-5-10-5 10" />
                   <path d="M14 18h6" />
                 </svg>
-                <span class="hidden sm:inline">Translate:</span>
+                <span class="hidden sm:inline">{t("Translate")}:</span>
               </div>
 
               {/* Source Language dropdown */}
@@ -1327,9 +1330,9 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                   onChange={(e) => setSourceLang(e.currentTarget.value)}
                   class="px-2.5 py-1 rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-1 focus:ring-[#A27561] cursor-pointer"
                 >
-                  <option value="auto">Auto-detect ({getLanguageName(detectedSourceLang())})</option>
+                  <option value="auto">{t("Auto-detect ({lang})", { lang: getLanguageName(detectedSourceLang()) })}</option>
                   <For each={SUPPORTED_LANGUAGES}>
-                    {(lang) => <option value={lang.code}>{lang.name}</option>}
+                    {(lang) => <option value={lang.code}>{t(lang.name)}</option>}
                   </For>
                 </select>
 
@@ -1345,7 +1348,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                   class="px-2.5 py-1 rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-xs text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-1 focus:ring-[#A27561] cursor-pointer"
                 >
                   <For each={SUPPORTED_LANGUAGES}>
-                    {(lang) => <option value={lang.code}>{lang.name}</option>}
+                    {(lang) => <option value={lang.code}>{t(lang.name)}</option>}
                   </For>
                 </select>
               </div>
@@ -1354,14 +1357,24 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               <button
                 type="button"
                 data-testid="translate-action-btn"
-                onClick={() => setIsTranslated(!isTranslated())}
+                onClick={() => {
+                  if (!isTranslated()) {
+                    const detected = effectiveSourceLang();
+                    if (detected === targetLang()) {
+                      setTargetLang(detected === "en" ? "es" : "en");
+                    }
+                    setIsTranslated(true);
+                  } else {
+                    setIsTranslated(false);
+                  }
+                }}
                 class={`px-3 py-1 rounded-xl text-xs font-semibold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
                   isTranslated()
                     ? "bg-[#E2DFD8] dark:bg-[#2E3138] text-[#1A1B1E] dark:text-[#F3F4F6] hover:bg-[#D5D1C8]"
                     : "bg-[#A27561] hover:bg-[#8F6452] text-white"
                 }`}
               >
-                {isTranslated() ? "Show original" : "Translate message"}
+                {isTranslated() ? t("Show original") : t("Translate message")}
               </button>
 
               {/* Always translate toggle */}
@@ -1373,7 +1386,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                   onChange={(e) => handleToggleAlwaysTranslate(e.currentTarget.checked)}
                   class="accent-[#A27561] rounded w-3.5 h-3.5 cursor-pointer"
                 />
-                <span>Always translate {getLanguageName(effectiveSourceLang())}</span>
+                <span>{t("Always translate {lang}", { lang: getLanguageName(effectiveSourceLang()) })}</span>
               </label>
             </div>
 
@@ -1381,10 +1394,13 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
             <button
               type="button"
               data-testid="close-translation-bar-btn"
-              onClick={() => setShowTranslationBar(false)}
+              onClick={() => {
+                setShowTranslationBar(false);
+                setIsTranslated(false);
+              }}
               class="p-1 rounded-lg text-[#878A8E] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer"
-              title="Close translation bar"
-              aria-label="Close translation bar"
+              title={t("Close translation bar")}
+              aria-label={t("Close translation bar")}
             >
               <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
                 <line x1="18" y1="6" x2="6" y2="18" />
@@ -1402,14 +1418,14 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               data-testid="translated-notice"
               class="mb-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#F2E8E2] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] text-xs font-medium border border-[#A27561]/20 shadow-2xs"
             >
-              <span>Translated from {getLanguageName(effectiveSourceLang())} to {getLanguageName(targetLang())}</span>
+              <span>{t("Translated from {from} to {to}", { from: getLanguageName(effectiveSourceLang()), to: getLanguageName(targetLang()) })}</span>
               <button
                 type="button"
                 data-testid="show-original-inline-btn"
                 onClick={() => setIsTranslated(false)}
                 class="underline hover:text-[#885A47] dark:hover:text-[#DEAC98] cursor-pointer font-semibold ml-1"
               >
-                Show original
+                {t("Show original")}
               </button>
             </div>
           </Show>
@@ -1661,19 +1677,20 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               <polyline points="9 14 4 9 9 4" />
               <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
             </svg>
-            <span>Reply</span>
+            <span>{t("Reply")}</span>
           </button>
 
           <button
             type="button"
             onClick={() => props.onForward(props.message)}
+            data-testid="reading-pane-forward-btn"
             class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561] dark:hover:border-[#A27561] text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] hover:text-[#A27561] dark:hover:text-[#A27561] transition cursor-pointer shadow-2xs"
           >
             <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
               <polyline points="15 14 20 9 15 4" />
               <path d="M4 20v-7a4 4 0 0 1 4-4h12" />
             </svg>
-            <span>Forward</span>
+            <span>{t("Forward")}</span>
           </button>
         </div>
       </Show>

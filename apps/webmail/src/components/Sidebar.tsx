@@ -8,8 +8,25 @@ import {
   loadExpandedLabels,
   saveExpandedLabels,
 } from "../utils/nested_labels";
+import { t } from "../utils/i18n";
 
 export type Folder = "inbox" | "sent" | "scheduled" | "drafts" | "snoozed" | "archive" | "spam" | "trash" | "unified_inbox";
+
+function getFolderName(folder: Folder | string): string {
+  switch (folder) {
+    case "inbox": return t("Inbox");
+    case "sent": return t("Sent");
+    case "drafts": return t("Drafts");
+    case "trash": return t("Trash");
+    case "archive": return t("Archive");
+    case "spam": return t("Spam");
+    case "starred": return t("Starred");
+    case "snoozed": return t("Snoozed");
+    case "scheduled": return t("Scheduled");
+    case "unified_inbox": return t("All Inboxes");
+    default: return folder;
+  }
+}
 
 interface SidebarProps {
   currentUser: UserMe | null;
@@ -239,17 +256,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       }
     } catch {}
   }
-  const folderLabels: Record<Folder, string> = {
-    inbox: "Inbox",
-    sent: "Sent",
-    scheduled: "Scheduled",
-    drafts: "Drafts",
-    archive: "Archive",
-    spam: "Spam",
-    trash: "Trash",
-    snoozed: "Snoozed",
-    unified_inbox: "Unified Inbox",
-  };
+  const folderLabels = (f: Folder): string => getFolderName(f);
 
   function renderFolderIcon(f: Folder) {
     switch (f) {
@@ -411,7 +418,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
-              <span>New Message</span>
+              <span>{t("New Message")}</span>
             </div>
             <kbd class="hidden sm:inline-block text-xs font-mono text-white/80 bg-black/20 px-1.5 py-0.5 rounded border border-white/15 leading-none">C</kbd>
           </button>
@@ -483,7 +490,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                   <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
                   <line x1="6" y1="2" x2="18" y2="2" />
                 </svg>
-                <span data-testid="folder-name-inbox">{isAllInboxes() ? "All Inboxes" : "Inbox"}</span>
+                <span data-testid="folder-name-inbox">{isAllInboxes() ? t("All Inboxes") : t("Inbox")}</span>
               </div>
               <div class="flex items-center gap-1.5">
                 <Show when={(isAllInboxes() ? (props.unifiedUnreadCount || 0) : (props.folderCounts?.inbox || 0)) > 0}>
@@ -578,7 +585,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 each={[
                   {
                     id: "newsletters" as FocusedCategory,
-                    label: "Newsletters",
+                    label: t("Newsletters"),
                     icon: (
                       <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
                         <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
@@ -588,7 +595,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                   },
                   {
                     id: "social" as FocusedCategory,
-                    label: "Social",
+                    label: t("Social"),
                     icon: (
                       <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
                         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -646,7 +653,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                       <path d="M12 20h9" />
                       <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
                     </svg>
-                    <span>Manage Subscriptions</span>
+                    <span>{t("Manage Subscriptions")}</span>
                   </div>
                 </button>
               </Show>
@@ -687,7 +694,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 >
                   <div class="flex items-center gap-2.5">
                     {renderFolderIcon(f)}
-                    <span>{folderLabels[f]}</span>
+                    <span data-testid={`folder-name-${f}`}>{folderLabels(f)}</span>
                   </div>
                   <Show when={f !== "sent" && count() > 0}>
                     <span class={`text-xs font-mono tabular-nums px-1.5 py-0.5 rounded-full ${isActive() ? "bg-[#A27561] text-white font-semibold" : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"}`}>
@@ -703,7 +710,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
         {/* Custom Folders Section */}
         <div class="px-2 pt-2 border-t border-[#E2DFD8]/50 dark:border-[#2E3138]">
           <div class="flex items-center justify-between px-2 py-1 text-xs font-semibold text-[#878A8E] uppercase tracking-wider font-mono">
-            <span>Folders</span>
+            <span>{t("Folders")}</span>
             <button
               onClick={() => props.onOpenCreateFolder?.()}
               class="w-7 h-7 min-w-[28px] min-h-[28px] flex items-center justify-center rounded-md hover:bg-[#E8E5DF] dark:hover:bg-[#26282E] text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] cursor-pointer transition"
@@ -834,7 +841,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
         {/* Labels Section */}
         <div class="px-2 pt-2 border-t border-[#E2DFD8]/50 dark:border-[#2E3138]">
           <div class="flex items-center justify-between px-2 py-1 text-xs font-semibold text-[#878A8E] uppercase tracking-wider font-mono">
-            <span>Labels</span>
+            <span>{t("Labels")}</span>
             <button
               onClick={() => props.onOpenCreateLabel?.()}
               class="w-7 h-7 min-w-[28px] min-h-[28px] flex items-center justify-center rounded-md hover:bg-[#E8E5DF] dark:hover:bg-[#26282E] text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#2B2C2D] dark:hover:text-[#F3F4F6] cursor-pointer transition"
@@ -1055,7 +1062,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               }}
               data-testid="sidebar-contacts-btn"
               data-testid-secondary="contacts-nav-btn"
-              aria-label="Contacts"
+              aria-label={t("Contacts")}
               class="w-full h-9 min-h-[36px] flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none"
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
@@ -1064,13 +1071,13 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
                 <path d="M16 3.13a4 4 0 0 1 0 7.75" />
               </svg>
-              <span class="sr-only">Contacts</span>
+              <span class="sr-only">{t("Contacts")}</span>
             </button>
             <div
               role="tooltip"
               class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-xs font-medium shadow-md whitespace-nowrap"
             >
-              Contacts
+              {t("Contacts")}
               <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1E2025] dark:border-t-[#2A2D35]" />
             </div>
           </div>
@@ -1086,20 +1093,20 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 props.onCloseMobile?.();
               }}
               data-testid="sidebar-settings-btn"
-              aria-label="Settings"
+              aria-label={t("Settings")}
               class="w-full h-9 min-h-[36px] flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-all duration-150 cursor-pointer select-none"
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
-              <span class="sr-only">Settings</span>
+              <span class="sr-only">{t("Settings")}</span>
             </button>
             <div
               role="tooltip"
               class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-xs font-medium shadow-md whitespace-nowrap"
             >
-              Settings
+              {t("Settings")}
               <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1E2025] dark:border-t-[#2A2D35]" />
             </div>
           </div>
@@ -1112,7 +1119,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               type="button"
               onClick={() => props.onLogout?.(props.selectedMailbox?.id, false)}
               data-testid="sidebar-signout-btn"
-              aria-label="Sign out"
+              aria-label={t("Sign out")}
               class="w-full h-9 min-h-[36px] flex items-center justify-center py-1.5 px-2 rounded-full text-[#5E6063] dark:text-[#A1A1AA] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/15 transition-all duration-150 cursor-pointer select-none"
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8] flex-shrink-0" viewBox="0 0 24 24">
@@ -1120,13 +1127,13 @@ export const Sidebar: Component<SidebarProps> = (props) => {
                 <polyline points="16 17 21 12 16 7" />
                 <line x1="21" y1="12" x2="9" y2="12" />
               </svg>
-              <span class="sr-only">Sign out</span>
+              <span class="sr-only">{t("Sign out")}</span>
             </button>
             <div
               role="tooltip"
               class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:-translate-y-0.5 transition-all duration-150 ease-out z-50 px-2.5 py-1 rounded-lg bg-[#1E2025] dark:bg-[#2A2D35] text-[#F3F4F6] text-xs font-medium shadow-md whitespace-nowrap"
             >
-              Sign out
+              {t("Sign out")}
               <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1E2025] dark:border-t-[#2A2D35]" />
             </div>
           </div>

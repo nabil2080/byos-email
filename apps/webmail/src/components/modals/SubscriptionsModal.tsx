@@ -7,6 +7,7 @@ import {
   resubscribeSender,
 } from "../../subscriptions_store";
 import { UnsubscribeConfirmModal } from "./UnsubscribeConfirmModal";
+import { t } from "../../utils/i18n";
 
 export interface SubscriptionsModalProps {
   isOpen: boolean;
@@ -95,10 +96,10 @@ export const SubscriptionsModal: Component<SubscriptionsModalProps> = (props) =>
               </div>
               <div class="min-w-0">
                 <h2 id="subscriptions-modal-title" class="text-base sm:text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6] truncate">
-                  Manage Subscriptions
+                  {t("Manage Subscriptions")}
                 </h2>
                 <p class="text-xs text-[#75777B] dark:text-[#8E918F] truncate">
-                  Review commercial senders and unsubscribe with a single click.
+                  {t("Review commercial senders and unsubscribe with a single click.")}
                 </p>
               </div>
             </div>
@@ -106,8 +107,8 @@ export const SubscriptionsModal: Component<SubscriptionsModalProps> = (props) =>
             <button
               type="button"
               onClick={props.onClose}
-              class="w-8 h-8 rounded-xl hover:bg-stone-200 dark:hover:bg-[#282C34] flex items-center justify-center text-[#6E7075] dark:text-[#878A8E] hover:text-[#1A1B1E] dark:hover:text-white transition cursor-pointer flex-shrink-0"
-              title="Close (Esc)"
+              class="w-8 h-8 rounded-xl hover:bg-stone-200 dark:hover:bg-[#282C34] flex items-center justify-center text-[#6E7075] dark:text-[#878A8E] hover:text-[#1A1B1E] dark:hover:white transition cursor-pointer flex-shrink-0"
+              title={t("Close (Esc)")}
               data-testid="subscriptions-modal-close"
             >
               <svg class="w-4 h-4 stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24">
@@ -123,7 +124,7 @@ export const SubscriptionsModal: Component<SubscriptionsModalProps> = (props) =>
             <div class="relative flex-1 min-w-0">
               <input
                 type="text"
-                placeholder="Search by publication or sender..."
+                placeholder={t("Search by publication or sender...")}
                 value={searchQuery()}
                 onInput={(e) => setSearchQuery(e.currentTarget.value)}
                 class="w-full pl-9 pr-3 py-1.5 rounded-xl text-xs bg-[#FAF9F7] dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] text-[#1A1B1E] dark:text-[#F3F4F6] placeholder-[#878A8E] focus:outline-none focus:ring-1 focus:ring-[#A27561]"
@@ -146,7 +147,7 @@ export const SubscriptionsModal: Component<SubscriptionsModalProps> = (props) =>
                     : "text-[#75777B] dark:text-[#8E918F] hover:text-[#1A1B1E]"
                 }`}
               >
-                All ({totalCount()})
+                {t("All ({count})", { count: totalCount() })}
               </button>
               <button
                 type="button"
@@ -157,7 +158,7 @@ export const SubscriptionsModal: Component<SubscriptionsModalProps> = (props) =>
                     : "text-[#75777B] dark:text-[#8E918F] hover:text-[#1A1B1E]"
                 }`}
               >
-                Active ({activeCount()})
+                {t("Active ({count})", { count: activeCount() })}
               </button>
               <button
                 type="button"
@@ -168,7 +169,7 @@ export const SubscriptionsModal: Component<SubscriptionsModalProps> = (props) =>
                     : "text-[#75777B] dark:text-[#8E918F] hover:text-[#1A1B1E]"
                 }`}
               >
-                Unsubscribed ({unsubscribedCount()})
+                {t("Unsubscribed ({count})", { count: unsubscribedCount() })}
               </button>
             </div>
           </div>
@@ -183,9 +184,9 @@ export const SubscriptionsModal: Component<SubscriptionsModalProps> = (props) =>
                     <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
                     <line x1="2" y1="2" x2="22" y2="22" />
                   </svg>
-                  <p class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">No subscriptions found</p>
+                  <p class="text-sm font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">{t("No subscriptions found")}</p>
                   <p class="text-xs">
-                    {searchQuery() ? "Try clearing your search query." : "No newsletter senders detected in your mailbox."}
+                    {searchQuery() ? t("Try clearing your search query.") : t("No newsletter senders detected in your mailbox.")}
                   </p>
                 </div>
               }
@@ -215,12 +216,12 @@ export const SubscriptionsModal: Component<SubscriptionsModalProps> = (props) =>
                               when={isUnsub()}
                               fallback={
                                 <span class="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                                  Active
+                                  {t("Active")}
                                 </span>
                               }
                             >
                               <span class="text-[10px] font-semibold text-stone-600 dark:text-stone-400 bg-stone-100 dark:bg-stone-800 px-2 py-0.5 rounded-full border border-stone-200 dark:border-stone-700">
-                                Unsubscribed
+                                {t("Unsubscribed")}
                               </span>
                             </Show>
                           </div>
@@ -250,7 +251,7 @@ export const SubscriptionsModal: Component<SubscriptionsModalProps> = (props) =>
                               data-testid={`unsubscribe-btn-${sub.senderEmail}`}
                               class="px-3 py-1.5 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-900/60 transition cursor-pointer"
                             >
-                              Unsubscribe
+                              {t("Unsubscribe")}
                             </button>
                           }
                         >

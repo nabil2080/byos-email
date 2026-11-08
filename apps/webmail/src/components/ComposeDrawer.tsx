@@ -9,6 +9,7 @@ import {
   calculateAggregateProgress,
   formatBytes,
 } from "../attachment_upload_pipeline";
+import { t } from "../utils/i18n";
 
 export type DrawerMode = "minimized" | "docked" | "maximized";
 
@@ -199,8 +200,8 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
             <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
             <span class="text-xs font-semibold tracking-wide truncate">
               {props.isEditingDraft
-                ? `Edit Draft: ${props.subject || "(no subject)"}`
-                : props.subject || "New Message"}
+                ? `${t("Edit Draft")}: ${props.subject || t("(no subject)")}`
+                : props.subject || t("New Message")}
             </span>
           </div>
 
@@ -347,12 +348,9 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                     <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                     </svg>
-                    <span>Switch accounts online to change sender.</span>
+                    <span>{t("Switch accounts online to change sender.")}</span>
                   </span>
                 </Show>
-                <span class="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-[#F3ECE8] dark:bg-[#2D2522] text-[#A27561] dark:text-[#D4A38F] font-bold">
-                  Sovereign Outbound
-                </span>
               </div>
 
               {/* To Row with Autocomplete & Chips */}
@@ -360,7 +358,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                 <div class="flex-1 min-w-0">
                   <RecipientInput
                     id="composeToInput"
-                    label="To"
+                    label={t("To")}
                     placeholder="recipient@example.com"
                     value={props.to}
                     onChange={props.onToChange}
@@ -375,7 +373,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                   class="text-[11px] font-medium text-[#A27561] hover:underline pt-1.5 select-none cursor-pointer flex-shrink-0"
                   data-testid="toggle-cc-bcc-btn"
                 >
-                  {showCcBcc() ? "Hide Cc/Bcc" : "Cc/Bcc"}
+                  {showCcBcc() ? t("Hide Cc/Bcc") : t("Cc/Bcc")}
                 </button>
               </div>
 
@@ -383,7 +381,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
               <Show when={showCcBcc()}>
                 <div class="border-t border-[#E2DFD8]/60 dark:border-[#2E3138] pt-2">
                   <RecipientInput
-                    label="Cc"
+                    label={t("Cc")}
                     placeholder="cc@example.com"
                     value={props.cc || ""}
                     onChange={props.onCcChange || (() => {})}
@@ -393,7 +391,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                 </div>
                 <div class="border-t border-[#E2DFD8]/60 dark:border-[#2E3138] pt-2">
                   <RecipientInput
-                    label="Bcc"
+                    label={t("Bcc")}
                     placeholder="bcc@example.com"
                     value={props.bcc || ""}
                     onChange={props.onBccChange || (() => {})}
@@ -406,13 +404,13 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
               {/* Subject Row */}
               <div class="flex items-center gap-2 text-xs border-t border-[#E2DFD8]/60 dark:border-[#2E3138] pt-2">
                 <label for="composeSubjectInput" class="w-16 text-[#55575B] dark:text-[#A1A1AA] font-medium">
-                  Subject:
+                  {t("Subject")}:
                 </label>
                 <input
                   id="composeSubjectInput"
                   ref={subjectInputRef}
                   type="text"
-                  placeholder="Message subject"
+                  placeholder={t("Message subject")}
                   value={props.subject}
                   onInput={(e) => props.onSubjectChange(e.currentTarget.value)}
                   required
@@ -423,7 +421,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
               {/* Scheduled Send Bar (optional toggle) */}
               <Show when={showScheduleInput() || Boolean(props.scheduledTime)}>
                 <div class="flex items-center gap-2 text-xs border-t border-[#E2DFD8]/60 dark:border-[#2E3138] pt-2 bg-amber-50/70 dark:bg-amber-950/40 -mx-4 px-4 py-2">
-                  <span class="w-16 text-amber-900 dark:text-amber-200 font-medium">Schedule:</span>
+                  <span class="w-16 text-amber-900 dark:text-amber-200 font-medium">{t("Schedule")}:</span>
                   <input
                     type="datetime-local"
                     value={props.scheduledTime}
@@ -438,7 +436,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                     }}
                     class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-800 dark:hover:text-stone-200 underline ml-2 cursor-pointer"
                   >
-                    Clear & Send Immediately
+                    {t("Clear & Send Immediately")}
                   </button>
                 </div>
               </Show>
@@ -471,9 +469,9 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                     data-testid="cancel-all-uploads"
                     onClick={props.onCancelAllUploads}
                     class="text-xs font-medium text-rose-600 dark:text-rose-400 hover:text-rose-700 hover:underline px-2 py-0.5 rounded cursor-pointer"
-                    aria-label="Cancel all attachment uploads"
+                    aria-label={t("Cancel All")}
                   >
-                    Cancel All
+                    {t("Cancel All")}
                   </button>
                 </Show>
               </div>
@@ -629,7 +627,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
             <div class="flex-1 min-h-0 flex flex-col">
               <RichTextEditor
                 value={props.bodyHtml || props.body}
-                placeholder="Write your encrypted message here…"
+                placeholder={t("Write your encrypted message here…")}
                 onChange={({ html, text }) => {
                   props.onBodyChange(text);
                   props.onBodyHtmlChange?.(html);
@@ -676,10 +674,10 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                   </svg>
                   <span>
                     {isAnyUploading()
-                      ? "Uploading Attachments…"
+                      ? t("Uploading Attachments…")
                       : props.scheduledTime
-                      ? "Schedule Encrypted Send"
-                      : "Send Encrypted"}
+                      ? t("Schedule Encrypted Send")
+                      : t("Send Encrypted")}
                   </span>
                 </button>
 
@@ -700,13 +698,13 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                 <button
                   type="button"
                   onClick={() => fileInputRef?.click()}
-                  title="Attach file"
+                  title={t("Attach file")}
                   class="p-2 rounded-xl border border-[#E2DFD8] dark:border-[#2E3138] text-xs text-[#55575B] dark:text-[#A1A1AA] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] transition flex items-center gap-1 cursor-pointer"
                 >
                   <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
                     <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                   </svg>
-                  <span class="text-[11px] font-medium hidden sm:inline">Attach</span>
+                  <span class="text-[11px] font-medium hidden sm:inline">{t("Attach")}</span>
                 </button>
 
                 {/* Open Tracking Toggle Button */}
@@ -725,7 +723,7 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                     <circle cx="12" cy="12" r="3" />
                   </svg>
                   <span class="text-[11px] font-medium hidden sm:inline">
-                    {props.trackOpens ? "Tracking On" : "Track Opens"}
+                    {props.trackOpens ? t("Tracking On") : t("Track Opens")}
                   </span>
                 </button>
               </div>
@@ -737,13 +735,13 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                   onClick={props.onSaveDraft}
                   class="px-3 py-1.5 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] text-xs font-medium text-[#55575B] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] transition cursor-pointer"
                 >
-                  Save Draft
+                  {t("Save Draft")}
                 </button>
                 <button
                   type="button"
                   onClick={handleClose}
                   class="p-2 text-[#878A8E] hover:text-rose-600 transition text-xs cursor-pointer flex items-center justify-center"
-                  title="Discard"
+                  title={t("Discard")}
                 >
                   <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
                     <polyline points="3 6 5 6 21 6" />

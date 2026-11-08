@@ -41,6 +41,7 @@ import {
   wrapMailboxKeyWithPassphrase,
 } from "../../message_crypto";
 import { generateQRCodeSVG } from "../../utils/qr";
+import { t } from "../../utils/i18n";
 import {
   setMailboxKeyFor,
   getMailboxKeyFor,
@@ -1044,7 +1045,7 @@ export const SecurityTab: Component<SecurityTabProps> = (props) => {
   return (
     <div class="space-y-6 pb-12">
       <div>
-        <h3 class="text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Security & Custody</h3>
+        <h3 class="text-lg font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">{t("Security & Custody")}</h3>
         <p class="text-xs text-[#6E7075] dark:text-[#A1A1AA] mt-1">
           Password authentication, two-factor verification, key exports, and active devices.
         </p>

@@ -2,6 +2,7 @@ import { Component, createSignal, onMount, onCleanup, For, Show } from "solid-js
 import { Mailbox, MailboxSettings, updateMailboxSettings } from "../api";
 import { getFocusedInboxEnabled, setFocusedInboxEnabled } from "../focused_inbox";
 import { SUPPORTED_LANGUAGES } from "../utils/translator";
+import { t } from "../utils/i18n";
 
 export interface QuickSettingsPanelProps {
   mailbox: Mailbox | null;
@@ -196,28 +197,23 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
     });
   }
 
-  const densityList: {
-    id: "compact" | "cozy" | "comfortable";
-    label: string;
-    desc: string;
-    lineH: string;
-  }[] = [
+  const densityList = () => [
     {
-      id: "compact",
-      label: "Compact",
-      desc: "Maximum rows, slim heights",
+      id: "compact" as const,
+      label: t("Compact"),
+      desc: t("Maximum rows, slim heights"),
       lineH: "h-5 text-[11px]",
     },
     {
-      id: "cozy",
-      label: "Cozy",
-      desc: "Balanced ergonomic density",
+      id: "cozy" as const,
+      label: t("Cozy"),
+      desc: t("Balanced ergonomic density"),
       lineH: "h-7 text-xs",
     },
     {
-      id: "comfortable",
-      label: "Comfortable",
-      desc: "Relaxed spacing & airflow",
+      id: "comfortable" as const,
+      label: t("Comfortable"),
+      desc: t("Relaxed spacing & airflow"),
       lineH: "h-9 text-sm",
     },
   ];
@@ -226,7 +222,7 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
     <aside
       data-testid="quick-settings-panel"
       role="region"
-      aria-label="Appearance and UI Settings"
+      aria-label={t("Appearance & Theme")}
       class="w-full sm:w-88 md:w-92 xl:w-96 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#18191D] border-l border-[#E2DFD8] dark:border-[#2A2D35] rounded-2xl shadow-xl md:shadow-2xs overflow-hidden flex-shrink-0 animate-slide-in-right z-30 lg:z-20 transition-colors"
     >
       {/* ── Panel Header ── */}
@@ -240,10 +236,10 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
           </div>
           <div>
             <h2 class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6] tracking-tight uppercase font-mono">
-              UI Customizer
+              {t("UI Customizer")}
             </h2>
             <p class="text-[11px] text-[#6E7075] dark:text-[#A1A1AA] leading-none mt-0.5">
-              Instant layout & appearance tweaks
+              {t("Instant layout & appearance tweaks")}
             </p>
           </div>
         </div>
@@ -255,14 +251,14 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
               <svg class="w-3 h-3 stroke-current fill-none stroke-[2.5]" viewBox="0 0 24 24">
                 <polyline points="20 6 9 17 4 12" />
               </svg>
-              <span>Saved</span>
+              <span>{t("Saved")}</span>
             </span>
           </Show>
 
           <Show when={saving() && !savedSuccess()}>
             <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-stone-100 dark:bg-stone-800 text-[10px] font-mono text-stone-600 dark:text-stone-300">
               <div class="w-2.5 h-2.5 border-2 border-[#9E725F] border-t-transparent rounded-full animate-spin" />
-              <span>Saving</span>
+              <span>{t("Saving")}</span>
             </span>
           </Show>
 
@@ -271,7 +267,7 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
             type="button"
             onClick={props.onClose}
             data-testid="close-quick-settings-btn"
-            aria-label="Close UI Customizer"
+            aria-label={t("Close UI Customizer")}
             class="w-7 h-7 rounded-lg flex items-center justify-center text-[#6E7075] hover:text-[#1A1B1E] dark:text-[#A1A1AA] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#252830] transition cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 ml-1"
           >
             <svg class="w-4 h-4 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -288,9 +284,9 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
         <section class="space-y-2.5">
           <div class="flex items-center justify-between">
             <span class="text-[10px] font-bold text-[#6E7075] dark:text-[#A1A1AA] uppercase tracking-wider font-mono">
-              Palette & Theme
+              {t("Palette & Theme")}
             </span>
-            <span class="text-[10px] text-[#878A8E] font-mono capitalize">{theme()}</span>
+            <span class="text-[10px] text-[#878A8E] font-mono capitalize">{theme() === "cloud_dancer" ? t("Cloud Dancer") : t("Midnight Dark")}</span>
           </div>
 
           <div class="grid grid-cols-2 gap-2.5">
@@ -318,8 +314,8 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                 </Show>
               </div>
               <div>
-                <span class="font-bold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] block">Cloud Dancer</span>
-                <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">Signature light alabaster</span>
+                <span class="font-bold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] block">{t("Cloud Dancer")}</span>
+                <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">{t("Signature light alabaster")}</span>
               </div>
             </button>
 
@@ -347,8 +343,8 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                 </Show>
               </div>
               <div>
-                <span class="font-bold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] block">Midnight Dark</span>
-                <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">Deep carbon slate</span>
+                <span class="font-bold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] block">{t("Midnight Dark")}</span>
+                <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">{t("Deep carbon slate")}</span>
               </div>
             </button>
           </div>
@@ -358,10 +354,10 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
         <section class="space-y-2.5">
           <div class="flex items-center justify-between">
             <span class="text-[10px] font-bold text-[#6E7075] dark:text-[#A1A1AA] uppercase tracking-wider font-mono">
-              Reading Layout
+              {t("Reading Layout")}
             </span>
             <span class="text-[10px] text-[#878A8E] font-mono">
-              {layoutMode() === "split" ? "Split 380px" : "Full List"}
+              {layoutMode() === "split" ? t("Split Columns") : t("Full Width List")}
             </span>
           </div>
 
@@ -384,8 +380,8 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                   <div class="w-2/3 h-1 bg-stone-300 dark:bg-stone-600 rounded-xs" />
                 </div>
               </div>
-              <span class="font-bold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] block">Split Columns</span>
-              <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">Side-by-side reading</span>
+              <span class="font-bold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] block">{t("Split Columns")}</span>
+              <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">{t("Side-by-side reading")}</span>
             </button>
 
             {/* Full Width List Option */}
@@ -403,8 +399,8 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                 <div class="w-full h-2 bg-[#E2DFD8] dark:bg-[#2E3138] rounded-xs" />
                 <div class="w-full h-2 bg-[#E2DFD8] dark:bg-[#2E3138] rounded-xs" />
               </div>
-              <span class="font-bold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] block">Full Width List</span>
-              <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">Expansive single list</span>
+              <span class="font-bold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] block">{t("Full Width List")}</span>
+              <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">{t("Expansive single list")}</span>
             </button>
           </div>
         </section>
@@ -413,13 +409,13 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
         <section class="space-y-2.5">
           <div class="flex items-center justify-between">
             <span class="text-[10px] font-bold text-[#6E7075] dark:text-[#A1A1AA] uppercase tracking-wider font-mono">
-              Inbox Density
+              {t("Inbox Density")}
             </span>
-            <span class="text-[10px] text-[#878A8E] font-mono capitalize">{density()}</span>
+            <span class="text-[10px] text-[#878A8E] font-mono capitalize">{t(density() === "compact" ? "Compact" : density() === "comfortable" ? "Comfortable" : "Cozy")}</span>
           </div>
 
           <div class="space-y-2">
-            <For each={densityList}>
+            <For each={densityList()}>
               {(opt) => {
                 const isSelected = () => density() === opt.id;
                 return (
@@ -467,9 +463,9 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
         <section class="space-y-2.5">
           <div class="flex items-center justify-between">
             <span class="text-[10px] font-bold text-[#6E7075] dark:text-[#A1A1AA] uppercase tracking-wider font-mono">
-              Reading Text Scale
+              {t("Reading Text Scale")}
             </span>
-            <span class="text-[10px] text-[#878A8E] font-mono capitalize">{fontScale()}</span>
+            <span class="text-[10px] text-[#878A8E] font-mono capitalize">{t(fontScale() === "large" ? "Large" : fontScale() === "xlarge" ? "Extra" : "Standard")}</span>
           </div>
 
           <div class="grid grid-cols-3 gap-2">
@@ -483,7 +479,7 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                   : "border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-[#1A1B1E] dark:text-[#F3F4F6]"
               }`}
             >
-              <span class="text-xs block">Standard</span>
+              <span class="text-xs block">{t("Standard")}</span>
               <span class="text-[9px] text-[#6E7075] dark:text-[#A1A1AA]">100%</span>
             </button>
 
@@ -497,7 +493,7 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                   : "border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-[#1A1B1E] dark:text-[#F3F4F6]"
               }`}
             >
-              <span class="text-sm block">Large</span>
+              <span class="text-sm block">{t("Large")}</span>
               <span class="text-[9px] text-[#6E7075] dark:text-[#A1A1AA]">110%</span>
             </button>
 
@@ -511,7 +507,7 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                   : "border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-[#1A1B1E] dark:text-[#F3F4F6]"
               }`}
             >
-              <span class="text-base block font-medium">Extra</span>
+              <span class="text-base block font-medium">{t("Extra")}</span>
               <span class="text-[9px] text-[#6E7075] dark:text-[#A1A1AA]">120%</span>
             </button>
           </div>
@@ -521,9 +517,9 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
         <section class="p-3.5 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] shadow-2xs space-y-3">
           <div class="flex items-center justify-between">
             <div>
-              <span class="font-bold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] block">Focused Inbox</span>
+              <span class="font-bold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] block">{t("Focused Inbox")}</span>
               <p class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA] leading-tight mt-0.5">
-                Sort incoming mail into smart category tabs
+                {t("Sort incoming mail into smart category tabs")}
               </p>
             </div>
 
@@ -546,16 +542,16 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
           {/* Category Chip Previews */}
           <div class="flex flex-wrap gap-1.5 pt-1 border-t border-[#E2DFD8]/60 dark:border-[#2E3138]">
             <span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#F3ECE8] dark:bg-[#2D2522] text-[#9E725F] dark:text-[#D4A38F] border border-[#9E725F]/20">
-              📥 Primary
+              📥 {t("Primary")}
             </span>
             <span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-              🔔 Notifications
+              🔔 {t("Notifications")}
             </span>
             <span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
-              📰 Newsletters
+              📰 {t("Newsletters")}
             </span>
             <span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800">
-              👥 Social
+              👥 {t("Social")}
             </span>
           </div>
         </section>
@@ -565,10 +561,10 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
           <section class="space-y-2">
             <div class="flex items-center justify-between">
               <span class="text-[10px] font-bold text-[#6E7075] dark:text-[#A1A1AA] uppercase tracking-wider font-mono">
-                Message Grouping
+                {t("Message Grouping")}
               </span>
               <span class="text-[10px] text-[#878A8E] font-mono capitalize">
-                {props.viewMode === "threads" ? "Conversations" : "Flat List"}
+                {props.viewMode === "threads" ? t("Conversations") : t("Flat Chronological")}
               </span>
             </div>
 
@@ -583,7 +579,7 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                     : "border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-[#1A1B1E] dark:text-[#F3F4F6]"
                 }`}
               >
-                Threads (Grouped)
+                {t("Threads (Grouped)")}
               </button>
 
               <button
@@ -596,7 +592,7 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                     : "border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-[#1A1B1E] dark:text-[#F3F4F6]"
                 }`}
               >
-                Flat Chronological
+                {t("Flat Chronological")}
               </button>
             </div>
           </section>
@@ -605,7 +601,7 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
         {/* 7. Time & Regional Formats */}
         <section class="space-y-3">
           <span class="text-[10px] font-bold text-[#6E7075] dark:text-[#A1A1AA] uppercase tracking-wider font-mono block">
-            Regional & Time
+            {t("Regional & Time")}
           </span>
 
           <div class="grid grid-cols-2 gap-2">
@@ -620,7 +616,7 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                   : "border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-[#1A1B1E] dark:text-[#F3F4F6]"
               }`}
             >
-              12-Hour (1:30 PM)
+              {t("12-Hour (1:30 PM)")}
             </button>
             <button
               type="button"
@@ -632,14 +628,14 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
                   : "border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] text-[#1A1B1E] dark:text-[#F3F4F6]"
               }`}
             >
-              24-Hour (13:30)
+              {t("24-Hour (13:30)")}
             </button>
           </div>
 
           {/* Language Control */}
           <div>
             <label class="block text-[10px] text-[#6E7075] dark:text-[#A1A1AA] mb-1 font-mono">
-              Language
+              {t("Language")}
             </label>
             <select
               value={language()}
@@ -661,8 +657,8 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
         {/* 8. High Contrast Toggle */}
         <section class="p-3 bg-white dark:bg-[#1E2025] rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between">
           <div>
-            <span class="font-bold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] block">High Contrast Borders</span>
-            <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">Sharp container outlines</span>
+            <span class="font-bold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] block">{t("High Contrast Borders")}</span>
+            <span class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">{t("Sharp container outlines")}</span>
           </div>
 
           <label class="relative inline-flex items-center cursor-pointer">
@@ -686,7 +682,7 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
           data-testid="quick-reset-defaults-btn"
           class="text-[11px] text-[#6E7075] hover:text-[#1A1B1E] dark:text-[#A1A1AA] dark:hover:text-[#F3F4F6] hover:underline cursor-pointer transition font-medium"
         >
-          Reset to Defaults
+          {t("Reset to Defaults")}
         </button>
 
         <Show when={props.onOpenFullSettings}>
@@ -696,7 +692,7 @@ export const QuickSettingsPanel: Component<QuickSettingsPanelProps> = (props) =>
             data-testid="quick-open-full-settings-btn"
             class="text-[11px] text-[#9E725F] dark:text-[#D4A38F] hover:text-[#865E4D] font-semibold flex items-center gap-1 cursor-pointer"
           >
-            <span>Full Settings</span>
+            <span>{t("Full Settings")}</span>
             <span>→</span>
           </button>
         </Show>
