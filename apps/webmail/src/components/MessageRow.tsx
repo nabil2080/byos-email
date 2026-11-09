@@ -1,6 +1,6 @@
 import { Component, Show, For, createSignal } from "solid-js";
 import { DisplayMessage } from "./MessageList";
-import { MailboxLabel } from "../api";
+import { MailboxLabel, ContactItem, ConnectedAccount, OrgMember } from "../api";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { FocusedCategory } from "../focused_inbox";
 import { t } from "../utils/i18n";
@@ -26,6 +26,9 @@ interface MessageRowProps {
   onMoveToCategory?: (msg: DisplayMessage, category: FocusedCategory) => void;
   currentUserEmail?: string;
   currentUserPhotoUrl?: string | null;
+  contacts?: ContactItem[];
+  connectedAccounts?: ConnectedAccount[];
+  orgMembers?: OrgMember[];
 }
 
 export function formatAddress(raw: string): string {
@@ -45,7 +48,14 @@ export function formatAddress(raw: string): string {
   return trimmed.replace(/^["']+|["']+$/g, "").trim();
 }
 
-export function getDisplayParty(message: DisplayMessage, folder?: Folder): string {
+export function getDisplayParty(
+  message: DisplayMessage,
+  folder?: Folder,
+  contacts?: ContactItem[],
+  connectedAccounts?: ConnectedAccount[],
+  currentUserEmail?: string,
+  orgMembers?: OrgMember[]
+): string {
   const currentFolder = folder || message.folder;
   if (currentFolder === "sent" || currentFolder === "drafts" || currentFolder === "scheduled") {
     let recipients: string[] = [];
@@ -62,13 +72,97 @@ export function getDisplayParty(message: DisplayMessage, folder?: Folder): strin
     if (recipients.length === 0) {
       return currentFolder === "drafts" ? t("No recipient") : t("(no recipient)");
     }
-    const first = formatAddress(recipients[0]);
+    const formatRecipientParty = (r: string) => {
+      const formatted = formatAddress(r);
+      const match = r.match(/<([^>]+)>/);
+      const clean = (match ? match[1] : r).replace(/["']/g, "").trim().toLowerCase();
+      // 1. Organization members directory
+      if (orgMembers && orgMembers.length > 0) {
+        const mem = orgMembers.find((m) => m.email && m.email.trim().toLowerCase() === clean);
+        if (mem && mem.display_name && mem.display_name.trim()) return mem.display_name.trim();
+      }
+      if (typeof sessionStorage !== "undefined" && clean) {
+        const orgName = sessionStorage.getItem("byos_org_member_name_" + clean);
+        if (orgName && orgName.trim()) return orgName.trim();
+      }
+      // 2. Local contacts
+      if (contacts && contacts.length > 0) {
+        const found = contacts.find((c) => c.email && c.email.trim().toLowerCase() === clean);
+        if (found && found.name && found.name.trim()) return found.name.trim();
+      }
+      // 3. Connected accounts
+      if (connectedAccounts && connectedAccounts.length > 0) {
+        const acc = connectedAccounts.find((a) => a.email && a.email.trim().toLowerCase() === clean);
+        if (acc && acc.displayName && acc.displayName.trim()) return acc.displayName.trim();
+      }
+      // 4. Cached sender display name
+      if (typeof sessionStorage !== "undefined" && clean) {
+        const cached = sessionStorage.getItem("byos_sender_email_name_" + clean);
+        if (cached && cached.trim()) return cached.trim();
+      }
+      // 5. Formatted address
+      if (formatted && formatted.toLowerCase() !== clean && formatted !== r.replace(/^<|>$/g, "").trim()) {
+        return formatted;
+      }
+      return formatted || clean;
+    };
+    const first = formatRecipientParty(recipients[0]);
     return recipients.length > 1 ? `${first} +${recipients.length - 1}` : first;
   }
+
+  const formattedSender = formatAddress(message.sender);
+  const match = message.sender ? message.sender.match(/<([^>]+)>/) : null;
+  const cleanEmail = (match ? match[1] : (message.sender || "")).replace(/["']/g, "").trim().toLowerCase();
+
+  // 1. Organization members directory takes top precedence for colleagues
+  if (orgMembers && orgMembers.length > 0) {
+    const mem = orgMembers.find((m) => m.email && m.email.trim().toLowerCase() === cleanEmail);
+    if (mem && mem.display_name && mem.display_name.trim()) {
+      return mem.display_name.trim();
+    }
+  }
+  if (typeof sessionStorage !== "undefined" && cleanEmail) {
+    const orgName = sessionStorage.getItem("byos_org_member_name_" + cleanEmail);
+    if (orgName && orgName.trim()) {
+      return orgName.trim();
+    }
+  }
+
+  // 2. Explicit senderName on message
   if (message.senderName && message.senderName.trim()) {
     return message.senderName.trim();
   }
-  return formatAddress(message.sender);
+
+  // 3. Connected accounts
+  if (connectedAccounts && connectedAccounts.length > 0) {
+    const acc = connectedAccounts.find((a) => a.email && a.email.trim().toLowerCase() === cleanEmail);
+    if (acc && acc.displayName && acc.displayName.trim()) {
+      return acc.displayName.trim();
+    }
+  }
+
+  // 4. Local contacts
+  if (contacts && contacts.length > 0) {
+    const found = contacts.find((c) => c.email && c.email.trim().toLowerCase() === cleanEmail);
+    if (found && found.name && found.name.trim()) {
+      return found.name.trim();
+    }
+  }
+
+  // 5. Cached sender display name in sessionStorage
+  if (typeof sessionStorage !== "undefined" && cleanEmail) {
+    const cached = sessionStorage.getItem("byos_sender_email_name_" + cleanEmail);
+    if (cached && cached.trim()) {
+      return cached.trim();
+    }
+  }
+
+  // 6. Formatted MIME sender address
+  if (formattedSender && formattedSender.toLowerCase() !== cleanEmail && formattedSender !== (message.sender || "").replace(/^<|>$/g, "").trim()) {
+    return formattedSender;
+  }
+
+  return formattedSender || cleanEmail;
 }
 
 export function getDisplayPartyEmail(message: DisplayMessage, folder?: Folder): string {
@@ -131,7 +225,15 @@ import { formatScheduledChip } from "../utils/dateTime";
 export const MessageRow: Component<MessageRowProps> = (props) => {
   const isSent = () => (props.currentFolder || props.message.folder) === "sent";
   const isUnread = () => !props.message.read && !isSent();
-  const partyLabel = () => getDisplayParty(props.message, props.currentFolder);
+  const partyLabel = () =>
+    getDisplayParty(
+      props.message,
+      props.currentFolder,
+      props.contacts,
+      props.connectedAccounts,
+      props.currentUserEmail,
+      props.orgMembers
+    );
   const partyEmail = () => getDisplayPartyEmail(props.message, props.currentFolder);
 
   const densityPadding = () => {

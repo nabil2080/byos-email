@@ -183,6 +183,7 @@ export async function runNotesTests() {
         },
       }
     );
+    if (!created) throw new Error("createNote returned null");
     if (!created.isChecklist || created.checklistItems?.length !== 2) {
       throw new Error("Checklist note structure mismatch");
     }
@@ -239,6 +240,7 @@ export async function runNotesTests() {
 
     // 8. Version history snapshot and restore
     const noteForVer = createNote(testMailboxId, "Version Original", "Initial content");
+    if (!noteForVer) throw new Error("createNote returned null");
     saveNoteVersion(testMailboxId, noteForVer.id);
     const updatedNote = updateNote(testMailboxId, noteForVer.id, {
       title: "Version Modified",
@@ -316,6 +318,7 @@ export async function runNotesTests() {
         ],
       }
     );
+    if (!encCreated) throw new Error("createNote returned null");
 
     // Verify raw storage secrecy: title, content, and checklist items MUST be redacted/empty
     const rawStorageStr = mockStorage.getItem(getNotesStorageKey(encMailboxId));
@@ -459,6 +462,7 @@ export async function runNotesTests() {
     const noteWithDrawing = createNote(testMailboxId, "Drawing Test Note", "Check drawing", "default", false, {
       drawings: [sampleDrawingDataUrl],
     });
+    if (!noteWithDrawing) throw new Error("createNote returned null");
     const storedDrawingRef = noteWithDrawing.drawings?.[0];
     if (!storedDrawingRef || !storedDrawingRef.startsWith("idb:drawing_")) {
       throw new Error(`Expected drawing to be stored as 'idb:drawing_*', got '${storedDrawingRef}'`);
@@ -479,6 +483,7 @@ export async function runNotesTests() {
 
     // 16. Edit note modal parity (reminder adjustments and checklist mode toggling)
     const modalTestNote = createNote(testMailboxId, "Modal Parity Note", "Plain content before toggle", "default", false);
+    if (!modalTestNote) throw new Error("createNote returned null");
     const remTs = Date.now() + 7200000;
     const updatedWithRem = updateNote(testMailboxId, modalTestNote.id, {
       reminder: { timestamp: remTs, label: "Later today (2 hours)" },
@@ -510,6 +515,7 @@ export async function runNotesTests() {
     const vhNote = createNote(testMailboxId, "VH Media Note", "Testing media version history", "default", false, {
       drawings: [testDrawingData],
     });
+    if (!vhNote) throw new Error("createNote returned null");
     const origDrawingPointer = vhNote.drawings?.[0];
     if (!origDrawingPointer || !origDrawingPointer.startsWith("idb:drawing_")) {
       throw new Error(`Expected idb pointer for note drawing, got ${origDrawingPointer}`);
@@ -548,6 +554,7 @@ export async function runNotesTests() {
 
     const noteA = createNote(testMailboxId, "Note A", "Has shared media", "default", false, { drawings: [sharedMediaId] });
     const noteB = createNote(testMailboxId, "Note B", "Also has shared media", "default", false, { drawings: [sharedMediaId] });
+    if (!noteA || !noteB) throw new Error("createNote returned null");
 
     // Delete Note A forever: media must NOT be deleted because Note B still references it!
     deleteNote(testMailboxId, noteA.id);
@@ -570,6 +577,7 @@ export async function runNotesTests() {
     const lockedEncId = `mbx_locked_guard_${Date.now()}`;
     setNotesMailboxKey(testMailboxKey);
     const confidentialNote = createNote(lockedEncId, "Confidential Secret", "Top secret payload");
+    if (!confidentialNote) throw new Error("createNote returned null");
     // Switch to null key: note becomes locked
     setNotesMailboxKey(null);
     const lockedList = loadNotes(lockedEncId, null);
@@ -590,6 +598,7 @@ export async function runNotesTests() {
     // 20. Version history automatically captures revisions on text modifications
     setNotesMailboxKey(testMailboxKey);
     const vhTextNote = createNote(testMailboxId, "Initial Text Title", "Initial content");
+    if (!vhTextNote) throw new Error("createNote returned null");
     saveNoteVersion(testMailboxId, vhTextNote.id);
     updateNote(testMailboxId, vhTextNote.id, { title: "Updated Title", content: "Updated content" });
     const noteWithEditHistory = loadNotes(testMailboxId).find((n) => n.id === vhTextNote.id);

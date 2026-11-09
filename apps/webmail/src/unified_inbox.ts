@@ -2,6 +2,7 @@ import { ConnectedAccount, MessageMetadata, AttachmentItem, getAccountColor } fr
 import { getMailboxKeyFor, getXWingSeedFor } from "./session_isolation";
 import { formatMessageDate } from "./utils/dateTime";
 import { FocusedCategory } from "./focused_inbox";
+import { formatAddress } from "./components/MessageRow";
 
 export interface DisplayMessage {
   id: string;
@@ -91,6 +92,9 @@ export function mergeUnifiedMessages(
       const cachedSnippet = typeof sessionStorage !== "undefined"
         ? sessionStorage.getItem("byos_msg_snippet_" + m.id)
         : null;
+      const cachedSenderName = typeof sessionStorage !== "undefined"
+        ? sessionStorage.getItem("byos_msg_sender_name_" + m.id)
+        : null;
 
       const msgAtts = attachmentsByMsgId.get(m.id) || [];
       const uniqueTypes = Array.from(
@@ -104,6 +108,14 @@ export function mergeUnifiedMessages(
 
       const rawDate = m.received_at || m.sent_at || m.scheduled_at || new Date().toISOString();
 
+      const cleanSender = (m.sender.match(/<([^>]+)>/)?.[1] || m.sender).replace(/["']/g, "").trim().toLowerCase();
+      const orgMemberName = typeof sessionStorage !== "undefined" && cleanSender
+        ? sessionStorage.getItem("byos_org_member_name_" + cleanSender)
+        : null;
+      const emailCachedName = typeof sessionStorage !== "undefined" && cleanSender
+        ? sessionStorage.getItem("byos_sender_email_name_" + cleanSender)
+        : null;
+
       allDisplayMessages.push({
         id: m.id,
         messageId: m.id,
@@ -112,6 +124,7 @@ export function mergeUnifiedMessages(
         folderId: m.folder_id || null,
         labelIds: m.label_ids || [],
         sender: m.sender,
+        senderName: orgMemberName || cachedSenderName || emailCachedName || (formatAddress(m.sender) !== m.sender.replace(/^<|>$/g, "").trim() ? formatAddress(m.sender) : undefined),
         recipient: (m.recipients || []).join(", "),
         recipients: m.recipients || [],
         subject: cachedSubject || "(Encrypted message)",

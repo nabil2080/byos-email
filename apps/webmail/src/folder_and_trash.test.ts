@@ -11,7 +11,7 @@ export async function runFolderAndTrashTests(): Promise<{ passed: number; failed
   let passed = 0;
   let failed = 0;
 
-  const test = (name: string, fn: () => void | Promise<void>) => {
+  const test = (name: string, fn: () => void | Promise<void>): Promise<void> => {
     try {
       const res = fn();
       if (res && typeof res.then === "function") {
@@ -27,9 +27,11 @@ export async function runFolderAndTrashTests(): Promise<{ passed: number; failed
       }
       console.log(`  ✓ ${name}`);
       passed++;
+      return Promise.resolve();
     } catch (err) {
       console.error(`  ✗ ${name}:`, err);
       failed++;
+      return Promise.resolve();
     }
   };
 
@@ -217,9 +219,11 @@ export async function runFolderAndTrashTests(): Promise<{ passed: number; failed
         id: "msg-sent-1",
         version: 1,
         sender: "alice@byos.local",
+        recipient: "bob@byos.local",
         recipients: ["bob@byos.local"],
         subject: "Outbound",
         snippet: "Hi",
+        encryptedBody: "",
         folder: "sent",
         date: new Date().toISOString(),
         read: true,
@@ -229,9 +233,11 @@ export async function runFolderAndTrashTests(): Promise<{ passed: number; failed
         id: "msg-inbox-1",
         version: 1,
         sender: "charlie@byos.local",
+        recipient: "alice@byos.local",
         recipients: ["alice@byos.local"],
         subject: "Inbound",
         snippet: "Hello",
+        encryptedBody: "",
         folder: "inbox",
         date: new Date().toISOString(),
         read: true,

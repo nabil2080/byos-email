@@ -94,6 +94,9 @@ export const AccountTab: Component<AccountTabProps> = (props) => {
       if (props.currentUser) {
         props.currentUser.display_name = combined;
       }
+      if (props.mailbox) {
+        props.mailbox.display_name = combined;
+      }
       if (typeof window !== "undefined") {
         window.dispatchEvent(
           new CustomEvent("byos_display_name_updated", { detail: { displayName: combined } })

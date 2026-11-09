@@ -85,13 +85,13 @@ async function runTest() {
     });
 
     const isScheduledCalendarClock = iconsData.scheduledSvgHtml.includes('circle') && iconsData.scheduledSvgHtml.includes('rect');
-    const isSpamOctagon = iconsData.spamSvgHtml.includes('polygon');
+    const isSpamFlameOrOctagon = iconsData.spamSvgHtml.includes('M8.5 14.5') || iconsData.spamSvgHtml.includes('polygon');
 
     console.log(`  Scheduled folder SVG contains calendar-clock: ${isScheduledCalendarClock}`);
-    console.log(`  Spam folder SVG contains alert-octagon: ${isSpamOctagon}`);
+    console.log(`  Spam folder SVG contains flame or alert-octagon: ${isSpamFlameOrOctagon}`);
 
     assert(isScheduledCalendarClock, "Scheduled folder icon modernized with calendar-clock SVG");
-    assert(isSpamOctagon, "Spam folder icon modernized with alert-octagon SVG");
+    assert(isSpamFlameOrOctagon, "Spam folder icon modernized with flame SVG (or legacy alert-octagon)");
 
     const shotIcons = path.join(artifactsDir, "sent_restrictions_and_mbox_icons.png");
     await page.screenshot({ path: shotIcons });

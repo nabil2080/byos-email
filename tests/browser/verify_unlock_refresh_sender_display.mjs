@@ -117,6 +117,65 @@ async function run() {
     await page.screenshot({ path: initialScreenshotPath });
     console.log(`  Saved screenshot: ${initialScreenshotPath}`);
 
+    // Ensure Alice has Bob Stone in contacts so we can verify Real Display Name resolution
+    const vaultObj = JSON.parse(storageDumpInitial.sessionVault || "{}");
+    const activeBoxId = Object.keys(vaultObj)[0];
+    if (activeBoxId) {
+      console.log(`  Seeding / checking contact 'Bob Stone' <bob@byos.local> for mailbox ${activeBoxId}...`);
+      const contactResult = await page.evaluate(async (boxId) => {
+        try {
+          const res = await fetch(`/v1/mailboxes/${boxId}/contacts`);
+          const data = await res.json();
+          // Read session vault to get mailboxSkHex
+          const vault = JSON.parse(sessionStorage.getItem("byos_session_vault") || "{}");
+          const entry = vault[boxId];
+          if (!entry || !entry.mailboxSkHex) {
+            return { error: "No mailboxSkHex in vault" };
+          }
+
+          const wasm = await import("/src/generated/crypto-core/byos_crypto_core.js");
+          const { encryptContactEnvelope, decryptContactEnvelope } = await import("/src/message_crypto.ts");
+          const keyBytes = new Uint8Array(entry.mailboxSkHex.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
+
+          // Check if contact already exists
+          let hasBob = false;
+          for (const c of data.contacts || []) {
+            if (c.encrypted_envelope) {
+              try {
+                const dec = decryptContactEnvelope(wasm, keyBytes, boxId, c.encrypted_envelope);
+                if (dec.email && dec.email.toLowerCase() === "bob@byos.local") {
+                  hasBob = true;
+                  break;
+                }
+              } catch {}
+            }
+          }
+
+          if (!hasBob) {
+            const envelope = encryptContactEnvelope(wasm, keyBytes, boxId, {
+              name: "Bob Stone",
+              email: "bob@byos.local",
+              notes: "Team member",
+              group: "Colleagues",
+            });
+            const createRes = await fetch(`/v1/mailboxes/${boxId}/contacts`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                encrypted_envelope: envelope,
+              }),
+            });
+            return { action: "created", status: createRes.status };
+          }
+          return { action: "already_exists" };
+        } catch (e) {
+          return { error: e.message };
+        }
+      }, activeBoxId);
+      console.log("  Contact seed result:", JSON.stringify(contactResult));
+      await sleep(500);
+    }
+
     // -------------------------------------------------------------------------
     // STEP 3: Page Reload / Refresh Persistence
     // -------------------------------------------------------------------------
@@ -185,6 +244,15 @@ async function run() {
       "Sender column displays clean Name or email without angle brackets or malformed formatting",
       senderRenderClean,
       `Inspected ${senderDisplaySample.length} rows; senderRenderClean=${senderRenderClean}`
+    );
+
+    const bobRow = senderDisplaySample.find((item) => item.sender === "Bob Builder" || item.sender === "Bob Stone");
+    const displaysBob = Boolean(bobRow);
+    recordResult(
+      "VERIFY-2b",
+      "Sender column resolves bare email to real Display Name ('Bob Builder')",
+      displaysBob,
+      `displaysBob=${displaysBob}, found sender=${bobRow ? bobRow.sender : "none"}`
     );
 
     const listScreenshotPath = path.join(artifactsDir, "email_list_sender_display.png");

@@ -73,8 +73,8 @@ export const ImportTab: Component<ImportTabProps> = (props) => {
     fetchJobs();
 
     // Check for cached tokens if mailboxKey is available
-    if (props.mailboxKey) {
-      loadTokens(props.mailbox.id, props.mailboxKey, provider()).then((saved) => {
+    if (props.mailboxKey && (provider() === "outlook" || provider() === "gmail")) {
+      loadTokens(props.mailbox.id, props.mailboxKey, provider() as "outlook" | "gmail").then((saved) => {
         if (saved && saved.expiresAt > Date.now()) {
           setTokens(saved);
           setStep(3);
@@ -188,7 +188,7 @@ export const ImportTab: Component<ImportTabProps> = (props) => {
           mailboxId: props.mailbox.id,
           mailboxKey: props.mailboxKey,
           file,
-          userEmail: props.mailbox.email_address,
+          userEmail: (props.mailbox as any).email || (props.mailbox as any).email_address || `${props.mailbox.local_part}@byos.local`,
           targetFolder: mboxTargetFolder(),
           concurrency: concurrency(),
           signal: controller.signal,
@@ -474,7 +474,11 @@ export const ImportTab: Component<ImportTabProps> = (props) => {
               type="button"
               data-testid="authorize-popup-btn"
               disabled={isAuthorizing()}
-              onClick={() => handleStartAuth(provider())}
+              onClick={() => {
+                if (provider() === "outlook" || provider() === "gmail") {
+                  handleStartAuth(provider() as "outlook" | "gmail");
+                }
+              }}
               class="w-full sm:w-auto px-6 py-2.5 bg-[#A27561] hover:bg-[#8F6452] disabled:opacity-50 text-white text-xs font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-2xs"
             >
               <Show when={isAuthorizing()} fallback={<span>Authorize with {provider() === "gmail" ? "Google" : "Microsoft"}</span>}>

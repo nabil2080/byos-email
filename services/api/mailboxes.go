@@ -1113,12 +1113,13 @@ func userMailboxesHandler(w http.ResponseWriter, r *http.Request) {
 				WHEN d.name IS NOT NULL AND d.name != '' THEN m.local_part || '@' || d.name 
 				ELSE m.local_part 
 			END AS email,
-			COALESCE(NULLIF(mu.display_name, ''), NULLIF(u.display_name, ''), m.local_part) AS display_name,
+			COALESCE(NULLIF(ms.display_name, ''), NULLIF(mu.display_name, ''), NULLIF(u.display_name, ''), m.local_part) AS display_name,
 			m.org_id::text,
 			m.is_active
 		FROM mailboxes m
 		JOIN users u ON u.id = $1
 		LEFT JOIN users mu ON mu.id = m.user_id
+		LEFT JOIN mailbox_settings ms ON ms.mailbox_id = m.id
 		LEFT JOIN domains d ON d.id = m.domain_id
 		WHERE (m.user_id = $1 OR (m.org_id = u.org_id AND u.role IN ('admin', 'owner')))
 		ORDER BY email ASC, m.id::text ASC

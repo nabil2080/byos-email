@@ -1,4 +1,4 @@
-import { Component, createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
+import { Component, createSignal, createEffect, createMemo, onMount, onCleanup, For, Show } from "solid-js";
 import { AppProviders, useAuth, useModal, useMail } from "./context";
 export { AppProviders, useAuth, useModal, useMail } from "./context";
 import {
@@ -93,6 +93,8 @@ import {
   ThreadSummary,
   toggleMessageStar,
   fetchMaskedAliases,
+  OrgMember,
+  fetchOrganizationMembers,
   MaskedAliasItem,
   getProfilePhoto,
   deleteProfilePhoto,
@@ -106,6 +108,7 @@ import {
   finalizeHistoricalKeyReactivation,
   rollbackHistoricalKeyReactivation,
   unlinkAccount,
+  linkAccount,
 } from "./api";
 import { executeStagedHistoricalKeyReactivation } from "./historical_key_reactivation";
 import { generateRsvpReplyIcs, generateIcs, verifyInvitationAuthenticity, type ParsedIcsEvent } from "./utils/calendarIcs";
@@ -290,6 +293,7 @@ interface DisplayMessage {
   id: string;
   messageSeq?: number;
   version?: number;
+  isDraft?: boolean;
   folder: Folder;
   folderId?: string | null;
   labelIds?: string[];
@@ -868,13 +872,31 @@ const AppContent: Component = () => {
     const handleDisplayNameUpdate = (e: any) => {
       const newName = e?.detail?.displayName;
       if (typeof newName === "string") {
+        const trimmed = newName.trim();
         const cur = currentUser();
         if (cur) {
-          auth.setCurrentUser({ ...cur, display_name: newName });
+          auth.setCurrentUser({ ...cur, display_name: trimmed });
+          if (cur.email) {
+            sessionStorage.setItem("byos_sender_email_name_" + cur.email.toLowerCase(), trimmed);
+            sessionStorage.setItem("byos_org_member_name_" + cur.email.toLowerCase(), trimmed);
+          }
         }
-        setConnectedAccounts((prev) =>
-          prev.map((a) =>
-            a.email?.toLowerCase() === cur?.email?.toLowerCase() ? { ...a, displayName: newName } : a
+        setSelectedMailbox((prev) => (prev ? { ...prev, display_name: trimmed } : prev));
+        setConnectedAccounts((prev) => {
+          const updated = prev.map((a) =>
+            a.email?.toLowerCase() === cur?.email?.toLowerCase() ? { ...a, displayName: trimmed } : a
+          );
+          if (typeof sessionStorage !== "undefined") {
+            sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+          }
+          persistAccountListForDisplay(updated);
+          return updated;
+        });
+        setOrgMembers((prev) =>
+          prev.map((m) =>
+            cur?.email && m.email.toLowerCase() === cur.email.toLowerCase()
+              ? { ...m, display_name: trimmed }
+              : m
           )
         );
       }
@@ -2245,8 +2267,48 @@ const AppContent: Component = () => {
   const [exceptionalConfirmPassword, setExceptionalConfirmPassword] = createSignal("");
   const [exceptionalSuccessMsg, setExceptionalSuccessMsg] = createSignal<string | null>(null);
 
+  async function decryptContactsList(
+    items: ContactItem[],
+    mailboxId: string,
+    key?: Uint8Array | null
+  ): Promise<ContactItem[]> {
+    if (!key || items.length === 0) return items;
+    try {
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      return items.map((c) => {
+        if (c.encrypted_envelope) {
+          try {
+            const dec = decryptContactEnvelope(wasm, key, mailboxId, c.encrypted_envelope);
+            return {
+              ...c,
+              name: dec.name || c.name,
+              email: dec.email || c.email,
+              notes: dec.notes || c.notes,
+              group_name: dec.group || dec.group_name || c.group_name,
+            };
+          } catch {
+            return c;
+          }
+        }
+        return c;
+      });
+    } catch {
+      return items;
+    }
+  }
+
   // Contacts manager state.
   const [contacts, setContacts] = createSignal<ContactItem[]>([]);
+  const [orgMembers, setOrgMembers] = createSignal<OrgMember[]>([]);
+
+  createEffect(() => {
+    const key = mailboxKey();
+    const box = selectedMailbox();
+    const list = contacts();
+    if (key && box && list.some((c) => c.encrypted_envelope && (!c.name || !c.email))) {
+      decryptContactsList(list, box.id, key).then(setContacts);
+    }
+  });
 
   // Multi-Mailbox state & toast notifications
   interface ToastItem {
@@ -2493,8 +2555,21 @@ const AppContent: Component = () => {
     boxId: string,
     signingSeed: Uint8Array,
     xwingSeed: Uint8Array,
+    token?: string,
   ): Promise<void> {
     try {
+      // Security guard: Ensure we only publish keys for the active session user's mailbox,
+      // or if an explicit auth token is provided for this mailbox.
+      // We must NEVER publish keys for another mailbox using the active user's session cookie.
+      const authedUser = currentUser();
+      if (!token && authedUser) {
+        const belongsToUser = mailboxes().some((m) => m.id === boxId) || authedUser.mailbox_id === boxId || authedUser.id === boxId;
+        if (!belongsToUser) {
+          console.warn("Skipping publishKeysOnce: box does not belong to active session user");
+          return;
+        }
+      }
+
       const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
       const signingPubHex = wasm.wasm_signing_public_key_from_seed(
         bytesToHex(signingSeed),
@@ -2508,7 +2583,7 @@ const AppContent: Component = () => {
       await publishMailboxKeys({
         ed25519_signing_public_key: hexToBase64(signingPubHex),
         xwing_public_key: hexToBase64(xwingPubHex),
-      });
+      }, token, boxId);
       sessionStorage.setItem(key, "1");
     } catch (e) {
       console.warn("Key publication failed:", e);
@@ -2522,6 +2597,7 @@ const AppContent: Component = () => {
     // A login as user A can never inherit user B's stale session tokens or keys.
     if (password) {
       rotateSessionGeneration();
+      setActiveMailboxContext(null);
     }
 
     setCurrentUser(user);
@@ -2593,7 +2669,7 @@ const AppContent: Component = () => {
           setXwingSeed(unwrapped.xwingSeed);
 
           if (unwrapped.signingSeed && unwrapped.xwingSeed) {
-            publishKeysOnce(targetBox.id, unwrapped.signingSeed, unwrapped.xwingSeed);
+            publishKeysOnce(targetBox.id, unwrapped.signingSeed, unwrapped.xwingSeed, sessionToken);
           }
 
           if (rememberDevice() && (user.id || (user as any).user_id)) {
@@ -2644,7 +2720,7 @@ const AppContent: Component = () => {
             }
 
             if (memSigning && memXwing) {
-              publishKeysOnce(targetBox.id, memSigning, memXwing);
+              publishKeysOnce(targetBox.id, memSigning, memXwing, sessionToken);
             }
           } catch {
             sessionStorage.removeItem("byos_mailbox_sk_" + targetBox.id);
@@ -2760,8 +2836,8 @@ const AppContent: Component = () => {
       const switchedXWingSeed = getXWingSeedFor(account.id);
       setXwingSeed(switchedXWingSeed);
 
-      if (switchedSigningSeed && switchedXWingSeed) {
-        publishKeysOnce(account.id, switchedSigningSeed, switchedXWingSeed);
+      if (switchedSigningSeed && switchedXWingSeed && account.sessionToken) {
+        publishKeysOnce(account.id, switchedSigningSeed, switchedXWingSeed, account.sessionToken);
       }
 
       // 3. Update active mailbox and user in reactive store
@@ -2810,7 +2886,7 @@ const AppContent: Component = () => {
         setCurrentPage(1);
       }
       // 6. Reload messages, drafts, folders
-      await loadMailboxData(account.id);
+      await loadMailboxData(account.id, account.sessionToken);
       refreshSignature(account.id);
       if (account.profile_photo_ref) {
         loadDecryptedProfilePhoto(targetKey, account.sessionToken);
@@ -3324,6 +3400,7 @@ const AppContent: Component = () => {
       setLoginError("Enter your email and password.");
       return;
     }
+    setActiveMailboxContext(null);
     setLoginBusy(true);
     setLoginError(null);
     try {
@@ -3700,6 +3777,7 @@ const AppContent: Component = () => {
       setLoginError("Passkeys are not supported in this browser.");
       return;
     }
+    setActiveMailboxContext(null);
     setLoginBusy(true);
     setLoginError(null);
     try {
@@ -3798,6 +3876,7 @@ const AppContent: Component = () => {
       setLoginError("Enter your password.");
       return;
     }
+    setActiveMailboxContext(null);
     setLoginBusy(true);
     setLoginError(null);
     try {
@@ -3869,6 +3948,7 @@ const AppContent: Component = () => {
       setLoginError("Enter your 24-word recovery phrase.");
       return;
     }
+    setActiveMailboxContext(null);
     setLoginBusy(true);
     setLoginError(null);
     try {
@@ -3951,6 +4031,7 @@ const AppContent: Component = () => {
       } catch {}
       setConnectedAccounts([]);
       // Rule 3: comprehensive sweep of all byos_* sensitive keys.
+      setActiveMailboxContext(null);
       clearAllSensitiveSessionKeys();
       clearPersistentSession().catch(() => {});
       clearOfflineCache().catch(() => {});
@@ -4022,21 +4103,42 @@ const AppContent: Component = () => {
     }
   }
 
-  async function loadMailboxData(mailboxId: string) {
+  async function loadMailboxData(mailboxId: string, tokenOverride?: string) {
     try {
       setStorageErrorBanner(null);
+      const targetAcc = connectedAccounts().find((a) => a.id === mailboxId);
+      const token = tokenOverride || targetAcc?.sessionToken || undefined;
       const [draftsList, messageList, scheduledList, folderList, labelList, attachmentList, threadList] = await Promise.all([
-        fetchDrafts(mailboxId),
-        fetchMessages(mailboxId),
-        fetchMessages(mailboxId, "scheduled"),
-        fetchFolders(mailboxId),
-        fetchLabels(mailboxId),
-        fetchAttachments(mailboxId),
-        fetchThreads(mailboxId),
+        fetchDrafts(mailboxId, token),
+        fetchMessages(mailboxId, undefined, token),
+        fetchMessages(mailboxId, "scheduled", token),
+        fetchFolders(mailboxId, token),
+        fetchLabels(mailboxId, token),
+        fetchAttachments(mailboxId, token),
+        fetchThreads(mailboxId, undefined, token),
       ]);
 
       cacheInboxMessages(mailboxId, messageList).catch(() => {});
-      fetchContacts(mailboxId).then(setContacts).catch(() => {});
+      fetchContacts(mailboxId, undefined, undefined, token)
+        .then(async (rawContacts) => {
+          const key = getMailboxKeyFor(mailboxId) || mailboxKey();
+          const decrypted = await decryptContactsList(rawContacts, mailboxId, key);
+          setContacts(decrypted);
+        })
+        .catch(() => {});
+      fetchOrganizationMembers()
+        .then((members) => {
+          setOrgMembers(members);
+          for (const m of members) {
+            if (m.email && m.display_name && m.display_name.trim()) {
+              const cleanEmail = m.email.trim().toLowerCase();
+              const cleanName = m.display_name.trim();
+              sessionStorage.setItem("byos_org_member_name_" + cleanEmail, cleanName);
+              sessionStorage.setItem("byos_sender_email_name_" + cleanEmail, cleanName);
+            }
+          }
+        })
+        .catch(() => {});
 
       function deduplicateByName<T extends { id: string; name: string }>(items: T[]): T[] {
         const seen = new Set<string>();
@@ -4084,6 +4186,7 @@ const AppContent: Component = () => {
         const isScheduled = m.folder === "scheduled";
         const cachedSubject = sessionStorage.getItem("byos_msg_subject_" + m.id);
         const cachedSnippet = sessionStorage.getItem("byos_msg_snippet_" + m.id);
+        const cachedSenderName = sessionStorage.getItem("byos_msg_sender_name_" + m.id);
         const msgAtts = attachmentsByMsgId.get(m.id) || [];
         const uniqueTypes = Array.from(
           new Set(
@@ -4110,7 +4213,7 @@ const AppContent: Component = () => {
             subject = "(Scheduled message)";
             snippet = `Scheduled send to ${m.recipients.join(", ")}`;
             // Asynchronously fetch from customer storage and decrypt preview
-            fetchScheduledDraft(mailboxId, m.id)
+            fetchScheduledDraft(mailboxId, m.id, token)
               .then(async (resp) => {
                 try {
                   const text = decryptDraftEnvelope(wasm, key, mailboxId, resp.encrypted_envelope);
@@ -4166,6 +4269,14 @@ const AppContent: Component = () => {
               }
         );
 
+        const cleanSender = extractSenderEmail(m.sender, "");
+        const orgMemberName = typeof sessionStorage !== "undefined" && cleanSender
+          ? sessionStorage.getItem("byos_org_member_name_" + cleanSender.toLowerCase())
+          : null;
+        const emailCachedName = typeof sessionStorage !== "undefined" && cleanSender
+          ? sessionStorage.getItem("byos_sender_email_name_" + cleanSender.toLowerCase())
+          : null;
+
         return {
           id: m.id,
           messageId: m.id, // For attachment filtering
@@ -4174,7 +4285,7 @@ const AppContent: Component = () => {
           folderId: m.folder_id || null,
           labelIds: m.label_ids || [],
           sender: m.sender,
-          senderName: formatAddress(m.sender) !== m.sender.replace(/^<|>$/g, "").trim() ? formatAddress(m.sender) : undefined,
+          senderName: orgMemberName || cachedSenderName || emailCachedName || (formatAddress(m.sender) !== m.sender.replace(/^<|>$/g, "").trim() ? formatAddress(m.sender) : undefined),
           recipient: (m.recipients || []).join(", "),
           recipients: m.recipients || [],
           subject,
@@ -4262,11 +4373,12 @@ const AppContent: Component = () => {
             if (m.folder === "scheduled") continue;
             if (
               sessionStorage.getItem("byos_msg_subject_" + m.id) &&
-              sessionStorage.getItem("byos_msg_category_" + m.id)
+              sessionStorage.getItem("byos_msg_category_" + m.id) &&
+              sessionStorage.getItem("byos_msg_sender_name_" + m.id)
             )
               continue;
             try {
-              const body = await fetchMessageBody(mailboxId, m.id);
+              const body = await fetchMessageBody(mailboxId, m.id, token);
               saveCachedMessageBody(mailboxId, m.id, body).catch(() => {});
               let plaintext = "";
               const mKeys = getMailboxKeyForMessage(m);
@@ -4319,11 +4431,20 @@ const AppContent: Component = () => {
                 const fromHeader = parsedHeaders["from"];
                 const parsedSenderName = fromHeader ? formatAddress(fromHeader) : undefined;
                 const cleanFromEmail = fromHeader ? extractSenderEmail(fromHeader, "") : "";
+                const existingOrgName = typeof sessionStorage !== "undefined" && cleanFromEmail
+                  ? sessionStorage.getItem("byos_org_member_name_" + cleanFromEmail.toLowerCase())
+                  : null;
                 const validSenderName = parsedSenderName && parsedSenderName !== cleanFromEmail ? parsedSenderName : undefined;
 
                 sessionStorage.setItem("byos_msg_subject_" + m.id, sub);
                 sessionStorage.setItem("byos_msg_snippet_" + m.id, snip);
                 sessionStorage.setItem("byos_msg_category_" + m.id, cat);
+                if (validSenderName) {
+                  sessionStorage.setItem("byos_msg_sender_name_" + m.id, validSenderName);
+                  if (cleanFromEmail && !existingOrgName) {
+                    sessionStorage.setItem("byos_sender_email_name_" + cleanFromEmail.toLowerCase(), validSenderName);
+                  }
+                }
 
                 setMessages((prev) =>
                   prev.map((msg) =>
@@ -4333,7 +4454,7 @@ const AppContent: Component = () => {
                           subject: sub,
                           snippet: snip,
                           category: cat,
-                          senderName: validSenderName || msg.senderName,
+                          senderName: existingOrgName || validSenderName || msg.senderName,
                         }
                       : msg
                   )
@@ -4347,8 +4468,39 @@ const AppContent: Component = () => {
       }
 
       // Load appearance preferences and regional settings
-      fetchMailboxSettings(mailboxId)
+      fetchMailboxSettings(mailboxId, token)
         .then(async (s) => {
+          if (s.display_name && s.display_name.trim()) {
+            const trimmedName = s.display_name.trim();
+            const cur = currentUser();
+            if (cur) {
+              auth.setCurrentUser({ ...cur, display_name: trimmedName });
+              if (cur.email) {
+                sessionStorage.setItem("byos_sender_email_name_" + cur.email.toLowerCase(), trimmedName);
+                sessionStorage.setItem("byos_org_member_name_" + cur.email.toLowerCase(), trimmedName);
+              }
+            }
+            setSelectedMailbox((prev) => (prev ? { ...prev, display_name: trimmedName } : prev));
+            setConnectedAccounts((prev) => {
+              const updated = prev.map((a) =>
+                a.id === mailboxId || (cur?.email && a.email?.toLowerCase() === cur.email.toLowerCase())
+                  ? { ...a, displayName: trimmedName }
+                  : a
+              );
+              if (typeof sessionStorage !== "undefined") {
+                sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+              }
+              persistAccountListForDisplay(updated);
+              return updated;
+            });
+            setOrgMembers((prev) =>
+              prev.map((m) =>
+                cur?.email && m.email.toLowerCase() === cur.email.toLowerCase()
+                  ? { ...m, display_name: trimmedName }
+                  : m
+              )
+            );
+          }
           if (s.density) {
             setDensity(s.density);
             if (typeof window !== "undefined") localStorage.setItem("byos_density", s.density);
@@ -4400,7 +4552,7 @@ const AppContent: Component = () => {
         .catch(() => {});
 
       // Fetch tracking list for sent message read receipts
-      fetchTrackingList(mailboxId)
+      fetchTrackingList(mailboxId, token)
         .then((trackList) => {
           if (!trackList || trackList.length === 0) return;
           const trackBySubjAndTo = new Map<string, MessageTrackingItem>();
@@ -4582,7 +4734,8 @@ const AppContent: Component = () => {
           for (const m of visible) {
             if (
               sessionStorage.getItem("byos_msg_subject_" + m.id) &&
-              sessionStorage.getItem("byos_msg_category_" + m.id)
+              sessionStorage.getItem("byos_msg_category_" + m.id) &&
+              sessionStorage.getItem("byos_msg_sender_name_" + m.id)
             )
               continue;
             const accId = m.mailboxId;
@@ -4650,6 +4803,12 @@ const AppContent: Component = () => {
                 sessionStorage.setItem("byos_msg_subject_" + m.id, sub);
                 sessionStorage.setItem("byos_msg_snippet_" + m.id, snip);
                 sessionStorage.setItem("byos_msg_category_" + m.id, cat);
+                if (validSenderName) {
+                  sessionStorage.setItem("byos_msg_sender_name_" + m.id, validSenderName);
+                  if (cleanFromEmail) {
+                    sessionStorage.setItem("byos_sender_email_name_" + cleanFromEmail.toLowerCase(), validSenderName);
+                  }
+                }
 
                 setMessages((prev) =>
                   prev.map((msg) =>
@@ -5449,6 +5608,9 @@ const AppContent: Component = () => {
         const loginRes = await login(target.email, primaryPass);
         wrappedSk = loginRes.wrapped_sk_user || "";
         sessionToken = loginRes.token || "";
+        try {
+          await linkAccount(target.email, primaryPass);
+        } catch {}
       } catch (loginErr) {
         if (currentUser()?.email.toLowerCase() === target.email.toLowerCase() && currentUser()?.wrapped_sk_user) {
           wrappedSk = currentUser()!.wrapped_sk_user!;
@@ -6189,6 +6351,34 @@ const AppContent: Component = () => {
     setComposeOpen(true);
   }
 
+  const composeRecentSenders = createMemo(() => {
+    const list: Array<{ name?: string; email: string }> = [];
+    const seen = new Set<string>();
+    for (const m of messages()) {
+      if (m.sender) {
+        const match = m.sender.match(/<([^>]+)>/);
+        const email = (match ? match[1] : m.sender).replace(/["']/g, "").trim().toLowerCase();
+        if (email && email.includes("@") && !seen.has(email)) {
+          seen.add(email);
+          const name = m.senderName || (formatAddress(m.sender) !== email ? formatAddress(m.sender) : undefined);
+          list.push({ name, email });
+        }
+      }
+      if (m.recipients && Array.isArray(m.recipients)) {
+        for (const r of m.recipients) {
+          const match = r.match(/<([^>]+)>/);
+          const email = (match ? match[1] : r).replace(/["']/g, "").trim().toLowerCase();
+          if (email && email.includes("@") && !seen.has(email)) {
+            seen.add(email);
+            const name = formatAddress(r) !== email ? formatAddress(r) : undefined;
+            list.push({ name, email });
+          }
+        }
+      }
+    }
+    return list;
+  });
+
   function prepareSendPayload(): PendingSend | null {
     const boxId = composeAccountId() || selectedMailbox()?.id;
     if (!boxId) return null;
@@ -6316,6 +6506,10 @@ const AppContent: Component = () => {
       }
 
       const senderFrom = payload.fromAlias || matchingAccount?.email || (currentUser()?.email ? currentUser()!.email : (box?.local_part ? `${box.local_part}@byos.local` : undefined));
+      const senderDisplayName = matchingAccount?.displayName || currentUser()?.display_name;
+      const formattedFrom = senderDisplayName && !payload.fromAlias && senderFrom
+        ? `"${senderDisplayName.replace(/"/g, '')}" <${senderFrom}>`
+        : senderFrom;
       const mimeMessage = buildMimeString({
         to,
         cc,
@@ -6325,8 +6519,8 @@ const AppContent: Component = () => {
         htmlBody,
         trackingToken,
         body: signedBody,
-        from: senderFrom,
-        replyTo: senderFrom,
+        from: formattedFrom,
+        replyTo: formattedFrom,
       });
 
       if (isOffline()) {
@@ -8921,6 +9115,9 @@ const AppContent: Component = () => {
               messages={paginatedMessages()}
               selectedMessage={selectedMsg()}
               selectedIds={selectedIds()}
+              contacts={contacts()}
+              connectedAccounts={connectedAccounts()}
+              orgMembers={orgMembers()}
               isSplit={isTabletOrMobile() || Boolean(selectedMsg())}
               onSelectMessage={openMessage}
               onToggleCheck={handleToggleCheck}
@@ -8993,6 +9190,9 @@ const AppContent: Component = () => {
               <AppErrorBoundary name="Reading Pane">
                 <ReadingPane
                 message={selectedMsg()!}
+                contacts={contacts()}
+                connectedAccounts={connectedAccounts()}
+                orgMembers={orgMembers()}
                 isDecrypting={isDecrypting()}
                 decryptedContent={decryptedContent()}
                 calendarIcs={decryptedCalendarIcs()}
@@ -9161,6 +9361,8 @@ const AppContent: Component = () => {
         errorMessage={errorMessage()}
         isEditingDraft={Boolean(editingDraft())}
         contacts={contacts()}
+        orgMembers={orgMembers()}
+        recentSenders={composeRecentSenders()}
         mailboxId={selectedMailbox()?.id}
         connectedAccounts={connectedAccounts()}
         selectedAccountId={composeAccountId() || selectedMailbox()?.id}

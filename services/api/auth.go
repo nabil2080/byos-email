@@ -839,9 +839,10 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 	if activeMailboxID != "" {
 		callerHash, _ := getCallerTokenHash(r)
 		if !isMailboxAuthorizedForSession(callerHash, userID, activeMailboxID, conn, ctx) {
-			http.Error(w, "not authorized for active mailbox", http.StatusForbidden)
-			return
+			activeMailboxID = ""
 		}
+	}
+	if activeMailboxID != "" {
 		_ = conn.QueryRow(ctx, `
 			SELECT id::text, local_part, mode, wrapped_sk_user, previous_wrapped_sk_user, profile_photo_ref
 			FROM mailboxes
@@ -853,6 +854,14 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 			WHERE user_id=$1 AND is_active=true AND status='active'
 			ORDER BY created_at DESC
 			LIMIT 1`, userID).Scan(&mailboxID, &mailboxLocalPart, &mailboxMode, &wrappedSkUser, &previousWrappedSkUser, &profilePhotoRef)
+	}
+
+	if mailboxID != "" {
+		var mbDisplayName string
+		_ = conn.QueryRow(ctx, `SELECT COALESCE(display_name, '') FROM mailbox_settings WHERE mailbox_id=$1`, mailboxID).Scan(&mbDisplayName)
+		if mbDisplayName != "" {
+			displayName = mbDisplayName
+		}
 	}
 
 	wrappedSkUserStr := ""

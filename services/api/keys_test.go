@@ -703,3 +703,73 @@ func TestKeyHistorySuccess(t *testing.T) {
 		t.Errorf("expected rotated_at to be nil in V1")
 	}
 }
+
+// 18. PUT /v1/keys/me with X-BYOS-Active-Mailbox for non-owned mailbox returns 403 Forbidden
+func TestKeyPublishActiveMailboxHeaderProtection(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	mux := setupKeyDirectoryTestMux()
+
+	tag1 := "owner1"
+	_, mailboxID1, token1 := createTestDirectoryMailbox(t, db, tag1, "user1-"+uuid.New().String()[:6], "byos.local", "active", nil, nil, 1, 1)
+
+	tag2 := "owner2"
+	_, mailboxID2, _ := createTestDirectoryMailbox(t, db, tag2, "user2-"+uuid.New().String()[:6], "byos.local", "active", nil, nil, 1, 1)
+
+	_, _, xwingB64, ed25519B64 := createTestKeypairBytes()
+	bodyJSON, _ := json.Marshal(map[string]string{
+		"xwing_public_key":           xwingB64,
+		"ed25519_signing_public_key": ed25519B64,
+	})
+
+	// User 1 attempts to publish keys for User 2's mailbox via X-BYOS-Active-Mailbox -> 403 Forbidden
+	reqForbidden := httptest.NewRequest("PUT", "/v1/keys/me", bytes.NewReader(bodyJSON))
+	reqForbidden.Header.Set("Authorization", "Bearer "+token1)
+	reqForbidden.Header.Set("X-BYOS-Active-Mailbox", mailboxID2)
+	reqForbidden.Header.Set("Content-Type", "application/json")
+	rrForbidden := httptest.NewRecorder()
+	mux.ServeHTTP(rrForbidden, reqForbidden)
+
+	if rrForbidden.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden when publishing keys for non-owned mailbox, got %d: %s", rrForbidden.Code, rrForbidden.Body.String())
+	}
+
+	// User 1 publishes keys for User 1's own mailbox via X-BYOS-Active-Mailbox -> 200 OK
+	reqAllowed := httptest.NewRequest("PUT", "/v1/keys/me", bytes.NewReader(bodyJSON))
+	reqAllowed.Header.Set("Authorization", "Bearer "+token1)
+	reqAllowed.Header.Set("X-BYOS-Active-Mailbox", mailboxID1)
+	reqAllowed.Header.Set("Content-Type", "application/json")
+	rrAllowed := httptest.NewRecorder()
+	mux.ServeHTTP(rrAllowed, reqAllowed)
+
+	if rrAllowed.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK when publishing keys for own mailbox, got %d: %s", rrAllowed.Code, rrAllowed.Body.String())
+	}
+
+	// Malformed UUID in X-BYOS-Active-Mailbox -> 400 Bad Request
+	reqMalformed := httptest.NewRequest("PUT", "/v1/keys/me", bytes.NewReader(bodyJSON))
+	reqMalformed.Header.Set("Authorization", "Bearer "+token1)
+	reqMalformed.Header.Set("X-BYOS-Active-Mailbox", "not-a-valid-uuid")
+	reqMalformed.Header.Set("Content-Type", "application/json")
+	rrMalformed := httptest.NewRecorder()
+	mux.ServeHTTP(rrMalformed, reqMalformed)
+
+	if rrMalformed.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for malformed mailbox UUID, got %d: %s", rrMalformed.Code, rrMalformed.Body.String())
+	}
+
+	// Disabled mailbox -> 410 Gone
+	tagDisabled := "disabled-box"
+	_, mailboxIDDisabled, tokenDisabled := createTestDirectoryMailbox(t, db, tagDisabled, "userdis-"+uuid.New().String()[:6], "byos.local", "disabled", nil, nil, 1, 1)
+
+	reqDisabled := httptest.NewRequest("PUT", "/v1/keys/me", bytes.NewReader(bodyJSON))
+	reqDisabled.Header.Set("Authorization", "Bearer "+tokenDisabled)
+	reqDisabled.Header.Set("X-BYOS-Active-Mailbox", mailboxIDDisabled)
+	reqDisabled.Header.Set("Content-Type", "application/json")
+	rrDisabled := httptest.NewRecorder()
+	mux.ServeHTTP(rrDisabled, reqDisabled)
+
+	if rrDisabled.Code != http.StatusGone {
+		t.Fatalf("expected 410 Gone when publishing keys for disabled mailbox, got %d: %s", rrDisabled.Code, rrDisabled.Body.String())
+	}
+}

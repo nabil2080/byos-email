@@ -3,7 +3,7 @@ import { Folder } from "./Sidebar";
 import { InboxToolbar, SelectionFilter, SortOrder } from "./InboxToolbar";
 import { MessageRow } from "./MessageRow";
 import { ThreadRow } from "./ThreadRow";
-import { MailboxFolder, MailboxLabel, ThreadSummary } from "../api";
+import { MailboxFolder, MailboxLabel, ThreadSummary, ContactItem, ConnectedAccount, OrgMember } from "../api";
 import { FocusedCategory } from "../focused_inbox";
 import { AppModule } from "./TopFixedBar";
 import { t } from "../utils/i18n";
@@ -110,6 +110,9 @@ interface MessageListProps {
   onLoadMore?: () => void;
   currentUserEmail?: string;
   currentUserPhotoUrl?: string | null;
+  contacts?: ContactItem[];
+  connectedAccounts?: ConnectedAccount[];
+  orgMembers?: OrgMember[];
   activeModule?: AppModule;
   onSwitchModule?: (mod: AppModule) => void;
   onOpenContacts?: () => void;
@@ -401,6 +404,9 @@ export const MessageList: Component<MessageListProps> = (props) => {
                   onMoveToCategory={props.onMoveToCategory}
                   currentUserEmail={props.currentUserEmail}
                   currentUserPhotoUrl={props.currentUserPhotoUrl}
+                  contacts={props.contacts}
+                  connectedAccounts={props.connectedAccounts}
+                  orgMembers={props.orgMembers}
                 />
               )}
             </For>
@@ -436,6 +442,10 @@ export const MessageList: Component<MessageListProps> = (props) => {
                   targetMessage={matchingMsg()}
                   latestMessage={latestMsg()}
                   labels={props.labels}
+                  contacts={props.contacts}
+                  connectedAccounts={props.connectedAccounts}
+                  currentUserEmail={props.currentUserEmail}
+                  orgMembers={props.orgMembers}
                   onToggleStarred={props.onToggleStarred}
                   onToggleRead={props.onToggleRead}
                   onArchive={props.onArchive}

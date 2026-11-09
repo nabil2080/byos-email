@@ -1,15 +1,114 @@
 import { Component, Show, For, createEffect } from "solid-js";
-import { ThreadSummary, MailboxLabel } from "../api";
+import { ThreadSummary, MailboxLabel, ContactItem, ConnectedAccount, OrgMember } from "../api";
 import { DisplayMessage } from "./MessageList";
 import { formatSmartDate, formatAddress, getDisplayParty, getDisplayPartyEmail } from "./MessageRow";
 import { Folder } from "./Sidebar";
 import { t } from "../utils/i18n";
 
-export function formatParticipants(parts: string[]): string {
+export function formatParticipants(
+  parts: string[],
+  contacts?: ContactItem[],
+  connectedAccounts?: ConnectedAccount[],
+  currentUserEmail?: string,
+  latestMessage?: DisplayMessage,
+  orgMembers?: OrgMember[]
+): string {
   if (!parts || parts.length === 0) return t("(no sender)");
-  if (parts.length === 1) return formatAddress(parts[0]);
-  if (parts.length === 2) return `${formatAddress(parts[0])}, ${formatAddress(parts[1])}`;
-  return `${formatAddress(parts[0])}, ${formatAddress(parts[1])} +${parts.length - 2}`;
+
+  const resolvePart = (raw: string) => {
+    const formatted = formatAddress(raw);
+    const match = raw.match(/<([^>]+)>/);
+    const clean = (match ? match[1] : raw).replace(/["']/g, "").trim().toLowerCase();
+
+    // 1. Organization members directory (authoritative for internal organization users)
+    if (orgMembers && orgMembers.length > 0) {
+      const member = orgMembers.find((m) => m.email && m.email.trim().toLowerCase() === clean);
+      if (member && member.display_name && member.display_name.trim()) {
+        return { name: member.display_name.trim(), email: clean };
+      }
+    }
+    if (typeof sessionStorage !== "undefined" && clean) {
+      const orgName = sessionStorage.getItem("byos_org_member_name_" + clean);
+      if (orgName && orgName.trim()) {
+        return { name: orgName.trim(), email: clean };
+      }
+    }
+    // 2. Connected accounts
+    if (connectedAccounts && connectedAccounts.length > 0) {
+      const acc = connectedAccounts.find((a) => a.email && a.email.trim().toLowerCase() === clean);
+      if (acc && acc.displayName && acc.displayName.trim()) return { name: acc.displayName.trim(), email: clean };
+    }
+    // 3. Local contacts
+    if (contacts && contacts.length > 0) {
+      const found = contacts.find((c) => c.email && c.email.trim().toLowerCase() === clean);
+      if (found && found.name && found.name.trim()) return { name: found.name.trim(), email: clean };
+    }
+    // 4. Explicit senderName on latestMessage if matching this email
+    if (latestMessage && latestMessage.senderName && latestMessage.senderName.trim()) {
+      const msgMatch = latestMessage.sender ? latestMessage.sender.match(/<([^>]+)>/) : null;
+      const msgClean = (msgMatch ? msgMatch[1] : (latestMessage.sender || "")).replace(/["']/g, "").trim().toLowerCase();
+      if (msgClean === clean) {
+        return { name: latestMessage.senderName.trim(), email: clean };
+      }
+    }
+    // 5. Cached sender display name by email address from previous decrypted messages
+    if (typeof sessionStorage !== "undefined") {
+      const cached = sessionStorage.getItem("byos_sender_email_name_" + clean);
+      if (cached && cached.trim()) return { name: cached.trim(), email: clean };
+    }
+    // 6. Formatted MIME display name
+    if (formatted && formatted.toLowerCase() !== clean && formatted !== raw.replace(/^<|>$/g, "").trim()) {
+      return { name: formatted, email: clean };
+    }
+    return { name: formatted || clean, email: clean };
+  };
+
+  // Resolve all parts and deduplicate by email address first, then by resolved display name
+  const resolvedMap = new Map<string, string>(); // email -> best resolved display name
+  const seenOrder: string[] = [];
+
+  for (const raw of parts) {
+    if (!raw || !raw.trim()) continue;
+    const { name, email } = resolvePart(raw);
+    if (!email) continue;
+    const existing = resolvedMap.get(email);
+    if (!existing) {
+      resolvedMap.set(email, name);
+      seenOrder.push(email);
+    } else {
+      // If the existing name is just the bare email, and the new name is a richer display name, upgrade!
+      if (
+        (existing.toLowerCase() === email || existing === raw.replace(/^<|>$/g, "").trim()) &&
+        name.toLowerCase() !== email
+      ) {
+        resolvedMap.set(email, name);
+      }
+    }
+  }
+
+  const resolvedList: { name: string; email: string }[] = [];
+  const seenNames = new Set<string>();
+
+  for (const email of seenOrder) {
+    const name = resolvedMap.get(email) || email;
+    const lowerName = name.toLowerCase();
+    if (seenNames.has(lowerName)) continue;
+    seenNames.add(lowerName);
+    resolvedList.push({ name, email });
+  }
+
+  if (resolvedList.length === 0) return t("(no sender)");
+
+  const currentClean = currentUserEmail?.trim().toLowerCase();
+  let displayNames = resolvedList.map((r) => r.name);
+  if (currentClean && resolvedList.length > 1) {
+    // If current user is among participants, place them as "me"
+    displayNames = resolvedList.map((r) => (r.email === currentClean ? t("me") : r.name));
+  }
+
+  if (displayNames.length === 1) return displayNames[0];
+  if (displayNames.length === 2) return `${displayNames[0]}, ${displayNames[1]}`;
+  return `${displayNames[0]}, ${displayNames[1]} +${displayNames.length - 2}`;
 }
 
 export function getUnreadClass(unreadCount: number): string {
@@ -38,6 +137,10 @@ export interface ThreadRowProps {
   onArchive?: (msg: DisplayMessage) => void;
   onTrash?: (msg: DisplayMessage) => void;
   onDeleteForever?: (msg: DisplayMessage) => void;
+  contacts?: ContactItem[];
+  connectedAccounts?: ConnectedAccount[];
+  currentUserEmail?: string;
+  orgMembers?: OrgMember[];
 }
 
 export const ThreadRow: Component<ThreadRowProps> = (props) => {
@@ -65,7 +168,15 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
     return props.isSplit ? "py-2.5 px-3.5" : "py-2 px-3.5";
   };
 
-  const participantLabel = () => formatParticipants(props.thread.participants);
+  const participantLabel = () =>
+    formatParticipants(
+      props.thread.participants,
+      props.contacts,
+      props.connectedAccounts,
+      props.currentUserEmail,
+      threadLatestMsg(),
+      props.orgMembers
+    );
 
   const threadLatestMsg = () => props.latestMessage || props.targetMessage;
 
@@ -74,17 +185,30 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
       if (props.thread.recipients && props.thread.recipients.length > 0) {
         return getDisplayParty(
           { recipients: props.thread.recipients } as DisplayMessage,
-          "sent"
+          "sent",
+          props.contacts,
+          props.connectedAccounts,
+          props.currentUserEmail,
+          props.orgMembers
         );
       }
       const msg = threadLatestMsg();
       if (msg) {
-        return getDisplayParty(msg, "sent");
+        return getDisplayParty(msg, "sent", props.contacts, props.connectedAccounts, props.currentUserEmail, props.orgMembers);
       }
     }
+    if (props.thread.participants && props.thread.participants.length > 0) {
+      return participantLabel();
+    }
     const msg = threadLatestMsg();
-    if (msg?.senderName && msg.senderName.trim()) {
-      return msg.senderName.trim();
+    if (msg) {
+      return getDisplayParty(
+        msg,
+        props.currentFolder || (props.thread.folder as Folder),
+        props.contacts,
+        props.connectedAccounts,
+        props.currentUserEmail
+      );
     }
     return participantLabel();
   };

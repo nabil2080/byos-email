@@ -182,7 +182,7 @@ export async function runNotesSyncTests(): Promise<{ passed: number; failed: num
       if (!key) return new Response("Missing key", { status: 400 });
       const data = mockStorage.retrieve(key);
       if (!data) return new Response("Not found", { status: 404 });
-      return new Response(data, {
+      return new Response(data as any, {
         status: 200,
         headers: { "Content-Type": "application/octet-stream" },
       });

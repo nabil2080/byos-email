@@ -1,7 +1,7 @@
 import { Component, createSignal, createEffect, Show, For, onMount, onCleanup } from "solid-js";
 import DOMPurify from "dompurify";
 import { DisplayMessage } from "./MessageList";
-import { AttachmentItem, MailboxFolder, MailboxLabel, downloadAndDecryptAttachment } from "../api";
+import { AttachmentItem, MailboxFolder, MailboxLabel, downloadAndDecryptAttachment, ContactItem, ConnectedAccount, OrgMember } from "../api";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { SnoozeMenu } from "./SnoozeMenu";
 import { formatScheduledBanner } from "../utils/dateTime";
@@ -50,6 +50,9 @@ export interface ReadingPaneProps {
   hasHistoricalLocked?: boolean;
   onUnlockAccount?: (account: { email: string; mailboxId: string; isHistorical?: boolean }) => void;
   senderVerification?: { verified: boolean; error?: string } | null;
+  contacts?: ContactItem[];
+  connectedAccounts?: ConnectedAccount[];
+  orgMembers?: OrgMember[];
   attachments: AttachmentItem[];
   downloadingAttachmentId: string | null;
   onDownloadAttachment: (att: AttachmentItem) => void;
@@ -435,8 +438,41 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
   };
 
   const senderDisplayName = () => {
-    const match = props.message.sender.match(/^([^<]+)/);
-    return match ? match[1].trim() : props.message.sender;
+    const clean = senderEmail().trim().toLowerCase();
+    // 1. Organization members directory takes top precedence for colleagues
+    if (props.orgMembers && props.orgMembers.length > 0) {
+      const mem = props.orgMembers.find((item) => item.email && item.email.trim().toLowerCase() === clean);
+      if (mem && mem.display_name && mem.display_name.trim()) return mem.display_name.trim();
+    }
+    if (typeof sessionStorage !== "undefined" && clean) {
+      const orgName = sessionStorage.getItem("byos_org_member_name_" + clean);
+      if (orgName && orgName.trim()) return orgName.trim();
+    }
+    // 2. Explicit senderName on message
+    if (props.message.senderName && props.message.senderName.trim()) {
+      return props.message.senderName.trim();
+    }
+    // 3. Connected accounts
+    if (props.connectedAccounts && props.connectedAccounts.length > 0) {
+      const a = props.connectedAccounts.find((item) => item.email && item.email.trim().toLowerCase() === clean);
+      if (a && a.displayName && a.displayName.trim()) return a.displayName.trim();
+    }
+    // 4. Local contacts
+    if (props.contacts && props.contacts.length > 0) {
+      const c = props.contacts.find((item) => item.email && item.email.trim().toLowerCase() === clean);
+      if (c && c.name && c.name.trim()) return c.name.trim();
+    }
+    // 5. Cached sender display name
+    if (typeof sessionStorage !== "undefined" && clean) {
+      const cached = sessionStorage.getItem("byos_sender_email_name_" + clean);
+      if (cached && cached.trim()) return cached.trim();
+    }
+    const match = props.message.sender.match(/^["']?([^"'<]+)["']?\s*<[^>]+>/);
+    if (match && match[1].trim()) {
+      return match[1].trim();
+    }
+    const prefixMatch = props.message.sender.match(/^([^<]+)/);
+    return prefixMatch ? prefixMatch[1].trim() : props.message.sender;
   };
 
   const recipientSummary = () => {
@@ -770,9 +806,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                     class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
                   >
                     <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                      <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2" />
-                      <line x1="12" y1="8" x2="12" y2="12" />
-                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                      <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z" />
                     </svg>
                     <span>{t("Report spam")}</span>
                   </button>
@@ -977,9 +1011,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                     class="w-full text-left px-3.5 py-1.5 min-h-[32px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
                   >
                     <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                      <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2" />
-                      <line x1="12" y1="8" x2="12" y2="12" />
-                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                      <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z" />
                     </svg>
                     <span>Spam</span>
                   </button>
@@ -1213,7 +1245,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                   <Show when={props.message.folder === "sent"}>
                     <span class="text-[#878A8E] dark:text-[#8A8E94] font-normal mr-0.5">from</span>
                   </Show>
-                  <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] truncate">
+                  <span data-testid="reading-pane-sender-name" class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] truncate">
                     {senderDisplayName()}
                   </span>
                   <span class="text-[#6E7075] dark:text-[#878A8E] font-mono text-[11px] truncate">

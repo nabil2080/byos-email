@@ -30,6 +30,7 @@ export interface Mailbox {
   local_part: string;
   domain_id: string;
   mode: string;
+  display_name?: string;
   public_key?: string;
   wrapped_sk_user?: string;
   previous_wrapped_sk_user?: string;
@@ -420,7 +421,7 @@ export async function apiRequest<T>(path: string, init?: RequestInit, token?: st
     const mbxMatch = path.match(/^\/v1\/mailboxes\/([0-9a-fA-F-]+)/);
     if (mbxMatch && mbxMatch[1]) {
       authHeaders["X-BYOS-Active-Mailbox"] = mbxMatch[1];
-    } else if (currentActiveMailboxId) {
+    } else if (currentActiveMailboxId && !path.startsWith("/v1/auth/")) {
       authHeaders["X-BYOS-Active-Mailbox"] = currentActiveMailboxId;
     }
   }
@@ -486,6 +487,7 @@ export interface LoginResponse {
 /** Password login. The session travels in an HttpOnly cookie set by the
     server; the password itself is never stored — cleared after the request. */
 export async function login(email: string, password: string): Promise<LoginResponse> {
+  setActiveMailboxContext(null);
   return apiRequest<LoginResponse>("/v1/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
@@ -495,6 +497,7 @@ export async function login(email: string, password: string): Promise<LoginRespo
 /** Server-side session revocation. Callers must still clear local state even
     when this throws (network failure must not keep a signed-in UI alive). */
 export async function logout(): Promise<void> {
+  setActiveMailboxContext(null);
   await apiRequest<void>("/v1/auth/logout", { method: "POST" });
 }
 
@@ -518,36 +521,38 @@ export async function fetchMailboxes(orgId: string): Promise<Mailbox[]> {
   return res.mailboxes || [];
 }
 
-export async function fetchDrafts(mailboxId: string): Promise<DraftMessage[]> {
-  const res = await apiRequest<{ drafts: DraftMessage[] }>(`/v1/mailboxes/${mailboxId}/drafts`);
+export async function fetchDrafts(mailboxId: string, token?: string): Promise<DraftMessage[]> {
+  const res = await apiRequest<{ drafts: DraftMessage[] }>(`/v1/mailboxes/${mailboxId}/drafts`, undefined, token);
   return res.drafts || [];
 }
 
 export async function createDraft(
   mailboxId: string,
-  payload: { subject: string; recipient: string; encrypted_envelope: string }
+  payload: { subject: string; recipient: string; encrypted_envelope: string },
+  token?: string
 ): Promise<DraftMessage> {
   return apiRequest<DraftMessage>(`/v1/mailboxes/${mailboxId}/drafts`, {
     method: "POST",
     body: JSON.stringify(payload),
-  });
+  }, token);
 }
 
-export async function deleteDraft(mailboxId: string, draftId: string): Promise<void> {
+export async function deleteDraft(mailboxId: string, draftId: string, token?: string): Promise<void> {
   return apiRequest<void>(`/v1/mailboxes/${mailboxId}/drafts/${draftId}`, {
     method: "DELETE",
-  });
+  }, token);
 }
 
 export async function updateDraft(
   mailboxId: string,
   draftId: string,
-  payload: { subject: string; recipient: string; encrypted_envelope: string; version: number }
+  payload: { subject: string; recipient: string; encrypted_envelope: string; version: number },
+  token?: string
 ): Promise<DraftMessage> {
   return apiRequest<DraftMessage>(`/v1/mailboxes/${mailboxId}/drafts/${draftId}`, {
     method: "PUT",
     body: JSON.stringify(payload),
-  });
+  }, token);
 }
 
 export interface ContactItem {
@@ -566,14 +571,15 @@ export interface ContactItem {
 export async function fetchContacts(
   mailboxId: string,
   search?: string,
-  group?: string
+  group?: string,
+  token?: string
 ): Promise<ContactItem[]> {
   const params = new URLSearchParams();
   if (search) params.append("search", search);
   if (group) params.append("group", group);
   const qs = params.toString();
   const url = `/v1/mailboxes/${mailboxId}/contacts${qs ? `?${qs}` : ""}`;
-  const res = await apiRequest<{ contacts: ContactItem[] }>(url);
+  const res = await apiRequest<{ contacts: ContactItem[] }>(url, undefined, token);
   return res.contacts || [];
 }
 
@@ -657,8 +663,8 @@ export interface MailboxLabel {
   unread_count?: number;
 }
 
-export async function fetchFolders(mailboxId: string): Promise<MailboxFolder[]> {
-  const res = await apiRequest<{ folders: MailboxFolder[] }>(`/v1/mailboxes/${mailboxId}/folders`);
+export async function fetchFolders(mailboxId: string, token?: string): Promise<MailboxFolder[]> {
+  const res = await apiRequest<{ folders: MailboxFolder[] }>(`/v1/mailboxes/${mailboxId}/folders`, undefined, token);
   return res.folders || [];
 }
 
@@ -689,8 +695,8 @@ export async function deleteFolder(mailboxId: string, folderId: string): Promise
   });
 }
 
-export async function fetchLabels(mailboxId: string): Promise<MailboxLabel[]> {
-  const res = await apiRequest<{ labels: MailboxLabel[] }>(`/v1/mailboxes/${mailboxId}/labels`);
+export async function fetchLabels(mailboxId: string, token?: string): Promise<MailboxLabel[]> {
+  const res = await apiRequest<{ labels: MailboxLabel[] }>(`/v1/mailboxes/${mailboxId}/labels`, undefined, token);
   return res.labels || [];
 }
 
@@ -1170,23 +1176,42 @@ export interface MailboxAlias {
   created_at?: string;
 }
 
-export async function fetchMailboxSettings(mailboxId: string): Promise<MailboxSettings> {
-  return apiRequest<MailboxSettings>(`/v1/mailboxes/${mailboxId}/settings`);
+export async function fetchMailboxSettings(mailboxId: string, token?: string): Promise<MailboxSettings> {
+  return apiRequest<MailboxSettings>(`/v1/mailboxes/${mailboxId}/settings`, undefined, token);
 }
 
 export async function updateMailboxSettings(
   mailboxId: string,
-  settings: Partial<MailboxSettings>
+  settings: Partial<MailboxSettings>,
+  token?: string
 ): Promise<MailboxSettings> {
   return apiRequest<MailboxSettings>(`/v1/mailboxes/${mailboxId}/settings`, {
     method: "PUT",
     body: JSON.stringify(settings),
-  });
+  }, token);
 }
 
 export async function fetchActiveSessions(): Promise<SessionItem[]> {
   const res = await apiRequest<{ sessions: SessionItem[] }>("/v1/auth/sessions");
   return res.sessions || [];
+}
+
+export interface OrgMember {
+  id: string;
+  email: string;
+  display_name: string;
+  role: "owner" | "admin" | "member";
+  is_active: boolean;
+  has_mailbox?: boolean;
+}
+
+export async function fetchOrganizationMembers(): Promise<OrgMember[]> {
+  try {
+    const res = await apiRequest<{ members: OrgMember[] }>("/v1/auth/organization-members");
+    return res.members || [];
+  } catch {
+    return [];
+  }
 }
 
 export async function revokeOtherSessions(): Promise<{ success: boolean; revoked_count: number }> {
@@ -1231,9 +1256,9 @@ export async function revokeBridgeCredential(mailboxId: string, credentialId: st
   });
 }
 
-export async function fetchMailboxAliases(mailboxId: string): Promise<MailboxAlias[]> {
+export async function fetchMailboxAliases(mailboxId: string, token?: string): Promise<MailboxAlias[]> {
   try {
-    const res = await apiRequest<{ aliases: MailboxAlias[] }>(`/v1/mailboxes/${mailboxId}/aliases`);
+    const res = await apiRequest<{ aliases: MailboxAlias[] }>(`/v1/mailboxes/${mailboxId}/aliases`, undefined, token);
     return res.aliases || [];
   } catch (err) {
     console.warn("fetchMailboxAliases error:", err);
@@ -1384,8 +1409,8 @@ export interface MailRule {
   updated_at: string;
 }
 
-export async function fetchRules(mailboxId: string): Promise<MailRule[]> {
-  return apiRequest<MailRule[]>(`/v1/mailboxes/${mailboxId}/rules`);
+export async function fetchRules(mailboxId: string, token?: string): Promise<MailRule[]> {
+  return apiRequest<MailRule[]>(`/v1/mailboxes/${mailboxId}/rules`, undefined, token);
 }
 
 export async function createRule(
@@ -1428,8 +1453,8 @@ export interface FilterItem {
   updated_at: string;
 }
 
-export async function fetchFilters(mailboxId: string): Promise<FilterItem[]> {
-  return apiRequest<FilterItem[]>(`/v1/mailboxes/${mailboxId}/filters`);
+export async function fetchFilters(mailboxId: string, token?: string): Promise<FilterItem[]> {
+  return apiRequest<FilterItem[]>(`/v1/mailboxes/${mailboxId}/filters`, undefined, token);
 }
 
 export async function createFilter(
@@ -1477,11 +1502,11 @@ export interface AddressRuleItem {
   created_at: string;
 }
 
-export async function fetchAddressRules(mailboxId: string, listType?: string): Promise<AddressRuleItem[]> {
+export async function fetchAddressRules(mailboxId: string, listType?: string, token?: string): Promise<AddressRuleItem[]> {
   const url = listType
     ? `/v1/mailboxes/${mailboxId}/address-rules?list_type=${encodeURIComponent(listType)}`
     : `/v1/mailboxes/${mailboxId}/address-rules`;
-  return apiRequest<AddressRuleItem[]>(url);
+  return apiRequest<AddressRuleItem[]>(url, undefined, token);
 }
 
 export async function createAddressRule(
@@ -1526,8 +1551,8 @@ export async function registerTracking(
   });
 }
 
-export async function fetchTrackingList(mailboxId: string): Promise<MessageTrackingItem[]> {
-  return apiRequest<MessageTrackingItem[]>(`/v1/mailboxes/${mailboxId}/tracking`);
+export async function fetchTrackingList(mailboxId: string, token?: string): Promise<MessageTrackingItem[]> {
+  return apiRequest<MessageTrackingItem[]>(`/v1/mailboxes/${mailboxId}/tracking`, undefined, token);
 }
 
 export async function fetchTrackingItem(mailboxId: string, token: string): Promise<MessageTrackingItem> {
@@ -1816,14 +1841,23 @@ export async function lookupMailboxKeys(
   );
 }
 
-export async function publishMailboxKeys(payload: {
-  xwing_public_key?: string;
-  ed25519_signing_public_key: string;
-}): Promise<{ status: string; key_epoch: number; signing_key_epoch: number }> {
+export async function publishMailboxKeys(
+  payload: {
+    xwing_public_key?: string;
+    ed25519_signing_public_key: string;
+  },
+  token?: string,
+  mailboxId?: string,
+): Promise<{ status: string; key_epoch: number; signing_key_epoch: number }> {
+  const headers: Record<string, string> = {};
+  if (mailboxId) {
+    headers["X-BYOS-Active-Mailbox"] = mailboxId;
+  }
   return apiRequest("/v1/keys/me", {
     method: "PUT",
+    headers,
     body: JSON.stringify(payload),
-  });
+  }, token);
 }
 
 export interface InternalSendRequest {
@@ -2363,7 +2397,7 @@ export async function apiRequestWithHeaders<T>(
     const mbxMatch = path.match(/^\/v1\/mailboxes\/([0-9a-fA-F-]+)/);
     if (mbxMatch && mbxMatch[1]) {
       authHeaders["X-BYOS-Active-Mailbox"] = mbxMatch[1];
-    } else if (currentActiveMailboxId) {
+    } else if (currentActiveMailboxId && !path.startsWith("/v1/auth/")) {
       authHeaders["X-BYOS-Active-Mailbox"] = currentActiveMailboxId;
     }
   }

@@ -1,17 +1,26 @@
 import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
-import { ContactItem, fetchContacts } from "../api";
+import { ContactItem, OrgMember, ConnectedAccount, fetchContacts } from "../api";
+import {
+  RecipientChip,
+  RecipientSuggestion,
+  buildRecipientCandidates,
+  filterAndSortRecipientSuggestions,
+  resolveRecipientChip,
+} from "../recipient_suggestions";
 
-export interface RecipientChip {
-  name?: string;
-  email: string;
-}
+export type { RecipientChip, RecipientSuggestion };
+export { buildRecipientCandidates, filterAndSortRecipientSuggestions, resolveRecipientChip };
 
-interface RecipientInputProps {
+export interface RecipientInputProps {
   id?: string;
   label: string;
   value: string; // Comma-separated string of emails
   onChange: (value: string) => void;
   contacts?: ContactItem[];
+  orgMembers?: OrgMember[];
+  connectedAccounts?: ConnectedAccount[];
+  recentSenders?: Array<{ name?: string; email: string }>;
+  senderAddress?: string;
   mailboxId?: string;
   placeholder?: string;
   required?: boolean;
@@ -20,13 +29,23 @@ interface RecipientInputProps {
 export function RecipientInput(props: RecipientInputProps) {
   const [chips, setChips] = createSignal<RecipientChip[]>([]);
   const [inputValue, setInputValue] = createSignal("");
-  const [suggestions, setSuggestions] = createSignal<ContactItem[]>([]);
+  const [suggestions, setSuggestions] = createSignal<RecipientSuggestion[]>([]);
   const [highlightedIndex, setHighlightedIndex] = createSignal(0);
   const [isOpen, setIsOpen] = createSignal(false);
   let inputRef: HTMLInputElement | undefined;
   let debounceTimer: any = null;
 
   let lastEmittedValue = "";
+
+  function getAllCandidates(): RecipientSuggestion[] {
+    return buildRecipientCandidates({
+      orgMembers: props.orgMembers,
+      contacts: props.contacts,
+      connectedAccounts: props.connectedAccounts,
+      recentSenders: props.recentSenders,
+      senderAddress: props.senderAddress,
+    });
+  }
 
   // Initialize chips from incoming comma-separated value
   createEffect(() => {
@@ -39,14 +58,8 @@ export function RecipientInput(props: RecipientInputProps) {
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
 
-    const knownContacts = props.contacts || [];
-    const newChips: RecipientChip[] = parsedEmails.map((email) => {
-      const found = knownContacts.find((c) => c.email?.toLowerCase() === email.toLowerCase());
-      return {
-        name: found?.name,
-        email,
-      };
-    });
+    const candidates = getAllCandidates();
+    const newChips: RecipientChip[] = parsedEmails.map((email) => resolveRecipientChip(email, candidates));
     setChips(newChips);
     setInputValue("");
   });
@@ -72,7 +85,15 @@ export function RecipientInput(props: RecipientInputProps) {
       return;
     }
 
-    const nextChips = [...chips(), { name: name?.trim() || undefined, email: trimmedEmail }];
+    // Resolve name from known candidates if not explicitly provided
+    let resolvedName = name?.trim();
+    if (!resolvedName) {
+      const candidates = getAllCandidates();
+      const match = candidates.find((c) => c.email.toLowerCase() === trimmedEmail.toLowerCase());
+      resolvedName = match?.name;
+    }
+
+    const nextChips = [...chips(), { name: resolvedName || undefined, email: trimmedEmail }];
     setInputValue("");
     setIsOpen(false);
     emitChange(nextChips);
@@ -105,37 +126,54 @@ export function RecipientInput(props: RecipientInputProps) {
 
     if (debounceTimer) clearTimeout(debounceTimer);
     const query = val.trim();
-    if (query.length < 2) {
+    // Gmail-style minimum character threshold: 3 characters or an explicit '@' domain search
+    if (query.length < 3 && !query.startsWith("@")) {
       setSuggestions([]);
       setIsOpen(false);
       return;
     }
 
     debounceTimer = setTimeout(async () => {
-      const lower = query.toLowerCase();
-      // First check local contacts signal if available
-      let matches: ContactItem[] = [];
-      if (props.contacts && props.contacts.length > 0) {
-        matches = props.contacts.filter((c) => {
-          const matchName = c.name?.toLowerCase().includes(lower);
-          const matchEmail = c.email?.toLowerCase().includes(lower);
-          return matchName || matchEmail;
-        });
-      }
+      const candidates = getAllCandidates();
+      const selectedEmails = new Set(chips().map((c) => c.email.toLowerCase()));
 
-      // If local had fewer than 5 or was empty, query backend if mailboxId provided
-      if (matches.length === 0 && props.mailboxId) {
+      let matches = filterAndSortRecipientSuggestions({
+        query,
+        candidates,
+        selectedEmails,
+        minQueryLength: 3,
+      });
+
+      // If local had fewer than 5 or was empty, query backend contacts if mailboxId provided
+      if (matches.length < 5 && props.mailboxId) {
         try {
-          matches = await fetchContacts(props.mailboxId, query);
+          const backendContacts = await fetchContacts(props.mailboxId, query);
+          for (const bc of backendContacts) {
+            if (!bc.email) continue;
+            const clean = bc.email.trim().toLowerCase();
+            if (!selectedEmails.has(clean) && !matches.some((m) => m.email.toLowerCase() === clean)) {
+              matches.push({
+                name: bc.name?.trim() || undefined,
+                email: bc.email.trim(),
+                source: "contact",
+                group_name: bc.group_name || undefined,
+              });
+            }
+          }
+          matches = filterAndSortRecipientSuggestions({
+            query,
+            candidates: matches,
+            selectedEmails,
+          });
         } catch {
           // ignore error
         }
       }
 
-      setSuggestions(matches);
+      setSuggestions(matches.slice(0, 8));
       setHighlightedIndex(0);
       setIsOpen(matches.length > 0);
-    }, 150);
+    }, 100);
   }
 
   function handleKeyDown(e: KeyboardEvent) {
@@ -150,7 +188,7 @@ export function RecipientInput(props: RecipientInputProps) {
         setHighlightedIndex((prev) => (prev - 1 + suggestions().length) % suggestions().length);
         return;
       }
-      if (e.key === "Enter") {
+      if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
         const selected = suggestions()[highlightedIndex()];
         if (selected && selected.email) {
@@ -180,8 +218,10 @@ export function RecipientInput(props: RecipientInputProps) {
   }
 
   function handleBlur() {
-    commitCurrentInput();
-    setIsOpen(false);
+    setTimeout(() => {
+      commitCurrentInput();
+      setIsOpen(false);
+    }, 150);
   }
 
   onCleanup(() => {
@@ -249,6 +289,11 @@ export function RecipientInput(props: RecipientInputProps) {
             placeholder={chips().length === 0 ? props.placeholder || "recipient@example.com" : ""}
             value={inputValue()}
             onInput={(e) => handleInputChange(e.currentTarget.value)}
+            onFocus={() => {
+              if (inputValue().trim()) {
+                handleInputChange(inputValue());
+              }
+            }}
             onKeyDown={handleKeyDown}
             onBlur={handleBlur}
             required={props.required && chips().length === 0}
@@ -260,13 +305,13 @@ export function RecipientInput(props: RecipientInputProps) {
           {/* Autocomplete Dropdown */}
           <Show when={isOpen() && suggestions().length > 0}>
             <ul
-              class="absolute left-0 top-full mt-1 w-72 max-h-60 overflow-y-auto bg-white dark:bg-[#1E2025] rounded-xl shadow-xl border border-[#E2DFD8] dark:border-[#2E3138] py-1 z-50 font-sans"
+              class="absolute left-0 top-full mt-1 w-80 max-h-64 overflow-y-auto bg-white dark:bg-[#1E2025] rounded-xl shadow-xl border border-[#E2DFD8] dark:border-[#2E3138] py-1.5 z-50 font-sans"
               role="listbox"
               data-testid="autocomplete-dropdown"
             >
               <For each={suggestions()}>
-                {(contact, index) => {
-                  const initial = (contact.name ? contact.name[0] : (contact.email || "U")[0]).toUpperCase();
+                {(item, index) => {
+                  const initial = (item.name ? item.name[0] : (item.email || "U")[0]).toUpperCase();
                   const isHighlighted = index() === highlightedIndex();
                   return (
                     <li
@@ -274,9 +319,10 @@ export function RecipientInput(props: RecipientInputProps) {
                       aria-selected={isHighlighted}
                       onMouseDown={(e) => {
                         e.preventDefault(); // Prevent input blur before selection
-                        if (contact.email) {
-                          addChip(contact.name, contact.email);
-                        }
+                        addChip(item.name, item.email);
+                      }}
+                      onClick={() => {
+                        addChip(item.name, item.email);
                       }}
                       onMouseEnter={() => setHighlightedIndex(index())}
                       class={`px-3 py-2 flex items-center gap-2.5 cursor-pointer text-xs transition ${
@@ -285,21 +331,35 @@ export function RecipientInput(props: RecipientInputProps) {
                           : "text-[#2B2C2D] dark:text-[#F3F4F6] hover:bg-[#F8F7F4] dark:hover:bg-[#26282E]"
                       }`}
                       data-testid="autocomplete-item"
+                      data-email={item.email}
+                      data-name={item.name || ""}
                     >
-                      <div class="w-6 h-6 rounded-full bg-[#A27561]/20 text-[#A27561] dark:text-[#E5B5A1] flex items-center justify-center font-bold text-xs flex-shrink-0">
+                      <div class="w-7 h-7 rounded-full bg-[#A27561]/20 text-[#A27561] dark:text-[#E5B5A1] flex items-center justify-center font-bold text-xs flex-shrink-0">
                         {initial}
                       </div>
                       <div class="min-w-0 flex-1">
-                        <div class="font-medium truncate">{contact.name || contact.email}</div>
-                        <Show when={contact.name && contact.email}>
+                        <div class="font-medium truncate flex items-center gap-1.5">
+                          <span>{item.name || item.email}</span>
+                        </div>
+                        <Show when={item.name}>
                           <div class="text-[11px] text-[#6F7173] dark:text-[#878A8E] truncate">
-                            {contact.email}
+                            {item.email}
                           </div>
                         </Show>
                       </div>
-                      <Show when={contact.group_name}>
-                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 flex-shrink-0">
-                          {contact.group_name}
+                      <Show when={item.source === "colleague"}>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 font-medium border border-amber-200/60 dark:border-amber-800/40 flex-shrink-0">
+                          Colleague
+                        </span>
+                      </Show>
+                      <Show when={item.source === "contact"}>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 font-medium border border-blue-200/60 dark:border-blue-800/40 flex-shrink-0">
+                          {item.group_name || "Contact"}
+                        </span>
+                      </Show>
+                      <Show when={item.source === "account"}>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 font-medium border border-stone-200/60 dark:border-stone-700/40 flex-shrink-0">
+                          Account
                         </span>
                       </Show>
                     </li>

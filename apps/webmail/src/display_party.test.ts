@@ -5,6 +5,14 @@ import {
   getDisplayParty,
   getDisplayPartyEmail,
 } from "./components/MessageRow.js";
+import { formatParticipants } from "./components/ThreadRow.js";
+import { ContactItem, ConnectedAccount, OrgMember } from "./api.js";
+import {
+  buildRecipientCandidates,
+  filterAndSortRecipientSuggestions,
+  resolveRecipientChip,
+  RecipientSuggestion,
+} from "./recipient_suggestions.js";
 import {
   setAccountKeys,
   getMailboxKeyFor,
@@ -450,6 +458,157 @@ export function runDisplayPartyTests(): { passed: number; failed: number } {
       "frank@example.com",
       "fallback to clean email when senderName not present"
     );
+
+    // 10h. Resolves sender from contacts when sender is a bare email
+    const mockContacts: ContactItem[] = [
+      {
+        id: "c-1",
+        mailbox_id: "mbox-1",
+        name: "Bob Stone",
+        email: "bob@byos.local",
+        notes: "",
+        group_name: "Colleagues",
+        version: 1,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
+    const bareBobMsg: DisplayMessage = {
+      id: "m-bare-bob",
+      folder: "inbox",
+      sender: "bob@byos.local",
+      recipient: "alice@byos.local",
+      subject: "Audit Notes",
+      snippet: "Ready",
+      encryptedBody: "enc",
+      date: "10:00 AM",
+      read: false,
+      starred: false,
+    };
+    assertEquals(
+      getDisplayParty(bareBobMsg, "inbox", mockContacts),
+      "Bob Stone",
+      "Resolves bare sender email from contacts"
+    );
+
+    // 10i. Resolves sender from connected accounts when sender is a bare email
+    const mockAccounts: ConnectedAccount[] = [
+      {
+        id: "acc-external-1",
+        email: "work.admin@corp.io",
+        displayName: "Work Administrator",
+        role: "admin",
+        privacyMode: "standard",
+      },
+    ];
+    const bareWorkMsg: DisplayMessage = {
+      id: "m-bare-work",
+      folder: "inbox",
+      sender: "work.admin@corp.io",
+      recipient: "alice@byos.local",
+      subject: "System Update",
+      snippet: "Done",
+      encryptedBody: "enc",
+      date: "11:00 AM",
+      read: true,
+      starred: false,
+    };
+    assertEquals(
+      getDisplayParty(bareWorkMsg, "inbox", [], mockAccounts),
+      "Work Administrator",
+      "Resolves bare sender email from connected accounts"
+    );
+
+    // 10j. Resolution precedence: senderName > contacts > connectedAccounts > bare email
+    const precedenceMsg: DisplayMessage = {
+      id: "m-prec",
+      folder: "inbox",
+      sender: "bob@byos.local",
+      senderName: "Bobby S.",
+      recipient: "alice@byos.local",
+      subject: "Status",
+      snippet: "Checking in",
+      encryptedBody: "enc",
+      date: "12:00 PM",
+      read: true,
+      starred: false,
+    };
+    assertEquals(
+      getDisplayParty(precedenceMsg, "inbox", mockContacts, [
+        {
+          id: "acc-bob",
+          email: "bob@byos.local",
+          displayName: "Robert from Storage",
+          role: "member",
+          privacyMode: "standard",
+        },
+      ]),
+      "Bobby S.",
+      "Explicit senderName takes top precedence over contacts and accounts"
+    );
+
+    // 10k. Sent folder resolves bare recipient email against contacts
+    const sentMsgToBob: DisplayMessage = {
+      id: "m-sent-bob",
+      folder: "sent",
+      sender: "alice@byos.local",
+      recipient: "bob@byos.local",
+      recipients: ["bob@byos.local"],
+      subject: "Reply to Bob",
+      snippet: "Got it",
+      encryptedBody: "enc",
+      date: "1:00 PM",
+      read: true,
+      starred: false,
+    };
+    assertEquals(
+      getDisplayParty(sentMsgToBob, "sent", mockContacts),
+      "Bob Stone",
+      "Sent folder resolves bare recipient email from contacts"
+    );
+
+    // 10l. ThreadRow formatParticipants resolves participant emails using contacts and connectedAccounts
+    const twoParticipants = ["bob@byos.local", "work.admin@corp.io"];
+    assertEquals(
+      formatParticipants(twoParticipants, mockContacts, mockAccounts),
+      "Bob Stone, Work Administrator",
+      "ThreadRow formatParticipants resolves 2 participants from contacts and accounts"
+    );
+    const threeParticipants = ["bob@byos.local", "work.admin@corp.io", "stranger@other.com"];
+    assertEquals(
+      formatParticipants(threeParticipants, mockContacts, mockAccounts),
+      "Bob Stone, Work Administrator +1",
+      "ThreadRow formatParticipants resolves names from contacts and accounts with +1 overflow"
+    );
+
+    // 10m. SessionStorage sender name persistence simulation
+    const msgSessionId = "m-session-persist-test";
+    sessionStorage.setItem("byos_msg_sender_name_" + msgSessionId, "Cached Sender Name");
+    const cachedName = sessionStorage.getItem("byos_msg_sender_name_" + msgSessionId);
+    assertEquals(
+      cachedName,
+      "Cached Sender Name",
+      "sessionStorage preserves decrypted sender name"
+    );
+    const restoredMsg: DisplayMessage = {
+      id: msgSessionId,
+      folder: "inbox",
+      sender: "bob@byos.local",
+      senderName: cachedName || undefined,
+      recipient: "alice@byos.local",
+      subject: "Session Test",
+      snippet: "Testing session restore",
+      encryptedBody: "enc",
+      date: "2:00 PM",
+      read: false,
+      starred: false,
+    };
+    assertEquals(
+      getDisplayParty(restoredMsg, "inbox"),
+      "Cached Sender Name",
+      "getDisplayParty respects senderName restored from sessionStorage"
+    );
+    sessionStorage.removeItem("byos_msg_sender_name_" + msgSessionId);
   });
 
   // 11. Mailbox Unlock Persistence Across Refresh
@@ -486,6 +645,266 @@ export function runDisplayPartyTests(): { passed: number; failed: number } {
     zeroizeKeys(accountId);
     assert(!isAccountUnlocked(accountId), "account is recognized as locked after zeroizeKeys");
     assert(getMailboxKeyFor(accountId) === null, "zeroizeKeys purges account from vault");
+  });
+
+  // 12. Participant Deduplication, Current User ("me"), and Address-Level Display Name Resolution
+  test("12. Participant Deduplication, Current User formatting, and Address-Level Resolution", () => {
+    const contacts: ContactItem[] = [
+      { id: "c1", mailbox_id: "m1", name: "Alice Smith", email: "alice@byos.local", created_at: "", updated_at: "", version: 1 },
+    ];
+    const accounts: ConnectedAccount[] = [
+      { id: "m2", email: "bob@byos.local", displayName: "Bob Stone", role: "owner", privacyMode: "standard" },
+    ];
+
+    // 12a. Multiple messages from same sender (Alice) in the same thread collapse to a single name
+    const aliceDuplicates = ["alice@byos.local", "Alice <alice@byos.local>", "Alice Smith <alice@byos.local>"];
+    assertEquals(
+      formatParticipants(aliceDuplicates, contacts, accounts),
+      "Alice Smith",
+      "formatParticipants collapses multiple duplicate participant representations of the same sender to 1 name"
+    );
+
+    // 12b. Even without contacts, duplicates with bare and formatted headers collapse to a single name
+    const rawAliceDuplicates = ["alice@byos.local", "Alice <alice@byos.local>"];
+    assertEquals(
+      formatParticipants(rawAliceDuplicates),
+      "Alice",
+      "formatParticipants collapses raw duplicates without contacts to 1 name"
+    );
+
+    // 12c. Two distinct participants including currentUserEmail formats current user as 'me'
+    const threadWithCurrentUser = ["alice@byos.local", "bob@byos.local"];
+    assertEquals(
+      formatParticipants(threadWithCurrentUser, contacts, accounts, "bob@byos.local"),
+      "Alice Smith, me",
+      "formatParticipants formats current user as 'me' when multiple participants exist"
+    );
+
+    // 12d. If currentUserEmail is the ONLY participant in the thread, keeps user's name
+    const onlyUserThread = ["bob@byos.local"];
+    assertEquals(
+      formatParticipants(onlyUserThread, contacts, accounts, "bob@byos.local"),
+      "Bob Stone",
+      "formatParticipants displays user's name when they are the only sender"
+    );
+
+    // 12e. getDisplayParty prioritizes personal contacts over unparsed MIME header in sender string
+    const msgWithDifferentMimeName: DisplayMessage = {
+      id: "m-mime-override",
+      folder: "inbox",
+      sender: "Alice Wonderland <alice@byos.local>",
+      recipient: "bob@byos.local",
+      subject: "Test",
+      snippet: "Testing contact priority",
+      encryptedBody: "enc",
+      date: "3:00 PM",
+      read: true,
+      starred: false,
+    };
+    assertEquals(
+      getDisplayParty(msgWithDifferentMimeName, "inbox", contacts, accounts),
+      "Alice Smith",
+      "getDisplayParty prioritizes address book contact name over raw MIME header in sender"
+    );
+
+    // 12f. getDisplayParty falls back to sessionStorage byos_sender_email_name_<email> when senderName is missing
+    sessionStorage.setItem("byos_sender_email_name_charlie@byos.local", "Charlie Brown");
+    const msgBareCharlie: DisplayMessage = {
+      id: "m-bare-charlie",
+      folder: "inbox",
+      sender: "charlie@byos.local",
+      recipient: "bob@byos.local",
+      subject: "Hi",
+      snippet: "Hello from Charlie",
+      encryptedBody: "enc",
+      date: "4:00 PM",
+      read: true,
+      starred: false,
+    };
+    assertEquals(
+      getDisplayParty(msgBareCharlie, "inbox"),
+      "Charlie Brown",
+      "getDisplayParty uses address-level cached name from sessionStorage when senderName is absent"
+    );
+    sessionStorage.removeItem("byos_sender_email_name_charlie@byos.local");
+
+    // 12g. formatParticipants utilizes latestMessage.senderName when participant only has bare email
+    const bareThread = ["david@byos.local"];
+    const latestDavidMsg: DisplayMessage = {
+      id: "m-david",
+      folder: "inbox",
+      sender: "david@byos.local",
+      senderName: "David Miller",
+      recipient: "bob@byos.local",
+      subject: "Update",
+      snippet: "Project update",
+      encryptedBody: "enc",
+      date: "5:00 PM",
+      read: true,
+      starred: false,
+    };
+    assertEquals(
+      formatParticipants(bareThread, undefined, undefined, undefined, latestDavidMsg),
+      "David Miller",
+      "formatParticipants resolves bare participant email from latestMessage.senderName"
+    );
+  });
+
+  // 13. Compose Recipient Auto-Suggestion & Candidate Resolution
+  test("13. Compose Recipient Auto-Suggestion & Candidate Resolution", () => {
+    const orgMembers: OrgMember[] = [
+      {
+        id: "u-bob",
+        email: "bob@byos.local",
+        display_name: "Bob Builder",
+        role: "member",
+        is_active: true,
+      },
+      {
+        id: "u-alice",
+        email: "alice@byos.local",
+        display_name: "Alice Architect",
+        role: "admin",
+        is_active: true,
+      },
+    ];
+
+    const contacts: ContactItem[] = [
+      {
+        id: "c-bob-stale",
+        mailbox_id: "mb-1",
+        name: "Bob Stone",
+        email: "bob@byos.local",
+        notes: "Old contact card",
+        version: 1,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: "c-carol",
+        mailbox_id: "mb-1",
+        name: "Carol Consultant",
+        email: "carol@external.com",
+        group_name: "Contractors",
+        version: 1,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
+
+    const connectedAccounts: ConnectedAccount[] = [
+      {
+        id: "acc-dan",
+        email: "dan@byos.local",
+        displayName: "Dan Director",
+        role: "member",
+        privacyMode: "standard",
+      },
+    ];
+
+    const recentSenders = [
+      { name: "Eve Engineer", email: "eve@byos.local" },
+      { email: "frank@byos.local" },
+    ];
+
+    // 13a. buildRecipientCandidates prioritizes organization member display name and marks colleagues
+    const candidates = buildRecipientCandidates({
+      orgMembers,
+      contacts,
+      connectedAccounts,
+      recentSenders,
+      senderAddress: "alice@byos.local",
+    });
+
+    // 13a-1. Excludes current sender (Alice) so user is not suggested to themselves
+    assert(!candidates.some((c) => c.email === "alice@byos.local"), "Sender 'alice@byos.local' is excluded from self-suggestions");
+
+    // 13a-2. Bob has colleague badge and resolved display name
+    const bobCandidate = candidates.find((c) => c.email === "bob@byos.local");
+    assert(Boolean(bobCandidate), "Bob candidate exists");
+    assertEquals(bobCandidate?.name, "Bob Builder", "Organization display name 'Bob Builder' takes precedence over stale contact 'Bob Stone'");
+    assertEquals(bobCandidate?.source, "colleague", "Bob candidate is marked as colleague sharing the sender's domain");
+
+    // 13a-3. Carol external contact is preserved without colleague badge
+    const carolCandidate = candidates.find((c) => c.email === "carol@external.com");
+    assert(Boolean(carolCandidate), "Carol candidate exists");
+    assertEquals(carolCandidate?.name, "Carol Consultant", "Carol contact name preserved");
+    assertEquals(carolCandidate?.group_name, "Contractors", "Carol group name preserved");
+    assertEquals(carolCandidate?.source, "contact", "External contact does not receive colleague badge");
+
+    // 13a-4. Dan connected account on same domain receives colleague badge
+    const danCandidate = candidates.find((c) => c.email === "dan@byos.local");
+    assert(Boolean(danCandidate), "Dan account candidate exists");
+    assertEquals(danCandidate?.name, "Dan Director", "Dan connected account name preserved");
+    assertEquals(danCandidate?.source, "colleague", "Same-domain account receives colleague badge");
+
+    // 13b. Minimum character threshold: queries shorter than 3 characters return empty
+    const singleLetterSuggestions = filterAndSortRecipientSuggestions({
+      query: "b",
+      candidates,
+    });
+    assertEquals(singleLetterSuggestions.length, 0, "Query with length 1 ('b') returns empty suggestions (below min threshold 3)");
+
+    const twoLetterSuggestions = filterAndSortRecipientSuggestions({
+      query: "bo",
+      candidates,
+    });
+    assertEquals(twoLetterSuggestions.length, 0, "Query with length 2 ('bo') returns empty suggestions (below min threshold 3)");
+
+    // 13c. Word-prefix matching: 3+ characters matches word prefixes
+    const bobSuggestions = filterAndSortRecipientSuggestions({
+      query: "bob",
+      candidates,
+    });
+    assert(bobSuggestions.length > 0, "Suggestions returned for 'bob'");
+    assertEquals(bobSuggestions[0].email, "bob@byos.local", "Bob Builder is top suggestion for 'bob'");
+    assertEquals(bobSuggestions[0].name, "Bob Builder", "Bob Builder display name returned");
+
+    // 13d. Word-prefix matching matches second word token ("bui" matches "Builder")
+    const buiSuggestions = filterAndSortRecipientSuggestions({
+      query: "bui",
+      candidates,
+    });
+    assert(buiSuggestions.some((s) => s.email === "bob@byos.local"), "'bui' matches 'Bob Builder'");
+
+    // 13e. Word-prefix does NOT match arbitrary substring inside words ("ild" does not match "Builder")
+    const ildSuggestions = filterAndSortRecipientSuggestions({
+      query: "ild",
+      candidates,
+    });
+    assertEquals(ildSuggestions.length, 0, "Non-prefix substring 'ild' returns 0 matches (Gmail-style token matching)");
+
+    // 13f. Domain match requires explicit '@' prefix
+    const domainQueryWithoutAt = filterAndSortRecipientSuggestions({
+      query: "byos",
+      candidates,
+    });
+    assertEquals(domainQueryWithoutAt.length, 0, "'byos' without '@' does not spam-match entire email domain");
+
+    const domainQueryWithAt = filterAndSortRecipientSuggestions({
+      query: "@byos",
+      candidates,
+    });
+    assert(domainQueryWithAt.length >= 3, "'@byos' matches candidates with @byos domain");
+
+    // 13g. filterAndSortRecipientSuggestions excludes already selected chips
+    const selected = new Set(["bob@byos.local"]);
+    const bobSuggestionsExcludingBob = filterAndSortRecipientSuggestions({
+      query: "bob",
+      candidates,
+      selectedEmails: selected,
+    });
+    assert(!bobSuggestionsExcludingBob.some((s) => s.email === "bob@byos.local"), "Already-selected Bob is excluded from suggestions");
+
+    // 13e. resolveRecipientChip maps bare email to candidate display name
+    const resolvedBob = resolveRecipientChip("bob@byos.local", candidates);
+    assertEquals(resolvedBob.email, "bob@byos.local", "Resolved email is clean");
+    assertEquals(resolvedBob.name, "Bob Builder", "Resolved chip has candidate display name");
+
+    // 13f. resolveRecipientChip preserves explicit RFC 5322 formatted names
+    const resolvedExplicit = resolveRecipientChip('"Robert Builder" <bob@byos.local>', candidates);
+    assertEquals(resolvedExplicit.email, "bob@byos.local", "Resolved email is clean");
+    assertEquals(resolvedExplicit.name, "Robert Builder", "Preserves explicitly typed name override");
   });
 
   return { passed, failed };

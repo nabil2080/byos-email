@@ -1,5 +1,5 @@
-import { Component, createSignal, createEffect, For, Show } from "solid-js";
-import { AttachmentItem, ConnectedAccount, MaskedAliasItem, ContactItem } from "../api";
+import { Component, createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
+import { AttachmentItem, ConnectedAccount, MaskedAliasItem, ContactItem, OrgMember, getAccountColor } from "../api";
 import { AttachmentBadge } from "./AttachmentBadge";
 import { RichTextEditor } from "./RichTextEditor";
 import { RecipientInput } from "./RecipientInput";
@@ -54,6 +54,8 @@ interface ComposeDrawerProps {
   onCcChange?: (val: string) => void;
   bcc?: string;
   onBccChange?: (val: string) => void;
+  orgMembers?: OrgMember[];
+  recentSenders?: Array<{ name?: string; email: string }>;
 }
 
 export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
@@ -138,6 +140,54 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
       fromSelectRef.value = targetVal;
     }
   });
+
+  const [fromMenuOpen, setFromMenuOpen] = createSignal(false);
+  let fromDropdownRef: HTMLDivElement | undefined;
+  let fromTriggerRef: HTMLButtonElement | undefined;
+
+  onMount(() => {
+    const handlePointerDown = (e: MouseEvent) => {
+      if (fromMenuOpen() && fromDropdownRef && !fromDropdownRef.contains(e.target as Node)) {
+        setFromMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    onCleanup(() => document.removeEventListener("mousedown", handlePointerDown));
+  });
+
+  const activeAccount = () => {
+    const list = props.connectedAccounts || [];
+    if (props.selectedAccountId) {
+      const found = list.find((a) => a.id === props.selectedAccountId);
+      if (found) return found;
+    }
+    return list[0] || null;
+  };
+
+  const handleSelectFromOption = (item: { type: "account" | "alias"; id: string; email: string }) => {
+    if (item.type === "alias") {
+      props.onSelectFromAlias?.(item.email);
+    } else {
+      props.onSelectFromAlias?.(null);
+      const accId = item.id.replace(/^account:/, "");
+      props.onSelectAccount?.(accId);
+    }
+    setFromMenuOpen(false);
+    if (fromSelectRef) {
+      fromSelectRef.value = item.id;
+      fromSelectRef.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  };
+
+  const handleFromTriggerKeyDown = (e: KeyboardEvent) => {
+    if (isOffline()) return;
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setFromMenuOpen((prev) => !prev);
+    } else if (e.key === "Escape") {
+      setFromMenuOpen(false);
+    }
+  };
 
   function toggleMinimize(e?: Event) {
     e?.stopPropagation();
@@ -284,60 +334,262 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                     </span>
                   }
                 >
-                  <select
-                    ref={fromSelectRef}
-                    disabled={isOffline()}
-                    title={isOffline() ? "Switch accounts online to change sender." : undefined}
-                    value={props.fromAlias ? `alias:${props.fromAlias}` : `account:${props.selectedAccountId || props.connectedAccounts?.[0]?.id || ""}`}
-                    onChange={(e) => {
-                      if (isOffline()) return;
-                      const val = e.currentTarget.value;
-                      if (val.startsWith("alias:")) {
-                        props.onSelectFromAlias?.(val.slice(6));
-                      } else if (val.startsWith("account:")) {
-                        props.onSelectFromAlias?.(null);
-                        props.onSelectAccount?.(val.slice(8));
-                      } else {
-                        props.onSelectFromAlias?.(null);
-                        props.onSelectAccount?.(val);
-                      }
-                    }}
-                    class={`font-mono text-xs bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] rounded-lg px-2 py-1 text-[#1A1B1E] dark:text-[#F3F4F6] focus:outline-none focus:ring-1 focus:ring-[#A27561] ${
-                      isOffline() ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
-                    }`}
-                    aria-label="Sender account"
-                    data-testid="compose-from-select"
-                  >
-                    <For each={props.connectedAccounts}>
-                      {(acc) => (
-                        <option
-                          value={`account:${acc.id}`}
-                          selected={!props.fromAlias && (props.selectedAccountId ? props.selectedAccountId === acc.id : acc.id === props.connectedAccounts?.[0]?.id)}
+                  <div class="relative inline-block text-left" ref={fromDropdownRef}>
+                    {/* Trigger Button */}
+                    <button
+                      ref={fromTriggerRef}
+                      type="button"
+                      disabled={isOffline()}
+                      onClick={() => !isOffline() && setFromMenuOpen(!fromMenuOpen())}
+                      onKeyDown={handleFromTriggerKeyDown}
+                      aria-expanded={fromMenuOpen()}
+                      aria-haspopup="listbox"
+                      data-testid="compose-from-trigger"
+                      title={isOffline() ? "Switch accounts online to change sender." : "Choose sending account or alias"}
+                      class={`inline-flex items-center gap-2 max-w-full rounded-xl bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561] dark:hover:border-[#A27561] px-2.5 py-1 text-xs text-[#1A1B1E] dark:text-[#F3F4F6] transition shadow-2xs group focus:outline-none focus:ring-1 focus:ring-[#A27561] ${
+                        isOffline() ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
+                      }`}
+                    >
+                      {/* Avatar initial or alias icon */}
+                      <Show
+                        when={!props.fromAlias}
+                        fallback={
+                          <div class="w-5 h-5 rounded-full bg-[#F0EEE9] dark:bg-[#2A2A2E] text-[#6F7173] dark:text-[#A1A1AA] flex items-center justify-center flex-shrink-0">
+                            <svg class="w-3 h-3 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                            </svg>
+                          </div>
+                        }
+                      >
+                        <div
+                          class="w-5 h-5 rounded-full text-white font-bold text-[10px] flex items-center justify-center flex-shrink-0 shadow-2xs"
+                          style={{ "background-color": getAccountColor(activeAccount()?.id || "") }}
                         >
-                          {acc.email}
-                        </option>
-                      )}
-                    </For>
-                    <Show when={!props.connectedAccounts || props.connectedAccounts.length === 0}>
-                      <option value={`account:${props.selectedAccountId || ""}`} selected={!props.fromAlias}>
-                        {props.senderAddress}
-                      </option>
+                          {(activeAccount()?.displayName || activeAccount()?.email || props.senderAddress).charAt(0).toUpperCase()}
+                        </div>
+                      </Show>
+
+                      {/* Display name & email */}
+                      <div class="flex items-center gap-1.5 min-w-0">
+                        <Show
+                          when={!props.fromAlias}
+                          fallback={
+                            <div class="flex items-center gap-1.5 min-w-0">
+                              <span class="font-mono text-xs font-medium text-[#1A1B1E] dark:text-[#F3F4F6] truncate">
+                                {props.fromAlias}
+                              </span>
+                              <span class="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-full bg-[#F0EEE9] dark:bg-[#2A2A2E] text-[#6F7173] dark:text-[#A1A1AA]">
+                                Alias
+                              </span>
+                            </div>
+                          }
+                        >
+                          <Show
+                            when={activeAccount()?.displayName && activeAccount()?.displayName !== activeAccount()?.email}
+                            fallback={
+                              <span class="font-mono text-xs font-medium text-[#1A1B1E] dark:text-[#F3F4F6] truncate">
+                                {activeAccount()?.email || props.senderAddress}
+                              </span>
+                            }
+                          >
+                            <span class="font-semibold text-xs text-[#1A1B1E] dark:text-[#F3F4F6] truncate">
+                              {activeAccount()!.displayName}
+                            </span>
+                            <span class="text-[11px] font-mono text-[#6F7173] dark:text-[#878A8E] truncate">
+                              &lt;{activeAccount()!.email}&gt;
+                            </span>
+                          </Show>
+                        </Show>
+                      </div>
+
+                      {/* Chevron down */}
+                      <svg
+                        class="w-3.5 h-3.5 text-[#6F7173] dark:text-[#878A8E] transition-transform duration-150 flex-shrink-0 group-hover:text-[#1A1B1E] dark:group-hover:text-[#F3F4F6]"
+                        classList={{ "rotate-180": fromMenuOpen() }}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        stroke-width="2.5"
+                      >
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+
+                    {/* Popover Dropdown */}
+                    <Show when={fromMenuOpen() && !isOffline()}>
+                      <div
+                        role="listbox"
+                        aria-label="Sender accounts and aliases"
+                        data-testid="compose-from-custom-dropdown"
+                        class="absolute left-0 top-full mt-1.5 w-80 max-w-[calc(100vw-3rem)] rounded-xl bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] shadow-2xl p-1 z-50 overflow-hidden"
+                      >
+                        {/* Accounts Section */}
+                        <div class="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#878A8E] dark:text-[#71717A] flex items-center justify-between">
+                          <span>Mailbox Accounts</span>
+                          <span class="text-[#A27561] font-semibold">{props.connectedAccounts?.length || 1}</span>
+                        </div>
+                        <For each={props.connectedAccounts}>
+                          {(acc) => {
+                            const isSelected = () => !props.fromAlias && (props.selectedAccountId ? props.selectedAccountId === acc.id : acc.id === props.connectedAccounts?.[0]?.id);
+                            return (
+                              <button
+                                type="button"
+                                role="option"
+                                aria-selected={isSelected()}
+                                data-testid={`compose-from-option-${acc.id}`}
+                                onClick={() => handleSelectFromOption({ type: "account", id: `account:${acc.id}`, email: acc.email })}
+                                class={`w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg text-left transition cursor-pointer ${
+                                  isSelected()
+                                    ? "bg-[#FAF9F7] dark:bg-[#26282E] ring-1 ring-[#A27561]/40"
+                                    : "hover:bg-[#FAF9F7] dark:hover:bg-[#26282E]"
+                                }`}
+                              >
+                                <div class="flex items-center gap-2 min-w-0">
+                                  <div
+                                    class="w-6 h-6 rounded-full text-white font-bold text-[10px] flex items-center justify-center flex-shrink-0 shadow-2xs"
+                                    style={{ "background-color": getAccountColor(acc.id) }}
+                                  >
+                                    {(acc.displayName || acc.email).charAt(0).toUpperCase()}
+                                  </div>
+                                  <div class="min-w-0 flex flex-col">
+                                    <Show when={acc.displayName && acc.displayName !== acc.email}>
+                                      <span class="text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] truncate">
+                                        {acc.displayName}
+                                      </span>
+                                    </Show>
+                                    <span class="text-[11px] font-mono text-[#6F7173] dark:text-[#878A8E] truncate">
+                                      {acc.email}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div class="flex items-center gap-1.5 flex-shrink-0">
+                                  <span class="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-full bg-[#F0EEE9] dark:bg-[#2A2A2E] text-[#6F7173] dark:text-[#A1A1AA]">
+                                    {acc.role === "owner" ? "Owner" : "Account"}
+                                  </span>
+                                  <Show when={isSelected()}>
+                                    <svg class="w-3.5 h-3.5 text-[#A27561] flex-shrink-0 stroke-[2.5]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <polyline points="20 6 9 17 4 12" />
+                                    </svg>
+                                  </Show>
+                                </div>
+                              </button>
+                            );
+                          }}
+                        </For>
+
+                        {/* Aliases Section */}
+                        <Show when={props.aliases && props.aliases.length > 0}>
+                          <div class="my-1 border-t border-[#E2DFD8]/60 dark:border-[#2E3138]"></div>
+                          <div class="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#878A8E] dark:text-[#71717A] flex items-center justify-between">
+                            <span>Masked Aliases</span>
+                            <span class="text-[#A27561] font-semibold">{props.aliases?.length}</span>
+                          </div>
+                          <For each={props.aliases}>
+                            {(al) => {
+                              const isSelected = () => props.fromAlias === al.alias_address;
+                              return (
+                                <button
+                                  type="button"
+                                  role="option"
+                                  aria-selected={isSelected()}
+                                  data-testid={`compose-from-alias-${al.alias_address}`}
+                                  onClick={() => handleSelectFromOption({ type: "alias", id: `alias:${al.alias_address}`, email: al.alias_address })}
+                                  class={`w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg text-left transition cursor-pointer ${
+                                    isSelected()
+                                      ? "bg-[#FAF9F7] dark:bg-[#26282E] ring-1 ring-[#A27561]/40"
+                                      : "hover:bg-[#FAF9F7] dark:hover:bg-[#26282E]"
+                                  }`}
+                                >
+                                  <div class="flex items-center gap-2 min-w-0">
+                                    <div class="w-6 h-6 rounded-full bg-[#F0EEE9] dark:bg-[#2A2A2E] text-[#6F7173] dark:text-[#A1A1AA] flex items-center justify-center flex-shrink-0">
+                                      <svg class="w-3 h-3 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                                      </svg>
+                                    </div>
+                                    <div class="min-w-0 flex flex-col">
+                                      <Show when={al.label}>
+                                        <span class="text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] truncate">
+                                          {al.label}
+                                        </span>
+                                      </Show>
+                                      <span class="text-[11px] font-mono text-[#6F7173] dark:text-[#878A8E] truncate">
+                                        {al.alias_address}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div class="flex items-center gap-1.5 flex-shrink-0">
+                                    <span class="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-full bg-[#F0EEE9] dark:bg-[#2A2A2E] text-[#6F7173] dark:text-[#A1A1AA]">
+                                      Alias
+                                    </span>
+                                    <Show when={isSelected()}>
+                                      <svg class="w-3.5 h-3.5 text-[#A27561] flex-shrink-0 stroke-[2.5]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <polyline points="20 6 9 17 4 12" />
+                                      </svg>
+                                    </Show>
+                                  </div>
+                                </button>
+                              );
+                            }}
+                          </For>
+                        </Show>
+                      </div>
                     </Show>
-                    <Show when={props.fromAlias && !props.aliases?.some((a) => a.alias_address === props.fromAlias)}>
-                      <option value={`alias:${props.fromAlias}`} selected={true}>
-                        {props.fromAlias} (alias)
-                      </option>
-                    </Show>
-                    <Show when={props.aliases && props.aliases.length > 0}>
-                      <For each={props.aliases}>
-                        {(al) => (
-                          <option value={`alias:${al.alias_address}`} selected={props.fromAlias === al.alias_address}>
-                            {al.alias_address} (alias)
+
+                    {/* Companion hidden select for test suites and programmatic DOM events */}
+                    <select
+                      ref={fromSelectRef}
+                      disabled={isOffline()}
+                      title={isOffline() ? "Switch accounts online to change sender." : undefined}
+                      value={props.fromAlias ? `alias:${props.fromAlias}` : `account:${props.selectedAccountId || props.connectedAccounts?.[0]?.id || ""}`}
+                      onChange={(e) => {
+                        if (isOffline()) return;
+                        const val = e.currentTarget.value;
+                        if (val.startsWith("alias:")) {
+                          props.onSelectFromAlias?.(val.slice(6));
+                        } else if (val.startsWith("account:")) {
+                          props.onSelectFromAlias?.(null);
+                          props.onSelectAccount?.(val.slice(8));
+                        } else {
+                          props.onSelectFromAlias?.(null);
+                          props.onSelectAccount?.(val);
+                        }
+                      }}
+                      class="sr-only pointer-events-none"
+                      tabIndex={-1}
+                      aria-hidden="true"
+                      data-testid="compose-from-select"
+                    >
+                      <For each={props.connectedAccounts}>
+                        {(acc) => (
+                          <option
+                            value={`account:${acc.id}`}
+                            selected={!props.fromAlias && (props.selectedAccountId ? props.selectedAccountId === acc.id : acc.id === props.connectedAccounts?.[0]?.id)}
+                          >
+                            {acc.displayName ? `${acc.displayName} <${acc.email}>` : acc.email}
                           </option>
                         )}
                       </For>
-                    </Show>
-                  </select>
+                      <Show when={!props.connectedAccounts || props.connectedAccounts.length === 0}>
+                        <option value={`account:${props.selectedAccountId || ""}`} selected={!props.fromAlias}>
+                          {props.senderAddress}
+                        </option>
+                      </Show>
+                      <Show when={props.fromAlias && !props.aliases?.some((a) => a.alias_address === props.fromAlias)}>
+                        <option value={`alias:${props.fromAlias}`} selected={true}>
+                          {props.fromAlias} (alias)
+                        </option>
+                      </Show>
+                      <Show when={props.aliases && props.aliases.length > 0}>
+                        <For each={props.aliases}>
+                          {(al) => (
+                            <option value={`alias:${al.alias_address}`} selected={props.fromAlias === al.alias_address}>
+                              {al.alias_address} (alias)
+                            </option>
+                          )}
+                        </For>
+                      </Show>
+                    </select>
+                  </div>
                 </Show>
                 <Show when={isOffline()}>
                   <span
@@ -364,6 +616,10 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                     onChange={props.onToChange}
                     contacts={props.contacts}
                     mailboxId={props.mailboxId}
+                    orgMembers={props.orgMembers}
+                    connectedAccounts={props.connectedAccounts}
+                    recentSenders={props.recentSenders}
+                    senderAddress={props.senderAddress}
                     required
                   />
                 </div>
@@ -387,6 +643,10 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                     onChange={props.onCcChange || (() => {})}
                     contacts={props.contacts}
                     mailboxId={props.mailboxId}
+                    orgMembers={props.orgMembers}
+                    connectedAccounts={props.connectedAccounts}
+                    recentSenders={props.recentSenders}
+                    senderAddress={props.senderAddress}
                   />
                 </div>
                 <div class="border-t border-[#E2DFD8]/60 dark:border-[#2E3138] pt-2">
@@ -397,6 +657,10 @@ export const ComposeDrawer: Component<ComposeDrawerProps> = (props) => {
                     onChange={props.onBccChange || (() => {})}
                     contacts={props.contacts}
                     mailboxId={props.mailboxId}
+                    orgMembers={props.orgMembers}
+                    connectedAccounts={props.connectedAccounts}
+                    recentSenders={props.recentSenders}
+                    senderAddress={props.senderAddress}
                   />
                 </div>
               </Show>

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -346,30 +347,64 @@ func keyPublishHandler(w http.ResponseWriter, r *http.Request) {
 		currentEd25519PK       []byte
 		currentKeyEpoch        int
 		currentSigningKeyEpoch int
+		currentKeyStatus       string
 	)
 
-	err = conn.QueryRow(ctx, `
-		SELECT id::text, mailbox_xwing_pk, mailbox_ed25519_pk, key_epoch, signing_key_epoch
-		FROM mailboxes
-		WHERE user_id = $1 AND is_active = true
-		ORDER BY created_at ASC
-		LIMIT 1
-	`, userID).Scan(&mailboxID, &currentXwingPK, &currentEd25519PK, &currentKeyEpoch, &currentSigningKeyEpoch)
-
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			err = conn.QueryRow(ctx, `
-				SELECT id::text, mailbox_xwing_pk, mailbox_ed25519_pk, key_epoch, signing_key_epoch
-				FROM mailboxes
-				WHERE user_id = $1
-				ORDER BY created_at ASC
-				LIMIT 1
-			`, userID).Scan(&mailboxID, &currentXwingPK, &currentEd25519PK, &currentKeyEpoch, &currentSigningKeyEpoch)
-		}
-		if err != nil {
-			writeKeyError(w, http.StatusNotFound, "unknown_mailbox", "no mailbox found for user")
+	targetMailboxID := strings.TrimSpace(r.Header.Get("X-BYOS-Active-Mailbox"))
+	if targetMailboxID != "" {
+		if _, err := uuid.Parse(targetMailboxID); err != nil {
+			writeKeyError(w, http.StatusBadRequest, "invalid_mailbox_id", "invalid mailbox ID format")
 			return
 		}
+
+		err = conn.QueryRow(ctx, `
+			SELECT id::text, mailbox_xwing_pk, mailbox_ed25519_pk, key_epoch, signing_key_epoch, key_status
+			FROM mailboxes
+			WHERE id = $1 AND user_id = $2 AND is_active = true
+		`, targetMailboxID, userID).Scan(&mailboxID, &currentXwingPK, &currentEd25519PK, &currentKeyEpoch, &currentSigningKeyEpoch, &currentKeyStatus)
+
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				err = conn.QueryRow(ctx, `
+					SELECT id::text, mailbox_xwing_pk, mailbox_ed25519_pk, key_epoch, signing_key_epoch, key_status
+					FROM mailboxes
+					WHERE id = $1 AND user_id = $2
+				`, targetMailboxID, userID).Scan(&mailboxID, &currentXwingPK, &currentEd25519PK, &currentKeyEpoch, &currentSigningKeyEpoch, &currentKeyStatus)
+			}
+			if err != nil {
+				writeKeyError(w, http.StatusForbidden, "not_mailbox_owner", "mailbox not found or not owned by authenticated user")
+				return
+			}
+		}
+	} else {
+		err = conn.QueryRow(ctx, `
+			SELECT id::text, mailbox_xwing_pk, mailbox_ed25519_pk, key_epoch, signing_key_epoch, key_status
+			FROM mailboxes
+			WHERE user_id = $1 AND is_active = true
+			ORDER BY created_at ASC
+			LIMIT 1
+		`, userID).Scan(&mailboxID, &currentXwingPK, &currentEd25519PK, &currentKeyEpoch, &currentSigningKeyEpoch, &currentKeyStatus)
+
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				err = conn.QueryRow(ctx, `
+					SELECT id::text, mailbox_xwing_pk, mailbox_ed25519_pk, key_epoch, signing_key_epoch, key_status
+					FROM mailboxes
+					WHERE user_id = $1
+					ORDER BY created_at ASC
+					LIMIT 1
+				`, userID).Scan(&mailboxID, &currentXwingPK, &currentEd25519PK, &currentKeyEpoch, &currentSigningKeyEpoch, &currentKeyStatus)
+			}
+			if err != nil {
+				writeKeyError(w, http.StatusNotFound, "unknown_mailbox", "no mailbox found for user")
+				return
+			}
+		}
+	}
+
+	if currentKeyStatus == "disabled" {
+		writeKeyError(w, http.StatusGone, "mailbox_disabled", "mailbox is disabled")
+		return
 	}
 
 	isFirstPublish := (len(currentXwingPK) == 0 && len(currentEd25519PK) == 0)

@@ -291,6 +291,10 @@ func mailboxSettingsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if dispName != nil && *dispName != "" {
+			_, _ = conn.Exec(ctx, `UPDATE users SET display_name=$1 WHERE id = (SELECT user_id FROM mailboxes WHERE id = $2)`, *dispName, mailboxID)
+		}
+
 		if recWrapped != nil {
 			s.RecoveryPhraseWrapped = *recWrapped
 		}

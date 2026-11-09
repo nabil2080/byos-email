@@ -188,7 +188,13 @@ func organizationMembersHandler(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodGet {
 		rows, err := conn.Query(ctx, `
-			SELECT u.id::text, u.email, COALESCE(u.display_name,''), u.role, u.is_active,
+			SELECT u.id::text, u.email,
+			       COALESCE(
+			           (SELECT NULLIF(ms.display_name, '') FROM mailboxes m JOIN mailbox_settings ms ON ms.mailbox_id = m.id WHERE m.user_id = u.id AND m.is_active = true LIMIT 1),
+			           NULLIF(u.display_name, ''),
+			           ''
+			       ),
+			       u.role, u.is_active,
 			       EXISTS(SELECT 1 FROM mailboxes m WHERE m.user_id = u.id AND m.is_active = true) as has_mailbox
 			FROM users u
 			WHERE u.org_id=$1
