@@ -345,12 +345,22 @@ func (s *S3Storage) TestConnection(ctx context.Context) error {
 	}
 
 	// Live write/read/verify/delete probe
-	probeKey := fmt.Sprintf(".byos-probe-%d", time.Now().UnixNano())
-	probeContent := []byte(fmt.Sprintf("byos-probe-%d", time.Now().UnixNano()))
+	randID := make([]byte, 16)
+	if _, err := io.ReadFull(rand.Reader, randID); err != nil {
+		return fmt.Errorf("probe entropy failed: %w", err)
+	}
+	probeKey := fmt.Sprintf(".byos-probe-%x", randID)
+	// Synthetic Section 12 binary envelope (0x01 + 12-byte IV + 16-byte Tag + 32-byte ciphertext)
+	// so probe never leaves readable customer plaintext in the customer bucket
+	probeContent := make([]byte, 1+12+16+32)
+	probeContent[0] = 0x01
+	if _, err := io.ReadFull(rand.Reader, probeContent[1:]); err != nil {
+		return fmt.Errorf("probe payload entropy failed: %w", err)
+	}
 
 	// 1. Write
 	_, err = s.client.PutObject(ctx, s.bucket, probeKey, bytes.NewReader(probeContent), int64(len(probeContent)), minio.PutObjectOptions{
-		ContentType: "text/plain",
+		ContentType: "application/octet-stream",
 	})
 	if err != nil {
 		return fmt.Errorf("probe write failed: %w", err)
@@ -456,11 +466,12 @@ func (m *MockDriveStorage) HeadObject(ctx context.Context, bucket, key string) (
 	return ObjectInfo{Key: key, Size: fi.Size(), LastModified: fi.ModTime()}, nil
 }
 func (m *MockDriveStorage) ListObjects(ctx context.Context, bucket, prefix string) ([]ObjectInfo, error) {
-	base := m.root
+	bucketDir := m.root
 	if bucket != "" {
-		base = filepath.Join(base, bucket)
+		bucketDir = filepath.Join(bucketDir, bucket)
 	}
-	if prefix != "" {
+	base := bucketDir
+	if false {
 		base = filepath.Join(base, filepath.Dir(prefix))
 		// If prefix contains dir, list that dir; otherwise list base
 		if strings.Contains(prefix, "/") {
@@ -475,11 +486,12 @@ func (m *MockDriveStorage) ListObjects(ctx context.Context, bucket, prefix strin
 		if info.IsDir() {
 			return nil
 		}
-		rel, _ := filepath.Rel(m.root, path)
-		// Filter by prefix if provided
-		if prefix != "" && !strings.HasPrefix(rel, prefix) && !strings.HasPrefix(filepath.Join(bucket, prefix), rel) {
+		rel, _ := filepath.Rel(bucketDir, path)
+		rel = filepath.ToSlash(rel)
+		if prefix != "" && !strings.HasPrefix(rel, filepath.ToSlash(prefix)) {
 			// For mock, simple contains check
-			if !strings.Contains(rel, prefix) {
+			return nil
+			if false {
 				return nil
 			}
 		}
@@ -496,8 +508,14 @@ func (m *MockDriveStorage) TestConnection(ctx context.Context) error {
 		return err
 	}
 	// Check writable
-	testFile := filepath.Join(m.root, ".test")
-	if err := os.WriteFile(testFile, []byte("ok"), 0644); err != nil {
+	randID := make([]byte, 16)
+	_, _ = io.ReadFull(rand.Reader, randID)
+	testFile := filepath.Join(m.root, fmt.Sprintf(".test-%x", randID))
+	defer os.Remove(testFile)
+	probeData := make([]byte, 29)
+	probeData[0] = 0x01
+	_, _ = io.ReadFull(rand.Reader, probeData[1:])
+	if err := os.WriteFile(testFile, probeData, 0644); err != nil {
 		return err
 	}
 	os.Remove(testFile)

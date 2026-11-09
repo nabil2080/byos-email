@@ -9,16 +9,20 @@ import {
   sanitizeConnectedAccounts,
   rotateSessionGeneration,
   isAccountUnlocked,
+  clearAccountKeys,
   SESSION_GENERATION_KEY,
 } from "./session_isolation";
 import { isMessageSnoozed, checkSnoozeExpirations } from "./snooze";
 import { buildEmlContent, uint8ArrayToBase64, formatRFC2822Date } from "./utils/eml_export";
+import { saveSignature, loadSignature, clearSignature } from "./signature";
 import {
   encryptContactEnvelope,
   decryptContactEnvelope,
   encryptDraftEnvelope,
   decryptDraftEnvelope,
   decryptPathAEnvelope,
+  encryptSignature,
+  decryptSignature,
   hexToBytes,
   hexToBase64,
 } from "./message_crypto";
@@ -560,6 +564,37 @@ export async function runTrack2SecurityTests(): Promise<{ passed: number; failed
     assert.strictEqual(res.plaintext, RUST_VECTOR.expected_plaintext, "plaintext preserved for thread reading");
     assert.strictEqual(res.senderVerified, false, "senderVerified is false");
     assert(res.senderVerifyError && res.senderVerifyError.includes("outside BYOS"), "descriptive verify error set");
+  });
+
+  await test("encryptSignature and decryptSignature roundtrip with authenticated AES-GCM envelope", async () => {
+    const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+    const mailboxKey = new Uint8Array(32).fill(7);
+    const mailboxId = "11111111-2222-3333-4444-555555555555";
+    const plainSig = "Best regards,\nAlice Bob";
+    const encrypted = encryptSignature(wasm, mailboxKey, mailboxId, plainSig);
+    assert(encrypted.startsWith("enc:v1:"), "encrypted signature must start with enc:v1:");
+    const decrypted = decryptSignature(wasm, mailboxKey, mailboxId, encrypted);
+    assert.strictEqual(decrypted, plainSig, "decrypted signature must match original");
+
+    // Legacy fallback
+    const legacyPlain = "Legacy unencrypted signature";
+    assert.strictEqual(decryptSignature(wasm, mailboxKey, mailboxId, legacyPlain), legacyPlain, "legacy signature returned as-is");
+
+    // Decryption with wrong key fails closed (returns empty string)
+    const wrongKey = new Uint8Array(32).fill(9);
+    assert.strictEqual(decryptSignature(wasm, wrongKey, mailboxId, encrypted), "", "wrong key returns empty string");
+
+    // Browser storage lifecycle: saveSignature writes to storage and synchronizes
+    saveSignature(mailboxId, plainSig);
+    assert.strictEqual(sessionStorage.getItem("byos.signature." + mailboxId), plainSig);
+    assert.strictEqual(localStorage.getItem("byos.signature." + mailboxId), plainSig);
+    assert.strictEqual(loadSignature(mailboxId), plainSig);
+
+    // clearAccountKeys on logout removes signature from both sessionStorage and localStorage
+    clearAccountKeys(mailboxId, sessionStorage);
+    assert.strictEqual(sessionStorage.getItem("byos.signature." + mailboxId), null);
+    assert.strictEqual(localStorage.getItem("byos.signature." + mailboxId), null);
+    assert.strictEqual(loadSignature(mailboxId), "");
   });
 
   return { passed, failed };

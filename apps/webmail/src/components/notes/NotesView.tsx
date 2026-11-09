@@ -32,6 +32,7 @@ import {
   getCachedMedia,
   getMediaFromIDB,
   offloadMediaIfDataUrl,
+  clearNotesMediaCache,
 } from "./notesStore";
 import { NotesSidebar, NotesViewFilter } from "./NotesSidebar";
 import { EditLabelsModal } from "./EditLabelsModal";
@@ -39,6 +40,13 @@ import { DrawingModal } from "./DrawingModal";
 import { VersionHistoryModal } from "./VersionHistoryModal";
 import { TopFixedBar, AppModule } from "../TopFixedBar";
 import { getMailboxKeyFor } from "../../session_isolation";
+import {
+  getNotesSyncStatus,
+  subscribeNotesSyncStatus,
+  syncNotesWithRemote,
+  triggerNotesSync,
+  initNotesSyncAutoListener,
+} from "./notesSync";
 
 export interface NotesViewProps {
   currentUser?: UserMe | null;
@@ -150,16 +158,85 @@ export const NotesView: Component<NotesViewProps> = (props) => {
   const [activeLabelMenuCardId, setActiveLabelMenuCardId] = createSignal<string | null>(null);
   const [activeCollabCardId, setActiveCollabCardId] = createSignal<string | null>(null);
 
+  // Saving state tracking
+  const [saveStatus, setSaveStatus] = createSignal<"idle" | "saving" | "saved" | "failed">("idle");
+  const [saveErrorMessage, setSaveErrorMessage] = createSignal<string | null>(null);
+  const [syncStatus, setSyncStatus] = createSignal(getNotesSyncStatus());
+
+  // Account / Mailbox affinity tracking to prevent cross-account leakage during composition or editing
+  const [composeMailboxId, setComposeMailboxId] = createSignal<string | null>(null);
+  const [editMailboxId, setEditMailboxId] = createSignal<string | null>(null);
+  let lastMailboxId: string | undefined = undefined;
+
   createEffect(() => {
     // Re-load notes and labels reactively when active mailbox or mailboxKey changes
-    const validKey = props.isUnlocked !== false ? (props.mailboxKey || null) : null;
+    const mb = effectiveMailboxId();
+    const validKey = (props.isUnlocked !== false ? props.mailboxKey : null) || (mb ? getMailboxKeyFor(mb) : null);
     setNotesMailboxKey(validKey);
-    const _mb = effectiveMailboxId();
+
+    if (lastMailboxId !== undefined && lastMailboxId !== mb) {
+      // Mailbox / account changed: reset composer and edit modal to prevent cross-account leakage
+      if (isComposing()) {
+        setIsComposing(false);
+        setNewTitle("");
+        setNewContent("");
+        setNewIsChecklist(false);
+        setNewChecklistItems([]);
+        setNewDrawings([]);
+        setNewImages([]);
+        setNewCollaborators([]);
+        setNewSelectedLabels([]);
+        setComposeMailboxId(null);
+      }
+      if (editingNote()) {
+        setEditingNote(null);
+        setEditTitle("");
+        setEditContent("");
+        setEditIsChecklist(false);
+        setEditChecklistItems([]);
+        setEditLabels([]);
+        setEditMailboxId(null);
+      }
+      setResolvedMedia({});
+      clearNotesMediaCache();
+      setSaveStatus("idle");
+      setSaveErrorMessage(null);
+    }
+    lastMailboxId = mb;
+
     refreshAll();
   });
 
   onMount(() => {
     refreshAll();
+
+    const unsubSync = subscribeNotesSyncStatus((status) => {
+      setSyncStatus(status);
+      if (status === "synced") {
+        refreshAll();
+      }
+    });
+    const cleanupAutoSync = initNotesSyncAutoListener();
+
+    // Trigger initial remote sync if key is available
+    const mb = effectiveMailboxId();
+    const key = props.mailboxKey || (mb ? getMailboxKeyFor(mb) : null);
+    if (mb && key) {
+      syncNotesWithRemote(mb, key).then(() => refreshAll());
+    }
+
+    onCleanup(() => {
+      unsubSync();
+      cleanupAutoSync();
+    });
+
+    const handleStorageChange = (e: StorageEvent) => {
+      const mb = effectiveMailboxId();
+      if (e.key && (e.key === `byos_notes_${mb}` || e.key === `byos_labels_${mb}`)) {
+        refreshAll();
+      }
+    };
+    window.addEventListener("storage", handleStorageChange);
 
     const handleGlobalClick = (e?: MouseEvent) => {
       const target = e?.target as HTMLElement | null;
@@ -184,11 +261,21 @@ export const NotesView: Component<NotesViewProps> = (props) => {
       setActiveMenuCardId(null);
       setActiveLabelMenuCardId(null);
       setActiveCollabCardId(null);
+
+      // Auto-save composer when clicking outside
+      if (isComposing() && (!target || !target.closest('[data-testid="notes-compose-expanded"], [data-testid="notes-compose-collapsed"]'))) {
+        handleSaveNewNote();
+      }
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         handleGlobalClick();
+        if (editingNote()) {
+          handleSaveEdit();
+        } else if (isComposing()) {
+          handleSaveNewNote();
+        }
       }
     };
 
@@ -196,6 +283,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     window.addEventListener("keydown", handleKeyDown);
 
     onCleanup(() => {
+      window.removeEventListener("storage", handleStorageChange);
       document.removeEventListener("click", handleGlobalClick);
       window.removeEventListener("keydown", handleKeyDown);
     });
@@ -205,7 +293,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
   function refreshAll() {
     const mb = effectiveMailboxId();
-    const key = (props.isUnlocked !== false ? props.mailboxKey : null) || null;
+    const key = (props.isUnlocked !== false ? props.mailboxKey : null) || (mb ? getMailboxKeyFor(mb) : null);
     const loaded = loadNotes(mb, key);
     setNotes(loaded);
     setLabels(loadLabels(mb));
@@ -342,6 +430,9 @@ export const NotesView: Component<NotesViewProps> = (props) => {
   // Compose Actions
   function handleStartCompose(checklist: boolean = false) {
     setIsComposing(true);
+    setComposeMailboxId(effectiveMailboxId() || null);
+    setSaveStatus("idle");
+    setSaveErrorMessage(null);
     setNewIsChecklist(checklist);
     if (checklist && newChecklistItems().length === 0) {
       setNewChecklistItems([{ id: `item-${Date.now()}`, text: "", completed: false }]);
@@ -414,21 +505,57 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     const drawings = newDrawings();
     const images = newImages();
 
+    const currentMb = effectiveMailboxId();
+    const initMb = composeMailboxId();
+
     if (title || content || items.length > 0 || drawings.length > 0 || images.length > 0) {
-      createNote(effectiveMailboxId(), title, content, newColor(), newIsPinned(), {
-        isChecklist: newIsChecklist(),
-        checklistItems: items,
-        drawings,
-        images,
-        collaborators: newCollaborators(),
-        labels: newSelectedLabels(),
-        reminder: newReminder()
-          ? {
-              timestamp: newReminder()!,
-              label: formatReminderLabel(newReminder()!),
-            }
-          : null,
-      });
+      if (initMb && currentMb && initMb !== currentMb) {
+        setSaveStatus("failed");
+        setSaveErrorMessage("Mailbox changed while composing. Note not saved to protect account isolation.");
+        return;
+      }
+
+      const mbKey = props.mailboxKey || (currentMb ? getMailboxKeyFor(currentMb) : null);
+      if (!mbKey || mbKey.length !== 32) {
+        setSaveStatus("failed");
+        setSaveErrorMessage("Encryption key unavailable. Note not saved to prevent unencrypted persistence.");
+        return;
+      }
+
+      setSaveStatus("saving");
+      const created = createNote(
+        currentMb,
+        title,
+        content,
+        newColor(),
+        newIsPinned(),
+        {
+          isChecklist: newIsChecklist(),
+          checklistItems: items,
+          drawings,
+          images,
+          collaborators: newCollaborators(),
+          labels: newSelectedLabels(),
+          reminder: newReminder()
+            ? {
+                timestamp: newReminder()!,
+                label: formatReminderLabel(newReminder()!),
+              }
+            : null,
+        },
+        mbKey
+      );
+
+      if (!created) {
+        setSaveStatus("failed");
+        setSaveErrorMessage("Failed to save note securely.");
+        return;
+      }
+
+      setSaveStatus("saved");
+      setTimeout(() => {
+        if (saveStatus() === "saved") setSaveStatus("idle");
+      }, 2000);
       refreshAll();
     }
 
@@ -450,6 +577,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     setShowComposeMenu(false);
     setShowComposeLabelMenu(false);
     setShowFormattingBar(false);
+    setComposeMailboxId(null);
     setIsComposing(false);
   }
 
@@ -638,6 +766,9 @@ export const NotesView: Component<NotesViewProps> = (props) => {
   function openEditModal(note: NoteItem) {
     if (note.isInBin || note._isLocked) return; // Read-only in bin or locked
     setEditingNote(note);
+    setEditMailboxId(effectiveMailboxId() || null);
+    setSaveStatus("idle");
+    setSaveErrorMessage(null);
     setEditTitle(note.title);
     setEditContent(note.content);
     setEditIsChecklist(Boolean(note.isChecklist));
@@ -691,33 +822,59 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     const content = editContent().trim();
     const items = editChecklistItems().filter((it) => it.text.trim());
 
+    const currentMb = effectiveMailboxId();
+    const initMb = editMailboxId();
+
+    if (initMb && currentMb && initMb !== currentMb) {
+      setSaveStatus("failed");
+      setSaveErrorMessage("Mailbox changed while editing. Note not saved to protect account isolation.");
+      return;
+    }
+
+    const mbKey = props.mailboxKey || (currentMb ? getMailboxKeyFor(currentMb) : null);
+
     if (!title && !content && items.length === 0 && (!note.drawings || note.drawings.length === 0) && (!note.images || note.images.length === 0)) {
-      deleteNote(effectiveMailboxId(), note.id);
-    } else {
-      const currentReminder = editReminder()
-        ? {
-            timestamp: editReminder()!,
-            label: formatReminderLabel(editReminder()!),
-          }
-        : null;
+      deleteNote(currentMb, note.id, mbKey);
+      refreshAll();
+      setEditingNote(null);
+      setEditMailboxId(null);
+      return;
+    }
 
-      const prevReminderTs = note.reminder?.timestamp || null;
-      const newReminderTs = editReminder() || null;
-      const reminderChanged = prevReminderTs !== newReminderTs;
+    const currentReminder = editReminder()
+      ? {
+          timestamp: editReminder()!,
+          label: formatReminderLabel(editReminder()!),
+        }
+      : null;
 
-      const isUnchanged =
-        !reminderChanged &&
-        title === (note.title || "").trim() &&
-        content === (note.content || "").trim() &&
-        editIsChecklist() === Boolean(note.isChecklist) &&
-        editColor() === (note.color || "default") &&
-        editIsPinned() === Boolean(note.isPinned) &&
-        JSON.stringify(items) === JSON.stringify((note.checklistItems || []).filter((it) => it.text.trim())) &&
-        JSON.stringify(editLabels()) === JSON.stringify(note.labels || []);
+    const prevReminderTs = note.reminder?.timestamp || null;
+    const newReminderTs = editReminder() || null;
+    const reminderChanged = prevReminderTs !== newReminderTs;
 
-      if (!isUnchanged) {
-        saveNoteVersion(effectiveMailboxId(), note.id);
-        updateNote(effectiveMailboxId(), note.id, {
+    const isUnchanged =
+      !reminderChanged &&
+      title === (note.title || "").trim() &&
+      content === (note.content || "").trim() &&
+      editIsChecklist() === Boolean(note.isChecklist) &&
+      editColor() === (note.color || "default") &&
+      editIsPinned() === Boolean(note.isPinned) &&
+      JSON.stringify(items) === JSON.stringify((note.checklistItems || []).filter((it) => it.text.trim())) &&
+      JSON.stringify(editLabels()) === JSON.stringify(note.labels || []);
+
+    if (!isUnchanged) {
+      if (!mbKey || mbKey.length !== 32) {
+        setSaveStatus("failed");
+        setSaveErrorMessage("Encryption key unavailable. Note not saved to prevent unencrypted persistence.");
+        return;
+      }
+
+      setSaveStatus("saving");
+      saveNoteVersion(currentMb, note.id, mbKey);
+      const updated = updateNote(
+        currentMb,
+        note.id,
+        {
           title,
           content,
           isChecklist: editIsChecklist(),
@@ -726,11 +883,25 @@ export const NotesView: Component<NotesViewProps> = (props) => {
           isPinned: editIsPinned(),
           labels: editLabels(),
           reminder: currentReminder,
-        });
+        },
+        mbKey
+      );
+
+      if (!updated) {
+        setSaveStatus("failed");
+        setSaveErrorMessage("Failed to update note securely.");
+        return;
       }
+
+      setSaveStatus("saved");
+      setTimeout(() => {
+        if (saveStatus() === "saved") setSaveStatus("idle");
+      }, 2000);
     }
+
     refreshAll();
     setEditingNote(null);
+    setEditMailboxId(null);
   }
 
   function getViewTitle(): string {
@@ -864,6 +1035,78 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
         {/* ── 2. MAIN WORKSPACE CARD (Matches Email List Section Radius & Card Styling) ── */}
         <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex flex-col min-w-0 min-h-0">
+          {/* Header Strip with View Title and Remote Customer-Owned Storage Sync Status */}
+          <div class="px-5 sm:px-6 py-2.5 border-b border-[#E2DFD8]/60 dark:border-[#2A2D35]/60 flex items-center justify-between gap-3 bg-[#FAF9F5]/80 dark:bg-[#151618]/80 select-none">
+            <div class="flex items-center gap-2.5">
+              <h2 class="text-sm font-semibold text-[#1A1B1E] dark:text-[#ECEBE8] flex items-center gap-2">
+                <span>{getViewTitle()}</span>
+                <span class="text-[11px] font-mono font-normal text-[#878A8E] dark:text-[#6F7173] px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/5">
+                  {searchFilteredNotes().length}
+                </span>
+              </h2>
+              <Show when={props.searchQuery}>
+                <span class="text-xs text-[#878A8E] flex items-center gap-1.5 pl-2 border-l border-[#E2DFD8] dark:border-[#2A2D35]">
+                  <span>Matching "{props.searchQuery}"</span>
+                  <button
+                    type="button"
+                    onClick={() => props.onSearchChange?.("")}
+                    class="text-[#9E725F] hover:underline cursor-pointer font-medium"
+                  >
+                    Clear
+                  </button>
+                </span>
+              </Show>
+            </div>
+            <div class="flex items-center gap-2">
+              <Show when={saveStatus() === "saving"}>
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium rounded-full bg-stone-100 text-[#6F7173] dark:bg-stone-800 dark:text-stone-300">
+                  <svg class="animate-spin w-3 h-3 text-[#9E725F]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Saving…
+                </span>
+              </Show>
+              <Show when={syncStatus() === "syncing"}>
+                <span
+                  data-testid="notes-sync-status"
+                  class="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium rounded-full bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 animate-pulse"
+                >
+                  <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping"></span>
+                  Syncing with customer storage...
+                </span>
+              </Show>
+              <Show when={syncStatus() === "synced"}>
+                <span
+                  data-testid="notes-sync-status"
+                  class="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-medium rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60"
+                >
+                  <svg class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                  Encrypted & synced
+                </span>
+              </Show>
+              <Show when={syncStatus() === "offline"}>
+                <span
+                  data-testid="notes-sync-status"
+                  class="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-medium rounded-full bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/60"
+                >
+                  Offline - saved on this device
+                </span>
+              </Show>
+              <Show when={syncStatus() === "failed"}>
+                <button
+                  type="button"
+                  onClick={() => triggerNotesSync(effectiveMailboxId(), props.mailboxKey, 0)}
+                  data-testid="notes-sync-status"
+                  class="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-medium rounded-full bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200/60 dark:border-rose-800/60 hover:bg-rose-100 dark:hover:bg-rose-900/40 cursor-pointer transition-colors"
+                >
+                  Sync failed (retry)
+                </button>
+              </Show>
+            </div>
+          </div>
         {/* Notes Scrollable Body */}
         <div class="flex-1 min-h-0 overflow-y-auto px-4 sm:px-8 py-6">
           <div class="max-w-5xl mx-auto">
@@ -901,7 +1144,10 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                     /* Collapsed Composer */
                     <div
                       data-testid="notes-compose-collapsed"
-                      onClick={() => handleStartCompose(false)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleStartCompose(false);
+                      }}
                       class="w-full h-12 px-4 rounded-xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E1F23] shadow-xs hover:shadow-md transition-shadow cursor-text flex items-center justify-between text-[#6F7173] dark:text-[#878A8E]"
                     >
                       <span class="text-sm font-medium">Take a note…</span>
@@ -1090,6 +1336,15 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                                 placeholder="List item"
                                 value={item.text}
                                 onInput={(e) => handleUpdateChecklistItem(item.id, e.currentTarget.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    handleAddChecklistItem();
+                                  } else if (e.key === "Backspace" && !item.text) {
+                                    e.preventDefault();
+                                    handleRemoveChecklistItem(item.id);
+                                  }
+                                }}
                                 class={`flex-1 text-sm bg-transparent outline-none ${
                                   item.completed ? "line-through text-[#878A8E]" : "text-[#1A1B1E] dark:text-[#ECEBE8]"
                                 }`}
@@ -1300,7 +1555,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                               setShowComposeReminder(!showComposeReminder());
                             }}
                             data-testid="new-note-reminder-btn"
-                            title="Remind me"
+                            title="Remind me (local target date)"
                             class="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer"
                           >
                             <svg class="w-4 h-4 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -1311,9 +1566,12 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
                           <Show when={showComposeReminder()}>
                             <div
-                              class="absolute left-0 bottom-full mb-2 w-44 p-1.5 rounded-xl bg-white dark:bg-[#1E1F23] border border-[#E2DFD8] dark:border-[#2A2D35] shadow-xl flex flex-col gap-1 z-30 text-xs"
+                              class="absolute left-0 bottom-full mb-2 w-48 p-1.5 rounded-xl bg-white dark:bg-[#1E1F23] border border-[#E2DFD8] dark:border-[#2A2D35] shadow-xl flex flex-col gap-1 z-30 text-xs"
                               onClick={(e) => e.stopPropagation()}
                             >
+                              <div class="text-[10px] text-[#878A8E] px-2 pt-1 leading-tight">
+                                Target date reminder (local reference; alerts not yet active)
+                              </div>
                               <button
                                 type="button"
                                 onClick={() => {
@@ -1357,7 +1615,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                               setShowComposeCollaborator(!showComposeCollaborator());
                             }}
                             data-testid="new-note-collaborator-btn"
-                            title="Add collaborator"
+                            title="Add collaborator (local attribution tag)"
                             class="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer"
                           >
                             <svg class="w-4 h-4 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -1373,7 +1631,10 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                               class="absolute left-0 bottom-full mb-2 w-64 p-3 rounded-xl bg-white dark:bg-[#1E1F23] border border-[#E2DFD8] dark:border-[#2A2D35] shadow-xl flex flex-col gap-2 z-30 text-xs"
                               onClick={(e) => e.stopPropagation()}
                             >
-                              <span class="font-semibold text-[#1A1B1E] dark:text-[#ECEBE8]">Add Collaborator</span>
+                              <div>
+                                <span class="font-semibold text-[#1A1B1E] dark:text-[#ECEBE8]">Add Collaborator (Local Tag)</span>
+                                <div class="text-[10px] text-[#878A8E] leading-tight mt-0.5">Local attribution tag only. Multi-user sharing is not yet supported.</div>
+                              </div>
                               <div class="flex items-center gap-1.5">
                                 <input
                                   type="text"
@@ -1618,15 +1879,46 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                         </button>
                       </div>
 
-                      {/* Close / Save Button on the right */}
-                      <button
-                        type="button"
-                        onClick={handleSaveNewNote}
-                        data-testid="new-note-save-btn"
-                        class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-[#9E725F] text-white hover:bg-[#8B6453] transition shadow-2xs cursor-pointer"
-                      >
-                        Close
-                      </button>
+                      {/* Close / Save Button on the right with Status */}
+                      <div class="flex items-center gap-2" data-testid="notes-compose-status-area">
+                        <Show when={saveStatus() === "saving"}>
+                          <span
+                            data-testid="notes-save-status-saving"
+                            class="text-xs text-[#878A8E] flex items-center gap-1"
+                          >
+                            <svg class="animate-spin w-3 h-3 text-[#9E725F]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Saving…
+                          </span>
+                        </Show>
+                        <Show when={saveStatus() === "saved"}>
+                          <span
+                            data-testid="notes-save-status-saved"
+                            class="text-xs text-green-600 dark:text-green-400 font-medium"
+                          >
+                            ✓ Saved
+                          </span>
+                        </Show>
+                        <Show when={saveStatus() === "failed"}>
+                          <span
+                            data-testid="notes-save-status-failed"
+                            class="text-xs text-red-600 dark:text-red-400 font-medium max-w-[200px] truncate"
+                            title={saveErrorMessage() || "Save failed"}
+                          >
+                            ⚠️ {saveErrorMessage() || "Save failed"}
+                          </span>
+                        </Show>
+                        <button
+                          type="button"
+                          onClick={handleSaveNewNote}
+                          data-testid="new-note-save-btn"
+                          class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-[#9E725F] text-white hover:bg-[#8B6453] transition shadow-2xs cursor-pointer"
+                        >
+                          Close
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </Show>
@@ -1651,16 +1943,49 @@ export const NotesView: Component<NotesViewProps> = (props) => {
             <Show when={searchFilteredNotes().length === 0}>
               <div
                 data-testid="notes-empty-state"
-                class="flex flex-col items-center justify-center py-20 text-center"
+                class="flex flex-col items-center justify-center py-16 text-center select-none"
               >
-                <div class="w-16 h-16 rounded-full bg-[#E2DFD8]/40 dark:bg-[#2A2D35]/50 flex items-center justify-center text-[#878A8E] mb-4">
-                  <svg class="w-8 h-8 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                    <path d="M9 18h6" />
-                    <path d="M10 22h4" />
-                    <path d="M12 2a7 7 0 0 0-7 7c0 2.5 1.5 4.5 3 6h8c1.5-1.5 3-3.5 3-6a7 7 0 0 0-7-7z" />
-                  </svg>
+                <div class="w-14 h-14 rounded-2xl bg-[#E2DFD8]/40 dark:bg-[#2A2D35]/50 flex items-center justify-center text-[#878A8E] mb-3.5 ring-1 ring-black/5 dark:ring-white/5">
+                  <Show
+                    when={props.searchQuery}
+                    fallback={
+                      <Show
+                        when={activeView() === "bin"}
+                        fallback={
+                          <Show
+                            when={activeView() === "archive"}
+                            fallback={
+                              <svg class="w-7 h-7 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" />
+                                <line x1="9" y1="21" x2="15" y2="21" stroke-linecap="round" stroke-linejoin="round" />
+                                <line x1="10" y1="18" x2="14" y2="18" stroke-linecap="round" stroke-linejoin="round" />
+                              </svg>
+                            }
+                          >
+                            <svg class="w-7 h-7 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                              <polyline points="21 8 21 21 3 21 3 8" />
+                              <rect x="1" y="3" width="22" height="5" />
+                              <line x1="10" y1="12" x2="14" y2="12" />
+                            </svg>
+                          </Show>
+                        }
+                      >
+                        <svg class="w-7 h-7 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          <line x1="10" y1="11" x2="10" y2="17" />
+                          <line x1="14" y1="11" x2="14" y2="17" />
+                        </svg>
+                      </Show>
+                    }
+                  >
+                    <svg class="w-7 h-7 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <circle cx="11" cy="11" r="8" />
+                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
+                  </Show>
                 </div>
-                <h3 class="text-base font-semibold text-[#1A1B1E] dark:text-[#ECEBE8] mb-1">
+                <h3 class="text-sm font-semibold text-[#1A1B1E] dark:text-[#ECEBE8] mb-1">
                   {props.searchQuery
                     ? "No matching notes found"
                     : activeView() === "bin"
@@ -1668,15 +1993,17 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                     : activeView() === "archive"
                     ? "Your archived notes appear here"
                     : activeView() === "reminders"
-                    ? "Notes with upcoming reminders appear here"
+                    ? "Notes with reminders appear here"
                     : "Notes you add appear here"}
                 </h3>
-                <p class="text-xs text-[#6F7173] dark:text-[#878A8E] max-w-sm">
+                <p class="text-xs text-[#6F7173] dark:text-[#878A8E] max-w-xs leading-relaxed">
                   {props.searchQuery
-                    ? "Try searching for different keywords or clear the search filter."
+                    ? "Try searching for different keywords or clear the search query."
                     : activeView() === "bin"
-                    ? "Deleted notes stay in the bin until emptied."
-                    : "Capture ideas, checklists, drawings, and daily reminders with encrypted privacy."}
+                    ? "Deleted notes stay in the Bin until permanently cleared."
+                    : activeView() === "archive"
+                    ? "Archived notes are kept safely out of your main notes view."
+                    : "Quickly capture ideas, checklists, and daily notes with zero-knowledge encryption."}
                 </p>
               </div>
             </Show>
@@ -1687,7 +2014,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                 <h4 class="text-[11px] font-bold tracking-wider uppercase text-[#6F7173] dark:text-[#878A8E] px-2 mb-3">
                   PINNED
                 </h4>
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-start">
                   <For each={pinnedNotes()}>{(note) => renderNoteCard(note)}</For>
                 </div>
               </div>
@@ -1701,7 +2028,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                     OTHERS
                   </h4>
                 </Show>
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-start">
                   <For each={otherNotes()}>{(note) => renderNoteCard(note)}</For>
                 </div>
               </div>
@@ -1898,6 +2225,18 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                             editChecklistItems().map((it) => (it.id === item.id ? { ...it, text: val } : it))
                           );
                         }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            setEditChecklistItems([
+                              ...editChecklistItems(),
+                              { id: `item-${Date.now()}`, text: "", completed: false },
+                            ]);
+                          } else if (e.key === "Backspace" && !item.text) {
+                            e.preventDefault();
+                            setEditChecklistItems(editChecklistItems().filter((it) => it.id !== item.id));
+                          }
+                        }}
                         class={`flex-1 text-sm bg-transparent outline-none ${
                           item.completed ? "line-through text-[#878A8E]" : "text-[#1A1B1E] dark:text-[#ECEBE8]"
                         }`}
@@ -2030,7 +2369,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                       setShowEditReminder(!showEditReminder());
                     }}
                     data-testid="edit-note-reminder-btn"
-                    title="Remind me"
+                    title="Remind me (local target date)"
                     class="p-1.5 rounded-lg text-[#6F7173] dark:text-[#878A8E] hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
                   >
                     <svg class="w-4 h-4 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -2042,9 +2381,12 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                   <Show when={showEditReminder()}>
                     <div
                       data-testid="edit-note-reminder-popover"
-                      class="absolute left-0 bottom-full mb-2 w-44 p-1.5 rounded-xl bg-white dark:bg-[#1E1F23] border border-[#E2DFD8] dark:border-[#2A2D35] shadow-xl flex flex-col gap-1 z-30 text-xs"
+                      class="absolute left-0 bottom-full mb-2 w-48 p-1.5 rounded-xl bg-white dark:bg-[#1E1F23] border border-[#E2DFD8] dark:border-[#2A2D35] shadow-xl flex flex-col gap-1 z-30 text-xs"
                       onClick={(e) => e.stopPropagation()}
                     >
+                      <div class="text-[10px] text-[#878A8E] px-2 pt-1 leading-tight">
+                        Target date reminder (local reference; alerts not yet active)
+                      </div>
                       <button
                         type="button"
                         data-testid="edit-reminder-later-today-btn"
@@ -2247,15 +2589,46 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                 </button>
               </div>
 
-              {/* Close / Save Button */}
-              <button
-                type="button"
-                onClick={handleSaveEdit}
-                data-testid="edit-note-save-btn"
-                class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-[#9E725F] text-white hover:bg-[#8B6453] transition shadow-2xs cursor-pointer"
-              >
-                Close
-              </button>
+              {/* Close / Save Button with Status */}
+              <div class="flex items-center gap-2" data-testid="notes-edit-status-area">
+                <Show when={saveStatus() === "saving"}>
+                  <span
+                    data-testid="notes-edit-save-status-saving"
+                    class="text-xs text-[#878A8E] flex items-center gap-1"
+                  >
+                    <svg class="animate-spin w-3 h-3 text-[#9E725F]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Saving…
+                  </span>
+                </Show>
+                <Show when={saveStatus() === "saved"}>
+                  <span
+                    data-testid="notes-edit-save-status-saved"
+                    class="text-xs text-green-600 dark:text-green-400 font-medium"
+                  >
+                    ✓ Saved
+                  </span>
+                </Show>
+                <Show when={saveStatus() === "failed"}>
+                  <span
+                    data-testid="notes-edit-save-status-failed"
+                    class="text-xs text-red-600 dark:text-red-400 font-medium max-w-[200px] truncate"
+                    title={saveErrorMessage() || "Save failed"}
+                  >
+                    ⚠️ {saveErrorMessage() || "Save failed"}
+                  </span>
+                </Show>
+                <button
+                  type="button"
+                  onClick={handleSaveEdit}
+                  data-testid="edit-note-save-btn"
+                  class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-[#9E725F] text-white hover:bg-[#8B6453] transition shadow-2xs cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2269,7 +2642,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
       <div
         data-testid={`note-card-${note.id}`}
         onClick={() => openEditModal(note)}
-        class={`group relative rounded-xl border p-4 shadow-2xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between ${
+        class={`group relative rounded-2xl border p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-[#9E725F]/30 transition-all cursor-pointer flex flex-col justify-between ${
           getColorDef(note.color).lightBg
         } ${getColorDef(note.color).darkBg} ${getColorDef(note.color).borderLight} ${
           getColorDef(note.color).borderDark
@@ -2382,7 +2755,10 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
           {/* Reminder Badge */}
           <Show when={note.reminder}>
-            <div class="mt-2.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-black/5 dark:bg-white/10 text-[#6F7173] dark:text-[#878A8E]">
+            <div
+              title="Target date reminder (local reference)"
+              class="mt-2.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-black/5 dark:bg-white/10 text-[#6F7173] dark:text-[#878A8E]"
+            >
               <svg class="w-3 h-3 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
                 <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
                 <path d="M13.73 21a2 2 0 0 1-3.46 0" />
@@ -2404,7 +2780,10 @@ export const NotesView: Component<NotesViewProps> = (props) => {
             <div class="mt-2 flex flex-wrap gap-1">
               <For each={note.collaborators}>
                 {(collab) => (
-                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-black/5 dark:bg-white/10 text-[#6F7173] dark:text-[#878A8E]">
+                  <span
+                    title="Attribution tag (local only; remote sharing not yet supported)"
+                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-black/5 dark:bg-white/10 text-[#6F7173] dark:text-[#878A8E]"
+                  >
                     <svg class="w-2.5 h-2.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
                       <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
                       <circle cx="12" cy="7" r="4" />
@@ -2455,7 +2834,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
           </span>
 
           {/* Actions toolbar on card hover */}
-          <div class="flex items-center gap-1 opacity-90 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+          <div class="flex items-center gap-0.5 opacity-90 sm:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
             <Show
               when={note.isInBin}
               fallback={
@@ -2485,7 +2864,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                         setActiveReminderCardId(activeReminderCardId() === note.id ? null : note.id);
                       }}
                       data-testid={`note-reminder-btn-${note.id}`}
-                      title="Remind me"
+                      title="Remind me (local target date)"
                       class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-[#6F7173] dark:text-[#878A8E] cursor-pointer"
                     >
                       <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -2496,9 +2875,12 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
                     <Show when={activeReminderCardId() === note.id}>
                       <div
-                        class="absolute left-0 bottom-full mb-1 w-36 p-1.5 rounded-xl bg-white dark:bg-[#1E1F23] border border-[#E2DFD8] dark:border-[#2A2D35] shadow-lg flex flex-col gap-1 z-30 text-xs"
+                        class="absolute left-0 bottom-full mb-1 w-44 p-1.5 rounded-xl bg-white dark:bg-[#1E1F23] border border-[#E2DFD8] dark:border-[#2A2D35] shadow-lg flex flex-col gap-1 z-30 text-xs"
                         onClick={(e) => e.stopPropagation()}
                       >
+                        <div class="text-[10px] text-[#878A8E] px-1 pb-1 leading-tight">
+                          Target date (local reference)
+                        </div>
                         <button
                           type="button"
                           onClick={(e) => handleSetCardReminder(note.id, 4, e)}

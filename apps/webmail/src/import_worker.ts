@@ -5,6 +5,8 @@ import {
   createImportJob,
   completeImportJob,
 } from "./oauth_import";
+import { streamMbox } from "./mbox_stream";
+import { resolveTargetFolder } from "./mbox_labels";
 
 export interface ImportOptions {
   mailboxId: string;
@@ -541,6 +543,211 @@ export async function runImport(options: ImportOptions): Promise<ImportSummary> 
   return {
     jobId,
     provider: options.provider,
+    total,
+    imported,
+    skipped,
+    failed,
+    status: finalStatus,
+  };
+}
+
+export interface MboxImportOptions {
+  mailboxId: string;
+  mailboxKey: Uint8Array;
+  file: File | Blob;
+  userEmail?: string;
+  targetFolder?: string; // "auto" | "inbox" | "sent" | "archive" | "trash"
+  concurrency?: number;
+  signal?: AbortSignal;
+  onProgress?: (progress: ImportProgress) => void;
+}
+
+/**
+ * Runs direct .mbox file import with client-side zero-knowledge encryption (AES-GCM).
+ * Streams messages from the provided file/blob, detects folder and headers,
+ * encrypts each message in-browser, and uploads to customer storage.
+ */
+export async function runMboxImport(options: MboxImportOptions): Promise<ImportSummary> {
+  const signal = options.signal;
+  const messages: { raw: string; fromLine: string }[] = [];
+
+  options.onProgress?.({
+    total: 0,
+    processed: 0,
+    imported: 0,
+    skipped: 0,
+    failed: 0,
+    percent: 0,
+    status: "running",
+  });
+
+  try {
+    for await (const msg of streamMbox(options.file, signal)) {
+      if (signal?.aborted) break;
+      messages.push(msg);
+      options.onProgress?.({
+        total: messages.length,
+        processed: 0,
+        imported: 0,
+        skipped: 0,
+        failed: 0,
+        percent: 0,
+        status: "running",
+      });
+    }
+  } catch (streamErr) {
+    console.error("Error reading mbox stream:", streamErr);
+    return {
+      provider: "custom_mbox",
+      total: messages.length,
+      imported: 0,
+      skipped: 0,
+      failed: messages.length || 1,
+      status: "failed",
+      errorMessage: streamErr instanceof Error ? streamErr.message : String(streamErr),
+    };
+  }
+
+  const total = messages.length;
+  if (total === 0 || signal?.aborted) {
+    const finalStatus = signal?.aborted ? "cancelled" : "completed";
+    return {
+      provider: "custom_mbox",
+      total: 0,
+      imported: 0,
+      skipped: 0,
+      failed: 0,
+      status: finalStatus,
+    };
+  }
+
+  let jobId: string | undefined;
+  try {
+    jobId = await createImportJob(options.mailboxId, "custom_mbox", total);
+  } catch (err) {
+    console.warn("Failed to create custom_mbox import job row:", err);
+  }
+
+  let processed = 0;
+  let imported = 0;
+  let skipped = 0;
+  let failed = 0;
+  let queueIndex = 0;
+  const concurrency = Math.min(options.concurrency || 3, 5);
+
+  async function worker() {
+    while (queueIndex < messages.length) {
+      if (signal?.aborted) return;
+      const idx = queueIndex++;
+      const item = messages[idx];
+
+      try {
+        const parsed = parseRfc822Headers(item.raw);
+        let folder = "inbox";
+        if (options.targetFolder && options.targetFolder !== "auto") {
+          folder = options.targetFolder;
+        } else {
+          const detected = resolveTargetFolder(item.raw, options.userEmail || "");
+          if (detected) {
+            folder = detected;
+          }
+        }
+
+        const msgIdMatch = item.raw.match(/^Message-ID:\s*(.*)$/im);
+        const rawMsgId = msgIdMatch ? msgIdMatch[1].trim().replace(/[<>\\/]/g, "") : "";
+        const sourceMessageId = rawMsgId || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `mbox-${Date.now()}-${idx}`);
+        const safeId = encodeURIComponent(sourceMessageId);
+        const storageKey = `mailboxes/${options.mailboxId}/imported/custom_mbox/${safeId}.eml.enc`;
+
+        // D2: Encrypt raw message client-side with user's mailbox key
+        const encryptedBytes = await encryptRawEml(options.mailboxKey, options.mailboxId, item.raw);
+
+        // Upload to customer storage
+        await storeEncryptedStorageObject(options.mailboxId, storageKey, encryptedBytes);
+
+        // Insert metadata row via API
+        const metaRes = await importMessageMetadata(options.mailboxId, {
+          source_provider: "custom_mbox",
+          source_message_id: sourceMessageId,
+          storage_object_id: storageKey,
+          sender: parsed.from,
+          recipients: parsed.to,
+          direction: folder === "sent" ? "sent" : "received",
+          folder,
+          is_read: true,
+          is_starred: false,
+          has_attachments: parsed.hasAttachments,
+          attachment_count: parsed.hasAttachments ? 1 : 0,
+          size_bytes: encryptedBytes.length,
+          received_at: parsed.date || new Date().toISOString(),
+          wrapped_key_algorithm: "byos-imported-v1",
+        });
+
+        if (metaRes.imported) {
+          imported++;
+        } else {
+          skipped++;
+        }
+        processed++;
+        options.onProgress?.({
+          total,
+          processed,
+          imported,
+          skipped,
+          failed,
+          currentSubject: parsed.subject,
+          percent: Math.round((processed / total) * 100),
+          status: "running",
+        });
+      } catch (itemErr: unknown) {
+        if (signal?.aborted) return;
+        failed++;
+        processed++;
+        console.warn(`Failed to import mbox message ${idx}:`, itemErr);
+        options.onProgress?.({
+          total,
+          processed,
+          imported,
+          skipped,
+          failed,
+          percent: Math.round((processed / total) * 100),
+          status: "running",
+        });
+      }
+    }
+  }
+
+  const workerCount = Math.min(concurrency, messages.length);
+  const workers = Array.from({ length: workerCount }, () => worker());
+  await Promise.all(workers);
+
+  const finalStatus: "completed" | "cancelled" | "failed" = signal?.aborted
+    ? "cancelled"
+    : failed === total && total > 0
+    ? "failed"
+    : "completed";
+
+  if (jobId) {
+    try {
+      await completeImportJob(jobId, finalStatus, imported, skipped, failed);
+    } catch (err) {
+      console.warn("Failed to complete custom_mbox import job row:", err);
+    }
+  }
+
+  options.onProgress?.({
+    total,
+    processed,
+    imported,
+    skipped,
+    failed,
+    percent: 100,
+    status: finalStatus,
+  });
+
+  return {
+    jobId,
+    provider: "custom_mbox",
     total,
     imported,
     skipped,

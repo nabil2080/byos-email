@@ -71,11 +71,29 @@ func messageSnoozeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var msgFolder string
+	err = conn.QueryRow(ctx, `SELECT COALESCE(folder, 'inbox') FROM message_metadata WHERE id = $1 AND mailbox_id = $2`, messageID, mailboxID).Scan(&msgFolder)
+	if err == pgx.ErrNoRows {
+		writeInternalSendError(w, http.StatusNotFound, "message_not_found")
+		return
+	} else if err != nil {
+		writeInternalSendError(w, http.StatusInternalServerError, "query_failed")
+		return
+	}
+
 	// Parse or clear the snooze
 	var snoozedUntil interface{}
 	if req.SnoozedUntil == nil || *req.SnoozedUntil == "" {
 		snoozedUntil = nil
 	} else {
+		if msgFolder == "sent" {
+			writeInternalSendError(w, http.StatusBadRequest, "sent_messages_cannot_be_snoozed")
+			return
+		}
+		if msgFolder == "trash" || msgFolder == "spam" {
+			writeInternalSendError(w, http.StatusBadRequest, "cannot_snooze_trash_or_spam")
+			return
+		}
 		t, err := time.Parse(time.RFC3339Nano, *req.SnoozedUntil)
 		if err != nil {
 			t, err = time.Parse(time.RFC3339, *req.SnoozedUntil)

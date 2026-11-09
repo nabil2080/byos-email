@@ -2,14 +2,19 @@ const MAX_SIGNATURE_CHARS = 2000;
 
 export function loadSignature(mailboxId: string): string {
   if (typeof window === "undefined") return "";
-  return (
-    localStorage.getItem("byos.signature." + mailboxId) || ""
-  ).slice(0, MAX_SIGNATURE_CHARS);
+  const val =
+    (typeof sessionStorage !== "undefined" && sessionStorage.getItem("byos.signature." + mailboxId)) ||
+    (typeof localStorage !== "undefined" && localStorage.getItem("byos.signature." + mailboxId)) ||
+    "";
+  return val.slice(0, MAX_SIGNATURE_CHARS);
 }
 
 export function loadSignatureHtml(mailboxId: string): string {
   if (typeof window === "undefined") return "";
-  const stored = localStorage.getItem("byos.signature.html." + mailboxId);
+  const stored =
+    (typeof sessionStorage !== "undefined" && sessionStorage.getItem("byos.signature.html." + mailboxId)) ||
+    (typeof localStorage !== "undefined" && localStorage.getItem("byos.signature.html." + mailboxId)) ||
+    "";
   if (stored) return stored.slice(0, MAX_SIGNATURE_CHARS * 4);
   // Fallback: convert plaintext signature to simple HTML
   const plain = loadSignature(mailboxId);
@@ -26,32 +31,38 @@ export function loadSignatureHtml(mailboxId: string): string {
 
 export function saveSignature(mailboxId: string, plain: string): void {
   if (typeof window === "undefined") return;
-  if (plain.trim()) {
-    localStorage.setItem(
-      "byos.signature." + mailboxId,
-      plain.slice(0, MAX_SIGNATURE_CHARS),
-    );
+  const val = plain.trim() ? plain.slice(0, MAX_SIGNATURE_CHARS) : "";
+  if (val) {
+    if (typeof localStorage !== "undefined") localStorage.setItem("byos.signature." + mailboxId, val);
+    if (typeof sessionStorage !== "undefined") sessionStorage.setItem("byos.signature." + mailboxId, val);
   } else {
-    localStorage.removeItem("byos.signature." + mailboxId);
+    if (typeof localStorage !== "undefined") localStorage.removeItem("byos.signature." + mailboxId);
+    if (typeof sessionStorage !== "undefined") sessionStorage.removeItem("byos.signature." + mailboxId);
   }
 }
 
 export function saveSignatureHtml(mailboxId: string, html: string): void {
   if (typeof window === "undefined") return;
-  if (html.trim()) {
-    localStorage.setItem(
-      "byos.signature.html." + mailboxId,
-      html.slice(0, MAX_SIGNATURE_CHARS * 4),
-    );
+  const val = html.trim() ? html.slice(0, MAX_SIGNATURE_CHARS * 4) : "";
+  if (val) {
+    if (typeof localStorage !== "undefined") localStorage.setItem("byos.signature.html." + mailboxId, val);
+    if (typeof sessionStorage !== "undefined") sessionStorage.setItem("byos.signature.html." + mailboxId, val);
   } else {
-    localStorage.removeItem("byos.signature.html." + mailboxId);
+    if (typeof localStorage !== "undefined") localStorage.removeItem("byos.signature.html." + mailboxId);
+    if (typeof sessionStorage !== "undefined") sessionStorage.removeItem("byos.signature.html." + mailboxId);
   }
 }
 
 export function clearSignature(mailboxId: string): void {
   if (typeof window === "undefined") return;
-  localStorage.removeItem("byos.signature." + mailboxId);
-  localStorage.removeItem("byos.signature.html." + mailboxId);
+  if (typeof localStorage !== "undefined") {
+    localStorage.removeItem("byos.signature." + mailboxId);
+    localStorage.removeItem("byos.signature.html." + mailboxId);
+  }
+  if (typeof sessionStorage !== "undefined") {
+    sessionStorage.removeItem("byos.signature." + mailboxId);
+    sessionStorage.removeItem("byos.signature.html." + mailboxId);
+  }
 }
 
 export function applySignature(plaintext: string, signature: string): string {

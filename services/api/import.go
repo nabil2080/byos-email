@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"byos.email/crypto/envelope"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -924,6 +925,21 @@ func importJobListHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"jobs": jobs})
 }
 
+func isAllowedNotesSubpath(subPath string) bool {
+	if !strings.HasPrefix(subPath, "notes/") || !strings.HasSuffix(subPath, ".enc") {
+		return false
+	}
+	if strings.Contains(subPath, "..") {
+		return false
+	}
+	for _, ch := range subPath {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '/' || ch == '-' || ch == '_' || ch == '.') {
+			return false
+		}
+	}
+	return true
+}
+
 // POST /v1/mailboxes/{mailbox_id}/storage/store
 func mailboxStorageStoreHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -943,9 +959,24 @@ func mailboxStorageStoreHandler(w http.ResponseWriter, r *http.Request) {
 
 	objectKey := r.Header.Get("X-Object-Key")
 	expectedPrefix := fmt.Sprintf("mailboxes/%s/", mailboxID)
-	if !strings.HasPrefix(objectKey, expectedPrefix) || strings.Contains(objectKey, "..") {
+	if !strings.HasPrefix(objectKey, expectedPrefix) || strings.Contains(objectKey, "..") || strings.ContainsAny(objectKey, "\r\n\x00") {
 		http.Error(w, "invalid X-Object-Key: must be within mailbox scope", http.StatusBadRequest)
 		return
+	}
+
+	// Route-specific namespace enforcement for user-facing uploads:
+	// Internal storage service callers may access any mailbox-scoped key.
+	// User sessions are strictly restricted to authorized import/oauth namespaces.
+	isInternalStorage := verifyInternalServiceAuth(r, "storage")
+	if !isInternalStorage {
+		subPath := strings.TrimPrefix(objectKey, expectedPrefix)
+		isOAuthTokenPath := subPath == "oauth/gmail.enc" || subPath == "oauth/outlook.enc"
+		isImportedEmlPath := strings.HasPrefix(subPath, "imported/") && strings.HasSuffix(subPath, ".eml.enc")
+		isNotesPath := isAllowedNotesSubpath(subPath)
+		if !isOAuthTokenPath && !isImportedEmlPath && !isNotesPath {
+			http.Error(w, "unauthorized storage path: user uploads restricted to authorized import/oauth/notes namespaces", http.StatusBadRequest)
+			return
+		}
 	}
 
 	dsn := os.Getenv("DATABASE_URL")
@@ -969,6 +1000,28 @@ func mailboxStorageStoreHandler(w http.ResponseWriter, r *http.Request) {
 	rawData, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 50<<20))
 	if err != nil {
 		http.Error(w, "payload too large or read failed", http.StatusBadRequest)
+		return
+	}
+
+	// FINDING-02 Remediation: Enforce encrypted-object contract.
+	// Rejects unencrypted plaintext (RFC 822 MIME, HTML, ASCII) or arbitrary non-envelope payloads.
+	if len(rawData) < 29 {
+		http.Error(w, "invalid storage payload: length below minimum encrypted framing (29 bytes)", http.StatusBadRequest)
+		return
+	}
+
+	if rawData[0] == 0x01 {
+		if err := validateSection12BinaryEnvelope(rawData); err != nil {
+			http.Error(w, fmt.Sprintf("invalid storage payload binary envelope: %v", err), http.StatusBadRequest)
+			return
+		}
+	} else if rawData[0] == '{' {
+		if _, err := envelope.UnmarshalCanonical(rawData); err != nil {
+			http.Error(w, fmt.Sprintf("invalid storage payload crypto envelope: %v", err), http.StatusBadRequest)
+			return
+		}
+	} else {
+		http.Error(w, "invalid storage payload: unencrypted or malformed payload rejected (must be v1 binary or HPKE JSON envelope)", http.StatusBadRequest)
 		return
 	}
 
@@ -1083,4 +1136,189 @@ func mailboxStorageRetrieveHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rawData)))
 	w.WriteHeader(http.StatusOK)
 	w.Write(rawData)
+}
+
+// GET /v1/mailboxes/{mailbox_id}/storage/list
+func mailboxStorageListHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mailboxID := r.PathValue("mailbox_id")
+	if _, err := uuid.Parse(mailboxID); err != nil {
+		http.Error(w, "invalid mailbox_id UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok && r.Header.Get("X-Internal-Key") == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	reqPrefix := r.URL.Query().Get("prefix")
+	expectedPrefix := fmt.Sprintf("mailboxes/%s/", mailboxID)
+
+	isInternalStorage := verifyInternalServiceAuth(r, "storage")
+	if !isInternalStorage {
+		cleanReq := strings.TrimPrefix(reqPrefix, expectedPrefix)
+		if !strings.HasPrefix(cleanReq, "notes/") && cleanReq != "notes" && cleanReq != "" {
+			http.Error(w, "unauthorized prefix: list operations restricted to notes namespace", http.StatusBadRequest)
+			return
+		}
+		if strings.Contains(reqPrefix, "..") || strings.ContainsAny(reqPrefix, "\r\n\x00") {
+			http.Error(w, "invalid prefix parameter", http.StatusBadRequest)
+			return
+		}
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	if status, errMsg, authOk := verifyMailboxScopedAccess(r, userID, mailboxID, "storage", conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
+
+	var targetPrefix string
+	if strings.HasPrefix(reqPrefix, expectedPrefix) {
+		targetPrefix = reqPrefix
+	} else {
+		targetPrefix = expectedPrefix + strings.TrimPrefix(reqPrefix, "/")
+	}
+
+	listURL := fmt.Sprintf("%s/api/list?mailbox_id=%s&prefix=%s", storageWorkerURL(), url.QueryEscape(mailboxID), url.QueryEscape(targetPrefix))
+	listReq, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	if err != nil {
+		http.Error(w, "failed to prepare storage request", http.StatusInternalServerError)
+		return
+	}
+	setStorageInternalAuth(listReq)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	listResp, err := client.Do(listReq)
+	if err != nil {
+		http.Error(w, "storage-worker unavailable", http.StatusBadGateway)
+		return
+	}
+	defer listResp.Body.Close()
+
+	if listResp.StatusCode != http.StatusOK {
+		respBytes, _ := io.ReadAll(listResp.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(listResp.StatusCode)
+		w.Write(respBytes)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, listResp.Body)
+}
+
+// POST /v1/mailboxes/{mailbox_id}/storage/delete
+func mailboxStorageDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mailboxID := r.PathValue("mailbox_id")
+	if _, err := uuid.Parse(mailboxID); err != nil {
+		http.Error(w, "invalid mailbox_id UUID", http.StatusBadRequest)
+		return
+	}
+	userID, ok := getAuthenticatedUserID(r)
+	if !ok && r.Header.Get("X-Internal-Key") == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var objectKey string
+	if r.Header.Get("X-Object-Key") != "" {
+		objectKey = r.Header.Get("X-Object-Key")
+	} else if r.URL.Query().Get("key") != "" {
+		objectKey = r.URL.Query().Get("key")
+	} else if r.Body != nil {
+		var body struct {
+			ObjectKey string `json:"object_key"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.ObjectKey != "" {
+			objectKey = body.ObjectKey
+		}
+	}
+
+	expectedPrefix := fmt.Sprintf("mailboxes/%s/", mailboxID)
+	if !strings.HasPrefix(objectKey, expectedPrefix) || strings.Contains(objectKey, "..") || strings.ContainsAny(objectKey, "\r\n\x00") {
+		http.Error(w, "invalid object_key: must be within mailbox scope", http.StatusBadRequest)
+		return
+	}
+
+	isInternalStorage := verifyInternalServiceAuth(r, "storage")
+	if !isInternalStorage {
+		subPath := strings.TrimPrefix(objectKey, expectedPrefix)
+		if !isAllowedNotesSubpath(subPath) {
+			http.Error(w, "unauthorized storage path: user deletions restricted to authorized notes namespace", http.StatusBadRequest)
+			return
+		}
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	if status, errMsg, authOk := verifyMailboxScopedAccess(r, userID, mailboxID, "storage", conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
+
+	delPayload, _ := json.Marshal(map[string]string{
+		"object_key": objectKey,
+		"mailbox_id": mailboxID,
+	})
+	delReq, err := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/delete", bytes.NewReader(delPayload))
+	if err != nil {
+		http.Error(w, "failed to prepare storage request", http.StatusInternalServerError)
+		return
+	}
+	delReq.Header.Set("Content-Type", "application/json")
+	setStorageInternalAuth(delReq)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	delResp, err := client.Do(delReq)
+	if err != nil {
+		http.Error(w, "storage-worker unavailable", http.StatusBadGateway)
+		return
+	}
+	defer delResp.Body.Close()
+
+	if delResp.StatusCode != http.StatusOK {
+		respBytes, _ := io.ReadAll(delResp.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(delResp.StatusCode)
+		w.Write(respBytes)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     "deleted",
+		"object_key": objectKey,
+	})
 }

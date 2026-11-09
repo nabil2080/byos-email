@@ -785,7 +785,11 @@ func messageFolderHandler(w http.ResponseWriter, r *http.Request) {
 
 	var oldFolder string
 	var isRead bool
-	_ = conn.QueryRow(ctx, `SELECT COALESCE(folder, 'inbox'), COALESCE(is_read, false) FROM message_metadata WHERE id=$1 AND mailbox_id=$2`, messageID, mailboxID).Scan(&oldFolder, &isRead)
+	err = conn.QueryRow(ctx, `SELECT COALESCE(folder, 'inbox'), COALESCE(is_read, false) FROM message_metadata WHERE id=$1 AND mailbox_id=$2`, messageID, mailboxID).Scan(&oldFolder, &isRead)
+	if err == nil && oldFolder == "sent" && folder != "trash" {
+		http.Error(w, "sent messages cannot be moved to another folder", http.StatusBadRequest)
+		return
+	}
 
 	tag, err := conn.Exec(ctx, `
 		UPDATE message_metadata
@@ -797,7 +801,58 @@ func messageFolderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		http.Error(w, "message not found", http.StatusNotFound)
+		// Check if target is in drafts table
+		var draftOldFolder string
+		err := conn.QueryRow(ctx, `SELECT COALESCE(folder, 'drafts') FROM drafts WHERE id=$1 AND mailbox_id=$2`, messageID, mailboxID).Scan(&draftOldFolder)
+		if err == pgx.ErrNoRows {
+			http.Error(w, "message not found", http.StatusNotFound)
+			return
+		} else if err != nil {
+			http.Error(w, "failed to query draft", http.StatusInternalServerError)
+			return
+		}
+
+		draftTag, err := conn.Exec(ctx, `
+			UPDATE drafts
+			SET folder = $1, folder_id = $2, updated_at = now()
+			WHERE id = $3 AND mailbox_id = $4`,
+			folder, folderUUID, messageID, mailboxID)
+		if err != nil {
+			http.Error(w, "failed to update draft folder", http.StatusInternalServerError)
+			return
+		}
+		if draftTag.RowsAffected() == 0 {
+			http.Error(w, "message not found", http.StatusNotFound)
+			return
+		}
+
+		if draftOldFolder != "" && draftOldFolder != folder {
+			publishMailboxEvent(ctx, MailboxEvent{
+				Type:        "message.moved",
+				MailboxID:   mailboxID,
+				Folder:      draftOldFolder,
+				MessageID:   messageID,
+				UnreadDelta: 0,
+			})
+		}
+		publishMailboxEvent(ctx, MailboxEvent{
+			Type:        "message.moved",
+			MailboxID:   mailboxID,
+			Folder:      folder,
+			MessageID:   messageID,
+			UnreadDelta: 0,
+		})
+
+		resp := map[string]interface{}{
+			"status":     "ok",
+			"message_id": messageID,
+			"folder":     folder,
+		}
+		if folderUUID != nil {
+			resp["folder_id"] = *folderUUID
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
 		return
 	}
 
@@ -1484,6 +1539,177 @@ func messageImportHandler(w http.ResponseWriter, r *http.Request) {
 		"message_id":        messageID,
 		"message_seq":       messageSeq,
 		"storage_object_id": storageObjectID,
+	})
+}
+
+func messageItemHandler(w http.ResponseWriter, r *http.Request) {
+	messageID := r.PathValue("message_id")
+	if messageID == "trash" {
+		emptyTrashHandler(w, r)
+		return
+	}
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, err := uuid.Parse(messageID); err != nil {
+		http.Error(w, "invalid message_id UUID", http.StatusBadRequest)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	userID, _, mailboxOrgID, mailboxID, ok := resolveDraftMailbox(w, r, conn, ctx)
+	if !ok {
+		return
+	}
+
+	var storageObjectID string
+	var folder string
+	err = conn.QueryRow(ctx, `SELECT COALESCE(storage_object_id, ''), COALESCE(folder, 'inbox') FROM message_metadata WHERE id=$1 AND mailbox_id=$2`, messageID, mailboxID).Scan(&storageObjectID, &folder)
+	if err == nil {
+		_, _ = conn.Exec(ctx, `DELETE FROM attachments WHERE mailbox_id=$1 AND message_id=$2`, mailboxID, messageID)
+		_, _ = conn.Exec(ctx, `DELETE FROM message_labels WHERE message_id=$1`, messageID)
+		_, _ = conn.Exec(ctx, `DELETE FROM masked_alias_reply_map WHERE message_id=$1`, messageID)
+		_, err = conn.Exec(ctx, `DELETE FROM message_metadata WHERE id=$1 AND mailbox_id=$2`, messageID, mailboxID)
+		if err != nil {
+			http.Error(w, "failed to delete message", http.StatusInternalServerError)
+			return
+		}
+
+		if storageObjectID != "" && !strings.HasPrefix(storageObjectID, "local") {
+			delPayload, _ := json.Marshal(map[string]string{
+				"object_key": storageObjectID,
+				"mailbox_id": mailboxID,
+			})
+			delReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/delete", bytes.NewReader(delPayload))
+			if delReq != nil {
+				delReq.Header.Set("Content-Type", "application/json")
+				setStorageInternalAuth(delReq)
+				_, _ = (&http.Client{Timeout: 5 * time.Second}).Do(delReq)
+			}
+		}
+
+		auditLog(ctx, conn, mailboxOrgID, userID, "message_delete_permanent", "message", messageID, map[string]interface{}{"mailbox_id": mailboxID, "folder": folder})
+		publishMailboxEvent(ctx, MailboxEvent{
+			Type:        "message.deleted",
+			MailboxID:   mailboxID,
+			Folder:      folder,
+			MessageID:   messageID,
+			UnreadDelta: 0,
+		})
+		w.WriteHeader(http.StatusNoContent)
+		return
+	} else if err != pgx.ErrNoRows {
+		http.Error(w, "failed to query message", http.StatusInternalServerError)
+		return
+	}
+
+	// Check drafts table
+	var draftFolder string
+	err = conn.QueryRow(ctx, `DELETE FROM drafts WHERE id=$1 AND mailbox_id=$2 RETURNING COALESCE(folder, 'drafts')`, messageID, mailboxID).Scan(&draftFolder)
+	if err == nil {
+		auditLog(ctx, conn, mailboxOrgID, userID, "draft_delete_permanent", "draft", messageID, map[string]interface{}{"mailbox_id": mailboxID, "folder": draftFolder})
+		publishMailboxEvent(ctx, MailboxEvent{
+			Type:        "message.deleted",
+			MailboxID:   mailboxID,
+			Folder:      draftFolder,
+			MessageID:   messageID,
+			UnreadDelta: 0,
+		})
+		w.WriteHeader(http.StatusNoContent)
+		return
+	} else if err == pgx.ErrNoRows {
+		http.Error(w, "message not found", http.StatusNotFound)
+		return
+	} else {
+		http.Error(w, "failed to delete draft", http.StatusInternalServerError)
+		return
+	}
+}
+
+func emptyTrashHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	userID, _, mailboxOrgID, mailboxID, ok := resolveDraftMailbox(w, r, conn, ctx)
+	if !ok {
+		return
+	}
+
+	rows, err := conn.Query(ctx, `SELECT id::text, COALESCE(storage_object_id, '') FROM message_metadata WHERE mailbox_id=$1 AND folder='trash'`, mailboxID)
+	var msgIDs []string
+	var storageKeys []string
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var mID, sKey string
+			if err := rows.Scan(&mID, &sKey); err == nil {
+				msgIDs = append(msgIDs, mID)
+				if sKey != "" && !strings.HasPrefix(sKey, "local") {
+					storageKeys = append(storageKeys, sKey)
+				}
+			}
+		}
+	}
+
+	if len(msgIDs) > 0 {
+		_, _ = conn.Exec(ctx, `DELETE FROM attachments WHERE mailbox_id=$1 AND message_id = ANY($2)`, mailboxID, msgIDs)
+		_, _ = conn.Exec(ctx, `DELETE FROM message_labels WHERE message_id = ANY($1)`, msgIDs)
+		_, _ = conn.Exec(ctx, `DELETE FROM masked_alias_reply_map WHERE message_id = ANY($1)`, msgIDs)
+	}
+
+	tagMsg, _ := conn.Exec(ctx, `DELETE FROM message_metadata WHERE mailbox_id=$1 AND folder='trash'`, mailboxID)
+	tagDraft, _ := conn.Exec(ctx, `DELETE FROM drafts WHERE mailbox_id=$1 AND folder='trash'`, mailboxID)
+	deletedCount := tagMsg.RowsAffected() + tagDraft.RowsAffected()
+
+	for _, key := range storageKeys {
+		delPayload, _ := json.Marshal(map[string]string{
+			"object_key": key,
+			"mailbox_id": mailboxID,
+		})
+		delReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/delete", bytes.NewReader(delPayload))
+		if delReq != nil {
+			delReq.Header.Set("Content-Type", "application/json")
+			setStorageInternalAuth(delReq)
+			_, _ = (&http.Client{Timeout: 5 * time.Second}).Do(delReq)
+		}
+	}
+
+	auditLog(ctx, conn, mailboxOrgID, userID, "empty_trash", "mailbox", mailboxID, map[string]interface{}{"deleted_count": deletedCount})
+	publishMailboxEvent(ctx, MailboxEvent{
+		Type:        "message.deleted",
+		MailboxID:   mailboxID,
+		Folder:      "trash",
+		UnreadDelta: 0,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":        "ok",
+		"deleted_count": deletedCount,
 	})
 }
 

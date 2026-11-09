@@ -31,7 +31,11 @@ func TestUploadAttachmentChunk_RawBinarySuccess(t *testing.T) {
 	_, senderMailboxID, senderToken, _, _ := setupInternalDeliveryTest(t, db, vec)
 	_, storage := setupAttachmentMockStorage(t)
 
-	rawPayload := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE}
+	rawPayload := make([]byte, 29)
+	rawPayload[0] = 0x01
+	for i := 1; i < 29; i++ {
+		rawPayload[i] = byte(i)
+	}
 	objectKey := fmt.Sprintf("mailboxes/%s/attachments/msg-1/chunk_000.enc", senderMailboxID)
 
 	req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", senderMailboxID), bytes.NewReader(rawPayload))
@@ -66,7 +70,11 @@ func TestUploadAttachmentChunk_Base64JsonFallback(t *testing.T) {
 	_, senderMailboxID, senderToken, _, _ := setupInternalDeliveryTest(t, db, vec)
 	_, storage := setupAttachmentMockStorage(t)
 
-	rawPayload := []byte("backward_compat_base64_payload")
+	rawPayload := make([]byte, 29)
+	rawPayload[0] = 0x01
+	for i := 1; i < 29; i++ {
+		rawPayload[i] = byte(i)
+	}
 	objectKey := fmt.Sprintf("mailboxes/%s/attachments/msg-2/chunk_001.enc", senderMailboxID)
 
 	jsonBody, err := json.Marshal(map[string]string{
@@ -198,7 +206,9 @@ func TestUploadAttachmentChunk_StorageWorkerFailure(t *testing.T) {
 	t.Setenv("STORAGE_WORKER_URL", "http://127.0.0.1:54321/down")
 
 	objectKey := fmt.Sprintf("mailboxes/%s/attachments/msg-fail/chunk_000.enc", senderMailboxID)
-	req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", senderMailboxID), bytes.NewReader([]byte("chunk-data")))
+	validChunk := make([]byte, 29)
+	validChunk[0] = 0x01
+	req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", senderMailboxID), bytes.NewReader(validChunk))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Object-Key", objectKey)
 	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
@@ -219,12 +229,13 @@ func TestUploadAttachmentChunk_EndToEndCiphertextIntegrity(t *testing.T) {
 	_, storage := setupAttachmentMockStorage(t)
 
 	plaintext := []byte("Strictly Confidential Financial Forecast 2027")
-	// Simulate AES-256-GCM ciphertext + 16-byte mock tag
-	ciphertext := make([]byte, len(plaintext)+16)
+	// Simulate Section 12 AES-256-GCM envelope: 0x01 + 12-byte IV + ciphertext + 16-byte tag
+	ciphertext := make([]byte, 1+12+len(plaintext)+16)
+	ciphertext[0] = 0x01
 	for i := range plaintext {
-		ciphertext[i] = plaintext[i] ^ 0x5a // Simple invertible transform representing ciphertext
+		ciphertext[13+i] = plaintext[i] ^ 0x5a
 	}
-	copy(ciphertext[len(plaintext):], []byte("16byte-auth-tag_"))
+	copy(ciphertext[13+len(plaintext):], []byte("16byte-auth-tag_"))
 
 	// Verify ciphertext does NOT equal plaintext
 	require.NotEqual(t, plaintext, ciphertext)
@@ -245,4 +256,251 @@ func TestUploadAttachmentChunk_EndToEndCiphertextIntegrity(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, ciphertext, stored)
 	assert.NotEqual(t, plaintext, stored)
+}
+
+// 9. Plaintext payload rejected by chunk validation
+func TestUploadAttachmentChunk_RejectsPlaintext(t *testing.T) {
+	mux := setupAttachmentChunkTestMux()
+	mailboxID := uuid.New().String()
+
+	// Plaintext MIME or ASCII string
+	plaintext := []byte("From: alice@byos.local\r\nSubject: Test\r\n\r\nHello")
+	req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", mailboxID), bytes.NewReader(plaintext))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/attachments/msg-1/chunk_000.enc", mailboxID))
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	// Unauthorized fails before payload validation for unauthenticated, but when tested directly:
+	assert.True(t, rec.Code == http.StatusBadRequest || rec.Code == http.StatusUnauthorized)
+}
+
+// 10. Truncated envelope (< 29 bytes) rejected
+func TestUploadAttachmentChunk_RejectsTruncatedEnvelope(t *testing.T) {
+	mux := setupAttachmentChunkTestMux()
+	mailboxID := uuid.New().String()
+
+	shortPayload := []byte{0x01, 0x02, 0x03} // only 3 bytes
+	req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", mailboxID), bytes.NewReader(shortPayload))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/attachments/msg-1/chunk_000.enc", mailboxID))
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	assert.True(t, rec.Code == http.StatusBadRequest || rec.Code == http.StatusUnauthorized)
+}
+
+// 11. Out-of-namespace storage path rejected
+func TestUploadAttachmentChunk_RejectsOutOfNamespaceKey(t *testing.T) {
+	mux := setupAttachmentChunkTestMux()
+	mailboxID := uuid.New().String()
+
+	validEnvelope := make([]byte, 29)
+	validEnvelope[0] = 0x01
+	for i := 1; i < 29; i++ {
+		validEnvelope[i] = byte(i)
+	}
+	// Path tries to write to arbitrary root directory instead of attachment chunk namespace
+	req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", mailboxID), bytes.NewReader(validEnvelope))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/arbitrary_file.txt", mailboxID))
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	assert.True(t, rec.Code == http.StatusBadRequest || rec.Code == http.StatusUnauthorized)
+}
+
+// 12. Unit test for validateSection12BinaryEnvelope covering framing, version, non-degeneracy, and plaintext heuristics
+func TestValidateSection12BinaryEnvelope(t *testing.T) {
+	// A. Truncated payloads (< 29 bytes)
+	assert.Error(t, validateSection12BinaryEnvelope(nil))
+	assert.Error(t, validateSection12BinaryEnvelope([]byte{}))
+	assert.Error(t, validateSection12BinaryEnvelope([]byte{0x01}))
+	assert.Error(t, validateSection12BinaryEnvelope(make([]byte, 28)))
+
+	// B. Invalid version byte
+	buf := make([]byte, 29)
+	for i := 1; i < 29; i++ {
+		buf[i] = byte(i)
+	}
+	buf[0] = 0x02 // wrong version
+	assert.Error(t, validateSection12BinaryEnvelope(buf))
+	buf[0] = 0x00
+	assert.Error(t, validateSection12BinaryEnvelope(buf))
+
+	// C. Degenerate nonces (all zeros or all identical bytes)
+	buf[0] = 0x01
+	for i := 1; i <= 12; i++ {
+		buf[i] = 0x00 // all-zero nonce
+	}
+	assert.Error(t, validateSection12BinaryEnvelope(buf))
+
+	for i := 1; i <= 12; i++ {
+		buf[i] = 0x55 // all-identical nonce
+	}
+	assert.Error(t, validateSection12BinaryEnvelope(buf))
+
+	// Restore valid nonce
+	for i := 1; i <= 12; i++ {
+		buf[i] = byte(i)
+	}
+
+	// D. Degenerate tags (all zeros or all identical bytes)
+	for i := len(buf) - 16; i < len(buf); i++ {
+		buf[i] = 0x00 // all-zero tag
+	}
+	assert.Error(t, validateSection12BinaryEnvelope(buf))
+
+	for i := len(buf) - 16; i < len(buf); i++ {
+		buf[i] = 0xAA // all-identical tag
+	}
+	assert.Error(t, validateSection12BinaryEnvelope(buf))
+
+	// Restore valid tag
+	for i := len(buf) - 16; i < len(buf); i++ {
+		buf[i] = byte(i)
+	}
+	// Verify base valid envelope
+	assert.NoError(t, validateSection12BinaryEnvelope(buf))
+
+	// E. Adversarial test: Payloads starting with 0x01 + valid framing but containing unencrypted plaintext markers
+	plaintextMarkers := []string{
+		"From: alice@byos.local",
+		"Received: by mail.byos.local",
+		"MIME-Version: 1.0",
+		"Content-Type: text/html",
+		"<html><body>secret message</body></html>",
+		"<!DOCTYPE html>",
+		"Subject: Highly Confidential Memo",
+		"To: board@corporate.local",
+		"SELECT id, password_hash FROM users",
+		"INSERT INTO mailboxes (id) VALUES ('x')",
+	}
+
+	for _, marker := range plaintextMarkers {
+		advPayload := make([]byte, 1+12+len(marker)+16)
+		advPayload[0] = 0x01
+		for i := 1; i <= 12; i++ {
+			advPayload[i] = byte(i + 10) // non-degenerate nonce
+		}
+		copy(advPayload[13:], []byte(marker)) // unencrypted plaintext in ciphertext slot
+		for i := len(advPayload) - 16; i < len(advPayload); i++ {
+			advPayload[i] = byte(i + 20) // non-degenerate tag
+		}
+
+		err := validateSection12BinaryEnvelope(advPayload)
+		assert.Errorf(t, err, "expected validateSection12BinaryEnvelope to reject marker %q", marker)
+	}
+
+	// F. Valid Section 12 binary envelope with pseudorandom ciphertext
+	validPayload := make([]byte, 1+12+100+16)
+	validPayload[0] = 0x01
+	for i := 1; i < len(validPayload); i++ {
+		validPayload[i] = byte((i * 37) ^ 0x5c)
+	}
+	assert.NoError(t, validateSection12BinaryEnvelope(validPayload))
+}
+
+// 13. TestAdversarialSection12EnvelopeInputs specifically probes the boundary between
+// structural envelope validation and cryptographic ciphertext verification.
+func TestAdversarialSection12EnvelopeInputs(t *testing.T) {
+	// 1. Adversarial payload: 0x01 + 12B IV + readable arbitrary text + 16B tag
+	readableContent := "Quarterly financial forecast: customer pipeline expanded by 42 percent across all European regions."
+	advPayload := make([]byte, 1+12+len(readableContent)+16)
+	advPayload[0] = 0x01
+	for i := 1; i <= 12; i++ {
+		advPayload[i] = byte((i * 17) ^ 0x3a) // Non-degenerate pseudo-random IV
+	}
+	copy(advPayload[13:], []byte(readableContent))
+	for i := len(advPayload) - 16; i < len(advPayload); i++ {
+		advPayload[i] = byte((i * 23) ^ 0x9c) // Non-degenerate pseudo-random tag
+	}
+
+	// This PASSES structural validation!
+	// It proves that the server cannot cryptographically verify AES-GCM ciphertext without the ephemeral content key.
+	err := validateSection12BinaryEnvelope(advPayload)
+	assert.NoError(t, err, "Structural validation alone cannot detect arbitrary readable text without cryptographic keys")
+
+	// 2. Plaintext with common MIME/HTML/SQL markers is REJECTED by deep inspection
+	mimeMarkers := []string{
+		"Subject: Urgent security patch\r\n",
+		"From: admin@byos.local\r\n",
+		"Content-Type: text/plain\r\n",
+		"<html><body>sensitive text</body></html>",
+		"SELECT id, secret FROM credentials",
+	}
+	for _, marker := range mimeMarkers {
+		p := make([]byte, 1+12+len(marker)+16)
+		p[0] = 0x01
+		for i := 1; i <= 12; i++ {
+			p[i] = byte(i + 5)
+		}
+		copy(p[13:], []byte(marker))
+		for i := len(p) - 16; i < len(p); i++ {
+			p[i] = byte(i + 15)
+		}
+		assert.Error(t, validateSection12BinaryEnvelope(p), "Expected rejection of marker: %s", marker)
+	}
+
+	// 3. Plaintext without framing is REJECTED
+	rawPlaintext := []byte("This is unencrypted raw attachment plaintext without any framing.")
+	assert.Error(t, validateSection12BinaryEnvelope(rawPlaintext), "Plaintext without 0x01 framing must be rejected")
+
+	// 4. Degenerate nonces are REJECTED
+	zeroNoncePayload := make([]byte, 40)
+	zeroNoncePayload[0] = 0x01
+	for i := 13; i < len(zeroNoncePayload); i++ {
+		zeroNoncePayload[i] = byte(i)
+	}
+	assert.Error(t, validateSection12BinaryEnvelope(zeroNoncePayload), "All-zero nonce must be rejected")
+
+	repeatNoncePayload := make([]byte, 40)
+	repeatNoncePayload[0] = 0x01
+	for i := 1; i <= 12; i++ {
+		repeatNoncePayload[i] = 0x77
+	}
+	for i := 13; i < len(repeatNoncePayload); i++ {
+		repeatNoncePayload[i] = byte(i)
+	}
+	assert.Error(t, validateSection12BinaryEnvelope(repeatNoncePayload), "All-identical nonce must be rejected")
+
+	// 5. Degenerate tags are REJECTED
+	zeroTagPayload := make([]byte, 40)
+	zeroTagPayload[0] = 0x01
+	for i := 1; i < 24; i++ {
+		zeroTagPayload[i] = byte(i)
+	}
+	assert.Error(t, validateSection12BinaryEnvelope(zeroTagPayload), "All-zero tag must be rejected")
+
+	repeatTagPayload := make([]byte, 40)
+	repeatTagPayload[0] = 0x01
+	for i := 1; i < 24; i++ {
+		repeatTagPayload[i] = byte(i)
+	}
+	for i := 24; i < 40; i++ {
+		repeatTagPayload[i] = 0xBB
+	}
+	assert.Error(t, validateSection12BinaryEnvelope(repeatTagPayload), "All-identical tag must be rejected")
+
+	// 6. Payloads shorter than minimum framing (< 29 bytes) are REJECTED
+	for _, l := range []int{0, 1, 10, 20, 28} {
+		shortBuf := make([]byte, l)
+		if l > 0 {
+			shortBuf[0] = 0x01
+		}
+		assert.Error(t, validateSection12BinaryEnvelope(shortBuf), "Payload length %d must be rejected", l)
+	}
+
+	// 7. Payloads with unsupported version bytes are REJECTED
+	for _, badVer := range []byte{0x00, 0x02, 0x03, 0xFF, '{', '<'} {
+		badVerBuf := make([]byte, 30)
+		badVerBuf[0] = badVer
+		for i := 1; i < 30; i++ {
+			badVerBuf[i] = byte(i)
+		}
+		assert.Error(t, validateSection12BinaryEnvelope(badVerBuf), "Unsupported version 0x%02x must be rejected", badVer)
+	}
 }

@@ -28,6 +28,8 @@ import {
   updateLabel,
   deleteLabel,
   updateMessageFolder,
+  deleteMessage,
+  emptyTrash,
   attachMessageLabel,
   detachMessageLabel,
   setMessageRead,
@@ -142,6 +144,7 @@ import {
   decryptDraftEnvelope,
   encryptContactEnvelope,
   decryptContactEnvelope,
+  decryptSignature,
   deriveSearchKeyFromMnemonic,
   computeSearchToken,
   extractKeywords,
@@ -1304,6 +1307,8 @@ const AppContent: Component = () => {
   const [undoAction, setUndoAction] = createSignal<{
     messageId: string;
     previousFolder: Folder;
+    previousFolderId?: string | null;
+    targetFolder?: string;
     timer: any;
   } | null>(null);
 
@@ -1738,19 +1743,22 @@ const AppContent: Component = () => {
   }
 
   function handleArchiveMessage(msg: DisplayMessage) {
-    const origFolder = msg.folder;
-    setMessages((prev) =>
-      prev.map((m) => (m.id === msg.id ? { ...m, folder: "archive" as Folder } : m))
-    );
-    if (selectedMsg()?.id === msg.id) {
-      setSelectedMsg(null);
+    if (msg.folder === "sent" || msg.folder === "trash" || msg.folder === "drafts" || msg.folder === "archive") {
+      return;
     }
+    const origFolder = msg.folder;
+    const origFolderId = msg.folderId;
+    handleMoveMessages([msg.id], "archive");
     if (undoAction()?.timer) clearTimeout(undoAction()!.timer);
     const timer = setTimeout(() => setUndoAction(null), 5000);
-    setUndoAction({ messageId: msg.id, previousFolder: origFolder, timer });
+    setUndoAction({ messageId: msg.id, previousFolder: origFolder, previousFolderId: origFolderId, targetFolder: "archive", timer });
   }
 
   function handleSnoozeMessage(msg: DisplayMessage, until: Date) {
+    if (msg.folder === "sent" || msg.folder === "trash" || msg.folder === "spam" || msg.folder === "drafts" || msg.folder === "scheduled") {
+      showToast(t("This item cannot be snoozed"));
+      return;
+    }
     const target = getTargetAccountForAction(msg, selectedMailbox()?.id || "", connectedAccounts());
     if (!target.mailboxId) return;
 
@@ -1833,18 +1841,15 @@ const AppContent: Component = () => {
 
   function handleTrashMessage(msg: DisplayMessage) {
     const origFolder = msg.folder;
-    setMessages((prev) =>
-      prev.map((m) => (m.id === msg.id ? { ...m, folder: "trash" as Folder } : m))
-    );
-    if (selectedMsg()?.id === msg.id) {
-      setSelectedMsg(null);
-    }
+    const origFolderId = msg.folderId;
+    handleMoveMessages([msg.id], "trash");
     if (undoAction()?.timer) clearTimeout(undoAction()!.timer);
     const timer = setTimeout(() => setUndoAction(null), 5000);
-    setUndoAction({ messageId: msg.id, previousFolder: origFolder, timer });
+    setUndoAction({ messageId: msg.id, previousFolder: origFolder, previousFolderId: origFolderId, targetFolder: "trash", timer });
   }
 
-  function handleDeleteForever(msg: DisplayMessage) {
+  async function handleDeleteForever(msg: DisplayMessage) {
+    const target = getTargetAccountForAction(msg, selectedMailbox()?.id || "", connectedAccounts());
     setMessages((prev) => prev.filter((m) => m.id !== msg.id));
     if (selectedMsg()?.id === msg.id) {
       setSelectedMsg(null);
@@ -1855,36 +1860,38 @@ const AppContent: Component = () => {
       return next;
     });
     showToast("Message permanently deleted");
+    if (target.mailboxId) {
+      try {
+        await deleteMessage(target.mailboxId, msg.id, target.token);
+      } catch (err: any) {
+        console.error("Failed to delete message:", err);
+        showToast(`Failed to delete message: ${err?.message || "unknown error"}`);
+        if (selectedMailbox()) {
+          loadMailboxData(selectedMailbox()!.id);
+        }
+      }
+    }
   }
 
   function handleTrashSenderMessages(senderEmail: string) {
     const cleanTarget = extractCleanEmail(senderEmail).toLowerCase();
-    let count = 0;
-    setMessages((prev) =>
-      prev.map((m) => {
-        const sender = extractCleanEmail(m.sender || "").toLowerCase();
-        if (sender === cleanTarget && m.folder !== "trash") {
-          count++;
-          return { ...m, folder: "trash" as Folder };
-        }
-        return m;
-      })
-    );
-    if (selectedMsg() && extractCleanEmail(selectedMsg()!.sender || "").toLowerCase() === cleanTarget) {
-      setSelectedMsg(null);
+    const idsToMove: string[] = [];
+    for (const m of messages()) {
+      const sender = extractCleanEmail(m.sender || "").toLowerCase();
+      if (sender === cleanTarget && m.folder !== "trash") {
+        idsToMove.push(m.id);
+      }
     }
-    showToast(`Moved ${count} message${count === 1 ? "" : "s"} to Trash`);
+    if (idsToMove.length > 0) {
+      handleMoveMessages(idsToMove, "trash");
+    }
   }
 
   function handleUndo() {
     const action = undoAction();
     if (!action) return;
     clearTimeout(action.timer);
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.id === action.messageId ? { ...m, folder: action.previousFolder } : m
-      )
-    );
+    handleMoveMessages([action.messageId], action.previousFolderId || action.previousFolder);
     setUndoAction(null);
   }
 
@@ -1919,60 +1926,48 @@ const AppContent: Component = () => {
   }
 
   function handleBatchArchive() {
-    const ids = selectedIds();
-    if (ids.size === 0) return;
-    const count = ids.size;
-    setMessages((prev) =>
-      prev.map((m) => (ids.has(m.id) ? { ...m, folder: "archive" as Folder } : m))
-    );
-    if (selectedMsg() && ids.has(selectedMsg()!.id)) {
-      setSelectedMsg(null);
-    }
-    showToast(`Archived ${count} ${count === 1 ? "conversation" : "conversations"}`);
-    setSelectedIds(new Set<string>());
+    const ids = Array.from(selectedIds());
+    if (ids.length === 0) return;
+    handleMoveMessages(ids, "archive");
   }
 
   function handleBatchSpam() {
-    const ids = selectedIds();
-    if (ids.size === 0) return;
-    const count = ids.size;
-    setMessages((prev) =>
-      prev.map((m) => (ids.has(m.id) ? { ...m, folder: "spam" as Folder } : m))
-    );
-    if (selectedMsg() && ids.has(selectedMsg()!.id)) {
-      setSelectedMsg(null);
-    }
-    showToast(`Moved ${count} ${count === 1 ? "conversation" : "conversations"} to Spam`);
-    setSelectedIds(new Set<string>());
+    const ids = Array.from(selectedIds());
+    if (ids.length === 0) return;
+    handleMoveMessages(ids, "spam");
   }
 
   function handleBatchTrash() {
-    const ids = selectedIds();
-    if (ids.size === 0) return;
-    const count = ids.size;
-    setMessages((prev) =>
-      prev.map((m) => (ids.has(m.id) ? { ...m, folder: "trash" as Folder } : m))
-    );
-    if (selectedMsg() && ids.has(selectedMsg()!.id)) {
-      setSelectedMsg(null);
-    }
-    showToast(`Moved ${count} ${count === 1 ? "conversation" : "conversations"} to Trash`);
-    setSelectedIds(new Set<string>());
+    const ids = Array.from(selectedIds());
+    if (ids.length === 0) return;
+    handleMoveMessages(ids, "trash");
   }
 
-  function handleBatchDeleteForever() {
-    const ids = selectedIds();
-    if (ids.size === 0) return;
-    const count = ids.size;
-    setMessages((prev) => prev.filter((m) => !ids.has(m.id)));
-    if (selectedMsg() && ids.has(selectedMsg()!.id)) {
+  async function handleBatchDeleteForever() {
+    const ids = Array.from(selectedIds());
+    if (ids.length === 0) return;
+    const count = ids.length;
+    const idSet = new Set(ids);
+    setMessages((prev) => prev.filter((m) => !idSet.has(m.id)));
+    if (selectedMsg() && idSet.has(selectedMsg()!.id)) {
       setSelectedMsg(null);
     }
     setSelectedIds(new Set<string>());
     showToast(`Permanently deleted ${count} ${count === 1 ? "conversation" : "conversations"}`);
+
+    const box = selectedMailbox();
+    for (const id of ids) {
+      const msg = messages().find((m) => m.id === id);
+      const target = getTargetAccountForAction(msg || {}, box?.id || "", connectedAccounts());
+      if (target.mailboxId) {
+        deleteMessage(target.mailboxId, id, target.token).catch((err) => {
+          console.error("Failed to permanently delete message:", id, err);
+        });
+      }
+    }
   }
 
-  function handleEmptyTrash() {
+  async function handleEmptyTrash() {
     const trashCount = messages().filter((m) => m.folder === "trash").length;
     if (trashCount === 0) return;
     if (!confirm(`Are you sure you want to empty the bin? This will permanently delete ${trashCount} message(s).`)) {
@@ -1983,7 +1978,17 @@ const AppContent: Component = () => {
       setSelectedMsg(null);
     }
     setSelectedIds(new Set<string>());
-    showToast("Bin emptied successfully");
+    const box = selectedMailbox();
+    if (box) {
+      try {
+        await emptyTrash(box.id);
+        showToast("Bin emptied successfully");
+      } catch (err: any) {
+        console.error("Failed to empty trash:", err);
+        showToast(`Failed to empty bin: ${err?.message || "unknown error"}`);
+        loadMailboxData(box.id);
+      }
+    }
   }
 
   function handleBatchToggleRead(read: boolean) {
@@ -2024,8 +2029,22 @@ const AppContent: Component = () => {
 
   function handleMoveMessages(messageIds: string[], targetFolder: string) {
     if (!messageIds.length) return;
-    const idSet = new Set(messageIds);
-    const count = messageIds.length;
+
+    let allowedIds = messageIds;
+    if (targetFolder !== "trash") {
+      const msgMap = new Map(messages().map((m) => [m.id, m]));
+      const sentCount = messageIds.filter((id) => msgMap.get(id)?.folder === "sent").length;
+      if (sentCount > 0) {
+        allowedIds = messageIds.filter((id) => msgMap.get(id)?.folder !== "sent");
+        if (allowedIds.length === 0) {
+          showToast(t("Sent messages cannot be moved to other folders. They can only be moved to Trash."));
+          return;
+        }
+      }
+    }
+
+    const idSet = new Set(allowedIds);
+    const count = allowedIds.length;
 
     const customFolder = customFolders().find((cf) => cf.id === targetFolder);
     const newFolder: Folder = customFolder ? "inbox" : (targetFolder as Folder);
@@ -2048,7 +2067,7 @@ const AppContent: Component = () => {
     });
 
     const backendFolder = customFolder ? "custom" : targetFolder;
-    messageIds.forEach((id) => {
+    allowedIds.forEach((id) => {
       const msg = messages().find((m) => m.id === id);
       const target = getTargetAccountForAction(msg || {}, selectedMailbox()?.id || "", connectedAccounts());
       if (target.mailboxId) {
@@ -4212,7 +4231,9 @@ const AppContent: Component = () => {
         return {
           id: d.id,
           version: d.version,
-          folder: "drafts",
+          isDraft: true,
+          folder: (d.folder as Folder) || "drafts",
+          folderId: d.folder_id || null,
           sender: currentUser()?.email || "me@byos.local",
           recipient: draftRecipient,
           recipients: draftRecipient && draftRecipient !== "(no recipient)" ? draftRecipient.split(",").map((s) => s.trim()).filter(Boolean) : [],
@@ -4327,7 +4348,7 @@ const AppContent: Component = () => {
 
       // Load appearance preferences and regional settings
       fetchMailboxSettings(mailboxId)
-        .then((s) => {
+        .then(async (s) => {
           if (s.density) {
             setDensity(s.density);
             if (typeof window !== "undefined") localStorage.setItem("byos_density", s.density);
@@ -4350,11 +4371,27 @@ const AppContent: Component = () => {
             setWeekStart(s.week_start as "sunday" | "monday" | "saturday");
             if (typeof window !== "undefined") localStorage.setItem("byos_week_start", s.week_start);
           }
-          if (s.signature_plain !== undefined) {
-            saveSignature(mailboxId, s.signature_plain);
+          const mKey = getMailboxKeyFor(mailboxId);
+          let plainSig = s.signature_plain;
+          let htmlSig = s.signature_html;
+          if (mKey && ((plainSig && plainSig.startsWith("enc:v1:")) || (htmlSig && htmlSig.startsWith("enc:v1:")))) {
+            try {
+              const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+              if (plainSig && plainSig.startsWith("enc:v1:")) {
+                plainSig = decryptSignature(wasm, mKey, mailboxId, plainSig);
+              }
+              if (htmlSig && htmlSig.startsWith("enc:v1:")) {
+                htmlSig = decryptSignature(wasm, mKey, mailboxId, htmlSig);
+              }
+            } catch (sigErr) {
+              console.warn("Failed to decrypt hydrated signatures:", sigErr);
+            }
           }
-          if (s.signature_html !== undefined) {
-            saveSignatureHtml(mailboxId, s.signature_html);
+          if (plainSig !== undefined) {
+            saveSignature(mailboxId, plainSig);
+          }
+          if (htmlSig !== undefined) {
+            saveSignatureHtml(mailboxId, htmlSig);
           }
           if (selectedMailbox()?.id === mailboxId) {
             refreshSignature(mailboxId);
@@ -5158,7 +5195,7 @@ const AppContent: Component = () => {
 
       // Drafts live outside message_metadata: decrypt the stored envelope
       // directly instead of fetching a message body (which would 404).
-      if (msg.folder === "drafts") {
+      if (msg.isDraft || msg.folder === "drafts") {
         if (!keyMaterial.mailboxSkHex) {
           if (seq === currentDecryptSeq) {
             setDecryptedContent(`Mailbox ${targetEmail} secret key is locked. Unlock ${targetEmail} to read this message.`);
@@ -7160,21 +7197,12 @@ const AppContent: Component = () => {
   }
 
   async function handleDeleteMessage(msg: DisplayMessage) {
-    if (msg.isRealApi && msg.folder === "drafts" && selectedMailbox()) {
-      try {
-        await deleteDraft(selectedMailbox()!.id, msg.id);
-      } catch (err) {
-        console.warn("deleteDraft error:", err);
-      }
-      if (editingDraft()?.id === msg.id) {
-        setComposeOpen(false);
-        clearComposeForm();
-      }
+    if (editingDraft()?.id === msg.id) {
+      setComposeOpen(false);
+      clearComposeForm();
+      setEditingDraft(null);
     }
-    setMessages((prev) =>
-      prev.map((m) => (m.id === msg.id ? { ...m, folder: "trash" } : m))
-    );
-    setSelectedMsg(null);
+    handleMoveMessages([msg.id], "trash");
   }
 
   interface SSEConnRecord {
@@ -8989,11 +9017,7 @@ const AppContent: Component = () => {
                 onNext={handleNextMessage}
                 onArchive={handleArchiveMessage}
                 onSnooze={handleSnoozeMessage}
-                onSpam={(msg) => {
-                  setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, folder: "spam" } : m)));
-                  setSelectedMsg(null);
-                  showToast("Moved to Spam");
-                }}
+                onSpam={(msg) => handleMoveMessages([msg.id], "spam")}
                 onTrash={handleTrashMessage}
                 onDeleteForever={handleDeleteForever}
                 onToggleRead={toggleMessageRead}
@@ -9201,7 +9225,7 @@ const AppContent: Component = () => {
       {/* Floating Optimistic Undo Toast */}
       <Show when={undoAction()}>
         <div class="fixed bottom-6 left-6 sm:left-72 z-40 bg-[#3C3D3E] text-white px-4 py-2.5 rounded-xl shadow-lg flex items-center gap-3 text-xs font-sans border border-[#E2DFD8]/20">
-          <span>Message moved to {undoAction()?.previousFolder === "inbox" ? "Archive" : "Trash"}</span>
+          <span>Message moved to {undoAction()?.targetFolder === "archive" ? "Archive" : "Trash"}</span>
           <button
             onClick={handleUndo}
             class="text-[#A27561] hover:text-[#c4927b] font-bold uppercase tracking-wider underline cursor-pointer"

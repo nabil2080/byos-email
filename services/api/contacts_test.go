@@ -12,8 +12,29 @@ import (
 	"testing"
 )
 
+const testContactMigrationKey = "test-internal-migration-key-xyz"
+
 func contactRequest(t *testing.T, method, mailboxID, contactID, body, token string) *httptest.ResponseRecorder {
 	t.Helper()
+	t.Setenv("MIGRATION_INTERNAL_KEY", testContactMigrationKey)
+
+	isPlaintextWrite := (method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch) && !strings.Contains(body, "encrypted_envelope")
+	if isPlaintextWrite {
+		internalURL := "/v1/internal/mailboxes/" + mailboxID + "/contacts/migration"
+		if contactID != "" {
+			internalURL += "/" + contactID
+		}
+		req := httptest.NewRequest(method, internalURL, bytes.NewBufferString(body))
+		req.SetPathValue("mailbox_id", mailboxID)
+		if contactID != "" {
+			req.SetPathValue("contact_id", contactID)
+		}
+		req.Header.Set("X-Internal-Key", testContactMigrationKey)
+		w := httptest.NewRecorder()
+		internalContactMigrationHandler(w, req)
+		return w
+	}
+
 	url := "/v1/mailboxes/" + mailboxID + "/contacts"
 	if contactID != "" {
 		url += "/" + contactID
@@ -288,11 +309,22 @@ User Five,user5@example.com,Notes 5,Group C`
 	b64Data := base64.StdEncoding.EncodeToString([]byte(csvData))
 	body := fmt.Sprintf(`{"format":"csv","data":"%s"}`, b64Data)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/contacts/import", bytes.NewBufferString(body))
+	// Public import endpoint rejects plaintext import
+	pubReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/contacts/import", bytes.NewBufferString(body))
+	pubReq.SetPathValue("mailbox_id", mailboxID)
+	pubReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+	pubW := httptest.NewRecorder()
+	contactsImportHandler(pubW, pubReq)
+	if pubW.Code != http.StatusBadRequest {
+		t.Fatalf("expected public import to reject plaintext with 400, got %d: %s", pubW.Code, pubW.Body.String())
+	}
+
+	t.Setenv("MIGRATION_INTERNAL_KEY", testContactMigrationKey)
+	req := httptest.NewRequest(http.MethodPost, "/v1/internal/mailboxes/"+mailboxID+"/contacts/migration", bytes.NewBufferString(body))
 	req.SetPathValue("mailbox_id", mailboxID)
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+	req.Header.Set("X-Internal-Key", testContactMigrationKey)
 	w := httptest.NewRecorder()
-	contactsImportHandler(w, req)
+	internalContactMigrationHandler(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("import csv expected 200, got %d: %s", w.Code, w.Body.String())
@@ -340,11 +372,22 @@ END:VCARD`
 	b64Data := base64.StdEncoding.EncodeToString([]byte(vcardData))
 	body := fmt.Sprintf(`{"format":"vcard","data":"%s"}`, b64Data)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/contacts/import", bytes.NewBufferString(body))
+	// Public import endpoint rejects plaintext import
+	pubReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/contacts/import", bytes.NewBufferString(body))
+	pubReq.SetPathValue("mailbox_id", mailboxID)
+	pubReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+	pubW := httptest.NewRecorder()
+	contactsImportHandler(pubW, pubReq)
+	if pubW.Code != http.StatusBadRequest {
+		t.Fatalf("expected public import to reject plaintext with 400, got %d: %s", pubW.Code, pubW.Body.String())
+	}
+
+	t.Setenv("MIGRATION_INTERNAL_KEY", testContactMigrationKey)
+	req := httptest.NewRequest(http.MethodPost, "/v1/internal/mailboxes/"+mailboxID+"/contacts/migration", bytes.NewBufferString(body))
 	req.SetPathValue("mailbox_id", mailboxID)
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+	req.Header.Set("X-Internal-Key", testContactMigrationKey)
 	w := httptest.NewRecorder()
-	contactsImportHandler(w, req)
+	internalContactMigrationHandler(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("import vcard expected 200, got %d: %s", w.Code, w.Body.String())
@@ -397,5 +440,137 @@ func TestExportCSV(t *testing.T) {
 	}
 	if rows[0][0] != "Name" || rows[0][1] != "Email" {
 		t.Fatalf("unexpected header: %v", rows[0])
+	}
+}
+
+func TestContactPlaintextRejectionWithoutMigration(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
+	_, mailboxID := createTestMailbox(t, db, mustOrg(t, db, ownerID), ownerID, "contacts-no-migration")
+	token := createTestSession(t, db, ownerID)
+
+	// 1. Plaintext create without migration header is rejected (400)
+	reqCreate := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/contacts", bytes.NewBufferString(`{"name":"Plain User","email":"plain@example.com"}`))
+	reqCreate.SetPathValue("mailbox_id", mailboxID)
+	reqCreate.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+	wCreate := httptest.NewRecorder()
+	contactsHandler(wCreate, reqCreate)
+	if wCreate.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for plaintext contact creation without migration header, got %d: %s", wCreate.Code, wCreate.Body.String())
+	}
+	if !strings.Contains(wCreate.Body.String(), "plaintext contact creation rejected") {
+		t.Fatalf("expected rejection error message, got: %s", wCreate.Body.String())
+	}
+
+	// 2. Plaintext update without migration header is rejected (400)
+	reqUpdate := httptest.NewRequest(http.MethodPut, "/v1/mailboxes/"+mailboxID+"/contacts/00000000-0000-0000-0000-000000000001", bytes.NewBufferString(`{"name":"Updated Name"}`))
+	reqUpdate.SetPathValue("mailbox_id", mailboxID)
+	reqUpdate.SetPathValue("contact_id", "00000000-0000-0000-0000-000000000001")
+	reqUpdate.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+	wUpdate := httptest.NewRecorder()
+	contactsHandler(wUpdate, reqUpdate)
+	if wUpdate.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for plaintext contact update without migration header, got %d: %s", wUpdate.Code, wUpdate.Body.String())
+	}
+	if !strings.Contains(wUpdate.Body.String(), "plaintext contact update rejected") {
+		t.Fatalf("expected rejection error message, got: %s", wUpdate.Body.String())
+	}
+
+	// 3. Plaintext import without migration header is rejected (400)
+	reqImport := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/contacts/import", bytes.NewBufferString(`{"format":"csv","data":"Name,Email\nUser,user@example.com"}`))
+	reqImport.SetPathValue("mailbox_id", mailboxID)
+	reqImport.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+	wImport := httptest.NewRecorder()
+	contactsImportHandler(wImport, reqImport)
+	if wImport.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for plaintext contacts import without migration header, got %d: %s", wImport.Code, wImport.Body.String())
+	}
+	if !strings.Contains(wImport.Body.String(), "plaintext contacts import rejected") {
+		t.Fatalf("expected rejection error message, got: %s", wImport.Body.String())
+	}
+
+	// 4. Plaintext create with bypass headers is STILL rejected (400)
+	reqCreateBypass := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/contacts?migration=true", bytes.NewBufferString(`{"name":"Plain User","email":"plain@example.com"}`))
+	reqCreateBypass.SetPathValue("mailbox_id", mailboxID)
+	reqCreateBypass.Header.Set("X-BYOS-Migration", "true")
+	reqCreateBypass.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+	wCreateBypass := httptest.NewRecorder()
+	contactsHandler(wCreateBypass, reqCreateBypass)
+	if wCreateBypass.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for plaintext contact creation with bypass headers, got %d: %s", wCreateBypass.Code, wCreateBypass.Body.String())
+	}
+
+	// 5. Plaintext update with bypass headers is STILL rejected (400)
+	reqUpdateBypass := httptest.NewRequest(http.MethodPut, "/v1/mailboxes/"+mailboxID+"/contacts/00000000-0000-0000-0000-000000000001?migration=true", bytes.NewBufferString(`{"name":"Updated Name"}`))
+	reqUpdateBypass.SetPathValue("mailbox_id", mailboxID)
+	reqUpdateBypass.SetPathValue("contact_id", "00000000-0000-0000-0000-000000000001")
+	reqUpdateBypass.Header.Set("X-BYOS-Migration", "true")
+	reqUpdateBypass.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+	wUpdateBypass := httptest.NewRecorder()
+	contactsHandler(wUpdateBypass, reqUpdateBypass)
+	if wUpdateBypass.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for plaintext contact update with bypass headers, got %d: %s", wUpdateBypass.Code, wUpdateBypass.Body.String())
+	}
+
+	// 6. Plaintext import with bypass headers is STILL rejected (400)
+	reqImportBypass := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/contacts/import?migration=true", bytes.NewBufferString(`{"format":"csv","data":"Name,Email\nUser,user@example.com"}`))
+	reqImportBypass.SetPathValue("mailbox_id", mailboxID)
+	reqImportBypass.Header.Set("X-BYOS-Migration", "true")
+	reqImportBypass.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+	wImportBypass := httptest.NewRecorder()
+	contactsImportHandler(wImportBypass, reqImportBypass)
+	if wImportBypass.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for plaintext contacts import with bypass headers, got %d: %s", wImportBypass.Code, wImportBypass.Body.String())
+	}
+}
+
+func TestInternalContactMigrationAuth(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	_, ownerID, _, _ := createTestOrgAndUsers(t, db)
+	_, mailboxID := createTestMailbox(t, db, mustOrg(t, db, ownerID), ownerID, "contacts-migration-auth")
+	token := createTestSession(t, db, ownerID)
+	t.Setenv("MIGRATION_INTERNAL_KEY", "correct-secret-migration-key")
+
+	body := `{"name":"Migration User","email":"migration.user@example.com"}`
+
+	// 1. Missing X-Internal-Key rejected (403)
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/internal/mailboxes/"+mailboxID+"/contacts/migration", bytes.NewBufferString(body))
+	req1.SetPathValue("mailbox_id", mailboxID)
+	w1 := httptest.NewRecorder()
+	internalContactMigrationHandler(w1, req1)
+	if w1.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for missing internal key, got %d: %s", w1.Code, w1.Body.String())
+	}
+
+	// 2. Regular user session cookie rejected (403)
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/internal/mailboxes/"+mailboxID+"/contacts/migration", bytes.NewBufferString(body))
+	req2.SetPathValue("mailbox_id", mailboxID)
+	req2.AddCookie(&http.Cookie{Name: "byos_session", Value: token, Path: "/"})
+	w2 := httptest.NewRecorder()
+	internalContactMigrationHandler(w2, req2)
+	if w2.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for user session cookie without internal key, got %d: %s", w2.Code, w2.Body.String())
+	}
+
+	// 3. Wrong X-Internal-Key rejected (403)
+	req3 := httptest.NewRequest(http.MethodPost, "/v1/internal/mailboxes/"+mailboxID+"/contacts/migration", bytes.NewBufferString(body))
+	req3.SetPathValue("mailbox_id", mailboxID)
+	req3.Header.Set("X-Internal-Key", "wrong-key")
+	w3 := httptest.NewRecorder()
+	internalContactMigrationHandler(w3, req3)
+	if w3.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for wrong internal key, got %d: %s", w3.Code, w3.Body.String())
+	}
+
+	// 4. Correct X-Internal-Key succeeds (201)
+	req4 := httptest.NewRequest(http.MethodPost, "/v1/internal/mailboxes/"+mailboxID+"/contacts/migration", bytes.NewBufferString(body))
+	req4.SetPathValue("mailbox_id", mailboxID)
+	req4.Header.Set("X-Internal-Key", "correct-secret-migration-key")
+	w4 := httptest.NewRecorder()
+	internalContactMigrationHandler(w4, req4)
+	if w4.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for valid internal migration request, got %d: %s", w4.Code, w4.Body.String())
 	}
 }

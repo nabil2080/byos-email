@@ -240,3 +240,42 @@ func TestSnoozeRejectsPastTime(t *testing.T) {
 		t.Fatalf("expected status 400 for past time, got %d", resp.StatusCode)
 	}
 }
+
+// 6. TestSnoozeSentAndTrashRestrictions
+func TestSnoozeSentAndTrashRestrictions(t *testing.T) {
+	conn := getTestDB(t)
+	defer conn.Close(context.Background())
+	ctx := context.Background()
+
+	_, userID, domainID, mailboxID := createThreadingTestMailbox(t, conn)
+
+	token, tokenHash := generateSessionToken()
+	_, err := conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		userID, tokenHash, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	futureTime := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
+
+	// Sent message cannot be snoozed
+	sentMsgID := insertSnoozeTestMessage(t, conn, mailboxID, domainID, "alice@test.local", "sent", nil)
+	respSent := postSnooze(t, mailboxID, sentMsgID, token, &futureTime)
+	if respSent.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected status 400 when snoozing sent message, got %d", respSent.StatusCode)
+	}
+
+	// Trash message cannot be snoozed
+	trashMsgID := insertSnoozeTestMessage(t, conn, mailboxID, domainID, "alice@test.local", "trash", nil)
+	respTrash := postSnooze(t, mailboxID, trashMsgID, token, &futureTime)
+	if respTrash.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected status 400 when snoozing trash message, got %d", respTrash.StatusCode)
+	}
+
+	// Spam message cannot be snoozed
+	spamMsgID := insertSnoozeTestMessage(t, conn, mailboxID, domainID, "spammer@test.local", "spam", nil)
+	respSpam := postSnooze(t, mailboxID, spamMsgID, token, &futureTime)
+	if respSpam.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected status 400 when snoozing spam message, got %d", respSpam.StatusCode)
+	}
+}

@@ -3,7 +3,8 @@ import {
   wasm_aes_gcm_decrypt,
 } from "../../generated/crypto-core/byos_crypto_core.js";
 import { bytesToHex, hexToBytes } from "../../attachment_crypto";
-import { getMailboxKeyFor } from "../../session_isolation";
+import { getMailboxKeyFor, registerSessionCleanupHook } from "../../session_isolation";
+import { enqueueNoteSync, triggerNotesSync } from "./notesSync";
 
 export interface NoteChecklistItem {
   id: string;
@@ -46,9 +47,17 @@ export interface NoteItem {
   versionHistory?: NoteVersion[];
   createdAt: number;
   updatedAt: number;
+  syncedRevision?: number;
+  localRevision?: number;
+  syncStatus?: "synced" | "saving" | "offline" | "conflict";
+  isDeleted?: boolean;
+  deletedAt?: number;
   encryptedPayload?: string;
+  encryptionVersion?: number; // 1 for legacy (byos-notes-v1:mailboxId), 2 for context-bound (byos-notes-v2:mailboxId:noteId)
   _isLocked?: boolean;
   _decrypted?: boolean;
+  _isLegacyPlaintext?: boolean;
+  _migrationStatus?: "migrated" | "pending" | "failed";
 }
 
 export const NOTE_COLORS: Array<{
@@ -237,9 +246,22 @@ export function deleteLabel(mailboxId: string | undefined, name: string): boolea
 
 // ── ZERO-KNOWLEDGE CRYPTO & MEDIA STORAGE ──
 export const NOTES_AAD_PREFIX = "byos-notes-v1";
+export const NOTES_AAD_PREFIX_V1 = "byos-notes-v1";
+export const NOTES_AAD_PREFIX_V2 = "byos-notes-v2";
 
-export function computeNotesAad(mailboxId?: string): Uint8Array {
-  return new TextEncoder().encode(`${NOTES_AAD_PREFIX}:${mailboxId || "local_default"}`);
+export function computeNotesAadV1(mailboxId?: string): Uint8Array {
+  return new TextEncoder().encode(`${NOTES_AAD_PREFIX_V1}:${mailboxId || "local_default"}`);
+}
+
+export function computeNotesAadV2(mailboxId: string | undefined, noteId: string): Uint8Array {
+  return new TextEncoder().encode(`${NOTES_AAD_PREFIX_V2}:${mailboxId || "local_default"}:${noteId}`);
+}
+
+export function computeNotesAad(mailboxId?: string, noteId?: string, version: number = 2): Uint8Array {
+  if (version === 2 && noteId) {
+    return computeNotesAadV2(mailboxId, noteId);
+  }
+  return computeNotesAadV1(mailboxId);
 }
 
 export interface NoteSensitivePayload {
@@ -259,10 +281,20 @@ export function getNotesMailboxKey(): Uint8Array | null {
   return storeMailboxKey;
 }
 
+// Register with session isolation to wipe in-memory keys on session zeroization/logout
+if (typeof registerSessionCleanupHook === "function") {
+  registerSessionCleanupHook(() => {
+    storeMailboxKey = null;
+    clearNotesMediaCache();
+  });
+}
+
 export function encryptNoteSensitiveSync(
   mailboxKey: Uint8Array,
   mailboxId: string | undefined,
-  sensitive: NoteSensitivePayload
+  sensitive: NoteSensitivePayload,
+  noteId?: string,
+  version: number = 2
 ): string {
   if (!mailboxKey || !(mailboxKey instanceof Uint8Array) || mailboxKey.length !== 32) {
     throw new Error("Invalid mailbox encryption key: 32 bytes required");
@@ -270,7 +302,7 @@ export function encryptNoteSensitiveSync(
   const keyHex = bytesToHex(mailboxKey);
   const plaintextBytes = new TextEncoder().encode(JSON.stringify(sensitive));
   const plaintextHex = bytesToHex(plaintextBytes);
-  const aadBytes = computeNotesAad(mailboxId);
+  const aadBytes = computeNotesAad(mailboxId, noteId, version);
   const aadHex = bytesToHex(aadBytes);
 
   return wasm_aes_gcm_encrypt(keyHex, plaintextHex, aadHex);
@@ -279,15 +311,56 @@ export function encryptNoteSensitiveSync(
 export function decryptNoteSensitiveSync(
   mailboxKey: Uint8Array,
   mailboxId: string | undefined,
-  envelopeHex: string
+  envelopeHex: string,
+  noteId?: string,
+  version?: number
 ): NoteSensitivePayload | null {
   if (!mailboxKey || !(mailboxKey instanceof Uint8Array) || mailboxKey.length !== 32 || !envelopeHex) {
     return null;
   }
+  const keyHex = bytesToHex(mailboxKey);
+
+  // If explicit version 2 with noteId, decrypt with v2 AAD
+  if (version === 2 && noteId) {
+    try {
+      const aadHex = bytesToHex(computeNotesAadV2(mailboxId, noteId));
+      const plaintextHex = wasm_aes_gcm_decrypt(keyHex, envelopeHex, aadHex);
+      const plaintextBytes = hexToBytes(plaintextHex);
+      const jsonStr = new TextDecoder().decode(plaintextBytes);
+      return JSON.parse(jsonStr) as NoteSensitivePayload;
+    } catch {
+      return null;
+    }
+  }
+
+  // If explicit version 1, decrypt with v1 AAD
+  if (version === 1) {
+    try {
+      const aadHex = bytesToHex(computeNotesAadV1(mailboxId));
+      const plaintextHex = wasm_aes_gcm_decrypt(keyHex, envelopeHex, aadHex);
+      const plaintextBytes = hexToBytes(plaintextHex);
+      const jsonStr = new TextDecoder().decode(plaintextBytes);
+      return JSON.parse(jsonStr) as NoteSensitivePayload;
+    } catch {
+      return null;
+    }
+  }
+
+  // Version unknown / unversioned legacy: try v2 first if noteId is available
+  if (noteId) {
+    try {
+      const aadHex = bytesToHex(computeNotesAadV2(mailboxId, noteId));
+      const plaintextHex = wasm_aes_gcm_decrypt(keyHex, envelopeHex, aadHex);
+      const plaintextBytes = hexToBytes(plaintextHex);
+      const jsonStr = new TextDecoder().decode(plaintextBytes);
+      return JSON.parse(jsonStr) as NoteSensitivePayload;
+    } catch {
+      // Fall through to v1
+    }
+  }
+
   try {
-    const keyHex = bytesToHex(mailboxKey);
-    const aadBytes = computeNotesAad(mailboxId);
-    const aadHex = bytesToHex(aadBytes);
+    const aadHex = bytesToHex(computeNotesAadV1(mailboxId));
     const plaintextHex = wasm_aes_gcm_decrypt(keyHex, envelopeHex, aadHex);
     const plaintextBytes = hexToBytes(plaintextHex);
     const jsonStr = new TextDecoder().decode(plaintextBytes);
@@ -301,14 +374,16 @@ export function decryptNoteSensitiveSync(
 export async function encryptNoteSensitiveSubtle(
   mailboxKey: Uint8Array,
   mailboxId: string | undefined,
-  sensitive: NoteSensitivePayload
+  sensitive: NoteSensitivePayload,
+  noteId?: string,
+  version: number = 2
 ): Promise<string> {
   if (!mailboxKey || !(mailboxKey instanceof Uint8Array) || mailboxKey.length !== 32) {
     throw new Error("Invalid mailbox encryption key: 32 bytes required");
   }
   const plaintext = new TextEncoder().encode(JSON.stringify(sensitive));
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const aad = computeNotesAad(mailboxId);
+  const aad = computeNotesAad(mailboxId, noteId, version);
 
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
@@ -340,7 +415,9 @@ export async function encryptNoteSensitiveSubtle(
 export async function decryptNoteSensitiveSubtle(
   mailboxKey: Uint8Array,
   mailboxId: string | undefined,
-  envelopeHex: string
+  envelopeHex: string,
+  noteId?: string,
+  version?: number
 ): Promise<NoteSensitivePayload | null> {
   if (!mailboxKey || !(mailboxKey instanceof Uint8Array) || mailboxKey.length !== 32 || !envelopeHex) {
     return null;
@@ -352,7 +429,6 @@ export async function decryptNoteSensitiveSubtle(
     }
     const iv = envelope.subarray(1, 13);
     const ciphertext = envelope.subarray(13);
-    const aad = computeNotesAad(mailboxId);
 
     const cryptoKey = await crypto.subtle.importKey(
       "raw",
@@ -362,6 +438,27 @@ export async function decryptNoteSensitiveSubtle(
       ["decrypt"]
     );
 
+    // Try v2 first if noteId present and not explicitly v1
+    if (noteId && version !== 1) {
+      try {
+        const aadV2 = computeNotesAadV2(mailboxId, noteId);
+        const decryptedBuffer = await crypto.subtle.decrypt(
+          {
+            name: "AES-GCM",
+            iv: iv as unknown as BufferSource,
+            additionalData: aadV2 as unknown as BufferSource,
+          },
+          cryptoKey,
+          ciphertext as unknown as BufferSource
+        );
+        const jsonStr = new TextDecoder().decode(decryptedBuffer);
+        return JSON.parse(jsonStr) as NoteSensitivePayload;
+      } catch {
+        if (version === 2) return null; // explicit v2 failure
+      }
+    }
+
+    const aad = computeNotesAadV1(mailboxId);
     const decryptedBuffer = await crypto.subtle.decrypt(
       {
         name: "AES-GCM",
@@ -448,19 +545,22 @@ export function openNotesMediaDB(): Promise<IDBDatabase | null> {
   return mediaDbPromise;
 }
 
-export function computeNotesMediaAad(mailboxId?: string): Uint8Array {
+export function computeNotesMediaAad(mailboxId?: string, mediaId?: string): Uint8Array {
+  if (mediaId) {
+    return new TextEncoder().encode(`byos-notes-media-v2:${mailboxId || "default"}:${mediaId}`);
+  }
   return new TextEncoder().encode(`byos-notes-media-v1:${mailboxId || "default"}`);
 }
 
-export function resolveMediaMailboxKey(
+export function resolveNotesMailboxKey(
   mailboxId?: string,
   key?: Uint8Array | null
 ): Uint8Array | null {
-  if (key && key instanceof Uint8Array && key.length === 32) {
-    return key;
-  }
-  if (storeMailboxKey && storeMailboxKey.length === 32) {
-    return storeMailboxKey;
+  if (key !== undefined) {
+    if (key && key instanceof Uint8Array && key.length === 32) {
+      return key;
+    }
+    return null;
   }
   if (mailboxId) {
     const memKey = getMailboxKeyFor(mailboxId);
@@ -468,13 +568,19 @@ export function resolveMediaMailboxKey(
       return memKey;
     }
   }
+  if (storeMailboxKey && storeMailboxKey.length === 32) {
+    return storeMailboxKey;
+  }
   return null;
 }
+
+export const resolveMediaMailboxKey = resolveNotesMailboxKey;
 
 export function encryptNotesMedia(
   mailboxKey: Uint8Array,
   mailboxId: string | undefined,
-  dataUrl: string
+  dataUrl: string,
+  mediaId?: string
 ): string | null {
   if (!mailboxKey || !(mailboxKey instanceof Uint8Array) || mailboxKey.length !== 32 || !dataUrl) {
     return null;
@@ -482,7 +588,7 @@ export function encryptNotesMedia(
   try {
     if (typeof wasm_aes_gcm_encrypt === "function") {
       const ptBytes = new TextEncoder().encode(dataUrl);
-      const aad = computeNotesMediaAad(mailboxId);
+      const aad = computeNotesMediaAad(mailboxId, mediaId);
       return wasm_aes_gcm_encrypt(
         bytesToHex(mailboxKey),
         bytesToHex(ptBytes),
@@ -498,11 +604,30 @@ export function encryptNotesMedia(
 export function decryptNotesMedia(
   mailboxKey: Uint8Array,
   mailboxId: string | undefined,
-  encryptedHex: string
+  encryptedHex: string,
+  mediaId?: string
 ): string | null {
   if (!mailboxKey || !(mailboxKey instanceof Uint8Array) || mailboxKey.length !== 32 || !encryptedHex) {
     return null;
   }
+  // Try v2 with mediaId first
+  if (mediaId) {
+    try {
+      if (typeof wasm_aes_gcm_decrypt === "function") {
+        const aad = computeNotesMediaAad(mailboxId, mediaId);
+        const decHex = wasm_aes_gcm_decrypt(
+          bytesToHex(mailboxKey),
+          encryptedHex,
+          bytesToHex(aad)
+        );
+        const decBytes = hexToBytes(decHex);
+        return new TextDecoder().decode(decBytes);
+      }
+    } catch {
+      // Fall through to v1
+    }
+  }
+  // Fallback to legacy v1 AAD
   try {
     if (typeof wasm_aes_gcm_decrypt === "function") {
       const aad = computeNotesMediaAad(mailboxId);
@@ -530,16 +655,20 @@ export async function saveMediaToIDB(
   const db = await openNotesMediaDB();
   if (!db) return id;
 
-  const activeKey = resolveMediaMailboxKey(mailboxId, mailboxKey);
+  const activeKey = resolveNotesMailboxKey(mailboxId, mailboxKey);
   let encryptedDataUrl: string | undefined;
   let storedDataUrl = dataUrl;
 
   if (activeKey) {
-    const enc = encryptNotesMedia(activeKey, mailboxId, dataUrl);
+    const enc = encryptNotesMedia(activeKey, mailboxId, dataUrl, id);
     if (enc) {
       encryptedDataUrl = enc;
       storedDataUrl = "(Encrypted Media)";
     }
+  } else {
+    // Fail-closed: refuse to persist unencrypted media to IDB when key is unavailable
+    console.warn("[notesStore] Refusing to persist unencrypted media to IDB: key unavailable");
+    return id;
   }
 
   return new Promise((resolve) => {
@@ -574,7 +703,7 @@ export async function getMediaFromIDB(
   const db = await openNotesMediaDB();
   if (!db) return null;
 
-  const activeKey = resolveMediaMailboxKey(mailboxId, mailboxKey);
+  const activeKey = resolveNotesMailboxKey(mailboxId, mailboxKey);
 
   return new Promise((resolve) => {
     try {
@@ -590,7 +719,7 @@ export async function getMediaFromIDB(
         // Check if media is zero-knowledge encrypted in IDB
         if (req.result.encryptedDataUrl) {
           if (activeKey) {
-            const dec = decryptNotesMedia(activeKey, mailboxId, req.result.encryptedDataUrl);
+            const dec = decryptNotesMedia(activeKey, mailboxId, req.result.encryptedDataUrl, id);
             if (dec) {
               setCachedMedia(id, dec);
               resolve(dec);
@@ -628,6 +757,42 @@ export async function deleteMediaFromIDB(id: string): Promise<boolean> {
       const tx = db.transaction(MEDIA_STORE_NAME, "readwrite");
       const store = tx.objectStore(MEDIA_STORE_NAME);
       const req = store.delete(id);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => resolve(false);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+export async function getRawMediaRecordFromIDB(
+  id: string
+): Promise<{ id: string; encryptedDataUrl?: string; dataUrl?: string } | null> {
+  const db = await openNotesMediaDB();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(MEDIA_STORE_NAME, "readonly");
+      const store = tx.objectStore(MEDIA_STORE_NAME);
+      const req = store.get(id);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export async function saveRawMediaRecordToIDB(
+  record: { id: string; encryptedDataUrl?: string; dataUrl?: string }
+): Promise<boolean> {
+  const db = await openNotesMediaDB();
+  if (!db) return false;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(MEDIA_STORE_NAME, "readwrite");
+      const store = tx.objectStore(MEDIA_STORE_NAME);
+      const req = store.put({ ...record, createdAt: Date.now() });
       req.onsuccess = () => resolve(true);
       req.onerror = () => resolve(false);
     } catch {
@@ -729,18 +894,112 @@ export function applyMarkdownFormat(
 }
 
 // ── NOTES STORE ──
+export interface MigrationResult {
+  totalLegacy: number;
+  migratedCount: number;
+  failedCount: number;
+  errors: string[];
+}
+
+/**
+ * 6-step verified migration of legacy plaintext notes into v2 authenticated AES-GCM ciphertext.
+ * Fails closed without modifying data if key is unavailable or verification fails.
+ */
+export function migrateLegacyPlaintextNotes(
+  mailboxId: string | undefined,
+  notes: NoteItem[],
+  mailboxKey?: Uint8Array | null
+): MigrationResult {
+  const result: MigrationResult = {
+    totalLegacy: 0,
+    migratedCount: 0,
+    failedCount: 0,
+    errors: [],
+  };
+
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  if (!key || key.length !== 32) {
+    // Rule: "Do not attempt automatic migration while the encryption key is unavailable."
+    return result;
+  }
+
+  // 1. Identify legacy plaintext notes without exposing their content in logs
+  const legacyNotes = notes.filter((n) => !n.encryptedPayload && (n._isLegacyPlaintext || n.title || n.content));
+  result.totalLegacy = legacyNotes.length;
+  if (legacyNotes.length === 0) {
+    return result;
+  }
+
+  let storeNeedsUpdate = false;
+
+  for (const n of legacyNotes) {
+    // 2. Preserve original record snapshot in case migration fails
+    const originalSnapshot: NoteSensitivePayload = {
+      title: n.title || "",
+      content: n.content || "",
+      checklistItems: n.checklistItems ? JSON.parse(JSON.stringify(n.checklistItems)) : [],
+      versionHistory: n.versionHistory ? JSON.parse(JSON.stringify(n.versionHistory)) : [],
+    };
+
+    try {
+      // 3. Migrate to encrypted storage: encrypt using v2 AAD
+      const encryptedHex = encryptNoteSensitiveSync(key, mailboxId, originalSnapshot, n.id, 2);
+      if (!encryptedHex) {
+        throw new Error("WASM encryption produced empty payload");
+      }
+
+      // 4. Verify the encrypted record can be decrypted and matches original content
+      const decrypted = decryptNoteSensitiveSync(key, mailboxId, encryptedHex, n.id, 2);
+      if (!decrypted) {
+        throw new Error("Post-migration decryption verification failed");
+      }
+
+      const matches =
+        decrypted.title === originalSnapshot.title &&
+        decrypted.content === originalSnapshot.content &&
+        JSON.stringify(decrypted.checklistItems || []) === JSON.stringify(originalSnapshot.checklistItems || []);
+
+      if (!matches) {
+        throw new Error("Post-migration verification content mismatch");
+      }
+
+      // 5. Replace or remove legacy plaintext representation ONLY after successful verification
+      n.encryptedPayload = encryptedHex;
+      n.encryptionVersion = 2;
+      delete n._isLegacyPlaintext;
+      n._migrationStatus = "migrated";
+      n._decrypted = true;
+      result.migratedCount++;
+      storeNeedsUpdate = true;
+    } catch {
+      // 6. On failure, preserve the original data and provide a recoverable error state
+      n._migrationStatus = "failed";
+      result.failedCount++;
+      result.errors.push(`Note ${n.id} migration failed`);
+      console.warn(`[notesStore] Legacy note migration failed safely for id=${n.id}`);
+    }
+  }
+
+  if (storeNeedsUpdate) {
+    saveNotes(mailboxId, notes, key);
+  }
+
+  return result;
+}
+
 export function loadNotes(mailboxId?: string, mailboxKey?: Uint8Array | null): NoteItem[] {
   if (typeof window === "undefined" || !window.localStorage) {
     return [];
   }
-  const key = mailboxKey !== undefined ? mailboxKey : storeMailboxKey;
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
 
   try {
     const raw = localStorage.getItem(getNotesStorageKey(mailboxId));
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed.map((n: any) => {
+        let hasLegacyPlaintext = false;
+        const loaded = parsed.map((n: any) => {
           const item: NoteItem = {
             ...n,
             isArchived: Boolean(n.isArchived),
@@ -752,12 +1011,19 @@ export function loadNotes(mailboxId?: string, mailboxKey?: Uint8Array | null): N
             drawings: Array.isArray(n.drawings) ? n.drawings : [],
             collaborators: Array.isArray(n.collaborators) ? n.collaborators : [],
             versionHistory: Array.isArray(n.versionHistory) ? n.versionHistory : [],
+            encryptionVersion: n.encryptionVersion || (n.encryptedPayload ? 1 : undefined),
           };
 
           if (n.encryptedPayload) {
             item.encryptedPayload = n.encryptedPayload;
             if (key && key.length === 32) {
-              const decrypted = decryptNoteSensitiveSync(key, mailboxId, n.encryptedPayload);
+              const decrypted = decryptNoteSensitiveSync(
+                key,
+                mailboxId,
+                n.encryptedPayload,
+                n.id,
+                n.encryptionVersion
+              );
               if (decrypted) {
                 item.title = decrypted.title ?? "";
                 item.content = decrypted.content ?? "";
@@ -775,12 +1041,21 @@ export function loadNotes(mailboxId?: string, mailboxKey?: Uint8Array | null): N
               item._isLocked = true;
             }
           } else {
-            // Legacy plaintext note fallback
+            // Legacy plaintext note from disk
+            item._isLegacyPlaintext = true;
             item._decrypted = true;
+            hasLegacyPlaintext = true;
           }
 
           return item;
         });
+
+        // If key is available and legacy plaintext notes were found, trigger verified migration
+        if (key && key.length === 32 && hasLegacyPlaintext) {
+          migrateLegacyPlaintextNotes(mailboxId, loaded, key);
+        }
+
+        return loaded;
       }
     }
   } catch (err) {
@@ -800,6 +1075,7 @@ export function loadNotes(mailboxId?: string, mailboxKey?: Uint8Array | null): N
       labels: ["Inspiration"],
       createdAt: Date.now() - 3600000,
       updatedAt: Date.now() - 3600000,
+      encryptionVersion: 2,
     },
     {
       id: "note-security-checklist",
@@ -823,17 +1099,47 @@ export function loadNotes(mailboxId?: string, mailboxKey?: Uint8Array | null): N
       },
       createdAt: Date.now() - 1800000,
       updatedAt: Date.now() - 1800000,
+      encryptionVersion: 2,
     },
   ];
-  saveNotes(mailboxId, defaultNotes, key);
+
+  // Only persist default notes if key is available! If no key, keep in memory without writing plaintext.
+  if (key && key.length === 32) {
+    saveNotes(mailboxId, defaultNotes, key);
+  }
   return defaultNotes;
 }
 
-export function saveNotes(mailboxId: string | undefined, notes: NoteItem[], mailboxKey?: Uint8Array | null): void {
+export function saveNotes(
+  mailboxId: string | undefined,
+  notes: NoteItem[],
+  mailboxKey?: Uint8Array | null
+): boolean {
   if (typeof window === "undefined" || !window.localStorage) {
-    return;
+    return false;
   }
-  const key = mailboxKey !== undefined ? mailboxKey : storeMailboxKey;
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+
+  // Fail-closed verification: Never persist sensitive content in plaintext
+  if (!key || key.length !== 32) {
+    const hasUnencryptedSensitive = notes.some((n) => {
+      if (n.encryptedPayload && (n._isLocked || !n._decrypted)) return false;
+      if (n._isLegacyPlaintext) return false;
+      const hasContent = Boolean(n.title || n.content || (n.checklistItems && n.checklistItems.length > 0));
+      return hasContent && !n.encryptedPayload;
+    });
+
+    if (hasUnencryptedSensitive) {
+      console.warn("Cannot persist notes: mailbox encryption key is unavailable. Failing closed to prevent plaintext leakage.");
+      return false;
+    }
+
+    const hasModifiedEncrypted = notes.some((n) => n.encryptedPayload && n._decrypted && !n._isLocked);
+    if (hasModifiedEncrypted) {
+      console.warn("Cannot persist modified encrypted notes: mailbox encryption key is unavailable. Failing closed.");
+      return false;
+    }
+  }
 
   try {
     const toStore = notes.map((n) => {
@@ -842,8 +1148,48 @@ export function saveNotes(mailboxId: string | undefined, notes: NoteItem[], mail
       const images = (n.images || []).map((img) => offloadMediaIfDataUrl(img, "image", key, mailboxId));
 
       if (key && key.length === 32) {
-        // If note was locked and not decrypted, retain its original encrypted payload!
+        // If note was locked and not decrypted, retain its original encrypted payload and version!
         if (n._isLocked && n.encryptedPayload) {
+          return {
+            ...n,
+            title: "",
+            content: "",
+            checklistItems: [],
+            versionHistory: [],
+            drawings,
+            images,
+            encryptionVersion: n.encryptionVersion || 1,
+          };
+        }
+
+        const sensitive: NoteSensitivePayload = {
+          title: n.title || "",
+          content: n.content || "",
+          checklistItems: n.checklistItems || [],
+          versionHistory: n.versionHistory || [],
+        };
+
+        const encryptedHex = encryptNoteSensitiveSync(key, mailboxId, sensitive, n.id, 2);
+        if (!encryptedHex) {
+          throw new Error(`Failed to encrypt note ${n.id}`);
+        }
+
+        return {
+          ...n,
+          title: "", // Redacted in storage
+          content: "", // Redacted in storage
+          checklistItems: [], // Redacted in storage
+          versionHistory: [], // Redacted in storage
+          encryptedPayload: encryptedHex,
+          encryptionVersion: 2,
+          drawings,
+          images,
+          _isLegacyPlaintext: undefined,
+          _migrationStatus: undefined,
+        };
+      } else {
+        // Key is not available: we can only write records that are ALREADY encrypted or preserved legacy notes
+        if (n.encryptedPayload) {
           return {
             ...n,
             title: "",
@@ -855,37 +1201,30 @@ export function saveNotes(mailboxId: string | undefined, notes: NoteItem[], mail
           };
         }
 
-        const sensitive: NoteSensitivePayload = {
-          title: n.title || "",
-          content: n.content || "",
-          checklistItems: n.checklistItems || [],
-          versionHistory: n.versionHistory || [],
-        };
+        if (n._isLegacyPlaintext) {
+          // Preserve legacy plaintext record untouched until key is available for migration
+          return {
+            ...n,
+            drawings,
+            images,
+          };
+        }
 
-        const encryptedHex = encryptNoteSensitiveSync(key, mailboxId, sensitive);
-        return {
-          ...n,
-          title: "", // Redacted in storage
-          content: "", // Redacted in storage
-          checklistItems: [], // Redacted in storage
-          versionHistory: [], // Redacted in storage
-          encryptedPayload: encryptedHex,
-          drawings,
-          images,
-        };
-      } else {
-        // Unencrypted save (legacy or when unlocked without key)
-        return {
-          ...n,
-          drawings,
-          images,
-        };
+        // Strictly NO plaintext persistence for new or modified notes!
+        throw new Error("Refusing to persist note in plaintext: encryption key unavailable");
       }
     });
 
     localStorage.setItem(getNotesStorageKey(mailboxId), JSON.stringify(toStore));
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      try {
+        window.dispatchEvent(new StorageEvent("storage", { key: getNotesStorageKey(mailboxId) }));
+      } catch {}
+    }
+    return true;
   } catch (err) {
     console.warn("Failed to save notes to localStorage:", err);
+    return false;
   }
 }
 
@@ -897,8 +1236,13 @@ export function createNote(
   isPinned: boolean = false,
   extra?: Partial<NoteItem>,
   mailboxKey?: Uint8Array | null
-): NoteItem {
-  const key = resolveMediaMailboxKey(mailboxId, mailboxKey);
+): NoteItem | null {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  if (!key || key.length !== 32) {
+    console.warn("Cannot create note: mailbox encryption key is unavailable");
+    return null;
+  }
+
   const notes = loadNotes(mailboxId, key);
   const images = (extra?.images || []).map((img) => offloadMediaIfDataUrl(img, "image", key, mailboxId));
   const drawings = (extra?.drawings || []).map((drw) => offloadMediaIfDataUrl(drw, "drawing", key, mailboxId));
@@ -921,10 +1265,19 @@ export function createNote(
     versionHistory: extra?.versionHistory || [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    encryptionVersion: 2,
+    _decrypted: true,
   };
 
   const updated = [newNote, ...notes];
-  saveNotes(mailboxId, updated);
+  const ok = saveNotes(mailboxId, updated, key);
+  if (!ok) {
+    return null;
+  }
+  if (mailboxId) {
+    enqueueNoteSync(mailboxId, newNote.id, "upsert");
+    triggerNotesSync(mailboxId, key);
+  }
   return newNote;
 }
 
@@ -974,13 +1327,24 @@ export function updateNote(
   patch: Partial<NoteItem>,
   mailboxKey?: Uint8Array | null
 ): NoteItem | null {
-  const key = resolveMediaMailboxKey(mailboxId, mailboxKey);
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
   const notes = loadNotes(mailboxId, key);
   const idx = notes.findIndex((n) => n.id === id);
   if (idx === -1) return null;
 
   if (notes[idx]._isLocked) {
     console.warn("Cannot update locked encrypted note without decryption key");
+    return null;
+  }
+
+  // If modifying sensitive fields and key is unavailable, fail closed
+  const modifiesSensitive =
+    patch.title !== undefined ||
+    patch.content !== undefined ||
+    patch.checklistItems !== undefined ||
+    patch.versionHistory !== undefined;
+  if (modifiesSensitive && (!key || key.length !== 32)) {
+    console.warn("Cannot update note content without encryption key");
     return null;
   }
 
@@ -996,17 +1360,25 @@ export function updateNote(
     ...patch,
     ...(patchImages ? { images: patchImages } : {}),
     ...(patchDrawings ? { drawings: patchDrawings } : {}),
-    updatedAt: Date.now(),
+    updatedAt: patch.updatedAt || Date.now(),
+    encryptionVersion: 2, // Upgrade to v2 context-bound AAD on update
   };
 
   notes[idx] = updatedNote;
-  saveNotes(mailboxId, notes, key);
+  const ok = saveNotes(mailboxId, notes, key);
+  if (!ok) {
+    return null;
+  }
+  if (mailboxId) {
+    enqueueNoteSync(mailboxId, updatedNote.id, "upsert");
+    triggerNotesSync(mailboxId, key);
+  }
   return updatedNote;
 }
 
-export function deleteNote(mailboxId: string | undefined, id: string): boolean {
-  // Google Keep deletes move to Bin first!
-  const notes = loadNotes(mailboxId);
+export function deleteNote(mailboxId: string | undefined, id: string, mailboxKey?: Uint8Array | null): boolean {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return false;
 
@@ -1014,16 +1386,21 @@ export function deleteNote(mailboxId: string | undefined, id: string): boolean {
     note.isInBin = true;
     note.isPinned = false; // unpin when binned
     note.updatedAt = Date.now();
-    saveNotes(mailboxId, notes);
-    return true;
+    const ok = saveNotes(mailboxId, notes, key);
+    if (ok && mailboxId) {
+      enqueueNoteSync(mailboxId, id, "upsert");
+      triggerNotesSync(mailboxId, key);
+    }
+    return ok;
   } else {
     // Permanent deletion from bin
-    return deleteNoteForever(mailboxId, id);
+    return deleteNoteForever(mailboxId, id, key);
   }
 }
 
-export function deleteNoteForever(mailboxId: string | undefined, id: string): boolean {
-  const notes = loadNotes(mailboxId);
+export function deleteNoteForever(mailboxId: string | undefined, id: string, mailboxKey?: Uint8Array | null): boolean {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
   const target = notes.find((n) => n.id === id);
   const filtered = notes.filter((n) => n.id !== id);
   if (target) {
@@ -1035,24 +1412,34 @@ export function deleteNoteForever(mailboxId: string | undefined, id: string): bo
     }
   }
   if (filtered.length !== notes.length) {
-    saveNotes(mailboxId, filtered);
-    return true;
+    const ok = saveNotes(mailboxId, filtered, key);
+    if (ok && mailboxId) {
+      enqueueNoteSync(mailboxId, id, "delete", target?.updatedAt);
+      triggerNotesSync(mailboxId, key);
+    }
+    return ok;
   }
   return false;
 }
 
-export function restoreNoteFromBin(mailboxId: string | undefined, id: string): boolean {
-  const notes = loadNotes(mailboxId);
+export function restoreNoteFromBin(mailboxId: string | undefined, id: string, mailboxKey?: Uint8Array | null): boolean {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return false;
   note.isInBin = false;
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes);
-  return true;
+  const ok = saveNotes(mailboxId, notes, key);
+  if (ok && mailboxId) {
+    enqueueNoteSync(mailboxId, id, "upsert");
+    triggerNotesSync(mailboxId, key);
+  }
+  return ok;
 }
 
-export function emptyBin(mailboxId: string | undefined): number {
-  const notes = loadNotes(mailboxId);
+export function emptyBin(mailboxId: string | undefined, mailboxKey?: Uint8Array | null): number {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
   const toDelete = notes.filter((n) => n.isInBin);
   const kept = notes.filter((n) => !n.isInBin);
   for (const n of toDelete) {
@@ -1064,43 +1451,48 @@ export function emptyBin(mailboxId: string | undefined): number {
     }
   }
   const count = notes.length - kept.length;
-  saveNotes(mailboxId, kept);
+  saveNotes(mailboxId, kept, key);
   return count;
 }
 
-export function archiveNote(mailboxId: string | undefined, id: string): boolean {
-  const notes = loadNotes(mailboxId);
+export function archiveNote(mailboxId: string | undefined, id: string, mailboxKey?: Uint8Array | null): boolean {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return false;
   note.isArchived = true;
   note.isPinned = false;
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes);
-  return true;
+  return saveNotes(mailboxId, notes, key);
 }
 
-export function unarchiveNote(mailboxId: string | undefined, id: string): boolean {
-  const notes = loadNotes(mailboxId);
+export function unarchiveNote(mailboxId: string | undefined, id: string, mailboxKey?: Uint8Array | null): boolean {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return false;
   note.isArchived = false;
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes);
-  return true;
+  return saveNotes(mailboxId, notes, key);
 }
 
-export function togglePinNote(mailboxId: string | undefined, id: string): boolean {
-  const notes = loadNotes(mailboxId);
+export function togglePinNote(mailboxId: string | undefined, id: string, mailboxKey?: Uint8Array | null): boolean {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return false;
   note.isPinned = !note.isPinned;
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes);
-  return true;
+  return saveNotes(mailboxId, notes, key);
 }
 
-export function duplicateNote(mailboxId: string | undefined, id: string): NoteItem | null {
-  const notes = loadNotes(mailboxId);
+export function duplicateNote(mailboxId: string | undefined, id: string, mailboxKey?: Uint8Array | null): NoteItem | null {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  if (!key || key.length !== 32) {
+    console.warn("Cannot duplicate note: mailbox encryption key is unavailable");
+    return null;
+  }
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return null;
   if (note._isLocked) {
@@ -1113,12 +1505,16 @@ export function duplicateNote(mailboxId: string | undefined, id: string): NoteIt
     title: note.title ? `${note.title} (Copy)` : "",
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    encryptionVersion: 2,
+    _decrypted: true,
   };
   delete clone.encryptedPayload;
   delete clone._isLocked;
-  delete clone._decrypted;
+  delete clone._isLegacyPlaintext;
+  delete clone._migrationStatus;
   const updated = [clone, ...notes];
-  saveNotes(mailboxId, updated);
+  const ok = saveNotes(mailboxId, updated, key);
+  if (!ok) return null;
   return clone;
 }
 
@@ -1128,16 +1524,15 @@ export function addNoteImage(
   dataUrl: string,
   mailboxKey?: Uint8Array | null
 ): boolean {
-  const key = resolveMediaMailboxKey(mailboxId, mailboxKey);
-  saveNoteVersion(mailboxId, id);
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  saveNoteVersion(mailboxId, id, key);
   const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return false;
   const storedRef = offloadMediaIfDataUrl(dataUrl, "image", key, mailboxId);
   note.images = [...(note.images || []), storedRef];
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes, key);
-  return true;
+  return saveNotes(mailboxId, notes, key);
 }
 
 export function removeNoteImage(
@@ -1146,16 +1541,15 @@ export function removeNoteImage(
   index: number,
   mailboxKey?: Uint8Array | null
 ): boolean {
-  const key = resolveMediaMailboxKey(mailboxId, mailboxKey);
-  saveNoteVersion(mailboxId, id);
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  saveNoteVersion(mailboxId, id, key);
   const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note || !note.images) return false;
   // Do NOT delete media from IDB here because saveNoteVersion preserves it in version history
   note.images = note.images.filter((_, i) => i !== index);
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes, key);
-  return true;
+  return saveNotes(mailboxId, notes, key);
 }
 
 export function addNoteDrawing(
@@ -1164,16 +1558,15 @@ export function addNoteDrawing(
   dataUrl: string,
   mailboxKey?: Uint8Array | null
 ): boolean {
-  const key = resolveMediaMailboxKey(mailboxId, mailboxKey);
-  saveNoteVersion(mailboxId, id);
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  saveNoteVersion(mailboxId, id, key);
   const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return false;
   const storedRef = offloadMediaIfDataUrl(dataUrl, "drawing", key, mailboxId);
   note.drawings = [...(note.drawings || []), storedRef];
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes, key);
-  return true;
+  return saveNotes(mailboxId, notes, key);
 }
 
 export function removeNoteDrawing(
@@ -1182,21 +1575,21 @@ export function removeNoteDrawing(
   index: number,
   mailboxKey?: Uint8Array | null
 ): boolean {
-  const key = resolveMediaMailboxKey(mailboxId, mailboxKey);
-  saveNoteVersion(mailboxId, id);
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  saveNoteVersion(mailboxId, id, key);
   const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note || !note.drawings) return false;
   // Do NOT delete media from IDB here because saveNoteVersion preserves it in version history
   note.drawings = note.drawings.filter((_, i) => i !== index);
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes, key);
-  return true;
+  return saveNotes(mailboxId, notes, key);
 }
 
-export function toggleNoteChecklist(mailboxId: string | undefined, id: string): boolean {
-  saveNoteVersion(mailboxId, id);
-  const notes = loadNotes(mailboxId);
+export function toggleNoteChecklist(mailboxId: string | undefined, id: string, mailboxKey?: Uint8Array | null): boolean {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  saveNoteVersion(mailboxId, id, key);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return false;
 
@@ -1221,12 +1614,12 @@ export function toggleNoteChecklist(mailboxId: string | undefined, id: string): 
   }
 
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes);
-  return true;
+  return saveNotes(mailboxId, notes, key);
 }
 
-export function saveNoteVersion(mailboxId: string | undefined, id: string): boolean {
-  const notes = loadNotes(mailboxId);
+export function saveNoteVersion(mailboxId: string | undefined, id: string, mailboxKey?: Uint8Array | null): boolean {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return false;
 
@@ -1244,12 +1637,17 @@ export function saveNoteVersion(mailboxId: string | undefined, id: string): bool
   const history = note.versionHistory || [];
   // Keep up to 25 historical revisions
   note.versionHistory = [version, ...history].slice(0, 25);
-  saveNotes(mailboxId, notes);
-  return true;
+  return saveNotes(mailboxId, notes, key);
 }
 
-export function restoreNoteVersion(mailboxId: string | undefined, noteId: string, versionId: string): boolean {
-  const notes = loadNotes(mailboxId);
+export function restoreNoteVersion(
+  mailboxId: string | undefined,
+  noteId: string,
+  versionId: string,
+  mailboxKey?: Uint8Array | null
+): boolean {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === noteId);
   if (!note || !note.versionHistory) return false;
 
@@ -1277,31 +1675,41 @@ export function restoreNoteVersion(mailboxId: string | undefined, noteId: string
   note.images = ver.images ? [...ver.images] : [];
   note.drawings = ver.drawings ? [...ver.drawings] : [];
   note.updatedAt = Date.now();
+  note.encryptionVersion = 2;
 
-  saveNotes(mailboxId, notes);
-  return true;
+  return saveNotes(mailboxId, notes, key);
 }
 
-export function addNoteCollaborator(mailboxId: string | undefined, id: string, collaborator: string): boolean {
+export function addNoteCollaborator(
+  mailboxId: string | undefined,
+  id: string,
+  collaborator: string,
+  mailboxKey?: Uint8Array | null
+): boolean {
   const trimmed = collaborator.trim();
   if (!trimmed) return false;
-  const notes = loadNotes(mailboxId);
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note) return false;
   const collabs = note.collaborators || [];
   if (collabs.includes(trimmed)) return false;
   note.collaborators = [...collabs, trimmed];
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes);
-  return true;
+  return saveNotes(mailboxId, notes, key);
 }
 
-export function removeNoteCollaborator(mailboxId: string | undefined, id: string, collaborator: string): boolean {
-  const notes = loadNotes(mailboxId);
+export function removeNoteCollaborator(
+  mailboxId: string | undefined,
+  id: string,
+  collaborator: string,
+  mailboxKey?: Uint8Array | null
+): boolean {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
   const note = notes.find((n) => n.id === id);
   if (!note || !note.collaborators) return false;
   note.collaborators = note.collaborators.filter((c) => c !== collaborator);
   note.updatedAt = Date.now();
-  saveNotes(mailboxId, notes);
-  return true;
+  return saveNotes(mailboxId, notes, key);
 }

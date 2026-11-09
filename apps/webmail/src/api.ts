@@ -45,6 +45,8 @@ export interface DraftMessage {
   encrypted_envelope: string;
   version: number;
   send_failed?: boolean;
+  folder?: string;
+  folder_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -258,7 +260,10 @@ export async function fetchScheduledDraft(
 }
 
 export function apiBase(): string {
-  return (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_BASE || "";
+  const envBase = (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_BASE;
+  if (envBase) return envBase;
+  if (typeof window === "undefined") return "http://localhost";
+  return "";
 }
 
 export function getTrackingPixelUrl(token: string): string {
@@ -742,6 +747,26 @@ export async function updateMessageFolder(
     {
       method: "PUT",
       body: JSON.stringify({ folder, folder_id: folderId ?? null }),
+    },
+    token
+  );
+}
+
+export async function deleteMessage(mailboxId: string, messageId: string, token?: string): Promise<void> {
+  return apiRequest<void>(
+    `/v1/mailboxes/${mailboxId}/messages/${messageId}`,
+    {
+      method: "DELETE",
+    },
+    token
+  );
+}
+
+export async function emptyTrash(mailboxId: string, token?: string): Promise<{ status: string; deleted_count: number }> {
+  return apiRequest<{ status: string; deleted_count: number }>(
+    `/v1/mailboxes/${mailboxId}/messages/trash`,
+    {
+      method: "DELETE",
     },
     token
   );
@@ -2443,4 +2468,127 @@ export async function fetchCalendarEventMigrationStatus(
     { method: "GET" },
     token
   );
+}
+
+/** Store an encrypted object in customer-owned storage via the storage gateway */
+export async function storeMailboxStorageObject(
+  mailboxId: string,
+  objectKey: string,
+  data: Uint8Array,
+  token?: string,
+  signal?: AbortSignal
+): Promise<{ status: string; object_key: string; size_bytes: number }> {
+  const base = apiBase();
+  const activeToken = token || (typeof sessionStorage !== "undefined" && sessionStorage.getItem("byos_active_session_token")) || undefined;
+  const res = await fetch(`${base}/v1/mailboxes/${mailboxId}/storage/store`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-Object-Key": objectKey,
+      "X-BYOS-Client": "webmail",
+      "X-BYOS-Active-Mailbox": mailboxId,
+      ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
+    },
+    credentials: "include",
+    body: data as unknown as BodyInit,
+    signal,
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Failed to store storage object (${res.status}): ${errText}`);
+  }
+  return res.json();
+}
+
+/** Retrieve an encrypted object from customer-owned storage via the storage gateway */
+export async function retrieveMailboxStorageObject(
+  mailboxId: string,
+  objectKey: string,
+  token?: string,
+  signal?: AbortSignal
+): Promise<Uint8Array | null> {
+  const base = apiBase();
+  const activeToken = token || (typeof sessionStorage !== "undefined" && sessionStorage.getItem("byos_active_session_token")) || undefined;
+  const res = await fetch(
+    `${base}/v1/mailboxes/${mailboxId}/storage/retrieve?key=${encodeURIComponent(objectKey)}`,
+    {
+      method: "GET",
+      headers: {
+        "X-BYOS-Client": "webmail",
+        "X-BYOS-Active-Mailbox": mailboxId,
+        ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
+      },
+      credentials: "include",
+      signal,
+    }
+  );
+
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Failed to retrieve storage object (${res.status}): ${errText}`);
+  }
+  const arrayBuffer = await res.arrayBuffer();
+  return new Uint8Array(arrayBuffer);
+}
+
+/** List objects in customer-owned storage under a prefix */
+export async function listMailboxStorageObjects(
+  mailboxId: string,
+  prefix: string,
+  token?: string,
+  signal?: AbortSignal
+): Promise<{ objects: string[]; count: number }> {
+  const base = apiBase();
+  const activeToken = token || (typeof sessionStorage !== "undefined" && sessionStorage.getItem("byos_active_session_token")) || undefined;
+  const res = await fetch(
+    `${base}/v1/mailboxes/${mailboxId}/storage/list?prefix=${encodeURIComponent(prefix)}`,
+    {
+      method: "GET",
+      headers: {
+        "X-BYOS-Client": "webmail",
+        "X-BYOS-Active-Mailbox": mailboxId,
+        ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
+      },
+      credentials: "include",
+      signal,
+    }
+  );
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Failed to list storage objects (${res.status}): ${errText}`);
+  }
+  return res.json();
+}
+
+/** Delete an object from customer-owned storage */
+export async function deleteMailboxStorageObject(
+  mailboxId: string,
+  objectKey: string,
+  token?: string,
+  signal?: AbortSignal
+): Promise<boolean> {
+  const base = apiBase();
+  const activeToken = token || (typeof sessionStorage !== "undefined" && sessionStorage.getItem("byos_active_session_token")) || undefined;
+  const res = await fetch(`${base}/v1/mailboxes/${mailboxId}/storage/delete`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Object-Key": objectKey,
+      "X-BYOS-Client": "webmail",
+      "X-BYOS-Active-Mailbox": mailboxId,
+      ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
+    },
+    credentials: "include",
+    body: JSON.stringify({ object_key: objectKey }),
+    signal,
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Failed to delete storage object (${res.status}): ${errText}`);
+  }
+  return true;
 }

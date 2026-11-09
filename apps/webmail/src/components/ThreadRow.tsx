@@ -385,7 +385,7 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                   </button>
                 </Show>
 
-                <Show when={props.targetMessage && props.onArchive}>
+                <Show when={props.targetMessage && props.onArchive && props.targetMessage.folder !== "sent" && props.targetMessage.folder !== "trash" && props.targetMessage.folder !== "drafts" && props.targetMessage.folder !== "archive"}>
                   <button
                     type="button"
                     onClick={(e) => {
@@ -403,21 +403,43 @@ export const ThreadRow: Component<ThreadRowProps> = (props) => {
                   </button>
                 </Show>
 
-                <Show when={props.targetMessage && props.onTrash}>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      props.onTrash!(props.targetMessage!);
-                    }}
-                    class="p-1 hover:bg-[#F3ECE8] dark:hover:bg-[#343842] rounded-lg text-[#5E6063] hover:text-rose-500 transition cursor-pointer"
-                    title={t("Move to Trash")}
+                <Show when={props.targetMessage && (props.onTrash || props.onDeleteForever)}>
+                  <Show
+                    when={props.targetMessage?.folder === "trash" && props.onDeleteForever}
+                    fallback={
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          props.onTrash?.(props.targetMessage!);
+                        }}
+                        class="p-1 hover:bg-[#F3ECE8] dark:hover:bg-[#343842] rounded-lg text-[#5E6063] hover:text-rose-500 transition cursor-pointer"
+                        title={t("Move to Trash")}
+                      >
+                        <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                      </button>
+                    }
                   >
-                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
-                      <polyline points="3 6 5 6 21 6" />
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    </svg>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        props.onDeleteForever?.(props.targetMessage!);
+                      }}
+                      class="p-1 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg text-rose-600 hover:text-rose-700 transition cursor-pointer"
+                      title={t("Delete Forever")}
+                    >
+                      <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        <line x1="10" y1="11" x2="14" y2="15" />
+                        <line x1="14" y1="11" x2="10" y2="15" />
+                      </svg>
+                    </button>
+                  </Show>
                 </Show>
               </div>
             </div>

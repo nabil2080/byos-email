@@ -474,21 +474,23 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
                 </button>
 
                 {/* Quick Archive */}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    props.onArchive(props.message);
-                  }}
-                  class="p-1 hover:bg-[#F3ECE8] rounded-lg text-[#5E6063] hover:text-[#A27561] transition cursor-pointer"
-                  title={t("Archive")}
-                >
-                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                    <polyline points="21 8 21 21 3 21 3 8" />
-                    <rect x="1" y="3" width="22" height="5" />
-                    <line x1="10" y1="12" x2="14" y2="12" />
-                  </svg>
-                </button>
+                <Show when={props.message.folder !== "sent" && props.message.folder !== "trash" && props.message.folder !== "drafts" && props.message.folder !== "archive"}>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      props.onArchive(props.message);
+                    }}
+                    class="p-1 hover:bg-[#F3ECE8] rounded-lg text-[#5E6063] hover:text-[#A27561] transition cursor-pointer"
+                    title={t("Archive")}
+                  >
+                    <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <polyline points="21 8 21 21 3 21 3 8" />
+                      <rect x="1" y="3" width="22" height="5" />
+                      <line x1="10" y1="12" x2="14" y2="12" />
+                    </svg>
+                  </button>
+                </Show>
 
                 {/* Quick Trash or Delete Forever */}
                 <Show

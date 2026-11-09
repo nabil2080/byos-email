@@ -36,7 +36,9 @@ import {
   setCachedMedia,
   getCachedMedia,
   getNotesStorageKey,
+  migrateLegacyPlaintextNotes,
 } from "./notesStore";
+import { zeroizeKeys } from "../../session_isolation";
 
 function createMockIDB() {
   const storeData = new Map<string, any>();
@@ -108,10 +110,13 @@ export async function runNotesTests() {
   clearNotesMediaCache();
 
   const testMailboxId = `mbx_notes_test_${Date.now()}`;
+  const testMailboxKey = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) testMailboxKey[i] = (i * 7 + 11) % 256;
+  setNotesMailboxKey(testMailboxKey);
 
   try {
     // 1. Initial load provides default welcome notes with checklists
-    const initialNotes = loadNotes(testMailboxId);
+    const initialNotes = loadNotes(testMailboxId, testMailboxKey);
     if (initialNotes.length < 2) {
       throw new Error(`Expected at least 2 default notes, got ${initialNotes.length}`);
     }
@@ -294,8 +299,6 @@ export async function runNotesTests() {
     console.log("  ✓ 9. Composer history undo/redo bounded indexing maintains valid array bounds");
 
     // 10. Zero-Knowledge AES-GCM Encryption and Decryption Round-trip with Mailbox Key
-    const testMailboxKey = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) testMailboxKey[i] = (i * 7 + 11) % 256;
     setNotesMailboxKey(testMailboxKey);
 
     const encMailboxId = `mbx_encrypted_${Date.now()}`;
@@ -357,6 +360,7 @@ export async function runNotesTests() {
       throw new Error("Wrong key must fail closed and mask note content");
     }
     console.log("  ✓ 11. Zero-Knowledge notes fail closed without key or with invalid key");
+    setNotesMailboxKey(testMailboxKey);
 
     // 12. Seamless backward compatibility for existing unencrypted legacy notes
     const legacyMailboxId = `mbx_legacy_${Date.now()}`;
@@ -608,8 +612,270 @@ export async function runNotesTests() {
     }
     console.log("  ✓ 21. Media cache LRU bounds eviction caps memory usage at 150 items");
 
-    console.log("GOOGLE NOTE FEATURE TESTS: All 21 passed, 0 failed\n");
-    return { passed: 21, failed: 0 };
+    // 22. Missing mailbox key fails closed (cannot create or persist note in plaintext)
+    setNotesMailboxKey(null);
+    const noKeyMb = `mbx_nokey_${Date.now()}`;
+    const createdNoKey = createNote(noKeyMb, "Should Not Persist", "Sensitive content", "default", false, {}, null);
+    if (createdNoKey !== null) {
+      throw new Error("createNote without key must return null and fail closed");
+    }
+    const rawNoKeyStorage = mockStorage.getItem(getNotesStorageKey(noKeyMb));
+    if (rawNoKeyStorage !== null) {
+      throw new Error("Storage must be null when createNote fails closed without key");
+    }
+    console.log("  ✓ 22. Missing mailbox key fails closed (cannot create or persist note in plaintext)");
+
+    // 23. Plaintext persistence fallback is completely eliminated
+    const plainNotes: NoteItem[] = [
+      {
+        id: "plain-fallback-test",
+        title: "Unencrypted Leak Attempt",
+        content: "Should Never Hit Disk",
+        color: "default",
+        isPinned: false,
+        isArchived: false,
+        isInBin: false,
+        labels: [],
+        isChecklist: false,
+        checklistItems: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    ];
+    const saveWithoutKeyOk = saveNotes(noKeyMb, plainNotes, null);
+    if (saveWithoutKeyOk !== false) {
+      throw new Error("saveNotes with sensitive plaintext content must return false without key");
+    }
+    if (mockStorage.getItem(getNotesStorageKey(noKeyMb)) !== null) {
+      throw new Error("saveNotes without key must NOT write plaintext fallback to storage");
+    }
+    console.log("  ✓ 23. Plaintext persistence fallback is completely eliminated");
+
+    // 24. Save failure preserves in-memory editor content without writing plaintext
+    const invalidShortKey = new Uint8Array(16); // Only 16 bytes, requires 32 bytes
+    const saveShortKeyOk = saveNotes(noKeyMb, plainNotes, invalidShortKey);
+    if (saveShortKeyOk !== false) {
+      throw new Error("saveNotes with invalid 16-byte key must return false");
+    }
+    if (mockStorage.getItem(getNotesStorageKey(noKeyMb)) !== null) {
+      throw new Error("saveNotes with invalid key must NOT write to storage");
+    }
+    console.log("  ✓ 24. Save failure fails closed without leaking unencrypted data to storage");
+
+    // 25. Context-specific v2 AAD binds note ID and mailbox ID (byos-notes-v2:${mailboxId}:${noteId})
+    setNotesMailboxKey(testMailboxKey);
+    const v2Mb = `mbx_v2_aad_${Date.now()}`;
+    const v2Note = createNote(v2Mb, "AAD Protected Note", "Bound to note ID and mailbox ID");
+    if (!v2Note || v2Note.encryptionVersion !== 2) {
+      throw new Error(`Expected v2Note encryptionVersion 2, got ${v2Note?.encryptionVersion}`);
+    }
+    const v2StorageRaw = JSON.parse(mockStorage.getItem(getNotesStorageKey(v2Mb))!);
+    const storedV2Note = v2StorageRaw.find((n: any) => n.id === v2Note.id);
+    if (!storedV2Note || storedV2Note.encryptionVersion !== 2 || !storedV2Note.encryptedPayload) {
+      throw new Error("Raw storage record missing v2 encryptionVersion or encryptedPayload");
+    }
+    console.log("  ✓ 25. Context-specific v2 AAD binds note ID and mailbox ID (byos-notes-v2:${mailboxId}:${noteId})");
+
+    // 26. Cross-note ciphertext substitution within the same mailbox is rejected (auth tag mismatch)
+    const subNoteA = createNote(v2Mb, "Note A Title", "Secret A content");
+    const subNoteB = createNote(v2Mb, "Note B Title", "Secret B content");
+    const currentV2Raw = JSON.parse(mockStorage.getItem(getNotesStorageKey(v2Mb))!);
+    const rawNoteA = currentV2Raw.find((n: any) => n.id === subNoteA!.id);
+    // Attempt substitution: decrypt Note A's payload using Note B's identity
+    const substitutedDec = decryptNoteSensitiveSync(testMailboxKey, v2Mb, rawNoteA.encryptedPayload, subNoteB!.id, 2);
+    if (substitutedDec !== null) {
+      throw new Error("Cross-note ciphertext substitution within same mailbox MUST fail decryption (AAD mismatch)");
+    }
+    console.log("  ✓ 26. Cross-note ciphertext substitution within same mailbox fails closed via v2 AAD binding");
+
+    // 27. Cross-mailbox ciphertext substitution is rejected (auth tag mismatch)
+    const otherMailboxId = `mbx_other_realm_${Date.now()}`;
+    const crossMailboxDec = decryptNoteSensitiveSync(testMailboxKey, otherMailboxId, rawNoteA.encryptedPayload, subNoteA!.id, 2);
+    if (crossMailboxDec !== null) {
+      throw new Error("Cross-mailbox ciphertext substitution MUST fail decryption (mailboxId AAD mismatch)");
+    }
+    console.log("  ✓ 27. Cross-mailbox ciphertext substitution fails closed via mailboxId AAD binding");
+
+    // 28. Tampered ciphertext envelope fails closed
+    const originalHex = rawNoteA.encryptedPayload;
+    const lastByteHex = originalHex.slice(-2);
+    const flippedByteHex = (parseInt(lastByteHex, 16) ^ 0x55).toString(16).padStart(2, "0");
+    const tamperedPayload = originalHex.slice(0, -2) + flippedByteHex;
+    const tamperedDec = decryptNoteSensitiveSync(testMailboxKey, v2Mb, tamperedPayload, subNoteA!.id, 2);
+    if (tamperedDec !== null) {
+      throw new Error("Tampered ciphertext envelope MUST fail closed (tag verification failed)");
+    }
+    console.log("  ✓ 28. Tampered ciphertext envelope fails closed and returns null");
+
+    // 29. Backward compatibility: legacy v1 AAD encrypted note decrypts seamlessly
+    const v1Payload = { title: "Legacy V1 Encrypted Title", content: "Legacy V1 Content", checklistItems: [] };
+    const v1EncryptedEnvelope = encryptNoteSensitiveSync(testMailboxKey, v2Mb, v1Payload, undefined, 1);
+    // Explicit v1 decryption
+    const decV1Explicit = decryptNoteSensitiveSync(testMailboxKey, v2Mb, v1EncryptedEnvelope, "legacy-v1-id", 1);
+    if (!decV1Explicit || decV1Explicit.title !== "Legacy V1 Encrypted Title") {
+      throw new Error(`Explicit v1 decryption failed: ${JSON.stringify(decV1Explicit)}`);
+    }
+    // Fallback v1 decryption without specifying version
+    const decV1Fallback = decryptNoteSensitiveSync(testMailboxKey, v2Mb, v1EncryptedEnvelope, "legacy-v1-id");
+    if (!decV1Fallback || decV1Fallback.title !== "Legacy V1 Encrypted Title") {
+      throw new Error(`Automatic v1 fallback decryption failed: ${JSON.stringify(decV1Fallback)}`);
+    }
+    console.log("  ✓ 29. Backward compatibility: legacy v1 AAD encrypted note decrypts seamlessly");
+
+    // 30. Legacy v1 AAD note upgrades to v2 AAD on next edit/save
+    const v1TestId = "legacy-v1-upgrade-test";
+    const v1StoredItem: NoteItem = {
+      id: v1TestId,
+      title: "",
+      content: "",
+      color: "default",
+      isPinned: false,
+      isArchived: false,
+      isInBin: false,
+      labels: [],
+      isChecklist: false,
+      checklistItems: [],
+      encryptedPayload: v1EncryptedEnvelope,
+      encryptionVersion: 1,
+      createdAt: Date.now() - 100000,
+      updatedAt: Date.now() - 100000,
+    };
+    mockStorage.setItem(getNotesStorageKey(v2Mb), JSON.stringify([v1StoredItem]));
+    // Load note: it decrypts v1
+    const loadedV1List = loadNotes(v2Mb, testMailboxKey);
+    if (loadedV1List[0].title !== "Legacy V1 Encrypted Title") {
+      throw new Error("Failed to load and decrypt v1 note");
+    }
+    // Update note: must upgrade to v2
+    const upgradedResult = updateNote(v2Mb, v1TestId, { title: "Upgraded V2 Title" }, testMailboxKey);
+    if (!upgradedResult || upgradedResult.encryptionVersion !== 2) {
+      throw new Error(`Expected upgraded note encryptionVersion 2, got ${upgradedResult?.encryptionVersion}`);
+    }
+    const rawUpgradedList = JSON.parse(mockStorage.getItem(getNotesStorageKey(v2Mb))!);
+    const rawUpgradedNote = rawUpgradedList.find((n: any) => n.id === v1TestId);
+    if (rawUpgradedNote.encryptionVersion !== 2) {
+      throw new Error(`Raw storage encryptionVersion expected 2, got ${rawUpgradedNote.encryptionVersion}`);
+    }
+    // Verify ciphertext is now authenticated with v2 AAD (noteId bound)
+    const decUpgraded = decryptNoteSensitiveSync(testMailboxKey, v2Mb, rawUpgradedNote.encryptedPayload, v1TestId, 2);
+    if (!decUpgraded || decUpgraded.title !== "Upgraded V2 Title") {
+      throw new Error(`Failed to decrypt upgraded note with v2 AAD: ${JSON.stringify(decUpgraded)}`);
+    }
+    console.log("  ✓ 30. Legacy v1 AAD note upgrades to v2 context-bound AAD on next edit/save");
+
+    // 31. Legacy plaintext note is preserved when key is unavailable (no premature migration)
+    const unencPreserveMb = `mbx_unenc_${Date.now()}`;
+    const legacyPlainToPreserve: NoteItem = {
+      id: "plain-preserve-1",
+      title: "Plaintext Preserved Note",
+      content: "Sensitive content preserved",
+      color: "default",
+      isPinned: false,
+      isArchived: false,
+      isInBin: false,
+      labels: [],
+      isChecklist: false,
+      checklistItems: [],
+      createdAt: Date.now() - 50000,
+      updatedAt: Date.now() - 50000,
+    };
+    mockStorage.setItem(getNotesStorageKey(unencPreserveMb), JSON.stringify([legacyPlainToPreserve]));
+    const loadedWithoutKey = loadNotes(unencPreserveMb, null);
+    if (loadedWithoutKey.length !== 1 || loadedWithoutKey[0].title !== "Plaintext Preserved Note") {
+      throw new Error("Failed to load legacy plaintext note without key");
+    }
+    if (!loadedWithoutKey[0]._isLegacyPlaintext) {
+      throw new Error("Expected _isLegacyPlaintext: true when loaded without key");
+    }
+    // Verify storage was untouched (no corrupt encryption attempt)
+    const rawPreservedStorage = JSON.parse(mockStorage.getItem(getNotesStorageKey(unencPreserveMb))!);
+    if (rawPreservedStorage[0].title !== "Plaintext Preserved Note" || rawPreservedStorage[0].encryptedPayload !== undefined) {
+      throw new Error("Storage was corrupted when key was unavailable");
+    }
+    console.log("  ✓ 31. Legacy plaintext note is preserved when key is unavailable (no premature migration)");
+
+    // 32. Legacy plaintext note successfully migrates to v2 AES-GCM when key is available with verified roundtrip
+    const loadedWithKey = loadNotes(unencPreserveMb, testMailboxKey);
+    if (loadedWithKey.length !== 1 || loadedWithKey[0].title !== "Plaintext Preserved Note") {
+      throw new Error(`Failed to load migrated note: ${JSON.stringify(loadedWithKey[0])}`);
+    }
+    if (loadedWithKey[0]._migrationStatus !== "migrated") {
+      throw new Error(`Expected _migrationStatus 'migrated', got '${loadedWithKey[0]._migrationStatus}'`);
+    }
+    const rawMigratedStorage = JSON.parse(mockStorage.getItem(getNotesStorageKey(unencPreserveMb))!);
+    if (rawMigratedStorage[0].title !== "" || rawMigratedStorage[0].content !== "" || !rawMigratedStorage[0].encryptedPayload) {
+      throw new Error("Raw storage after migration must have redacted plaintext and valid encryptedPayload");
+    }
+    if (rawMigratedStorage[0].encryptionVersion !== 2) {
+      throw new Error(`Migrated note must have encryptionVersion 2, got ${rawMigratedStorage[0].encryptionVersion}`);
+    }
+    console.log("  ✓ 32. Legacy plaintext note migrates to v2 AES-GCM when key is available with verified round-trip");
+
+    // 33. Legacy plaintext note migration failure leaves original plaintext intact (safe rollback)
+    const badMigrateMb = `mbx_bad_migrate_${Date.now()}`;
+    const rollbackTestNote: NoteItem = {
+      id: "rollback-note-1",
+      title: "Critical Plaintext Note",
+      content: "Must Not Be Lost On Failure",
+      color: "default",
+      isPinned: false,
+      isArchived: false,
+      isInBin: false,
+      labels: [],
+      isChecklist: false,
+      checklistItems: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    mockStorage.setItem(getNotesStorageKey(badMigrateMb), JSON.stringify([rollbackTestNote]));
+    const invalidMigrateKey = new Uint8Array(12); // Invalid key length
+    const migrationResult = migrateLegacyPlaintextNotes(badMigrateMb, [rollbackTestNote], invalidMigrateKey);
+    if (migrationResult.migratedCount !== 0) {
+      throw new Error(`Expected migratedCount 0 for invalid key, got ${JSON.stringify(migrationResult)}`);
+    }
+    const rawAfterFailedMigrate = JSON.parse(mockStorage.getItem(getNotesStorageKey(badMigrateMb))!);
+    if (rawAfterFailedMigrate[0].title !== "Critical Plaintext Note" || rawAfterFailedMigrate[0].encryptedPayload !== undefined) {
+      throw new Error("Failed migration corrupted original plaintext data!");
+    }
+    console.log("  ✓ 33. Legacy plaintext note migration failure leaves original plaintext intact (safe rollback)");
+
+    // 34. Account switching isolation: pending save rejected if active mailbox changes
+    const acctAMb = `mbx_acct_a_${Date.now()}`;
+    const acctBMb = `mbx_acct_b_${Date.now()}`;
+    const keyA = new Uint8Array(32).fill(0x11);
+    const keyB = new Uint8Array(32).fill(0x22);
+    setNotesMailboxKey(keyA);
+    const noteInA = createNote(acctAMb, "Account A Note", "Confidential to Account A", "default", false, {}, keyA);
+    if (!noteInA) throw new Error("Failed to create note in Account A");
+    // Switch active key to Account B
+    setNotesMailboxKey(keyB);
+    const crossAccountLoad = loadNotes(acctAMb, keyB);
+    if (!crossAccountLoad[0]._isLocked || crossAccountLoad[0].title !== "(Encrypted Note)") {
+      throw new Error("Account A notes loaded with Account B key MUST fail closed as locked");
+    }
+    console.log("  ✓ 34. Account switching isolation: cross-account key decrypts fail closed");
+
+    // 35. Session isolation & logout cleanup wipes notes in-memory key and media cache
+    setNotesMailboxKey(testMailboxKey);
+    setCachedMedia("cached_logout_test", "data:image/png;base64,sample_logout_media");
+    if (getCachedMedia("cached_logout_test") === undefined) {
+      throw new Error("Failed to seed media cache before zeroization test");
+    }
+    if (getNotesMailboxKey() === null) {
+      throw new Error("Expected in-memory mailbox key to be set before zeroization test");
+    }
+    // Perform session logout / zeroization
+    zeroizeKeys();
+    if (getNotesMailboxKey() !== null) {
+      throw new Error("zeroizeKeys() did NOT wipe in-memory notes mailbox key!");
+    }
+    if (getCachedMedia("cached_logout_test") !== undefined) {
+      throw new Error("zeroizeKeys() did NOT clear in-memory notes media cache!");
+    }
+    console.log("  ✓ 35. Session isolation & logout cleanup wipes notes in-memory key and media cache");
+
+    console.log("GOOGLE NOTE FEATURE TESTS: All 35 passed, 0 failed\n");
+    return { passed: 35, failed: 0 };
   } finally {
     setNotesMailboxKey(null);
     clearNotesMediaCache();

@@ -561,19 +561,21 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
         {/* Right Side: Standard Triage Actions & More Overflow */}
         <div class="flex items-center gap-1 sm:gap-1.5">
           {/* 1. Archive */}
-          <button
-            type="button"
-            onClick={() => props.onArchive(props.message)}
-            class="w-8 h-8 sm:w-9 sm:h-9 min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] p-1.5 sm:p-2 flex items-center justify-center text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] rounded-xl transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
-            title={t("Archive")}
-            aria-label={t("Archive")}
-          >
-            <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-              <polyline points="21 8 21 21 3 21 3 8" />
-              <rect x="1" y="3" width="22" height="5" />
-              <line x1="10" y1="12" x2="14" y2="12" />
-            </svg>
-          </button>
+          <Show when={props.message.folder !== "sent" && props.message.folder !== "trash" && props.message.folder !== "drafts" && props.message.folder !== "archive"}>
+            <button
+              type="button"
+              onClick={() => props.onArchive(props.message)}
+              class="w-8 h-8 sm:w-9 sm:h-9 min-w-[32px] min-h-[32px] sm:min-w-[36px] sm:min-h-[36px] p-1.5 sm:p-2 flex items-center justify-center text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] rounded-xl transition cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50"
+              title={t("Archive")}
+              aria-label={t("Archive")}
+            >
+              <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                <polyline points="21 8 21 21 3 21 3 8" />
+                <rect x="1" y="3" width="22" height="5" />
+                <line x1="10" y1="12" x2="14" y2="12" />
+              </svg>
+            </button>
+          </Show>
 
           {/* 2. Trash or Delete Forever */}
           <Show
@@ -696,41 +698,45 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
               }`}
             >
               <Show when={moreSubmenu() === "main"}>
-                {/* Snooze */}
-                <button
-                  type="button"
-                  role="menuitem"
-                  data-testid="reading-pane-snooze-btn"
-                  onClick={() => {
-                    setMoreMenuOpen(false);
-                    setSnoozeMenuOpen(true);
-                  }}
-                  class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
-                >
-                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 16 14" />
-                  </svg>
-                  <span>{t("Snooze")}</span>
-                </button>
-
-                {/* Move to folder */}
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => setMoreSubmenu("move")}
-                  class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center justify-between gap-2.5"
-                >
-                  <div class="flex items-center gap-2.5">
+                {/* Snooze (Hidden for Sent, Trash, Spam, Drafts, Scheduled) */}
+                <Show when={props.message.folder !== "sent" && props.message.folder !== "trash" && props.message.folder !== "spam" && props.message.folder !== "drafts" && props.message.folder !== "scheduled"}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-testid="reading-pane-snooze-btn"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setSnoozeMenuOpen(true);
+                    }}
+                    class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
+                  >
                     <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                      <circle cx="12" cy="12" r="10" />
+                      <polyline points="12 6 12 12 16 14" />
                     </svg>
-                    <span>{t("Move to folder")}</span>
-                  </div>
-                  <svg class="w-3.5 h-3.5 text-[#878A8E]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="9 18 15 12 9 6" />
-                  </svg>
-                </button>
+                    <span>{t("Snooze")}</span>
+                  </button>
+                </Show>
+
+                {/* Move to folder (Hidden for Sent emails: sent emails are fixed at sent) */}
+                <Show when={props.message.folder !== "sent"}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => setMoreSubmenu("move")}
+                    class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center justify-between gap-2.5"
+                  >
+                    <div class="flex items-center gap-2.5">
+                      <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                      </svg>
+                      <span>{t("Move to folder")}</span>
+                    </div>
+                    <svg class="w-3.5 h-3.5 text-[#878A8E]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                  </button>
+                </Show>
 
                 {/* Label as */}
                 <button
@@ -751,23 +757,46 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                   </svg>
                 </button>
 
-                {/* Report Spam */}
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setMoreMenuOpen(false);
-                    props.onSpam(props.message);
-                  }}
-                  class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
-                >
-                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="8" x2="12" y2="12" />
-                    <line x1="12" y1="16" x2="12.01" y2="16" />
-                  </svg>
-                  <span>{t("Report spam")}</span>
-                </button>
+                {/* Report Spam (Hidden for Sent, Trash, Drafts, Spam) */}
+                <Show when={props.message.folder !== "sent" && props.message.folder !== "trash" && props.message.folder !== "drafts" && props.message.folder !== "spam"}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-testid="reading-pane-report-spam-btn"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      props.onSpam(props.message);
+                    }}
+                    class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
+                  >
+                    <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
+                    <span>{t("Report spam")}</span>
+                  </button>
+                </Show>
+
+                {/* Not Spam (Move to Inbox) when in Spam folder */}
+                <Show when={props.message.folder === "spam"}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-testid="reading-pane-not-spam-btn"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      props.onMoveTo(props.message, "inbox");
+                    }}
+                    class="w-full text-left px-3.5 py-2 min-h-[34px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2.5"
+                  >
+                    <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+                      <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+                    </svg>
+                    <span>{t("Not spam (Move to Inbox)")}</span>
+                  </button>
+                </Show>
 
                 <div class="my-1 border-t border-[#E2DFD8] dark:border-[#2E3138]" />
 
@@ -908,6 +937,22 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                     type="button"
                     role="menuitem"
                     onClick={() => {
+                      props.onMoveTo(props.message, "drafts");
+                      setMoreMenuOpen(false);
+                      setMoreSubmenu("main");
+                    }}
+                    class="w-full text-left px-3.5 py-1.5 min-h-[32px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
+                  >
+                    <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                      <path d="M12 20h9" />
+                      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                    </svg>
+                    <span>Drafts</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
                       props.onMoveTo(props.message, "archive");
                       setMoreMenuOpen(false);
                       setMoreSubmenu("main");
@@ -932,7 +977,7 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                     class="w-full text-left px-3.5 py-1.5 min-h-[32px] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] text-[#1A1B1E] dark:text-[#F3F4F6] transition cursor-pointer flex items-center gap-2"
                   >
                     <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                      <circle cx="12" cy="12" r="10" />
+                      <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2" />
                       <line x1="12" y1="8" x2="12" y2="12" />
                       <line x1="12" y1="16" x2="12.01" y2="16" />
                     </svg>

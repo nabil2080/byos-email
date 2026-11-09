@@ -9,6 +9,8 @@ import { saveSignature, saveSignatureHtml } from "../../signature";
 import { RichTextEditor } from "../../components/RichTextEditor";
 import { t } from "../../utils/i18n";
 import DOMPurify from "dompurify";
+import { getMailboxKeyFor } from "../../session_isolation";
+import { encryptSignature, decryptSignature } from "../../message_crypto";
 
 interface SignaturesTabProps {
   mailbox: Mailbox;
@@ -38,11 +40,28 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
     try {
       setLoading(true);
       const settings = await fetchMailboxSettings(props.mailbox.id);
+      let plain = settings.signature_plain || "";
+      let html = settings.signature_html || "";
 
-      setSignaturePlain(settings.signature_plain || "");
+      const mailboxKey = getMailboxKeyFor(props.mailbox.id);
+      if (mailboxKey && ((plain && plain.startsWith("enc:v1:")) || (html && html.startsWith("enc:v1:")))) {
+        try {
+          const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
+          if (plain.startsWith("enc:v1:")) {
+            plain = decryptSignature(wasm, mailboxKey, props.mailbox.id, plain);
+          }
+          if (html.startsWith("enc:v1:")) {
+            html = decryptSignature(wasm, mailboxKey, props.mailbox.id, html);
+          }
+        } catch (decErr) {
+          console.warn("Failed to decrypt signature settings:", decErr);
+        }
+      }
+
+      setSignaturePlain(plain);
       const initialHtml =
-        settings.signature_html ||
-        settings.signature_plain?.replace(/\n/g, "<br/>") ||
+        html ||
+        plain.replace(/\n/g, "<br/>") ||
         "";
       setSignatureHtml(DOMPurify.sanitize(initialHtml, { FORCE_BODY: true, FORBID_TAGS: ['style', 'head', 'meta'] }));
       setInsertOnReply(settings.insert_signature_on_reply);
@@ -59,13 +78,32 @@ export const SignaturesTab: Component<SignaturesTabProps> = (props) => {
     setSaving(true);
     setError(null);
     try {
+      const sanitizedHtml = DOMPurify.sanitize(signatureHtml());
+      let plainToStore = signaturePlain();
+      let htmlToStore = sanitizedHtml;
+
+      const mailboxKey = getMailboxKeyFor(props.mailbox.id);
+      if (mailboxKey) {
+        try {
+          const wasm = await import("../../generated/crypto-core/byos_crypto_core.js");
+          if (plainToStore) {
+            plainToStore = encryptSignature(wasm, mailboxKey, props.mailbox.id, plainToStore);
+          }
+          if (htmlToStore) {
+            htmlToStore = encryptSignature(wasm, mailboxKey, props.mailbox.id, htmlToStore);
+          }
+        } catch (encErr) {
+          console.warn("Failed to encrypt signature:", encErr);
+        }
+      }
+
       await updateMailboxSettings(props.mailbox.id, {
-        signature_plain: signaturePlain(),
-        signature_html: DOMPurify.sanitize(signatureHtml()),
+        signature_plain: plainToStore,
+        signature_html: htmlToStore,
         insert_signature_on_reply: insertOnReply(),
       });
       saveSignature(props.mailbox.id, signaturePlain());
-      saveSignatureHtml(props.mailbox.id, DOMPurify.sanitize(signatureHtml()));
+      saveSignatureHtml(props.mailbox.id, sanitizedHtml);
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
     } catch (err: any) {

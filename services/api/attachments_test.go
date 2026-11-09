@@ -222,6 +222,12 @@ func TestAttachmentEncryptedUploadAccepted(t *testing.T) {
 	if !strings.HasPrefix(receivedObjectKey, "mailboxes/"+mailboxID+"/attachments/") {
 		t.Fatalf("downstream object key = %q, want mailbox-scoped prefix", receivedObjectKey)
 	}
+	if strings.Contains(receivedObjectKey, "test.enc") {
+		t.Fatalf("downstream object key leaked plaintext filename: %q", receivedObjectKey)
+	}
+	if !strings.HasSuffix(receivedObjectKey, "/payload.bin") {
+		t.Fatalf("downstream object key = %q, want /payload.bin suffix", receivedObjectKey)
+	}
 	if !bytes.Equal(receivedDownstreamBytes, encryptedBytes) {
 		t.Fatalf("stored bytes must equal submitted encrypted bytes; got %v want %v", receivedDownstreamBytes, encryptedBytes)
 	}

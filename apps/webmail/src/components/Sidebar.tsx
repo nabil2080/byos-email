@@ -277,10 +277,12 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       case "scheduled":
         return (
           <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5] flex-shrink-0" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="10" />
-            <polyline points="12 6 12 12 16 14" />
-            <line x1="18.5" y1="5.5" x2="20.5" y2="3.5" />
-            <polyline points="19 3 21 3 21 5" />
+            <rect x="3" y="4" width="18" height="18" rx="2" />
+            <line x1="16" y1="2" x2="16" y2="6" />
+            <line x1="8" y1="2" x2="8" y2="6" />
+            <line x1="3" y1="10" x2="21" y2="10" />
+            <circle cx="15" cy="16" r="3" />
+            <polyline points="15 15 15 16 16 16" />
           </svg>
         );
       case "drafts":
@@ -303,7 +305,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       case "spam":
         return (
           <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5] flex-shrink-0" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="10" />
+            <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2" />
             <line x1="12" y1="8" x2="12" y2="12" />
             <line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>

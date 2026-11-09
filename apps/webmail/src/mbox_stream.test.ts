@@ -207,5 +207,85 @@ export async function runMboxStreamTests(): Promise<{ passed: number; failed: nu
     assert(messages[0].raw.includes("Subject: Msg 1"), "First message subject mismatch");
   });
 
+  // 7. Custom .mbox import encryption pipeline (zero-knowledge Section 12 binary envelope)
+  await test("7. Custom .mbox import encryption pipeline (AES-GCM zero-knowledge roundtrip)", async () => {
+    const rawMbox = [
+      "From alice@byos.local Mon Jan 01 00:00:00 2026",
+      "From: alice@byos.local",
+      "To: bob@byos.local",
+      "Subject: Confidential Project Alpha",
+      "Message-ID: <alpha-001@byos.local>",
+      "Date: Mon, 01 Jan 2026 12:00:00 +0000",
+      "",
+      "This is top secret proprietary customer correspondence.",
+      "",
+      "From bob@byos.local Tue Jan 02 00:00:00 2026",
+      "From: bob@byos.local",
+      "To: alice@byos.local",
+      "Subject: Re: Confidential Project Alpha",
+      "Message-ID: <alpha-002@byos.local>",
+      "Date: Tue, 02 Jan 2026 14:00:00 +0000",
+      "",
+      "Acknowledged and received securely.",
+    ].join("\n");
+
+    const file = new File([rawMbox], "inbox.mbox");
+    const mailboxKey = new Uint8Array(32).fill(7);
+    const mailboxId = "11111111-2222-3333-4444-555555555555";
+
+    // Dynamic import of encryptRawEml
+    const { encryptRawEml, computeEnvelopeAad } = await import("./oauth_import.js");
+    const { parseRfc822Headers } = await import("./import_worker.js");
+
+    const processedMessages: { subject: string; envelope: Uint8Array; originalRaw: string }[] = [];
+
+    for await (const item of streamMbox(file)) {
+      const parsed = parseRfc822Headers(item.raw);
+      const envelope = await encryptRawEml(mailboxKey, mailboxId, item.raw);
+      processedMessages.push({
+        subject: parsed.subject,
+        envelope,
+        originalRaw: item.raw,
+      });
+    }
+
+    assert(processedMessages.length === 2, `Expected 2 messages, got ${processedMessages.length}`);
+    assert(processedMessages[0].subject === "Confidential Project Alpha", "First subject parsed correctly");
+    assert(processedMessages[1].subject === "Re: Confidential Project Alpha", "Second subject parsed correctly");
+
+    for (const msg of processedMessages) {
+      // 1. Must use Section 12 binary envelope framing (0x01)
+      assert(msg.envelope[0] === 0x01, "Envelope must start with 0x01 framing byte");
+      // 2. Minimum length: 1 framing + 12 IV + 16 Tag = 29 bytes
+      assert(msg.envelope.length >= 29, "Envelope must satisfy minimum length");
+      // 3. Plaintext must never appear in raw ciphertext envelope
+      const rawEnvelopeStr = new TextDecoder("utf-8", { fatal: false }).decode(msg.envelope);
+      assert(!rawEnvelopeStr.includes("Confidential Project Alpha"), "Plaintext subject leaked in envelope");
+      assert(!rawEnvelopeStr.includes("top secret proprietary"), "Plaintext body leaked in envelope");
+
+      // 4. Verify client-side decryption with authenticated AAD
+      const iv = msg.envelope.subarray(1, 13);
+      const ciphertext = msg.envelope.subarray(13);
+      const aad = computeEnvelopeAad(mailboxId, "byos-draft-v1");
+
+      const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        mailboxKey as unknown as BufferSource,
+        "AES-GCM",
+        false,
+        ["decrypt"],
+      );
+
+      const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: iv as unknown as BufferSource, additionalData: aad as unknown as BufferSource },
+        cryptoKey,
+        ciphertext as unknown as BufferSource,
+      );
+
+      const plaintext = new TextDecoder().decode(decrypted);
+      assert(plaintext === msg.originalRaw, "Decrypted message must match original RFC 822 text exactly");
+    }
+  });
+
   return { passed, failed };
 }

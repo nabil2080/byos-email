@@ -12,6 +12,7 @@ export interface DisplayMessage {
   id: string;
   messageSeq?: number;
   version?: number;
+  isDraft?: boolean;
   folder: Folder;
   folderId?: string | null;
   labelIds?: string[];

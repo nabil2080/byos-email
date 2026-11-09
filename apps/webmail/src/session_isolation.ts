@@ -84,6 +84,7 @@ const SENSITIVE_PREFIXES = [
   "byos_active_session_token",
   "byos_impersonation_token",
   "byos_pending_send",
+  "byos.signature.",
 ];
 
 interface AccountKeyBuffers {
@@ -234,12 +235,35 @@ export function getXWingSeedHexFor(accountId: string, storage?: Storage): string
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+export type SessionCleanupHook = (accountId?: string) => void;
+const sessionCleanupHooks: SessionCleanupHook[] = [];
+
+/**
+ * Register a cleanup hook to be executed on session logout or zeroization.
+ * Used by modular stores (e.g. notesStore) to wipe sensitive in-memory key material and caches.
+ */
+export function registerSessionCleanupHook(hook: SessionCleanupHook): () => void {
+  sessionCleanupHooks.push(hook);
+  return () => {
+    const idx = sessionCleanupHooks.indexOf(hook);
+    if (idx !== -1) sessionCleanupHooks.splice(idx, 1);
+  };
+}
+
 /**
  * Zeroizes all active in-memory private key and seed buffers by calling .fill(0).
  * If accountId is provided, zeroizes only that account's keys.
  * Also clears in-memory map entries and sweeps raw private keys from sessionStorage.
  */
 export function zeroizeKeys(accountId?: string, storage?: Storage): void {
+  for (const hook of sessionCleanupHooks) {
+    try {
+      hook(accountId);
+    } catch (e) {
+      console.warn("Session cleanup hook error:", e);
+    }
+  }
+
   const store = storage || (typeof sessionStorage !== "undefined" ? sessionStorage : null);
   if (accountId) {
     const entry = inMemoryKeys.get(accountId);
@@ -362,6 +386,8 @@ export function clearAccountKeys(accountId: string, storage: Storage = sessionSt
     "byos_xwing_seed_" + accountId,
     "byos_signing_seed_" + accountId,
     "byos_signing_pubkey_published_" + accountId,
+    "byos.signature." + accountId,
+    "byos.signature.html." + accountId,
   ];
   // Also sweep the compound keys_published key (includes pubkey fingerprints)
   const toRemove: string[] = [];
@@ -377,6 +403,10 @@ export function clearAccountKeys(accountId: string, storage: Storage = sessionSt
   }
   for (const key of toRemove) {
     storage.removeItem(key);
+  }
+  if (typeof localStorage !== "undefined") {
+    localStorage.removeItem("byos.signature." + accountId);
+    localStorage.removeItem("byos.signature.html." + accountId);
   }
 }
 
@@ -394,6 +424,17 @@ export function rotateSessionGeneration(
   // Clear the old connected-accounts list and generation marker from localStorage
   ls.removeItem("byos_connected_accounts");
   ls.removeItem(SESSION_GENERATION_KEY);
+  // Clear any residual signature caches from prior sessions
+  const sigKeysToRemove: string[] = [];
+  for (let i = 0; i < ls.length; i++) {
+    const key = ls.key(i);
+    if (key && (key.startsWith("byos.signature.") || key.startsWith("byos.signature.html."))) {
+      sigKeysToRemove.push(key);
+    }
+  }
+  for (const k of sigKeysToRemove) {
+    ls.removeItem(k);
+  }
   // Clear all sensitive keys from sessionStorage (fresh session)
   clearAllSensitiveSessionKeys(ss);
   // Remove the stale sessionStorage account list too

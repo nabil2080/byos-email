@@ -1174,9 +1174,28 @@ func verifyInternalServiceAuth(r *http.Request, requiredService string) bool {
 	case "outbound":
 		expectedKey := internalAPIKey()
 		return expectedKey != "" && subtle.ConstantTimeCompare([]byte(gotKey), []byte(expectedKey)) == 1
+	case "migration":
+		migrationKey := internalMigrationKey()
+		return migrationKey != "" && subtle.ConstantTimeCompare([]byte(gotKey), []byte(migrationKey)) == 1
 	default:
 		return false
 	}
+}
+
+// internalMigrationKey returns the dedicated server-side migration key from environment or file.
+func internalMigrationKey() string {
+	if v := strings.TrimSpace(os.Getenv("MIGRATION_INTERNAL_KEY")); v != "" {
+		return v
+	}
+	path := strings.TrimSpace(os.Getenv("MIGRATION_INTERNAL_KEY_FILE"))
+	if path == "" {
+		path = "/run/secrets/migration_internal_key"
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // verifyMailboxScopedAccess verifies caller authorization for a mailbox.

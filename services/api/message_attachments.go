@@ -366,10 +366,25 @@ func uploadAttachmentChunkHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Tenant isolation: objectKey must start with mailboxes/{mailbox_id}/
+	// Tenant isolation: objectKey must start with mailboxes/{mailbox_id}/ and contain no path traversal
 	prefix := fmt.Sprintf("mailboxes/%s/", mailboxID)
-	if !strings.HasPrefix(objectKey, prefix) {
-		http.Error(w, "object_key outside mailbox scope", http.StatusForbidden)
+	if !strings.HasPrefix(objectKey, prefix) || strings.Contains(objectKey, "..") || strings.ContainsAny(objectKey, "\r\n\x00") {
+		http.Error(w, "object_key outside mailbox scope or invalid", http.StatusForbidden)
+		return
+	}
+
+	// Enforce authorized attachment chunk storage namespace
+	subPath := strings.TrimPrefix(objectKey, prefix)
+	if !strings.HasPrefix(subPath, "attachments/") &&
+		!strings.HasPrefix(subPath, "path-a-attachments/") &&
+		!strings.HasPrefix(subPath, "sent-attachments/") {
+		http.Error(w, "object_key outside attachment chunk namespaces", http.StatusBadRequest)
+		return
+	}
+
+	// FINDING-01 Remediation: Enforce canonical Section 12 AES-256-GCM encrypted envelope contract.
+	if err := validateSection12BinaryEnvelope(rawData); err != nil {
+		http.Error(w, fmt.Sprintf("invalid chunk envelope: %v", err), http.StatusBadRequest)
 		return
 	}
 
@@ -386,4 +401,85 @@ func uploadAttachmentChunkHandler(w http.ResponseWriter, r *http.Request) {
 		"object_key": objectKey,
 		"size_bytes": len(rawData),
 	})
+}
+
+// validateSection12BinaryEnvelope performs structural envelope validation on
+// Section 12 AES-256-GCM binary envelopes (wire format: 0x01 || Nonce(12B) || Ciphertext(NB) || Tag(16B)).
+//
+// TRUST BOUNDARY & CRYPTOGRAPHIC LIMITATION NOTE:
+// In the BYOS zero-knowledge model, the backend API does NOT hold the ephemeral
+// attachment content key or the recipient's private mailbox key (mailbox_sk).
+// Consequently, the server CANNOT cryptographically verify the AES-GCM authentication
+// tag or decrypt the ciphertext without violating zero-knowledge boundaries.
+//
+// This validation enforces:
+// 1. Framing and minimum length (>= 29 bytes: 1B version + 12B nonce + 0B ciphertext + 16B tag).
+// 2. Exact version match (0x01).
+// 3. Non-degeneracy of the 12-byte IV (rejecting all-zero or all-identical byte nonces).
+// 4. Non-degeneracy of the 16-byte GCM authentication tag (rejecting all-zero or all-identical tags).
+// 5. Deep inspection heuristic: rejecting payloads containing recognizable plaintext markers
+//    (MIME headers, HTML tags, SQL keywords) embedded anywhere in the envelope.
+//
+// Full cryptographic authenticity relies on the trusted-client assumption at the
+// client-side encryption boundary.
+func validateSection12BinaryEnvelope(rawData []byte) error {
+	if len(rawData) < 29 {
+		return fmt.Errorf("length %d below minimum framing (29 bytes)", len(rawData))
+	}
+	if rawData[0] != 0x01 {
+		return fmt.Errorf("unsupported version 0x%02x, expected 0x01", rawData[0])
+	}
+
+	// Non-degenerate nonce validation
+	nonce := rawData[1:13]
+	allZeroNonce := true
+	allIdenticalNonce := true
+	for i := 0; i < len(nonce); i++ {
+		if nonce[i] != 0x00 {
+			allZeroNonce = false
+		}
+		if nonce[i] != nonce[0] {
+			allIdenticalNonce = false
+		}
+	}
+	if allZeroNonce || allIdenticalNonce {
+		return fmt.Errorf("degenerate nonce detected (must be random 12-byte CSPRNG IV)")
+	}
+
+	// Non-degenerate authentication tag validation
+	tag := rawData[len(rawData)-16:]
+	allZeroTag := true
+	allIdenticalTag := true
+	for i := 0; i < len(tag); i++ {
+		if tag[i] != 0x00 {
+			allZeroTag = false
+		}
+		if tag[i] != tag[0] {
+			allIdenticalTag = false
+		}
+	}
+	if allZeroTag || allIdenticalTag {
+		return fmt.Errorf("degenerate authentication tag detected (must be 16-byte GCM tag)")
+	}
+
+	// Deep inspection: Reject recognizable plaintext signatures embedded in envelope body
+	plaintextMarkers := [][]byte{
+		[]byte("From:"),
+		[]byte("Received:"),
+		[]byte("MIME-Version:"),
+		[]byte("Content-Type:"),
+		[]byte("<html"),
+		[]byte("<!DOCTYPE"),
+		[]byte("Subject:"),
+		[]byte("To:"),
+		[]byte("SELECT "),
+		[]byte("INSERT INTO"),
+	}
+	for _, marker := range plaintextMarkers {
+		if bytes.Contains(rawData[13:], marker) {
+			return fmt.Errorf("unencrypted plaintext marker %q detected in envelope body", string(marker))
+		}
+	}
+
+	return nil
 }

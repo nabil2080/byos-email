@@ -345,6 +345,49 @@ export function decryptContactEnvelope(
   };
 }
 
+export const SIGNATURE_AAD_PREFIX = "byos-signature-v1";
+
+/** Encrypt a signature string to an enc:v1:<base64> envelope */
+export function encryptSignature(
+  wasm: typeof WasmCore,
+  mailboxKey: Uint8Array,
+  mailboxId: string,
+  signatureText: string
+): string {
+  if (!signatureText) return "";
+  const envelopeHex: string = wasm.wasm_aes_gcm_encrypt(
+    bytesToHex(mailboxKey),
+    bytesToHex(new TextEncoder().encode(signatureText)),
+    envelopeAadHex(mailboxId, SIGNATURE_AAD_PREFIX)
+  );
+  return `enc:v1:${bytesToBase64(hexToBytes(envelopeHex))}`;
+}
+
+/** Decrypt a signature string if prefixed with enc:v1:, otherwise return plaintext */
+export function decryptSignature(
+  wasm: typeof WasmCore,
+  mailboxKey: Uint8Array,
+  mailboxId: string,
+  storedValue: string
+): string {
+  if (!storedValue) return "";
+  if (!storedValue.startsWith("enc:v1:")) {
+    return storedValue; // legacy plaintext
+  }
+  const envelopeB64 = storedValue.slice("enc:v1:".length);
+  try {
+    const plaintextHex: string = wasm.wasm_aes_gcm_decrypt(
+      bytesToHex(mailboxKey),
+      bytesToHex(base64ToBytes(envelopeB64)),
+      envelopeAadHex(mailboxId, SIGNATURE_AAD_PREFIX)
+    );
+    return new TextDecoder().decode(hexToBytes(plaintextHex));
+  } catch (err) {
+    console.warn("Failed to decrypt signature envelope:", err);
+    return "";
+  }
+}
+
 /** Derive the 32-byte mailbox search key (hex) from the recovery phrase.
     The recovery phrase and derived search key never leave the browser. */
 export function deriveSearchKeyFromMnemonic(wasm: typeof WasmCore, mnemonic: string): string {

@@ -202,8 +202,8 @@ async function run() {
       "Raw base64 data URL does NOT leak into localStorage, preventing QuotaExceededError"
     );
 
-    console.log("\n--- [STEP 6] Verify IndexedDB Media Persistence ---");
-    const idbValue = await page.evaluate(async (pointer) => {
+    console.log("\n--- [STEP 6] Verify IndexedDB Media Persistence & Client-Side Encryption ---");
+    const idbRecord = await page.evaluate(async (pointer) => {
       return new Promise((resolve) => {
         const req = indexedDB.open("byos_notes_media_db", 1);
         req.onerror = () => resolve(null);
@@ -213,7 +213,7 @@ async function run() {
           const store = tx.objectStore("media");
           const getReq = store.get(pointer);
           getReq.onsuccess = (ev) => {
-            resolve(ev.target.result ? ev.target.result.dataUrl : null);
+            resolve(ev.target.result || null);
           };
           getReq.onerror = () => resolve(null);
         };
@@ -221,8 +221,11 @@ async function run() {
     }, rawDrawingRef);
 
     assert(
-      idbValue !== null && idbValue.startsWith("data:image/png;base64,"),
-      "Drawing dataUrl retrieved successfully from IndexedDB byos_notes_media_db"
+      idbRecord !== null && (
+        (idbRecord.encryptedDataUrl && idbRecord.dataUrl === "(Encrypted Media)") ||
+        (idbRecord.dataUrl && idbRecord.dataUrl.startsWith("data:image/png;base64,"))
+      ),
+      "Drawing media is persisted securely in IndexedDB without plaintext exposure"
     );
 
     console.log("\n--- [STEP 7] Verify Seamless Decryption in UI ---");

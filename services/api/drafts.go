@@ -35,8 +35,8 @@ import (
 )
 
 // draftResponse is the JSON shape for single-draft responses and list items.
-func draftResponse(id, mailboxID, subject, recipient string, envelope []byte, version int, sendFailed bool, createdAt, updatedAt time.Time) map[string]interface{} {
-	return map[string]interface{}{
+func draftResponse(id, mailboxID, subject, recipient string, envelope []byte, version int, sendFailed bool, createdAt, updatedAt time.Time, folder string, folderID *string) map[string]interface{} {
+	resp := map[string]interface{}{
 		"id":                 id,
 		"mailbox_id":         mailboxID,
 		"subject":            subject,
@@ -46,7 +46,12 @@ func draftResponse(id, mailboxID, subject, recipient string, envelope []byte, ve
 		"send_failed":        sendFailed,
 		"created_at":         createdAt.Format(time.RFC3339),
 		"updated_at":         updatedAt.Format(time.RFC3339),
+		"folder":             folder,
 	}
+	if folderID != nil {
+		resp["folder_id"] = *folderID
+	}
+	return resp
 }
 
 // resolveDraftMailbox authenticates the actor and resolves the mailbox with
@@ -66,12 +71,19 @@ func resolveDraftMailbox(w http.ResponseWriter, r *http.Request, conn *pgx.Conn,
 		http.Error(w, "missing or invalid X-User-Id", http.StatusUnauthorized)
 		return "", "", "", "", false
 	}
+	err := conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID)
+	if err == pgx.ErrNoRows {
+		http.Error(w, "mailbox not found", http.StatusNotFound)
+		return "", "", "", "", false
+	} else if err != nil {
+		http.Error(w, "failed to query mailbox", http.StatusInternalServerError)
+		return "", "", "", "", false
+	}
 	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
 		http.Error(w, errMsg, status)
 		return "", "", "", "", false
 	}
 	_ = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1`, userID).Scan(&userOrgID)
-	_ = conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID)
 	return userID, userOrgID, mailboxOrgID, mailboxID, true
 }
 
@@ -111,12 +123,13 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var id, subject, recipient string
+		var id, subject, recipient, folder string
+		var folderID *string
 		var envelope []byte
 		var version int
 		var sendFailed bool
 		var createdAt, updatedAt time.Time
-		err := conn.QueryRow(ctx, `SELECT id::text, COALESCE(subject,''), COALESCE(recipient,''), encrypted_envelope, version, send_failed, created_at, updated_at FROM drafts WHERE id=$1 AND mailbox_id=$2`, draftID, mailboxID).Scan(&id, &subject, &recipient, &envelope, &version, &sendFailed, &createdAt, &updatedAt)
+		err := conn.QueryRow(ctx, `SELECT id::text, COALESCE(subject,''), COALESCE(recipient,''), encrypted_envelope, version, send_failed, created_at, updated_at, COALESCE(folder, 'drafts'), folder_id::text FROM drafts WHERE id=$1 AND mailbox_id=$2`, draftID, mailboxID).Scan(&id, &subject, &recipient, &envelope, &version, &sendFailed, &createdAt, &updatedAt, &folder, &folderID)
 		if err != nil {
 			// Covers nonexistent IDs and IDs belonging to another mailbox
 			// (no existence leak across mailboxes).
@@ -124,7 +137,7 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, sendFailed, createdAt, updatedAt))
+		json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, sendFailed, createdAt, updatedAt, folder, folderID))
 		return
 	}
 
@@ -132,7 +145,13 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		draftCreateHandler(w, r, conn, ctx, mailboxID, userID)
 	case http.MethodGet:
-		rows, err := conn.Query(ctx, `SELECT id::text, COALESCE(subject,''), COALESCE(recipient,''), encrypted_envelope, version, send_failed, created_at, updated_at FROM drafts WHERE mailbox_id=$1 ORDER BY updated_at DESC, id ASC`, mailboxID)
+		folderFilter := strings.TrimSpace(r.URL.Query().Get("folder"))
+		var rows pgx.Rows
+		if folderFilter != "" {
+			rows, err = conn.Query(ctx, `SELECT id::text, COALESCE(subject,''), COALESCE(recipient,''), encrypted_envelope, version, send_failed, created_at, updated_at, COALESCE(folder, 'drafts'), folder_id::text FROM drafts WHERE mailbox_id=$1 AND folder=$2 ORDER BY updated_at DESC, id ASC`, mailboxID, folderFilter)
+		} else {
+			rows, err = conn.Query(ctx, `SELECT id::text, COALESCE(subject,''), COALESCE(recipient,''), encrypted_envelope, version, send_failed, created_at, updated_at, COALESCE(folder, 'drafts'), folder_id::text FROM drafts WHERE mailbox_id=$1 ORDER BY updated_at DESC, id ASC`, mailboxID)
+		}
 		if err != nil {
 			http.Error(w, "failed to list drafts", http.StatusInternalServerError)
 			return
@@ -140,15 +159,16 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		drafts := []map[string]interface{}{}
 		for rows.Next() {
-			var id, subject, recipient string
+			var id, subject, recipient, folder string
+			var folderID *string
 			var envelope []byte
 			var version int
 			var sendFailed bool
 			var createdAt, updatedAt time.Time
-			if err := rows.Scan(&id, &subject, &recipient, &envelope, &version, &sendFailed, &createdAt, &updatedAt); err != nil {
+			if err := rows.Scan(&id, &subject, &recipient, &envelope, &version, &sendFailed, &createdAt, &updatedAt, &folder, &folderID); err != nil {
 				continue
 			}
-			drafts = append(drafts, draftResponse(id, mailboxID, subject, recipient, envelope, version, sendFailed, createdAt, updatedAt))
+			drafts = append(drafts, draftResponse(id, mailboxID, subject, recipient, envelope, version, sendFailed, createdAt, updatedAt, folder, folderID))
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"drafts": drafts})
@@ -188,7 +208,8 @@ func draftUpdateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 		http.Error(w, "invalid encrypted_envelope", http.StatusBadRequest)
 		return
 	}
-	var id string
+	var id, folder string
+	var folderID *string
 	var version int
 	var createdAt, updatedAt time.Time
 	err = conn.QueryRow(ctx, `
@@ -196,8 +217,8 @@ func draftUpdateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 		SET subject=$1, recipient=$2, encrypted_envelope=$3,
 		    version=version+1, send_failed=false, updated_at=now()
 		WHERE id=$4 AND mailbox_id=$5 AND version=$6
-		RETURNING id::text, version, created_at, updated_at
-	`, subject, recipient, envelope, draftID, mailboxID, req.Version).Scan(&id, &version, &createdAt, &updatedAt)
+		RETURNING id::text, version, created_at, updated_at, COALESCE(folder, 'drafts'), folder_id::text
+	`, subject, recipient, envelope, draftID, mailboxID, req.Version).Scan(&id, &version, &createdAt, &updatedAt, &folder, &folderID)
 	if err == pgx.ErrNoRows {
 		var currentVersion int
 		err = conn.QueryRow(ctx, `SELECT version FROM drafts WHERE id=$1 AND mailbox_id=$2`, draftID, mailboxID).Scan(&currentVersion)
@@ -224,17 +245,17 @@ func draftUpdateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 	publishMailboxEvent(ctx, MailboxEvent{
 		Type:        "message.updated",
 		MailboxID:   mailboxID,
-		Folder:      "drafts",
+		Folder:      folder,
 		MessageID:   draftID,
 		UnreadDelta: 0,
 	})
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, false, createdAt, updatedAt))
+	json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, false, createdAt, updatedAt, folder, folderID))
 }
 
 func draftDeleteHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, ctx context.Context, mailboxID, userID, draftID string) {
-	var deletedID string
-	err := conn.QueryRow(ctx, `DELETE FROM drafts WHERE id=$1 AND mailbox_id=$2 RETURNING id::text`, draftID, mailboxID).Scan(&deletedID)
+	var deletedID, folder string
+	err := conn.QueryRow(ctx, `DELETE FROM drafts WHERE id=$1 AND mailbox_id=$2 RETURNING id::text, COALESCE(folder, 'drafts')`, draftID, mailboxID).Scan(&deletedID, &folder)
 	if err == pgx.ErrNoRows {
 		http.Error(w, "draft not found", http.StatusNotFound)
 		return
@@ -249,7 +270,7 @@ func draftDeleteHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 	publishMailboxEvent(ctx, MailboxEvent{
 		Type:        "message.deleted",
 		MailboxID:   mailboxID,
-		Folder:      "drafts",
+		Folder:      folder,
 		MessageID:   deletedID,
 		UnreadDelta: 0,
 	})
@@ -296,7 +317,7 @@ func draftCreateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 	_ = conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&orgID)
 	draftID := uuid.New().String()
 	var createdAt, updatedAt time.Time
-	err = conn.QueryRow(ctx, `INSERT INTO drafts (id, mailbox_id, subject, recipient, encrypted_envelope, version) VALUES ($1, $2, $3, $4, $5, 1) RETURNING created_at, updated_at`, draftID, mailboxID, subject, recipient, envelope).Scan(&createdAt, &updatedAt)
+	err = conn.QueryRow(ctx, `INSERT INTO drafts (id, mailbox_id, subject, recipient, encrypted_envelope, version, folder) VALUES ($1, $2, $3, $4, $5, 1, 'drafts') RETURNING created_at, updated_at`, draftID, mailboxID, subject, recipient, envelope).Scan(&createdAt, &updatedAt)
 	if err != nil {
 		http.Error(w, "failed to save draft", http.StatusInternalServerError)
 		return
@@ -311,5 +332,5 @@ func draftCreateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 	})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(draftResponse(draftID, mailboxID, subject, recipient, envelope, 1, false, createdAt, updatedAt))
+	json.NewEncoder(w).Encode(draftResponse(draftID, mailboxID, subject, recipient, envelope, 1, false, createdAt, updatedAt, "drafts", nil))
 }

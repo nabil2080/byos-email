@@ -172,3 +172,24 @@ func TestMailboxSettingsRoundtrip(t *testing.T) {
 		t.Errorf("expected layout 'full' to be preserved, got %q", partUpdated2.LayoutMode)
 	}
 }
+
+func TestMailboxSettings_Unauthorized(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+uuid.New().String()+"/settings", nil)
+	req.SetPathValue("mailbox_id", uuid.New().String())
+	w := httptest.NewRecorder()
+	mailboxSettingsHandler(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized, got %d", w.Code)
+	}
+}
+
+func TestMailboxSettings_RejectsMalformedEncryptedSignature(t *testing.T) {
+	body := []byte(`{"signature_plain": "enc:v1:not-valid-base64!!!"}`)
+	req := httptest.NewRequest(http.MethodPut, "/v1/mailboxes/"+uuid.New().String()+"/settings", bytes.NewReader(body))
+	req.SetPathValue("mailbox_id", uuid.New().String())
+	w := httptest.NewRecorder()
+	mailboxSettingsHandler(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}

@@ -660,6 +660,8 @@ func TestMultiAccount_RouteLevelAuthorizationCoverage(t *testing.T) {
 	})))
 	mux.HandleFunc("/v1/mailboxes/{mailbox_id}/storage/store", withSecurityHeaders(withCORS(mailboxStorageStoreHandler)))
 	mux.HandleFunc("/v1/mailboxes/{mailbox_id}/storage/retrieve", withSecurityHeaders(withCORS(mailboxStorageRetrieveHandler)))
+	mux.HandleFunc("/v1/mailboxes/{mailbox_id}/storage/list", withSecurityHeaders(withCORS(mailboxStorageListHandler)))
+	mux.HandleFunc("/v1/mailboxes/{mailbox_id}/storage/delete", withSecurityHeaders(withCORS(mailboxStorageDeleteHandler)))
 	mux.HandleFunc("/v1/mailboxes/{mailbox_id}/messages/{message_id}/attachments", withSecurityHeaders(withCORS(messageAttachmentsHandler)))
 	mux.HandleFunc("/v1/mailboxes/{mailbox_id}/attachments/{attachment_id}", withSecurityHeaders(withCORS(attachmentsHandler)))
 	mux.HandleFunc("/v1/mailboxes/{mailbox_id}/attachment-chunks", withSecurityHeaders(withCORS(uploadAttachmentChunkHandler)))

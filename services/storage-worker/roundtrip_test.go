@@ -8,6 +8,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -215,5 +216,71 @@ func TestNilStorageBackendFailsWithoutFallback(t *testing.T) {
 	}
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected status 500 InternalServerError, got %d", rec.Code)
+	}
+}
+
+func TestStorageProbeNonPlaintextAndCleanup(t *testing.T) {
+	tempDir := t.TempDir()
+	mock, err := NewMockDriveStorage(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create mock storage: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := mock.TestConnection(ctx); err != nil {
+		t.Fatalf("TestConnection failed: %v", err)
+	}
+
+	// Verify no probe files were left behind
+	entries, err := os.ReadDir(tempDir)
+	if err != nil {
+		t.Fatalf("failed to read temp dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".test") || strings.HasPrefix(entry.Name(), ".byos-probe") {
+			t.Fatalf("probe object leaked: found %s in storage directory", entry.Name())
+		}
+	}
+}
+
+func TestNotesStorageListRoundTrip(t *testing.T) {
+	w := testWorker(t)
+	const mailboxID = "box-notes-test"
+	const objectKey = "mailboxes/" + mailboxID + "/notes/test-note.enc"
+	data := []byte{0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC}
+
+	// Store note object
+	stored := doStore(t, w, objectKey, data, "test-internal-key")
+	if stored.Code != http.StatusOK {
+		t.Fatalf("store status = %d, want 200: %s", stored.Code, stored.Body.String())
+	}
+
+	// List objects under mailbox notes prefix
+	listReq := httptest.NewRequest(http.MethodGet, "/api/list?prefix=mailboxes/"+mailboxID+"/notes/", nil)
+	listReq.Header.Set("X-Internal-Key", "test-internal-key")
+	listRec := httptest.NewRecorder()
+	w.listHandler(listRec, listReq)
+
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200: %s", listRec.Code, listRec.Body.String())
+	}
+
+	var lr struct {
+		Objects []string `json:"objects"`
+		Count   int      `json:"count"`
+	}
+	if err := json.NewDecoder(listRec.Body).Decode(&lr); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+
+	found := false
+	for _, obj := range lr.Objects {
+		if strings.Contains(obj, "test-note.enc") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected test-note.enc in listed objects, got %v", lr.Objects)
 	}
 }

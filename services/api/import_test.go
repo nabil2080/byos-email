@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -330,7 +331,12 @@ func TestMailboxStorage_ScopeEnforcement(t *testing.T) {
 	defer mockStorageWorker.Close()
 	t.Setenv("STORAGE_WORKER_URL", mockStorageWorker.URL)
 
-	validReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader([]byte("ciphertext")))
+	validEnvelope := make([]byte, 29)
+	validEnvelope[0] = 0x01
+	for i := 1; i < 29; i++ {
+		validEnvelope[i] = byte(i)
+	}
+	validReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader(validEnvelope))
 	validReq.SetPathValue("mailbox_id", mailboxID)
 	validReq.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/oauth/gmail.enc", mailboxID))
 	validReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
@@ -342,5 +348,307 @@ func TestMailboxStorage_ScopeEnforcement(t *testing.T) {
 	}
 	if !storeCalled {
 		t.Fatalf("expected storage-worker to be invoked for valid store")
+	}
+
+	// Plaintext payload rejected (FINDING-02)
+	plainReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader([]byte("From: user@byos.local\r\n\r\nPlaintext")))
+	plainReq.SetPathValue("mailbox_id", mailboxID)
+	plainReq.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/oauth/gmail.enc", mailboxID))
+	plainReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	plainRec := httptest.NewRecorder()
+	mailboxStorageStoreHandler(plainRec, plainReq)
+	if plainRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for plaintext upload, got %d", plainRec.Code)
+	}
+
+	// Degenerate binary envelope (all-zero nonce) rejected (FINDING-02)
+	degenEnvelope := make([]byte, 29)
+	degenEnvelope[0] = 0x01
+	degenReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader(degenEnvelope))
+	degenReq.SetPathValue("mailbox_id", mailboxID)
+	degenReq.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/oauth/gmail.enc", mailboxID))
+	degenReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	degenRec := httptest.NewRecorder()
+	mailboxStorageStoreHandler(degenRec, degenReq)
+	if degenRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for degenerate envelope upload, got %d", degenRec.Code)
+	}
+
+	// Malformed JSON envelope rejected (FINDING-02)
+	badJSONReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader([]byte(`{"alg":"unknown","data":"bad"}`)))
+	badJSONReq.SetPathValue("mailbox_id", mailboxID)
+	badJSONReq.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/oauth/gmail.enc", mailboxID))
+	badJSONReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	badJSONRec := httptest.NewRecorder()
+	mailboxStorageStoreHandler(badJSONRec, badJSONReq)
+	if badJSONRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for malformed JSON envelope upload, got %d", badJSONRec.Code)
+	}
+
+	// Unauthorized path for user session rejected (FINDING-02)
+	unauthPathReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader(validEnvelope))
+	unauthPathReq.SetPathValue("mailbox_id", mailboxID)
+	unauthPathReq.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/arbitrary_file.txt", mailboxID))
+	unauthPathReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	unauthPathRec := httptest.NewRecorder()
+	mailboxStorageStoreHandler(unauthPathRec, unauthPathReq)
+	if unauthPathRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unauthorized storage path, got %d", unauthPathRec.Code)
+	}
+}
+
+// TestAdversarialGenericStorageEnvelopes tests adversarial inputs against generic storage upload endpoints
+// (/v1/mailboxes/{mailbox_id}/storage/store), asserting structural validation, path bounds, and trust boundaries.
+func TestAdversarialGenericStorageEnvelopes(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
+	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "adv-storage")
+	token := createTestSession(t, db, ownerID)
+
+	var storeCalled bool
+	mockStorageWorker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/store" {
+			storeCalled = true
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer mockStorageWorker.Close()
+	t.Setenv("STORAGE_WORKER_URL", mockStorageWorker.URL)
+
+	validKey := fmt.Sprintf("mailboxes/%s/oauth/gmail.enc", mailboxID)
+
+	// 1. Adversarial binary payload: 0x01 + 12B IV + readable text + 16B tag
+	// Passes structural validation (demonstrating format validation vs cryptographic verification)
+	advBinary := make([]byte, 1+12+44+16)
+	advBinary[0] = 0x01
+	for i := 1; i <= 12; i++ {
+		advBinary[i] = byte((i * 13) ^ 0x47)
+	}
+	copy(advBinary[13:], []byte("Arbitrary readable data in ciphertext region"))
+	for i := len(advBinary) - 16; i < len(advBinary); i++ {
+		advBinary[i] = byte((i * 29) ^ 0x8b)
+	}
+
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader(advBinary))
+	req1.SetPathValue("mailbox_id", mailboxID)
+	req1.Header.Set("X-Object-Key", validKey)
+	req1.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	rec1 := httptest.NewRecorder()
+	mailboxStorageStoreHandler(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected 200 for framed readable text (demonstrating structural framing limits), got %d: %s", rec1.Code, rec1.Body.String())
+	}
+	if !storeCalled {
+		t.Fatalf("expected storage worker to be called")
+	}
+
+	// 2. Plaintext without 0x01 framing is rejected (400)
+	plainReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader([]byte("Plain text without 0x01 framing byte")))
+	plainReq.SetPathValue("mailbox_id", mailboxID)
+	plainReq.Header.Set("X-Object-Key", validKey)
+	plainReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	rec2 := httptest.NewRecorder()
+	mailboxStorageStoreHandler(rec2, plainReq)
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unframed plaintext, got %d", rec2.Code)
+	}
+
+	// 3. Truncated binary envelope (< 29 bytes) is rejected (400)
+	shortReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader([]byte{0x01, 0x02, 0x03}))
+	shortReq.SetPathValue("mailbox_id", mailboxID)
+	shortReq.Header.Set("X-Object-Key", validKey)
+	shortReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	rec3 := httptest.NewRecorder()
+	mailboxStorageStoreHandler(rec3, shortReq)
+	if rec3.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for truncated envelope, got %d", rec3.Code)
+	}
+
+	// 4. Unsupported binary version is rejected (400)
+	badVerReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader(make([]byte, 30)))
+	badVerReq.SetPathValue("mailbox_id", mailboxID)
+	badVerReq.Header.Set("X-Object-Key", validKey)
+	badVerReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	rec4 := httptest.NewRecorder()
+	mailboxStorageStoreHandler(rec4, badVerReq)
+	if rec4.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unsupported binary version, got %d", rec4.Code)
+	}
+
+	// 5. Malformed JSON envelopes are rejected (400)
+	badJSONs := []string{
+		`{not-valid-json`,
+		`{"alg":"unsupported"}`,
+		`{"version":1,"ciphertext":"!not-base64!"}`,
+		`{"version":1,"ciphertext":"` + base64.StdEncoding.EncodeToString([]byte("short")) + `"}`, // ciphertext < 16 bytes tag
+	}
+	for _, bj := range badJSONs {
+		bjReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader([]byte(bj)))
+		bjReq.SetPathValue("mailbox_id", mailboxID)
+		bjReq.Header.Set("X-Object-Key", validKey)
+		bjReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+		bjRec := httptest.NewRecorder()
+		mailboxStorageStoreHandler(bjRec, bjReq)
+		if bjRec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for bad JSON envelope %s, got %d", bj, bjRec.Code)
+		}
+	}
+
+	// 6. Path traversal and cross-mailbox namespace violations are rejected (400)
+	badKeys := []string{
+		fmt.Sprintf("mailboxes/%s/../../etc/passwd", mailboxID),
+		fmt.Sprintf("mailboxes/%s/../other/secret.enc", mailboxID),
+		"mailboxes/00000000-0000-0000-0000-000000000000/oauth/gmail.enc", // cross-mailbox
+		fmt.Sprintf("mailboxes/%s/unknown_prefix/data.enc", mailboxID),    // unauthorized prefix
+	}
+	for _, bk := range badKeys {
+		bkReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader(advBinary))
+		bkReq.SetPathValue("mailbox_id", mailboxID)
+		bkReq.Header.Set("X-Object-Key", bk)
+		bkReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+		bkRec := httptest.NewRecorder()
+		mailboxStorageStoreHandler(bkRec, bkReq)
+		if bkRec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for bad key %s, got %d", bk, bkRec.Code)
+		}
+	}
+}
+
+func TestNotesSubpathValidation(t *testing.T) {
+	if !isAllowedNotesSubpath("notes/abc-123.enc") {
+		t.Fatalf("expected notes/abc-123.enc to be allowed")
+	}
+	if !isAllowedNotesSubpath("notes/media/drawing_123.enc") {
+		t.Fatalf("expected notes/media/drawing_123.enc to be allowed")
+	}
+	if !isAllowedNotesSubpath("notes/manifest.enc") {
+		t.Fatalf("expected notes/manifest.enc to be allowed")
+	}
+	if isAllowedNotesSubpath("notes/../evil.enc") {
+		t.Fatalf("expected notes/../evil.enc to be rejected")
+	}
+	if isAllowedNotesSubpath("notes/plain.txt") {
+		t.Fatalf("expected notes/plain.txt to be rejected")
+	}
+	if isAllowedNotesSubpath("oauth/gmail.enc") {
+		t.Fatalf("expected oauth/gmail.enc to be rejected")
+	}
+	if isAllowedNotesSubpath("notes/bad$name.enc") {
+		t.Fatalf("expected notes/bad$name.enc to be rejected")
+	}
+}
+
+func TestNotesStorageSyncEndpoints(t *testing.T) {
+	// Integration with test database if available
+	db := setupTestDB(t)
+	defer db.Close()
+	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
+	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "notes-sync-box")
+	token := createTestSession(t, db, ownerID)
+
+	var lastRequestedPath string
+	mockStorageWorker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastRequestedPath = r.URL.Path
+		if r.URL.Path == "/api/store" {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			return
+		}
+		if r.URL.Path == "/api/list" {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"objects": []string{
+					fmt.Sprintf("mailboxes/%s/notes/note-1.enc", mailboxID),
+				},
+				"count": 1,
+			})
+			return
+		}
+		if r.URL.Path == "/api/delete" {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer mockStorageWorker.Close()
+	t.Setenv("STORAGE_WORKER_URL", mockStorageWorker.URL)
+
+	// Valid Section 12 binary envelope for notes
+	noteEnvelope := make([]byte, 45)
+	noteEnvelope[0] = 0x01
+	for i := 1; i < 45; i++ {
+		noteEnvelope[i] = byte(i * 3)
+	}
+
+	// 3. Store encrypted note under notes/ namespace
+	validReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/store", bytes.NewReader(noteEnvelope))
+	validReq.SetPathValue("mailbox_id", mailboxID)
+	validReq.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/notes/note-1.enc", mailboxID))
+	validReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	validRec := httptest.NewRecorder()
+	mailboxStorageStoreHandler(validRec, validReq)
+
+	if validRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for notes store, got %d; body: %s", validRec.Code, validRec.Body.String())
+	}
+	if lastRequestedPath != "/api/store" {
+		t.Fatalf("expected call to /api/store, got %s", lastRequestedPath)
+	}
+
+	// 4. List notes via mailboxStorageListHandler
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailboxID+"/storage/list?prefix=notes/", nil)
+	listReq.SetPathValue("mailbox_id", mailboxID)
+	listReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	listRec := httptest.NewRecorder()
+	mailboxStorageListHandler(listRec, listReq)
+
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for notes list, got %d; body: %s", listRec.Code, listRec.Body.String())
+	}
+	if lastRequestedPath != "/api/list" {
+		t.Fatalf("expected call to /api/list, got %s", lastRequestedPath)
+	}
+
+	// List rejection for unauthorized prefix (e.g. attempting to list root or oauth)
+	badListReq := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailboxID+"/storage/list?prefix=oauth/", nil)
+	badListReq.SetPathValue("mailbox_id", mailboxID)
+	badListReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	badListRec := httptest.NewRecorder()
+	mailboxStorageListHandler(badListRec, badListReq)
+
+	if badListRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unauthorized list prefix, got %d", badListRec.Code)
+	}
+
+	// 5. Delete note via mailboxStorageDeleteHandler
+	delReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/delete", bytes.NewReader([]byte(fmt.Sprintf(`{"object_key":"mailboxes/%s/notes/note-1.enc"}`, mailboxID))))
+	delReq.SetPathValue("mailbox_id", mailboxID)
+	delReq.Header.Set("Content-Type", "application/json")
+	delReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	delRec := httptest.NewRecorder()
+	mailboxStorageDeleteHandler(delRec, delReq)
+
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for notes delete, got %d; body: %s", delRec.Code, delRec.Body.String())
+	}
+	if lastRequestedPath != "/api/delete" {
+		t.Fatalf("expected call to /api/delete, got %s", lastRequestedPath)
+	}
+
+	// Delete rejection for out-of-namespace key
+	badDelReq := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/storage/delete", bytes.NewReader([]byte(fmt.Sprintf(`{"object_key":"mailboxes/%s/oauth/gmail.enc"}`, mailboxID))))
+	badDelReq.SetPathValue("mailbox_id", mailboxID)
+	badDelReq.Header.Set("Content-Type", "application/json")
+	badDelReq.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+	badDelRec := httptest.NewRecorder()
+	mailboxStorageDeleteHandler(badDelRec, badDelReq)
+
+	if badDelRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for out-of-namespace delete, got %d", badDelRec.Code)
 	}
 }

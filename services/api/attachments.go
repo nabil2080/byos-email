@@ -213,9 +213,9 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 				cType = "application/octet-stream"
 			}
 
-			// Generate storage key
+			// Generate opaque storage key: eliminates plaintext filename from customer-owned storage key and provider metadata
 			attID := uuid.New().String()
-			storageKey := fmt.Sprintf("mailboxes/%s/attachments/%s/%s", mailboxID, attID, filename)
+			storageKey := fmt.Sprintf("mailboxes/%s/attachments/%s/payload.bin", mailboxID, attID)
 
 			// Forward bytes to customer storage via storage-worker streaming connection.
 			// Total stream size equals the original multipart file size (headerBytes

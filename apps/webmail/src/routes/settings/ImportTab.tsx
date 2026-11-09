@@ -8,7 +8,7 @@ import {
   loadTokens,
   beginImportOAuth,
 } from "../../oauth_import";
-import { runImport, ImportProgress, ImportSummary } from "../../import_worker";
+import { runImport, runMboxImport, ImportProgress, ImportSummary } from "../../import_worker";
 
 interface ImportTabProps {
   mailbox: Mailbox;
@@ -20,10 +20,14 @@ interface ImportTabProps {
 export const ImportTab: Component<ImportTabProps> = (props) => {
   // Wizard steps: 1: Provider Select, 2: Authorize, 3: Configure, 4: Progress, 5: Summary
   const [step, setStep] = createSignal<1 | 2 | 3 | 4 | 5>(1);
-  const [provider, setProvider] = createSignal<"gmail" | "outlook">("gmail");
+  const [provider, setProvider] = createSignal<"gmail" | "outlook" | "custom_mbox">("gmail");
   const [tokens, setTokens] = createSignal<OAuthTokens | null>(null);
   const [isAuthorizing, setIsAuthorizing] = createSignal(false);
   const [authError, setAuthError] = createSignal<string | null>(null);
+
+  // Mbox custom file import options
+  const [mboxFile, setMboxFile] = createSignal<File | null>(null);
+  const [mboxTargetFolder, setMboxTargetFolder] = createSignal<string>("auto");
 
   // Configuration options
   const [dateRangeYears, setDateRangeYears] = createSignal<number>(2);
@@ -162,14 +166,58 @@ export const ImportTab: Component<ImportTabProps> = (props) => {
 
   // Launch live import
   const handleLaunchImport = async () => {
+    if (!props.mailboxKey) {
+      setAuthError("Mailbox is locked. Please enter your recovery phrase or password to unlock keys.");
+      return;
+    }
+
+    // Branch for Custom .mbox file import
+    if (provider() === "custom_mbox") {
+      const file = mboxFile();
+      if (!file) {
+        setAuthError("Please select an .mbox file to import.");
+        return;
+      }
+
+      const controller = new AbortController();
+      setAbortController(controller);
+      setStep(4);
+
+      try {
+        const result = await runMboxImport({
+          mailboxId: props.mailbox.id,
+          mailboxKey: props.mailboxKey,
+          file,
+          userEmail: props.mailbox.email_address,
+          targetFolder: mboxTargetFolder(),
+          concurrency: concurrency(),
+          signal: controller.signal,
+          onProgress: (p) => setProgress(p),
+        });
+
+        setSummary(result);
+        setStep(5);
+        fetchJobs();
+      } catch (err: unknown) {
+        setSummary({
+          provider: "custom_mbox",
+          total: progress().total,
+          imported: progress().imported,
+          skipped: progress().skipped,
+          failed: progress().failed,
+          status: "failed",
+          errorMessage: err instanceof Error ? err.message : String(err),
+        });
+        setStep(5);
+        fetchJobs();
+      }
+      return;
+    }
+
     const currentTokens = tokens();
     if (!currentTokens) {
       setAuthError("No authorization tokens available. Please authorize first.");
       setStep(2);
-      return;
-    }
-    if (!props.mailboxKey) {
-      setAuthError("Mailbox is locked. Please enter your recovery phrase or password to unlock keys.");
       return;
     }
 
@@ -189,7 +237,7 @@ export const ImportTab: Component<ImportTabProps> = (props) => {
       const result = await runImport({
         mailboxId: props.mailbox.id,
         mailboxKey: props.mailboxKey,
-        provider: provider(),
+        provider: provider() as "gmail" | "outlook",
         accessToken: currentTokens.accessToken,
         refreshToken: currentTokens.refreshToken,
         folders: activeFolders,
@@ -296,7 +344,7 @@ export const ImportTab: Component<ImportTabProps> = (props) => {
           <h2 class="text-sm font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
             Select Source Provider
           </h2>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {/* Google / Gmail Card */}
             <div
               data-testid="provider-card-gmail"
@@ -327,7 +375,7 @@ export const ImportTab: Component<ImportTabProps> = (props) => {
               </p>
               <button
                 type="button"
-                class="w-full py-2 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold rounded-lg transition"
+                class="w-full py-2 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold rounded-lg transition cursor-pointer"
               >
                 Select Gmail
               </button>
@@ -360,9 +408,44 @@ export const ImportTab: Component<ImportTabProps> = (props) => {
               </p>
               <button
                 type="button"
-                class="w-full py-2 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold rounded-lg transition"
+                class="w-full py-2 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold rounded-lg transition cursor-pointer"
               >
                 Select Outlook
+              </button>
+            </div>
+
+            {/* Custom .mbox File Card */}
+            <div
+              data-testid="provider-card-custom-mbox"
+              onClick={() => {
+                setProvider("custom_mbox");
+                setStep(3);
+              }}
+              class="border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#18191D] hover:border-[#A27561] hover:bg-[#FAF9F6] dark:hover:bg-[#202227] p-5 rounded-xl cursor-pointer transition flex flex-col justify-between gap-4"
+            >
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 flex items-center justify-center text-emerald-600">
+                  <svg class="w-5 h-5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="16" y1="13" x2="8" y2="13" />
+                    <line x1="16" y1="17" x2="8" y2="17" />
+                    <polyline points="10 9 9 9 8 9" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 class="text-sm font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">Custom .mbox File</h3>
+                  <p class="text-[11px] text-[#6E7075] dark:text-[#A1A1AA]">Direct RFC 822 / mbox import</p>
+                </div>
+              </div>
+              <p class="text-xs text-[#464748] dark:text-[#A1A1AA] leading-relaxed">
+                Import mailbox archives from Thunderbird, Apple Mail, or Google Takeout with local zero-knowledge encryption.
+              </p>
+              <button
+                type="button"
+                class="w-full py-2 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-semibold rounded-lg transition cursor-pointer"
+              >
+                Select .mbox File
               </button>
             </div>
           </div>
@@ -408,111 +491,264 @@ export const ImportTab: Component<ImportTabProps> = (props) => {
 
       {/* ── STEP 3: Configure & Folder Mapping ── */}
       <Show when={step() === 3}>
-        <div class="bg-white dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] rounded-xl p-6 space-y-5">
-          <h2 class="text-sm font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
-            Configure Import Settings
-          </h2>
+        <Show
+          when={provider() === "custom_mbox"}
+          fallback={
+            <div class="bg-white dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] rounded-xl p-6 space-y-5">
+              <h2 class="text-sm font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
+                Configure Import Settings
+              </h2>
 
-          {/* Date range selection */}
-          <div class="space-y-2">
-            <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">
-              Date Range (Default: Last 2 Years)
-            </label>
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <For each={[
-                { label: "Last 6 Months", val: 0.5 },
-                { label: "Last 1 Year", val: 1 },
-                { label: "Last 2 Years", val: 2 },
-                { label: "All Time (5 Yrs)", val: 5 },
-              ]}>
-                {(opt) => (
-                  <button
-                    type="button"
-                    onClick={() => setDateRangeYears(opt.val)}
-                    class={`p-2.5 rounded-lg border text-xs font-medium transition text-center ${
-                      dateRangeYears() === opt.val
-                        ? "border-[#A27561] bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-bold"
-                        : "border-[#E2DFD8] dark:border-[#2E3138] text-[#464748] dark:text-[#A1A1AA] hover:bg-[#FAF9F6]"
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                )}
-              </For>
+              {/* Date range selection */}
+              <div class="space-y-2">
+                <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">
+                  Date Range (Default: Last 2 Years)
+                </label>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <For each={[
+                    { label: "Last 6 Months", val: 0.5 },
+                    { label: "Last 1 Year", val: 1 },
+                    { label: "Last 2 Years", val: 2 },
+                    { label: "All Time (5 Yrs)", val: 5 },
+                  ]}>
+                    {(opt) => (
+                      <button
+                        type="button"
+                        onClick={() => setDateRangeYears(opt.val)}
+                        class={`p-2.5 rounded-lg border text-xs font-medium transition text-center ${
+                          dateRangeYears() === opt.val
+                            ? "border-[#A27561] bg-[#F2E8E2] text-[#A27561] dark:bg-[#2D2522] dark:text-[#D4A38F] font-bold"
+                            : "border-[#E2DFD8] dark:border-[#2E3138] text-[#464748] dark:text-[#A1A1AA] hover:bg-[#FAF9F6]"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </div>
+
+              {/* Folders to import */}
+              <div class="space-y-2">
+                <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">
+                  Folders to Import
+                </label>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <For each={[
+                    { id: "inbox", label: "Inbox" },
+                    { id: "sent", label: "Sent" },
+                    { id: "archive", label: "Archive" },
+                    { id: "trash", label: "Trash" },
+                  ]}>
+                    {(f) => (
+                      <label class="flex items-center gap-2 p-2.5 border border-[#E2DFD8] dark:border-[#2E3138] rounded-lg cursor-pointer hover:bg-[#FAF9F6] text-xs">
+                        <input
+                          type="checkbox"
+                          checked={importFolders()[f.id]}
+                          onChange={(e) => {
+                            setImportFolders({
+                              ...importFolders(),
+                              [f.id]: e.currentTarget.checked,
+                            });
+                          }}
+                          class="rounded text-[#A27561] focus:ring-[#A27561]"
+                        />
+                        <span class="text-[#1A1B1E] dark:text-[#F3F4F6]">{f.label}</span>
+                      </label>
+                    )}
+                  </For>
+                </div>
+              </div>
+
+              {/* Concurrency limit (D3: max 5) */}
+              <div class="space-y-1">
+                <div class="flex items-center justify-between text-xs">
+                  <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">Parallel Fetch Concurrency:</span>
+                  <span class="font-mono text-[#A27561] font-bold">{concurrency()} parallel workers</span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="5"
+                  step="1"
+                  value={concurrency()}
+                  onInput={(e) => setConcurrency(parseInt(e.currentTarget.value, 10))}
+                  class="w-full accent-[#A27561]"
+                />
+                <p class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">
+                  Capped at 5 parallel fetches per provider to prevent provider rate limits (D3).
+                </p>
+              </div>
+
+              {/* Action buttons */}
+              <div class="flex items-center justify-end gap-3 pt-3 border-t border-[#E2DFD8] dark:border-[#2E3138]">
+                <button
+                  type="button"
+                  onClick={() => setStep(2)}
+                  class="px-4 py-2 text-xs font-semibold text-[#6E7075] hover:text-[#1A1B1E]"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  data-testid="start-import-btn"
+                  onClick={handleLaunchImport}
+                  class="px-6 py-2.5 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-bold rounded-xl transition shadow-2xs cursor-pointer"
+                >
+                  Start Mailbox Import
+                </button>
+              </div>
             </div>
-          </div>
+          }
+        >
+          {/* Custom .mbox File Configuration */}
+          <div class="bg-white dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] rounded-xl p-6 space-y-5">
+            <div class="flex items-center justify-between">
+              <h2 class="text-sm font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
+                Configure .mbox File Import
+              </h2>
+              <button
+                type="button"
+                onClick={() => setStep(1)}
+                class="text-xs text-[#A27561] hover:underline cursor-pointer"
+              >
+                Change Provider
+              </button>
+            </div>
 
-          {/* Folders to import */}
-          <div class="space-y-2">
-            <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">
-              Folders to Import
-            </label>
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <For each={[
-                { id: "inbox", label: "Inbox" },
-                { id: "sent", label: "Sent" },
-                { id: "archive", label: "Archive" },
-                { id: "trash", label: "Trash" },
-              ]}>
-                {(f) => (
-                  <label class="flex items-center gap-2 p-2.5 border border-[#E2DFD8] dark:border-[#2E3138] rounded-lg cursor-pointer hover:bg-[#FAF9F6] text-xs">
-                    <input
-                      type="checkbox"
-                      checked={importFolders()[f.id]}
-                      onChange={(e) => {
-                        setImportFolders({
-                          ...importFolders(),
-                          [f.id]: e.currentTarget.checked,
-                        });
+            {/* File picker dropzone */}
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">
+                Select .mbox Archive File
+              </label>
+              <div
+                class="border-2 border-dashed border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561] dark:hover:border-[#A27561] rounded-xl p-6 text-center transition cursor-pointer bg-[#FAF9F6] dark:bg-[#202227]/40 relative"
+                onClick={() => {
+                  const input = document.getElementById("mbox-file-picker") as HTMLInputElement;
+                  if (input) input.click();
+                }}
+              >
+                <input
+                  id="mbox-file-picker"
+                  data-testid="mbox-file-input"
+                  type="file"
+                  accept=".mbox,text/plain"
+                  class="hidden"
+                  onChange={(e) => {
+                    const f = e.currentTarget.files?.[0] || null;
+                    setMboxFile(f);
+                  }}
+                />
+                <Show
+                  when={mboxFile()}
+                  fallback={
+                    <div class="space-y-2">
+                      <div class="w-10 h-10 mx-auto rounded-full bg-[#F2E8E2] dark:bg-[#2D2522] text-[#A27561] flex items-center justify-center">
+                        <svg class="w-5 h-5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                          <polyline points="17 8 12 3 7 8" />
+                          <line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
+                      </div>
+                      <p class="text-xs font-medium text-[#1A1B1E] dark:text-[#F3F4F6]">
+                        Click to select or drag and drop your <span class="font-bold">.mbox</span> file here
+                      </p>
+                      <p class="text-[11px] text-[#6E7075] dark:text-[#A1A1AA]">
+                        Supports standard mboxrd/mboxo formats up to several GBs
+                      </p>
+                    </div>
+                  }
+                >
+                  <div class="flex items-center justify-center gap-3">
+                    <div class="w-10 h-10 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 flex items-center justify-center text-emerald-600">
+                      <svg class="w-5 h-5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                      </svg>
+                    </div>
+                    <div class="text-left">
+                      <p class="text-xs font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
+                        {mboxFile()!.name}
+                      </p>
+                      <p class="text-[11px] text-[#6E7075] dark:text-[#A1A1AA] font-mono">
+                        {(mboxFile()!.size / (1024 * 1024)).toFixed(2)} MB
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMboxFile(null);
                       }}
-                      class="rounded text-[#A27561] focus:ring-[#A27561]"
-                    />
-                    <span class="text-[#1A1B1E] dark:text-[#F3F4F6]">{f.label}</span>
-                  </label>
-                )}
-              </For>
+                      class="ml-4 text-xs text-rose-600 hover:underline cursor-pointer"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </Show>
+              </div>
+            </div>
+
+            {/* Target Destination Folder Selection */}
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">
+                Target Destination Folder
+              </label>
+              <select
+                data-testid="mbox-target-folder-select"
+                value={mboxTargetFolder()}
+                onChange={(e) => setMboxTargetFolder(e.currentTarget.value)}
+                class="w-full text-xs p-2.5 rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#18191D] text-[#1A1B1E] dark:text-[#F3F4F6]"
+              >
+                <option value="auto">Auto-detect (via Gmail labels & From headers)</option>
+                <option value="inbox">Inbox</option>
+                <option value="sent">Sent</option>
+                <option value="archive">Archive</option>
+                <option value="trash">Trash</option>
+              </select>
+              <p class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">
+                "Auto-detect" checks X-Gmail-Labels or sets folder to Sent if From matches your account.
+              </p>
+            </div>
+
+            {/* Concurrency limit */}
+            <div class="space-y-1">
+              <div class="flex items-center justify-between text-xs">
+                <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">Parallel Encryption & Storage Workers:</span>
+                <span class="font-mono text-[#A27561] font-bold">{concurrency()} parallel workers</span>
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="5"
+                step="1"
+                value={concurrency()}
+                onInput={(e) => setConcurrency(parseInt(e.currentTarget.value, 10))}
+                class="w-full accent-[#A27561]"
+              />
+            </div>
+
+            {/* Action buttons */}
+            <div class="flex items-center justify-end gap-3 pt-3 border-t border-[#E2DFD8] dark:border-[#2E3138]">
+              <button
+                type="button"
+                onClick={() => setStep(1)}
+                class="px-4 py-2 text-xs font-semibold text-[#6E7075] hover:text-[#1A1B1E] cursor-pointer"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                data-testid="start-mbox-import-btn"
+                disabled={!mboxFile()}
+                onClick={handleLaunchImport}
+                class="px-6 py-2.5 bg-[#A27561] hover:bg-[#8F6452] disabled:opacity-50 text-white text-xs font-bold rounded-xl transition shadow-2xs cursor-pointer"
+              >
+                Start .mbox Import
+              </button>
             </div>
           </div>
-
-          {/* Concurrency limit (D3: max 5) */}
-          <div class="space-y-1">
-            <div class="flex items-center justify-between text-xs">
-              <span class="font-semibold text-[#1A1B1E] dark:text-[#F3F4F6]">Parallel Fetch Concurrency:</span>
-              <span class="font-mono text-[#A27561] font-bold">{concurrency()} parallel workers</span>
-            </div>
-            <input
-              type="range"
-              min="1"
-              max="5"
-              step="1"
-              value={concurrency()}
-              onInput={(e) => setConcurrency(parseInt(e.currentTarget.value, 10))}
-              class="w-full accent-[#A27561]"
-            />
-            <p class="text-[10px] text-[#6E7075] dark:text-[#A1A1AA]">
-              Capped at 5 parallel fetches per provider to prevent provider rate limits (D3).
-            </p>
-          </div>
-
-          {/* Action buttons */}
-          <div class="flex items-center justify-end gap-3 pt-3 border-t border-[#E2DFD8] dark:border-[#2E3138]">
-            <button
-              type="button"
-              onClick={() => setStep(2)}
-              class="px-4 py-2 text-xs font-semibold text-[#6E7075] hover:text-[#1A1B1E]"
-            >
-              Back
-            </button>
-            <button
-              type="button"
-              data-testid="start-import-btn"
-              onClick={handleLaunchImport}
-              class="px-6 py-2.5 bg-[#A27561] hover:bg-[#8F6452] text-white text-xs font-bold rounded-xl transition shadow-2xs"
-            >
-              Start Mailbox Import
-            </button>
-          </div>
-        </div>
+        </Show>
       </Show>
 
       {/* ── STEP 4: Live Progress with D4 Warning Banner ── */}
@@ -544,7 +780,7 @@ export const ImportTab: Component<ImportTabProps> = (props) => {
           <div class="bg-white dark:bg-[#18191D] border border-[#E2DFD8] dark:border-[#2E3138] rounded-xl p-6 space-y-5">
             <div class="flex items-center justify-between text-xs">
               <span class="font-bold text-[#1A1B1E] dark:text-[#F3F4F6]">
-                Importing {provider() === "gmail" ? "Gmail" : "Outlook"} Messages...
+                Importing {provider() === "gmail" ? "Gmail" : provider() === "outlook" ? "Outlook" : ".mbox"} Messages...
               </span>
               <span class="font-mono text-sm font-bold text-[#A27561]">{progress().percent}%</span>
             </div>

@@ -129,6 +129,12 @@ func contactsHandler(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "failed to get contact", http.StatusInternalServerError)
 				return
 			}
+			if len(envelope) > 0 {
+				name = ""
+				email = ""
+				notes = ""
+				groupName = ""
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(contactResponse(id, mailboxID, name, email, notes, groupName, envelope, version, createdAt, updatedAt))
 		case http.MethodPatch, http.MethodPut:
@@ -192,6 +198,12 @@ func contactsHandler(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "failed to read contacts", http.StatusInternalServerError)
 				return
 			}
+			if len(envelope) > 0 {
+				name = ""
+				email = ""
+				notes = ""
+				groupName = ""
+			}
 			contacts = append(contacts, contactResponse(id, mailboxID, name, email, notes, groupName, envelope, version, createdAt, updatedAt))
 		}
 		if err := rows.Err(); err != nil {
@@ -213,20 +225,20 @@ func contactCreateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn
 		return
 	}
 
-	// Legacy ciphertext support
+	// Zero-Knowledge Encrypted Envelope Support (Section 12 / FINDING-04)
 	if envRaw, hasEnv := raw["encrypted_envelope"]; hasEnv {
 		envStr, _ := envRaw.(string)
 		envelope, err := base64.StdEncoding.DecodeString(strings.TrimSpace(envStr))
-		if err != nil || len(envelope) < 29 || envelope[0] != 0x01 {
-			http.Error(w, "invalid encrypted_envelope", http.StatusBadRequest)
+		if err != nil || validateSection12BinaryEnvelope(envelope) != nil {
+			http.Error(w, "invalid encrypted_envelope: must be v1 AES-GCM envelope", http.StatusBadRequest)
 			return
 		}
 		var id string
 		var version int
 		var createdAt, updatedAt time.Time
 		err = conn.QueryRow(ctx, `
-			INSERT INTO contacts (mailbox_id, encrypted_envelope)
-			VALUES ($1,$2)
+			INSERT INTO contacts (mailbox_id, encrypted_envelope, name, email, notes, group_name)
+			VALUES ($1, $2, NULL, NULL, NULL, NULL)
 			RETURNING id::text, version, created_at, updated_at`, mailboxID, envelope).
 			Scan(&id, &version, &createdAt, &updatedAt)
 		if err != nil {
@@ -239,53 +251,12 @@ func contactCreateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn
 		return
 	}
 
-	name, _ := raw["name"].(string)
-	email, _ := raw["email"].(string)
-	notes, _ := raw["notes"].(string)
-	groupName, _ := raw["group_name"].(string)
-
-	name = strings.TrimSpace(name)
-	email = strings.TrimSpace(email)
-	notes = strings.TrimSpace(notes)
-	groupName = strings.TrimSpace(groupName)
-
-	if err := validateContactFields(name, email, notes, groupName, true); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-
-	// Check duplicate email (case-insensitive) within this mailbox
-	var existingID string
-	err := conn.QueryRow(ctx, `SELECT id::text FROM contacts WHERE mailbox_id=$1 AND LOWER(email)=LOWER($2)`, mailboxID, email).Scan(&existingID)
-	if err == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(map[string]string{"error": "contact_exists"})
-		return
-	} else if err != pgx.ErrNoRows {
-		http.Error(w, "failed to check duplicate contact", http.StatusInternalServerError)
-		return
-	}
-
-	var id string
-	var version int
-	var createdAt, updatedAt time.Time
-	err = conn.QueryRow(ctx, `
-		INSERT INTO contacts (mailbox_id, name, email, notes, group_name)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id::text, version, created_at, updated_at`,
-		mailboxID, name, email, notes, groupName).
-		Scan(&id, &version, &createdAt, &updatedAt)
-	if err != nil {
-		http.Error(w, "failed to create contact", http.StatusInternalServerError)
-		return
-	}
-
+	// Plaintext contact creation is strictly rejected on public endpoints
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(contactResponse(id, mailboxID, name, email, notes, groupName, nil, version, createdAt, updatedAt))
+	w.WriteHeader(http.StatusBadRequest)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error": "plaintext contact creation rejected: encrypted_envelope is required",
+	})
 }
 
 func contactUpdateOrPatchHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, ctx context.Context, mailboxID, contactID string) {
@@ -296,11 +267,11 @@ func contactUpdateOrPatchHandler(w http.ResponseWriter, r *http.Request, conn *p
 		return
 	}
 
-	// Legacy ciphertext support
+	// Encrypted envelope update (Section 12 / FINDING-04)
 	if envRaw, hasEnv := raw["encrypted_envelope"]; hasEnv {
 		envStr, _ := envRaw.(string)
 		envelope, err := base64.StdEncoding.DecodeString(strings.TrimSpace(envStr))
-		if err != nil || len(envelope) < 29 || envelope[0] != 0x01 {
+		if err != nil || validateSection12BinaryEnvelope(envelope) != nil {
 			http.Error(w, "invalid encrypted_envelope", http.StatusBadRequest)
 			return
 		}
@@ -316,7 +287,7 @@ func contactUpdateOrPatchHandler(w http.ResponseWriter, r *http.Request, conn *p
 		var nextVersion int
 		var createdAt, updatedAt time.Time
 		err = conn.QueryRow(ctx, `
-			UPDATE contacts SET encrypted_envelope=$1, version=version+1, updated_at=now()
+			UPDATE contacts SET encrypted_envelope=$1, name=NULL, email=NULL, notes=NULL, group_name=NULL, version=version+1, updated_at=now()
 			WHERE id=$2 AND mailbox_id=$3 AND version=$4
 			RETURNING id::text, version, created_at, updated_at`,
 			envelope, contactID, mailboxID, expectedVersion).
@@ -344,103 +315,12 @@ func contactUpdateOrPatchHandler(w http.ResponseWriter, r *http.Request, conn *p
 		return
 	}
 
-	// Fetch existing contact to ensure ownership and existence
-	var curName, curEmail, curNotes, curGroup string
-	var curVersion int
-	var curCreatedAt, curUpdatedAt time.Time
-	err := conn.QueryRow(ctx, `
-		SELECT COALESCE(name, ''), COALESCE(email, ''), COALESCE(notes, ''), COALESCE(group_name, ''),
-		       version, created_at, updated_at
-		FROM contacts WHERE id=$1 AND mailbox_id=$2`, contactID, mailboxID).
-		Scan(&curName, &curEmail, &curNotes, &curGroup, &curVersion, &curCreatedAt, &curUpdatedAt)
-	if err == pgx.ErrNoRows {
-		http.Error(w, "contact not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		http.Error(w, "failed to check contact", http.StatusInternalServerError)
-		return
-	}
-
-	newName := curName
-	if v, exists := raw["name"]; exists {
-		s, _ := v.(string)
-		newName = strings.TrimSpace(s)
-		if len(newName) < 1 || len(newName) > 200 {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "name must be between 1 and 200 characters"})
-			return
-		}
-	}
-
-	newEmail := curEmail
-	if v, exists := raw["email"]; exists {
-		s, _ := v.(string)
-		newEmail = strings.TrimSpace(s)
-		if len(newEmail) < 3 || len(newEmail) > 254 || !contactEmailRegex.MatchString(newEmail) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "invalid email format"})
-			return
-		}
-		// Duplicate check if changed
-		if !strings.EqualFold(newEmail, curEmail) {
-			var dupID string
-			dupErr := conn.QueryRow(ctx, `SELECT id::text FROM contacts WHERE mailbox_id=$1 AND LOWER(email)=LOWER($2) AND id != $3`, mailboxID, newEmail, contactID).Scan(&dupID)
-			if dupErr == nil {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(map[string]string{"error": "contact_exists"})
-				return
-			} else if dupErr != pgx.ErrNoRows {
-				http.Error(w, "failed to check duplicate contact", http.StatusInternalServerError)
-				return
-			}
-		}
-	}
-
-	newNotes := curNotes
-	if v, exists := raw["notes"]; exists {
-		s, _ := v.(string)
-		newNotes = strings.TrimSpace(s)
-		if len(newNotes) > 2000 {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "notes must be at most 2000 characters"})
-			return
-		}
-	}
-
-	newGroup := curGroup
-	if v, exists := raw["group_name"]; exists {
-		s, _ := v.(string)
-		newGroup = strings.TrimSpace(s)
-		if len(newGroup) > 50 || !contactGroupRegex.MatchString(newGroup) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "group name must be 0-50 alphanumeric characters"})
-			return
-		}
-	}
-
-	var updatedVersion int
-	var updatedTime time.Time
-	err = conn.QueryRow(ctx, `
-		UPDATE contacts SET
-			name = $1, email = $2, notes = $3, group_name = $4,
-			version = version + 1, updated_at = now()
-		WHERE id=$5 AND mailbox_id=$6
-		RETURNING version, updated_at`,
-		newName, newEmail, newNotes, newGroup, contactID, mailboxID).
-		Scan(&updatedVersion, &updatedTime)
-	if err != nil {
-		http.Error(w, "failed to update contact", http.StatusInternalServerError)
-		return
-	}
-
+	// Plaintext contact update is strictly rejected on public endpoints
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(contactResponse(contactID, mailboxID, newName, newEmail, newNotes, newGroup, nil, updatedVersion, curCreatedAt, updatedTime))
+	w.WriteHeader(http.StatusBadRequest)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error": "plaintext contact update rejected: encrypted_envelope is required",
+	})
 }
 
 func contactsImportHandler(w http.ResponseWriter, r *http.Request) {
@@ -460,94 +340,279 @@ func contactsImportHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	_, _, _, mailboxID, ok := resolveDraftMailbox(w, r, conn, ctx)
+	_, _, _, _, ok := resolveDraftMailbox(w, r, conn, ctx)
 	if !ok {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB limit
-	var req struct {
-		Format string `json:"format"`
-		Data   string `json:"data"`
+	// Plaintext contacts import is strictly rejected on public endpoints
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error": "plaintext contacts import rejected: client-side encryption required",
+	})
+}
+
+// internalContactMigrationHandler provides a dedicated, server-side migration endpoint for seeding or backfilling
+// legacy contacts into a mailbox. It is strictly guarded by internal service authentication (MIGRATION_INTERNAL_KEY).
+// Ordinary user sessions, client requests, and unauthenticated callers are rejected with 403 Forbidden.
+func internalContactMigrationHandler(w http.ResponseWriter, r *http.Request) {
+	if !verifyInternalServiceAuth(r, "migration") {
+		http.Error(w, "Forbidden: invalid or missing internal migration key", http.StatusForbidden)
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+
+	mailboxID := r.PathValue("mailbox_id")
+	if _, err := uuid.Parse(mailboxID); err != nil {
+		http.Error(w, "mailbox ID must be UUID", http.StatusBadRequest)
+		return
+	}
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	}
+	ctx := r.Context()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		http.Error(w, "Database connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close(ctx)
+
+	var mbExists bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mailboxes WHERE id=$1)`, mailboxID).Scan(&mbExists); err != nil || !mbExists {
+		http.Error(w, "mailbox not found", http.StatusNotFound)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB limit
+	var raw map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	fileBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(req.Data))
-	if err != nil {
-		// Try raw if not base64
-		fileBytes = []byte(req.Data)
-	}
-
-	var parsedContacts []ContactRecord
-	var parseErrors []string
-
-	format := strings.ToLower(strings.TrimSpace(req.Format))
-	if format == "csv" {
-		parsedContacts, parseErrors = parseCSVContacts(fileBytes)
-	} else if format == "vcard" || format == "vcf" {
-		parsedContacts, parseErrors = parseVCardContacts(fileBytes)
-	} else {
-		http.Error(w, "invalid format: must be csv or vcard", http.StatusBadRequest)
-		return
-	}
-
-	// Fetch existing emails in mailbox to skip duplicates
-	existingRows, err := conn.Query(ctx, `SELECT LOWER(email) FROM contacts WHERE mailbox_id=$1 AND email IS NOT NULL`, mailboxID)
-	if err != nil {
-		http.Error(w, "failed to query existing contacts", http.StatusInternalServerError)
-		return
-	}
-	defer existingRows.Close()
-
-	existingSet := make(map[string]bool)
-	for existingRows.Next() {
-		var em string
-		if err := existingRows.Scan(&em); err == nil {
-			existingSet[strings.ToLower(em)] = true
-		}
-	}
-
-	imported := 0
-	skipped := 0
-	finalErrors := append([]string{}, parseErrors...)
-
-	for _, c := range parsedContacts {
-		lowerEmail := strings.ToLower(strings.TrimSpace(c.Email))
-		if lowerEmail == "" {
-			finalErrors = append(finalErrors, fmt.Sprintf("invalid contact '%s': missing email", c.Name))
-			continue
-		}
-		if existingSet[lowerEmail] {
-			skipped++
-			continue
-		}
-		if err := validateContactFields(c.Name, c.Email, c.Notes, c.GroupName, true); err != nil {
-			finalErrors = append(finalErrors, fmt.Sprintf("contact '%s' (%s): %v", c.Name, c.Email, err))
-			continue
-		}
-
-		_, err := conn.Exec(ctx, `
-			INSERT INTO contacts (mailbox_id, name, email, notes, group_name)
-			VALUES ($1, $2, $3, $4, $5)`,
-			mailboxID, c.Name, c.Email, c.Notes, c.GroupName)
+	// 1. Batch CSV / vCard migration import
+	if fmtVal, ok := raw["format"].(string); ok && fmtVal != "" {
+		dataStr, _ := raw["data"].(string)
+		fileBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(dataStr))
 		if err != nil {
-			// Might be concurrent duplicate
-			skipped++
-		} else {
-			existingSet[lowerEmail] = true
-			imported++
+			fileBytes = []byte(dataStr)
 		}
+		var parsedContacts []ContactRecord
+		var parseErrors []string
+		format := strings.ToLower(strings.TrimSpace(fmtVal))
+		if format == "csv" {
+			parsedContacts, parseErrors = parseCSVContacts(fileBytes)
+		} else if format == "vcard" || format == "vcf" {
+			parsedContacts, parseErrors = parseVCardContacts(fileBytes)
+		} else {
+			http.Error(w, "invalid format: must be csv or vcard", http.StatusBadRequest)
+			return
+		}
+
+		existingRows, err := conn.Query(ctx, `SELECT LOWER(email) FROM contacts WHERE mailbox_id=$1 AND email IS NOT NULL`, mailboxID)
+		if err != nil {
+			http.Error(w, "failed to query existing contacts", http.StatusInternalServerError)
+			return
+		}
+		defer existingRows.Close()
+
+		existingSet := make(map[string]bool)
+		for existingRows.Next() {
+			var em string
+			if err := existingRows.Scan(&em); err == nil {
+				existingSet[strings.ToLower(em)] = true
+			}
+		}
+
+		imported := 0
+		skipped := 0
+		finalErrors := append([]string{}, parseErrors...)
+
+		for _, c := range parsedContacts {
+			lowerEmail := strings.ToLower(strings.TrimSpace(c.Email))
+			if lowerEmail == "" {
+				finalErrors = append(finalErrors, fmt.Sprintf("invalid contact '%s': missing email", c.Name))
+				continue
+			}
+			if existingSet[lowerEmail] {
+				skipped++
+				continue
+			}
+			if err := validateContactFields(c.Name, c.Email, c.Notes, c.GroupName, true); err != nil {
+				finalErrors = append(finalErrors, fmt.Sprintf("contact '%s' (%s): %v", c.Name, c.Email, err))
+				continue
+			}
+
+			_, err := conn.Exec(ctx, `
+				INSERT INTO contacts (mailbox_id, name, email, notes, group_name)
+				VALUES ($1, $2, $3, $4, $5)`,
+				mailboxID, c.Name, c.Email, c.Notes, c.GroupName)
+			if err != nil {
+				skipped++
+			} else {
+				existingSet[lowerEmail] = true
+				imported++
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"imported": imported,
+			"skipped":  skipped,
+			"errors":   finalErrors,
+		})
+		return
+	}
+
+	// 2. Single contact update via migration endpoint
+	contactID := r.PathValue("contact_id")
+	if contactID == "" {
+		if idVal, ok := raw["id"].(string); ok && idVal != "" {
+			contactID = idVal
+		} else if idVal, ok := raw["contact_id"].(string); ok && idVal != "" {
+			contactID = idVal
+		}
+	}
+
+	if contactID != "" || r.Method == http.MethodPut || r.Method == http.MethodPatch {
+		if _, err := uuid.Parse(contactID); err != nil {
+			http.Error(w, "contact ID must be UUID", http.StatusBadRequest)
+			return
+		}
+		var curName, curEmail, curNotes, curGroup string
+		var curVersion int
+		var curCreatedAt, curUpdatedAt time.Time
+		err := conn.QueryRow(ctx, `
+			SELECT COALESCE(name, ''), COALESCE(email, ''), COALESCE(notes, ''), COALESCE(group_name, ''),
+			       version, created_at, updated_at
+			FROM contacts WHERE id=$1 AND mailbox_id=$2`, contactID, mailboxID).
+			Scan(&curName, &curEmail, &curNotes, &curGroup, &curVersion, &curCreatedAt, &curUpdatedAt)
+		if err == pgx.ErrNoRows {
+			http.Error(w, "contact not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, "failed to check contact", http.StatusInternalServerError)
+			return
+		}
+
+		newName := curName
+		if v, exists := raw["name"]; exists {
+			s, _ := v.(string)
+			newName = strings.TrimSpace(s)
+			if len(newName) < 1 || len(newName) > 200 {
+				http.Error(w, "name must be between 1 and 200 characters", http.StatusBadRequest)
+				return
+			}
+		}
+		newEmail := curEmail
+		if v, exists := raw["email"]; exists {
+			s, _ := v.(string)
+			newEmail = strings.TrimSpace(s)
+			if len(newEmail) < 3 || len(newEmail) > 254 || !contactEmailRegex.MatchString(newEmail) {
+				http.Error(w, "invalid email format", http.StatusBadRequest)
+				return
+			}
+			if !strings.EqualFold(newEmail, curEmail) {
+				var dupID string
+				dupErr := conn.QueryRow(ctx, `SELECT id::text FROM contacts WHERE mailbox_id=$1 AND LOWER(email)=LOWER($2) AND id != $3`, mailboxID, newEmail, contactID).Scan(&dupID)
+				if dupErr == nil {
+					http.Error(w, "contact_exists", http.StatusConflict)
+					return
+				} else if dupErr != pgx.ErrNoRows {
+					http.Error(w, "failed to check duplicate contact", http.StatusInternalServerError)
+					return
+				}
+			}
+		}
+		newNotes := curNotes
+		if v, exists := raw["notes"]; exists {
+			s, _ := v.(string)
+			newNotes = strings.TrimSpace(s)
+			if len(newNotes) > 2000 {
+				http.Error(w, "notes must be at most 2000 characters", http.StatusBadRequest)
+				return
+			}
+		}
+		newGroup := curGroup
+		if v, exists := raw["group_name"]; exists {
+			s, _ := v.(string)
+			newGroup = strings.TrimSpace(s)
+			if len(newGroup) > 50 || !contactGroupRegex.MatchString(newGroup) {
+				http.Error(w, "group name must be 0-50 alphanumeric characters", http.StatusBadRequest)
+				return
+			}
+		}
+
+		var updatedVersion int
+		var updatedTime time.Time
+		err = conn.QueryRow(ctx, `
+			UPDATE contacts SET
+				name = $1, email = $2, notes = $3, group_name = $4,
+				version = version + 1, updated_at = now()
+			WHERE id=$5 AND mailbox_id=$6
+			RETURNING version, updated_at`,
+			newName, newEmail, newNotes, newGroup, contactID, mailboxID).
+			Scan(&updatedVersion, &updatedTime)
+		if err != nil {
+			http.Error(w, "failed to update contact", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(contactResponse(contactID, mailboxID, newName, newEmail, newNotes, newGroup, nil, updatedVersion, curCreatedAt, updatedTime))
+		return
+	}
+
+	// 3. Single contact creation via migration endpoint
+	name, _ := raw["name"].(string)
+	email, _ := raw["email"].(string)
+	notes, _ := raw["notes"].(string)
+	groupName, _ := raw["group_name"].(string)
+
+	name = strings.TrimSpace(name)
+	email = strings.TrimSpace(email)
+	notes = strings.TrimSpace(notes)
+	groupName = strings.TrimSpace(groupName)
+
+	if err := validateContactFields(name, email, notes, groupName, true); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	var existingID string
+	err = conn.QueryRow(ctx, `SELECT id::text FROM contacts WHERE mailbox_id=$1 AND LOWER(email)=LOWER($2)`, mailboxID, email).Scan(&existingID)
+	if err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]string{"error": "contact_exists"})
+		return
+	} else if err != pgx.ErrNoRows {
+		http.Error(w, "failed to check duplicate contact", http.StatusInternalServerError)
+		return
+	}
+
+	var id string
+	var version int
+	var createdAt, updatedAt time.Time
+	err = conn.QueryRow(ctx, `
+		INSERT INTO contacts (mailbox_id, name, email, notes, group_name)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id::text, version, created_at, updated_at`,
+		mailboxID, name, email, notes, groupName).
+		Scan(&id, &version, &createdAt, &updatedAt)
+	if err != nil {
+		http.Error(w, "failed to create contact", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"imported": imported,
-		"skipped":  skipped,
-		"errors":   finalErrors,
-	})
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(contactResponse(id, mailboxID, name, email, notes, groupName, nil, version, createdAt, updatedAt))
 }
 
 func parseCSVContacts(data []byte) ([]ContactRecord, []string) {

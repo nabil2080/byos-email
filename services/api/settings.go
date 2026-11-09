@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -216,6 +217,24 @@ func mailboxSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		if req.DisplayName != nil {
 			d := strings.TrimSpace(*req.DisplayName)
 			dispName = &d
+		}
+
+		// FINDING-05 Remediation: Validate client-side encrypted signature envelopes when present
+		if req.SignaturePlain != nil && strings.HasPrefix(*req.SignaturePlain, "enc:v1:") {
+			rawB64 := strings.TrimPrefix(*req.SignaturePlain, "enc:v1:")
+			env, decErr := base64.StdEncoding.DecodeString(rawB64)
+			if decErr != nil || validateSection12BinaryEnvelope(env) != nil {
+				http.Error(w, "invalid encrypted signature_plain envelope", http.StatusBadRequest)
+				return
+			}
+		}
+		if req.SignatureHTML != nil && strings.HasPrefix(*req.SignatureHTML, "enc:v1:") {
+			rawB64 := strings.TrimPrefix(*req.SignatureHTML, "enc:v1:")
+			env, decErr := base64.StdEncoding.DecodeString(rawB64)
+			if decErr != nil || validateSection12BinaryEnvelope(env) != nil {
+				http.Error(w, "invalid encrypted signature_html envelope", http.StatusBadRequest)
+				return
+			}
 		}
 
 		var s MailboxSettings

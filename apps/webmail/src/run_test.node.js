@@ -60,6 +60,7 @@ import { runCalendarLayoutTests } from "./utils/calendarLayout.test.js";
 import { runUnlockAnd2FAPersistenceTests } from "./unlock_and_2fa_persistence.test.js";
 import { runKashcalParserTests } from "./components/calendar/kashcalParser.test.js";
 import { runNotesTests } from "./components/notes/notes.test.js";
+import { runNotesSyncTests } from "./components/notes/notesSync.test.js";
 import { runTrack2SecurityTests } from "./track2_security.test.js";
 import { runCalendarTrack3Tests } from "./calendar_track3.test.js";
 import { runTrack4ResilienceTests } from "./track4_resilience.test.js";
@@ -67,6 +68,7 @@ import { runCryptoWorkerTests } from "./crypto_worker.test.js";
 import { runSubscriptionsStoreTests } from "./subscriptions_store.test.js";
 import { runImagePrivacyStoreTests } from "./utils/image_privacy_store.test.js";
 import { runTranslatorTests } from "./translator.test.js";
+import { runFolderAndTrashTests } from "./folder_and_trash.test.js";
 
 async function main() {
   let totalPassed = 0;
@@ -427,6 +429,10 @@ async function main() {
   totalPassed += (notesRes?.passed ?? 21);
   if (notesRes?.failed) totalFailed += notesRes.failed;
 
+  const notesSyncRes = await runNotesSyncTests();
+  totalPassed += (notesSyncRes?.passed ?? 0);
+  if (notesSyncRes?.failed) totalFailed += notesSyncRes.failed;
+
   const unlock2faRes = await runUnlockAnd2FAPersistenceTests();
   console.log(`UNLOCK & 2FA PERSISTENCE TESTS: ${unlock2faRes.passed} passed, ${unlock2faRes.failed} failed\n`);
   totalPassed += unlock2faRes.passed;
@@ -473,6 +479,12 @@ async function main() {
   console.log(`TRANSLATOR & LOCALIZATION TESTS: ${translatorRes.passed} passed, ${translatorRes.failed} failed\n`);
   totalPassed += translatorRes.passed;
   totalFailed += translatorRes.failed;
+
+  console.log("Running Folder & Trash Lifecycle Tests...");
+  const folderTrashRes = await runFolderAndTrashTests();
+  console.log(`FOLDER & TRASH TESTS: ${folderTrashRes.passed} passed, ${folderTrashRes.failed} failed\n`);
+  totalPassed += folderTrashRes.passed;
+  totalFailed += folderTrashRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

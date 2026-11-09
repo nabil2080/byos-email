@@ -249,6 +249,20 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
           <button
             type="button"
             onClick={() => {
+              props.onBatchMoveTo("drafts");
+              toggleMenu(null);
+            }}
+            class="w-full text-left px-3 py-1.5 hover:bg-[#F3ECE8] dark:hover:bg-[#2D2522] hover:text-[#A27561] dark:hover:text-[#D4A38F] text-[#3C3D3E] dark:text-[#E2DFD8] transition cursor-pointer flex items-center gap-2"
+          >
+            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+            </svg>
+            <span>{t("Drafts")}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
               props.onBatchMoveTo("archive");
               toggleMenu(null);
             }}
@@ -270,7 +284,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
             class="w-full text-left px-3 py-1.5 hover:bg-[#F3ECE8] dark:hover:bg-[#2D2522] hover:text-[#A27561] dark:hover:text-[#D4A38F] text-[#3C3D3E] dark:text-[#E2DFD8] transition cursor-pointer flex items-center gap-2"
           >
             <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="10" />
+              <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2" />
               <line x1="12" y1="8" x2="12" y2="12" />
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
@@ -613,32 +627,51 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                   </span>
 
                   {/* Archive */}
-                  <button
-                    type="button"
-                    onClick={props.onBatchArchive}
-                    class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
-                    title={t("Archive")}
-                  >
-                    <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                      <polyline points="21 8 21 21 3 21 3 8" />
-                      <rect x="1" y="3" width="22" height="5" />
-                      <line x1="10" y1="12" x2="14" y2="12" />
-                    </svg>
-                  </button>
+                  <Show when={props.currentFolder !== "sent" && props.currentFolder !== "trash" && props.currentFolder !== "drafts" && props.currentFolder !== "archive"}>
+                    <button
+                      type="button"
+                      onClick={props.onBatchArchive}
+                      class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                      title={t("Archive")}
+                    >
+                      <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                        <polyline points="21 8 21 21 3 21 3 8" />
+                        <rect x="1" y="3" width="22" height="5" />
+                        <line x1="10" y1="12" x2="14" y2="12" />
+                      </svg>
+                    </button>
+                  </Show>
 
                   {/* Report Spam */}
-                  <button
-                    type="button"
-                    onClick={props.onBatchSpam}
-                    class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
-                    title={t("Report spam")}
-                  >
-                    <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="8" x2="12" y2="12" />
-                      <line x1="12" y1="16" x2="12.01" y2="16" />
-                    </svg>
-                  </button>
+                  <Show when={props.currentFolder !== "sent" && props.currentFolder !== "trash" && props.currentFolder !== "drafts" && props.currentFolder !== "spam"}>
+                    <button
+                      type="button"
+                      onClick={props.onBatchSpam}
+                      class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                      title={t("Report spam")}
+                    >
+                      <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                        <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2" />
+                        <line x1="12" y1="8" x2="12" y2="12" />
+                        <line x1="12" y1="16" x2="12.01" y2="16" />
+                      </svg>
+                    </button>
+                  </Show>
+
+                  {/* Not Spam (Move to Inbox) */}
+                  <Show when={props.currentFolder === "spam"}>
+                    <button
+                      type="button"
+                      onClick={() => props.onBatchMoveTo("inbox")}
+                      class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                      title={t("Not spam")}
+                    >
+                      <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                        <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+                        <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+                      </svg>
+                    </button>
+                  </Show>
 
                   {/* Delete / Trash or Delete Forever */}
                   <Show
@@ -707,7 +740,9 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
                     </svg>
                   </button>
 
-                  {renderMoveToMenu("right-0")}
+                  <Show when={props.currentFolder !== "sent"}>
+                    {renderMoveToMenu("right-0")}
+                  </Show>
                   {renderLabelAsMenu("right-0")}
                 </div>
               </Show>
@@ -778,18 +813,20 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
           {/* Row 2: Action Icons Cluster with Full Width */}
           <div class="flex items-center justify-between border-t border-[#E2DFD8]/60 dark:border-[#2E3138] pt-1.5">
             <div class="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={props.onBatchArchive}
-                class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
-                title={t("Archive")}
-              >
-                <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
-                  <polyline points="21 8 21 21 3 21 3 8" />
-                  <rect x="1" y="3" width="22" height="5" />
-                  <line x1="10" y1="12" x2="14" y2="12" />
-                </svg>
-              </button>
+              <Show when={props.currentFolder !== "sent" && props.currentFolder !== "trash" && props.currentFolder !== "drafts" && props.currentFolder !== "archive"}>
+                <button
+                  type="button"
+                  onClick={props.onBatchArchive}
+                  class="w-9 h-9 min-w-[36px] min-h-[36px] p-2 flex items-center justify-center text-[#55575B] dark:text-[#A1A1AA] hover:text-[#A27561] dark:hover:text-[#D4A38F] hover:bg-white dark:hover:bg-[#1E2025] rounded-lg transition-colors duration-150 cursor-pointer border border-transparent hover:border-[#E2DFD8] dark:hover:border-[#2E3138]"
+                  title={t("Archive")}
+                >
+                  <svg class="w-4 h-4 stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+                    <polyline points="21 8 21 21 3 21 3 8" />
+                    <rect x="1" y="3" width="22" height="5" />
+                    <line x1="10" y1="12" x2="14" y2="12" />
+                  </svg>
+                </button>
+              </Show>
               <Show
                 when={props.currentFolder === "trash" && props.onBatchDeleteForever}
                 fallback={
@@ -853,7 +890,9 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
               </button>
             </div>
             <div class="flex items-center gap-1">
-              {renderMoveToMenu("right-0")}
+              <Show when={props.currentFolder !== "sent"}>
+                {renderMoveToMenu("right-0")}
+              </Show>
               {renderLabelAsMenu("right-0")}
             </div>
           </div>
