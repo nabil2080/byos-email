@@ -2,7 +2,7 @@ import { Component, For, Show, createSignal, createEffect } from "solid-js";
 import { UserMe, Mailbox, ConnectedAccount } from "../../api";
 import { AccountSwitcher } from "../AccountSwitcher";
 
-export type NotesViewFilter = "notes" | "reminders" | "archive" | "bin" | string;
+export type NotesViewFilter = "notes" | "favorites" | "reminders" | "archive" | "bin" | string;
 
 export interface NotesSidebarProps {
   currentUser?: UserMe | null;
@@ -21,10 +21,12 @@ export interface NotesSidebarProps {
   unifiedUnreadCount?: number;
   activeView: NotesViewFilter;
   onSelectView: (view: NotesViewFilter) => void;
+  onNewNote?: () => void;
   labels: string[];
   onOpenEditLabels: () => void;
   notesCounts?: {
     notes?: number;
+    favorites?: number;
     reminders?: number;
     archive?: number;
     bin?: number;
@@ -76,7 +78,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
   return (
     <aside
       data-testid="notes-sidebar"
-      class={`w-full md:w-64 flex-shrink-0 bg-[#F0EEE9] dark:bg-[#18191D] flex flex-col justify-between select-none h-full relative ${
+      class={`w-full md:w-60 md:min-w-[240px] md:max-w-[240px] flex-shrink-0 bg-[#F0EEE9] dark:bg-[#18191D] flex flex-col justify-between select-none h-full relative ${
         props.class || ""
       }`}
     >
@@ -130,6 +132,25 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           profilePhotoUrl={props.profilePhotoUrl}
           photoUrls={props.photoUrls}
         />
+
+        {/* ── Prominent Refined "+ New Note" Action Button ── */}
+        <div class="pt-1">
+          <button
+            type="button"
+            onClick={() => {
+              props.onNewNote?.();
+              props.onCloseMobile?.();
+            }}
+            data-testid="notes-new-note-btn"
+            class="w-full py-2.5 px-4 bg-[#9E725F] hover:bg-[#865E4D] text-white rounded-xl font-semibold text-xs tracking-wide transition-all shadow-2xs hover:shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-[0.99] border border-[#865E4D]/20 focus:outline-none focus:ring-2 focus:ring-[#9E725F]/40"
+          >
+            <svg class="w-4 h-4 stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            <span>New Note</span>
+          </button>
+        </div>
       </div>
 
       {/* ── MIDDLE SCROLLABLE SECTION: Notes Navigation Items ── */}
@@ -144,7 +165,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           }}
         />
 
-        {/* 1. Notes */}
+        {/* 1. All Notes */}
         <button
           ref={(el) => { if (el) viewRefs.set("notes", el); }}
           type="button"
@@ -153,23 +174,24 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
             props.onCloseMobile?.();
           }}
           data-testid="notes-nav-notes"
-          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent ${
+          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent min-w-0 ${
             isSelected("notes")
               ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
               : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
           }`}
         >
-          <div class="flex items-center gap-2.5">
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
             <svg class="w-4 h-4 flex-shrink-0 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" />
-              <line x1="9" y1="21" x2="15" y2="21" stroke-linecap="round" stroke-linejoin="round" />
-              <line x1="10" y1="18" x2="14" y2="18" stroke-linecap="round" stroke-linejoin="round" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline stroke-linecap="round" stroke-linejoin="round" points="14 2 14 8 20 8" />
+              <line stroke-linecap="round" stroke-linejoin="round" x1="16" y1="13" x2="8" y2="13" />
+              <line stroke-linecap="round" stroke-linejoin="round" x1="16" y1="17" x2="8" y2="17" />
             </svg>
-            <span>Notes</span>
+            <span class="truncate">All Notes</span>
           </div>
           <Show when={props.notesCounts?.notes !== undefined}>
             <span
-              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full ${
+              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full flex-shrink-0 ${
                 isSelected("notes")
                   ? "bg-[#A27561] text-white font-semibold"
                   : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
@@ -180,7 +202,41 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
           </Show>
         </button>
 
-        {/* 2. Reminders */}
+        {/* 2. Favorites */}
+        <button
+          ref={(el) => { if (el) viewRefs.set("favorites", el); }}
+          type="button"
+          onClick={() => {
+            props.onSelectView("favorites");
+            props.onCloseMobile?.();
+          }}
+          data-testid="notes-nav-favorites"
+          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent min-w-0 ${
+            isSelected("favorites")
+              ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
+              : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
+          }`}
+        >
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
+            <svg class="w-4 h-4 flex-shrink-0 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+              <polygon stroke-linecap="round" stroke-linejoin="round" points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+            </svg>
+            <span class="truncate">Favorites</span>
+          </div>
+          <Show when={props.notesCounts?.favorites !== undefined}>
+            <span
+              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full flex-shrink-0 ${
+                isSelected("favorites")
+                  ? "bg-[#A27561] text-white font-semibold"
+                  : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
+              }`}
+            >
+              {props.notesCounts?.favorites}
+            </span>
+          </Show>
+        </button>
+
+        {/* 3. Reminders */}
         <button
           ref={(el) => { if (el) viewRefs.set("reminders", el); }}
           type="button"
@@ -189,22 +245,22 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
             props.onCloseMobile?.();
           }}
           data-testid="notes-nav-reminders"
-          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent ${
+          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent min-w-0 ${
             isSelected("reminders")
               ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
               : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
           }`}
         >
-          <div class="flex items-center gap-2.5">
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
             <svg class="w-4 h-4 flex-shrink-0 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
               <path stroke-linecap="round" stroke-linejoin="round" d="M13.73 21a2 2 0 0 1-3.46 0" />
             </svg>
-            <span>Reminders</span>
+            <span class="truncate">Reminders</span>
           </div>
           <Show when={props.notesCounts?.reminders !== undefined}>
             <span
-              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full ${
+              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full flex-shrink-0 ${
                 isSelected("reminders")
                   ? "bg-[#A27561] text-white font-semibold"
                   : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
@@ -240,41 +296,42 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
 
         {/* User Labels */}
         <For each={props.labels}>
-          {(lbl) => (
-            <button
-              ref={(el) => { if (el) viewRefs.set(`label:${lbl}`, el); }}
-              type="button"
-              onClick={() => {
-                props.onSelectView(`label:${lbl}`);
-                props.onCloseMobile?.();
-              }}
-              data-testid={`notes-nav-label-${lbl}`}
-              class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent ${
-                isSelected(`label:${lbl}`)
-                  ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
-                  : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
-              }`}
-            >
-              <div class="flex items-center gap-2.5 truncate">
-                <svg class="w-4 h-4 flex-shrink-0 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-                  <line x1="7" y1="7" x2="7.01" y2="7" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-                <span class="truncate">{lbl}</span>
-              </div>
-              <Show when={props.notesCounts?.labelCounts?.[lbl] !== undefined}>
-                <span
-                  class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full ${
-                    isSelected(`label:${lbl}`)
-                      ? "bg-[#A27561] text-white font-semibold"
-                      : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
-                  }`}
-                >
-                  {props.notesCounts?.labelCounts?.[lbl]}
-                </span>
-              </Show>
-            </button>
-          )}
+          {(lbl, idx) => {
+            const dotColors = ["bg-[#9E725F]", "bg-amber-500", "bg-emerald-500", "bg-sky-500", "bg-purple-500", "bg-rose-500"];
+            const dotColor = dotColors[idx() % dotColors.length];
+            return (
+              <button
+                ref={(el) => { if (el) viewRefs.set(`label:${lbl}`, el); }}
+                type="button"
+                onClick={() => {
+                  props.onSelectView(`label:${lbl}`);
+                  props.onCloseMobile?.();
+                }}
+                data-testid={`notes-nav-label-${lbl}`}
+                class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent min-w-0 ${
+                  isSelected(`label:${lbl}`)
+                    ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
+                    : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
+                }`}
+              >
+                <div class="flex items-center gap-2.5 min-w-0 flex-1 truncate">
+                  <span class={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`} />
+                  <span class="truncate">{lbl}</span>
+                </div>
+                <Show when={props.notesCounts?.labelCounts?.[lbl] !== undefined}>
+                  <span
+                    class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full flex-shrink-0 ${
+                      isSelected(`label:${lbl}`)
+                        ? "bg-[#A27561] text-white font-semibold"
+                        : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
+                    }`}
+                  >
+                    {props.notesCounts?.labelCounts?.[lbl]}
+                  </span>
+                </Show>
+              </button>
+            );
+          }}
         </For>
         <Show when={!props.labels || props.labels.length === 0}>
           <div class="px-3 py-1 text-xs text-[#878A8E] italic">No labels</div>
@@ -292,23 +349,23 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
             props.onCloseMobile?.();
           }}
           data-testid="notes-nav-archive"
-          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent ${
+          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent min-w-0 ${
             isSelected("archive")
               ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
               : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
           }`}
         >
-          <div class="flex items-center gap-2.5">
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
             <svg class="w-4 h-4 flex-shrink-0 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
               <polyline stroke-linecap="round" stroke-linejoin="round" points="21 8 21 21 3 21 3 8" />
               <rect stroke-linecap="round" stroke-linejoin="round" x="1" y="3" width="22" height="5" />
               <line stroke-linecap="round" stroke-linejoin="round" x1="10" y1="12" x2="14" y2="12" />
             </svg>
-            <span>Archive</span>
+            <span class="truncate">Archive</span>
           </div>
           <Show when={props.notesCounts?.archive !== undefined}>
             <span
-              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full ${
+              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full flex-shrink-0 ${
                 isSelected("archive")
                   ? "bg-[#A27561] text-white font-semibold"
                   : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"
@@ -328,24 +385,24 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
             props.onCloseMobile?.();
           }}
           data-testid="notes-nav-bin"
-          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent ${
+          class={`relative z-10 w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all cursor-pointer bg-transparent min-w-0 ${
             isSelected("bin")
               ? "text-[#A27561] dark:text-[#D4A38F] font-semibold"
               : "text-[#464748] dark:text-[#A1A1AA] hover:text-[#1F2022] dark:hover:text-[#F3F4F6] hover:bg-[#E8E5DF]/50 dark:hover:bg-[#26282E]/50 font-medium"
           }`}
         >
-          <div class="flex items-center gap-2.5">
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
             <svg class="w-4 h-4 flex-shrink-0 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
               <polyline stroke-linecap="round" stroke-linejoin="round" points="3 6 5 6 21 6" />
               <path stroke-linecap="round" stroke-linejoin="round" d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
               <line stroke-linecap="round" stroke-linejoin="round" x1="10" y1="11" x2="10" y2="17" />
               <line stroke-linecap="round" stroke-linejoin="round" x1="14" y1="11" x2="14" y2="17" />
             </svg>
-            <span>Bin</span>
+            <span class="truncate">Bin</span>
           </div>
           <Show when={props.notesCounts?.bin !== undefined}>
             <span
-              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full ${
+              class={`text-xs font-mono tabular-nums px-2 py-0.5 rounded-full flex-shrink-0 ${
                 isSelected("bin")
                   ? "bg-[#A27561] text-white font-semibold"
                   : "bg-[#E8E5DF] dark:bg-[#2E3138] text-[#3C3D3E] dark:text-[#E2DFD8]"

@@ -12,6 +12,7 @@ import {
   archiveNote,
   unarchiveNote,
   togglePinNote,
+  toggleFavoriteNote,
   duplicateNote,
   loadLabels,
   addLabel,
@@ -883,8 +884,42 @@ export async function runNotesTests() {
     }
     console.log("  ✓ 35. Session isolation & logout cleanup wipes notes in-memory key and media cache");
 
-    console.log("GOOGLE NOTE FEATURE TESTS: All 35 passed, 0 failed\n");
-    return { passed: 35, failed: 0 };
+    // 36. Complete Favorites lifecycle: toggle on, toggle off, persistence, and account isolation
+    setNotesMailboxKey(testMailboxKey);
+    const favNote = createNote(testMailboxId, "Favorite Lifecycle Note", "Testing favorites persistence", "peach", false, {}, testMailboxKey);
+    if (!favNote) throw new Error("Failed to create note for favorite lifecycle test");
+    if (favNote.isFavorite) throw new Error("New note should default to isFavorite=false");
+
+    // Toggle on
+    const toggledOn = toggleFavoriteNote(testMailboxId, favNote.id, testMailboxKey);
+    if (!toggledOn) throw new Error("Failed to toggle favorite note on");
+    const notesWithFav = loadNotes(testMailboxId, testMailboxKey);
+    const favOnCheck = notesWithFav.find((n) => n.id === favNote.id);
+    if (!favOnCheck || !favOnCheck.isFavorite) {
+      throw new Error("Favorite state was not persisted as true in durable storage");
+    }
+
+    // Toggle off
+    const toggledOff = toggleFavoriteNote(testMailboxId, favNote.id, testMailboxKey);
+    if (!toggledOff) throw new Error("Failed to toggle favorite note off");
+    const notesWithoutFav = loadNotes(testMailboxId, testMailboxKey);
+    const favOffCheck = notesWithoutFav.find((n) => n.id === favNote.id);
+    if (!favOffCheck || favOffCheck.isFavorite) {
+      throw new Error("Favorite state was not removed in durable storage");
+    }
+
+    // Re-favorite and test account isolation
+    toggleFavoriteNote(testMailboxId, favNote.id, testMailboxKey);
+    const separateMbId = `mbx_separate_${Date.now()}`;
+    const separateKey = new Uint8Array(32).fill(0x77);
+    const separateNotes = loadNotes(separateMbId, separateKey);
+    if (separateNotes.some((n) => n.id === favNote.id)) {
+      throw new Error("Cross-account leakage: separate mailbox contains favorite note from test mailbox");
+    }
+    console.log("  ✓ 36. Favorites lifecycle: toggle on, toggle off, persistence, and account isolation");
+
+    console.log("GOOGLE NOTE FEATURE TESTS: All 36 passed, 0 failed\n");
+    return { passed: 36, failed: 0 };
   } finally {
     setNotesMailboxKey(null);
     clearNotesMediaCache();

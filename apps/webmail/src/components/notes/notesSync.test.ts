@@ -318,7 +318,7 @@ export async function runNotesSyncTests(): Promise<{ passed: number; failed: num
         "Discussed Phase 2 zero-knowledge customer storage sync.",
         "peach",
         true,
-        { labels: ["Work"] },
+        { labels: ["Work"], isFavorite: true },
         testMailboxKey
       );
       assert(devANote !== null, "Device A created note successfully");
@@ -354,6 +354,7 @@ export async function runNotesSyncTests(): Promise<{ passed: number; failed: num
       assert(syncedNoteOnB!.content === "Discussed Phase 2 zero-knowledge customer storage sync.", "Content decrypted correctly on Device B");
       assert(syncedNoteOnB!.color === "peach", "Color preserved on Device B");
       assert(syncedNoteOnB!.isPinned === true, "Pin state preserved on Device B");
+      assert(syncedNoteOnB!.isFavorite === true, "Favorite state preserved on Device B");
       assert(syncedNoteOnB!.labels.includes("Work"), "Labels preserved on Device B");
       assert(syncedNoteOnB!.syncedRevision === devANote!.updatedAt, "Synced revision marked accurately");
     });

@@ -34,6 +34,7 @@ export interface RemoteEncryptedNotePayload {
   collaborators?: string[];
   color: string;
   isPinned: boolean;
+  isFavorite?: boolean;
   isArchived: boolean;
   isInBin: boolean;
   labels: string[];
@@ -420,6 +421,7 @@ export async function syncNotesWithRemote(
             collaborators: remotePayload.collaborators || [],
             color: remotePayload.color || "default",
             isPinned: Boolean(remotePayload.isPinned),
+            isFavorite: Boolean(remotePayload.isFavorite),
             isArchived: Boolean(remotePayload.isArchived),
             isInBin: Boolean(remotePayload.isInBin),
             labels: remotePayload.labels || [],
@@ -477,6 +479,7 @@ export async function syncNotesWithRemote(
               collaborators: remotePayload.collaborators || [],
               color: remotePayload.color,
               isPinned: Boolean(remotePayload.isPinned),
+              isFavorite: Boolean(remotePayload.isFavorite),
               isArchived: Boolean(remotePayload.isArchived),
               isInBin: Boolean(remotePayload.isInBin),
               labels: remotePayload.labels || [],
@@ -502,6 +505,7 @@ export async function syncNotesWithRemote(
               collaborators: remotePayload.collaborators || [],
               color: remotePayload.color,
               isPinned: Boolean(remotePayload.isPinned),
+              isFavorite: Boolean(remotePayload.isFavorite),
               isArchived: Boolean(remotePayload.isArchived),
               isInBin: Boolean(remotePayload.isInBin),
               labels: remotePayload.labels || [],
@@ -581,6 +585,7 @@ export async function syncNotesWithRemote(
               collaborators: note.collaborators,
               color: note.color,
               isPinned: note.isPinned,
+              isFavorite: note.isFavorite,
               isArchived: note.isArchived,
               isInBin: note.isInBin,
               labels: note.labels,

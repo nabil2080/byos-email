@@ -40,6 +40,7 @@ export interface NoteItem {
   collaborators?: string[];
   color: string; // 'default' | 'peach' | 'amber' | 'sage' | 'sky' | 'lavender' | 'pink' | 'sand'
   isPinned: boolean;
+  isFavorite?: boolean;
   isArchived: boolean;
   isInBin: boolean;
   labels: string[];
@@ -820,7 +821,7 @@ export function applyMarkdownFormat(
   content: string,
   selectionStart: number,
   selectionEnd: number,
-  format: "bold" | "italic" | "underline" | "bullet"
+  format: "bold" | "italic" | "underline" | "strikethrough" | "h1" | "h2" | "h3" | "bullet" | "numbered" | "checklist" | "code" | "quote" | "link"
 ): { newContent: string; newSelectionStart: number; newSelectionEnd: number } {
   const len = content.length;
   const start = Math.max(0, Math.min(selectionStart, len));
@@ -850,8 +851,89 @@ export function applyMarkdownFormat(
     case "underline":
       prefix = "<u>";
       suffix = "</u>";
-      defaultText = "underlined";
+      defaultText = "underlined text";
       break;
+    case "strikethrough":
+      prefix = "~~";
+      suffix = "~~";
+      defaultText = "strikethrough text";
+      break;
+    case "h1":
+      prefix = "# ";
+      suffix = "";
+      defaultText = "Heading 1";
+      break;
+    case "h2":
+      prefix = "## ";
+      suffix = "";
+      defaultText = "Heading 2";
+      break;
+    case "h3":
+      prefix = "### ";
+      suffix = "";
+      defaultText = "Heading 3";
+      break;
+    case "code":
+      if (selected.includes("\n")) {
+        prefix = "```\n";
+        suffix = "\n```";
+        defaultText = "code";
+      } else {
+        prefix = "`";
+        suffix = "`";
+        defaultText = "code";
+      }
+      break;
+    case "quote":
+      prefix = "> ";
+      suffix = "";
+      defaultText = "Quote";
+      break;
+    case "link":
+      prefix = "[";
+      suffix = "](https://)";
+      defaultText = "link text";
+      break;
+    case "numbered": {
+      if (actualStart !== actualEnd) {
+        const lines = selected.split("\n");
+        const numbered = lines.map((l, i) => `${i + 1}. ${l}`).join("\n");
+        const newContent = before + numbered + after;
+        return {
+          newContent,
+          newSelectionStart: actualStart,
+          newSelectionEnd: actualStart + numbered.length,
+        };
+      } else {
+        const textToInsert = "1. List item";
+        const newContent = before + textToInsert + after;
+        return {
+          newContent,
+          newSelectionStart: actualStart,
+          newSelectionEnd: actualStart + textToInsert.length,
+        };
+      }
+    }
+    case "checklist": {
+      if (actualStart !== actualEnd) {
+        const lines = selected.split("\n");
+        const checked = lines.map((l) => (l.startsWith("- [ ] ") || l.startsWith("- [x] ") ? l : `- [ ] ${l}`)).join("\n");
+        const newContent = before + checked + after;
+        return {
+          newContent,
+          newSelectionStart: actualStart,
+          newSelectionEnd: actualStart + checked.length,
+        };
+      } else {
+        const textToInsert = "- [ ] Task item";
+        const newContent = before + textToInsert + after;
+        return {
+          newContent,
+          newSelectionStart: actualStart,
+          newSelectionEnd: actualStart + textToInsert.length,
+        };
+      }
+    }
     case "bullet": {
       if (actualStart !== actualEnd) {
         const lines = selected.split("\n");
@@ -1004,6 +1086,7 @@ export function loadNotes(mailboxId?: string, mailboxKey?: Uint8Array | null): N
             ...n,
             isArchived: Boolean(n.isArchived),
             isInBin: Boolean(n.isInBin),
+            isFavorite: Boolean(n.isFavorite),
             labels: Array.isArray(n.labels) ? n.labels : [],
             isChecklist: Boolean(n.isChecklist),
             checklistItems: Array.isArray(n.checklistItems) ? n.checklistItems : [],
@@ -1253,6 +1336,7 @@ export function createNote(
     content: content.trim(),
     color: color || "default",
     isPinned,
+    isFavorite: Boolean(extra?.isFavorite),
     isArchived: false,
     isInBin: false,
     labels: extra?.labels || [],
@@ -1483,7 +1567,27 @@ export function togglePinNote(mailboxId: string | undefined, id: string, mailbox
   if (!note) return false;
   note.isPinned = !note.isPinned;
   note.updatedAt = Date.now();
-  return saveNotes(mailboxId, notes, key);
+  const ok = saveNotes(mailboxId, notes, key);
+  if (ok && mailboxId) {
+    enqueueNoteSync(mailboxId, note.id, "upsert");
+    triggerNotesSync(mailboxId, key);
+  }
+  return ok;
+}
+
+export function toggleFavoriteNote(mailboxId: string | undefined, id: string, mailboxKey?: Uint8Array | null): boolean {
+  const key = resolveNotesMailboxKey(mailboxId, mailboxKey);
+  const notes = loadNotes(mailboxId, key);
+  const note = notes.find((n) => n.id === id);
+  if (!note) return false;
+  note.isFavorite = !note.isFavorite;
+  note.updatedAt = Date.now();
+  const ok = saveNotes(mailboxId, notes, key);
+  if (ok && mailboxId) {
+    enqueueNoteSync(mailboxId, note.id, "upsert");
+    triggerNotesSync(mailboxId, key);
+  }
+  return ok;
 }
 
 export function duplicateNote(mailboxId: string | undefined, id: string, mailboxKey?: Uint8Array | null): NoteItem | null {

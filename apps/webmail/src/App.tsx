@@ -812,10 +812,21 @@ const AppContent: Component = () => {
 
   const [isMobile, setIsMobile] = createSignal(typeof window !== "undefined" ? window.innerWidth < 768 : false);
   const [isTabletOrMobile, setIsTabletOrMobile] = createSignal(typeof window !== "undefined" ? window.innerWidth < 1024 : false);
-  const [activeModule, setActiveModuleState] = createSignal<AppModule>("mail");
+  const getInitialModule = (): AppModule => {
+    if (typeof window === "undefined") return "mail";
+    const saved = sessionStorage.getItem("byos_active_module");
+    if (saved === "mail" || saved === "calendar" || saved === "notes") {
+      return saved as AppModule;
+    }
+    return "mail";
+  };
+  const [activeModule, setActiveModuleState] = createSignal<AppModule>(getInitialModule());
 
   function setActiveModule(target: AppModule) {
     setActiveModuleState(target);
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("byos_active_module", target);
+    }
   }
 
   const [calendarViewMode, setCalendarViewMode] = createSignal<CalendarViewMode>(
@@ -6127,6 +6138,52 @@ const AppContent: Component = () => {
     );
   }
 
+  function handleShareNoteViaMail(file: File, defaultSubject: string, defaultBody: string) {
+    setActiveModule("mail");
+    clearComposeForm();
+    setComposeSubject(defaultSubject);
+    setComposeBody(defaultBody);
+    setComposeAttachments([]);
+    setEditingDraft(null);
+    refreshMaskedAliases();
+    setComposeOpen(true);
+
+    const boxId = composeAccountId() || selectedMailbox()?.id;
+    const box = boxId ? (mailboxes().find((b) => b.id === boxId) || selectedMailbox()) : selectedMailbox();
+    const key = box ? getMailboxKeyFor(box.id) : null;
+    if (box && key) {
+      const attId = "att-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+      const controller = new AbortController();
+      const attemptId = crypto.randomUUID();
+
+      const initialItem: AttachmentItem = {
+        id: attId,
+        mailbox_id: box.id,
+        filename: file.name,
+        content_type: file.type || "application/octet-stream",
+        size_bytes: file.size,
+        byte_size: file.size,
+        encrypted: true,
+        created_at: new Date().toISOString(),
+        rawFile: file,
+        uploadStatus: "encrypting",
+        uploadProgress: {
+          completedBytes: 0,
+          totalBytes: file.size,
+          completedChunks: 0,
+          totalChunks: 1,
+          percent: 0,
+        },
+        uploadError: null,
+        abortController: controller,
+        uploadAttemptId: attemptId,
+      };
+
+      setComposeAttachments([initialItem]);
+      runAttachmentUpload(attId, file, box, key, controller, attemptId);
+    }
+  }
+
   function removeComposeAttachment(id: string) {
     const box = selectedMailbox();
     const target = composeAttachments().find((a) => a.id === id);
@@ -8971,6 +9028,7 @@ const AppContent: Component = () => {
                   onToggleCustomizer={() => setRightCustomizerOpen(!rightCustomizerOpen())}
                   theme={theme()}
                   onToggleTheme={() => handleSetTheme(theme() === "dark" ? "cloud_dancer" : "dark", true)}
+                  onShareViaMail={handleShareNoteViaMail}
                 />
               </AppErrorBoundary>
             </div>
