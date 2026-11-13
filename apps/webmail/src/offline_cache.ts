@@ -32,12 +32,25 @@ export interface QueuedSendItem {
     aad_version?: number;
     encryption_iv?: string;
     attachment_ids?: string[];
+    offline_attachments?: Array<{
+      id: string;
+      filename: string;
+      content_type: string;
+      size_bytes: number;
+      crypto_version?: number;
+      cek_owner_wrapped?: string;
+      owner_key_version?: number;
+      plaintext_sha256?: string;
+      disposition?: "attachment" | "inline";
+      content_id?: string;
+    }>;
   };
   is_path_a: boolean;
   status: "pending" | "sending" | "failed";
   error?: string;
   created_at: number;
   attempts: number;
+  next_retry_at?: number;
 }
 
 export interface CachedDraft {

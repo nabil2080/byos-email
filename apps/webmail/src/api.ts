@@ -1,13 +1,24 @@
 import {
   encryptAttachmentBytes,
   decryptAttachmentBytes,
+  encryptAttachmentV2,
+  decryptAttachmentV2,
+  sanitizeFilenameV2,
+  canonicalMimeTypeV2,
   AttachmentEnvelope,
   AttachmentWrappedKey,
   AttachmentChunk,
   type PreparedAttachment,
+  type OutboundAttachmentGrantV2,
 } from "./attachment_crypto";
 
-export type { AttachmentEnvelope, AttachmentWrappedKey, AttachmentChunk, PreparedAttachment };
+export type {
+  AttachmentEnvelope,
+  AttachmentWrappedKey,
+  AttachmentChunk,
+  PreparedAttachment,
+  OutboundAttachmentGrantV2,
+};
 
 export interface UserMe {
   id?: string;
@@ -48,6 +59,7 @@ export interface DraftMessage {
   send_failed?: boolean;
   folder?: string;
   folder_id?: string;
+  attachment_ids?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -60,8 +72,18 @@ export interface AttachmentItem {
   content_type: string;
   size_bytes: number;
   byte_size?: number;
+  plaintext_size_bytes?: number;
+  ciphertext_size_bytes?: number;
   encrypted: boolean;
   created_at: string;
+  crypto_version?: number;
+  cek_owner_wrapped?: string;
+  owner_wrap_alg?: string;
+  owner_key_version?: number;
+  owner_pk_sha256?: string;
+  blob_aad_version?: number;
+  plaintext_sha256?: string;
+  ciphertext_sha256?: string;
   rawFile?: File;
   isPathA?: boolean;
   envelope?: AttachmentEnvelope;
@@ -158,6 +180,11 @@ export interface PrepareResponse {
 
 export interface OutboundPubkeyResponse {
   outbound_delivery_pk: string;
+  key_id?: string;
+  key_epoch?: number;
+  algorithm?: string;
+  valid_until?: string;
+  min_accepted_epoch?: number;
 }
 
 export interface SendPayload {
@@ -170,7 +197,10 @@ export interface SendPayload {
   encryption_version: number;
   aad_version: number;
   encryption_iv: string;
+  send_token_key_epoch?: number;
+  send_token_key_id?: string;
   attachment_ids?: string[];
+  attachments?: OutboundAttachmentGrantV2[];
   alias_id?: string;
   client_queue_id?: string;
 }
@@ -439,8 +469,36 @@ export async function apiRequest<T>(path: string, init?: RequestInit, token?: st
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
-    const error = new Error(errorText || `API error ${response.status}`) as Error & { status: number };
+    let errorCode: string | undefined;
+    try {
+      const parsed = JSON.parse(errorText);
+      errorCode = parsed?.error || parsed?.code;
+    } catch {}
+
+    const error = new Error(errorText || `API error ${response.status}`) as Error & {
+      status: number;
+      code?: string;
+      retryAfter?: number;
+      headers?: Headers;
+    };
     error.status = response.status;
+    if (errorCode) {
+      error.code = errorCode;
+    }
+    const retryAfterHeader = response.headers?.get ? response.headers.get("Retry-After") : undefined;
+    if (retryAfterHeader) {
+      const parsedSec = parseInt(retryAfterHeader, 10);
+      if (!isNaN(parsedSec) && parsedSec >= 0) {
+        error.retryAfter = parsedSec;
+      } else {
+        const parsedDate = Date.parse(retryAfterHeader);
+        if (!isNaN(parsedDate)) {
+          const diffMs = parsedDate - Date.now();
+          error.retryAfter = Math.max(0, Math.ceil(diffMs / 1000));
+        }
+      }
+    }
+    error.headers = response.headers;
     throw error;
   }
 
@@ -528,7 +586,7 @@ export async function fetchDrafts(mailboxId: string, token?: string): Promise<Dr
 
 export async function createDraft(
   mailboxId: string,
-  payload: { subject: string; recipient: string; encrypted_envelope: string },
+  payload: { subject: string; recipient: string; encrypted_envelope: string; attachment_ids?: string[] },
   token?: string
 ): Promise<DraftMessage> {
   return apiRequest<DraftMessage>(`/v1/mailboxes/${mailboxId}/drafts`, {
@@ -546,7 +604,7 @@ export async function deleteDraft(mailboxId: string, draftId: string, token?: st
 export async function updateDraft(
   mailboxId: string,
   draftId: string,
-  payload: { subject: string; recipient: string; encrypted_envelope: string; version: number },
+  payload: { subject: string; recipient: string; encrypted_envelope: string; version: number; attachment_ids?: string[] },
   token?: string
 ): Promise<DraftMessage> {
   return apiRequest<DraftMessage>(`/v1/mailboxes/${mailboxId}/drafts/${draftId}`, {
@@ -899,6 +957,24 @@ export async function fetchMessageBody(mailboxId: string, messageId: string, tok
   return apiRequest<MessageBodyResponse>(`/v1/mailboxes/${mailboxId}/messages/${messageId}/body`, undefined, token);
 }
 
+export interface UploadAttachmentV2Options {
+  mailboxPkBytes: Uint8Array;
+  ownerKeyVersion: number;
+  attachmentId?: string;
+}
+
+export async function fetchAttachmentMetadata(
+  mailboxId: string,
+  attachmentId: string,
+  token?: string,
+): Promise<AttachmentItem> {
+  return apiRequest<AttachmentItem>(
+    `/v1/mailboxes/${mailboxId}/attachments/${attachmentId}`,
+    undefined,
+    token,
+  );
+}
+
 export async function uploadEncryptedAttachment(
   mailboxId: string,
   file: File,
@@ -906,6 +982,7 @@ export async function uploadEncryptedAttachment(
   messageId?: string,
   token?: string,
   signal?: AbortSignal,
+  v2Options?: UploadAttachmentV2Options,
 ): Promise<AttachmentItem> {
   const arrayBuffer = await file.arrayBuffer();
   if (signal?.aborted) {
@@ -913,29 +990,73 @@ export async function uploadEncryptedAttachment(
   }
   const plaintextBytes = new Uint8Array(arrayBuffer);
 
-  // Encrypt client-side using Section 12 WASM primitive before network transit
-  const ciphertextBytes = encryptAttachmentBytes(plaintextBytes, mailboxKey);
-  if (signal?.aborted) {
-    throw new DOMException("Upload aborted", "AbortError");
-  }
-
   const formData = new FormData();
-  const encryptedBlob = new Blob([ciphertextBytes.buffer as ArrayBuffer], { type: "application/octet-stream" });
-  formData.append("file", encryptedBlob, file.name);
+  if (v2Options && v2Options.mailboxPkBytes?.length === 32 && v2Options.ownerKeyVersion > 0) {
+    const v2 = await encryptAttachmentV2({
+      plaintextBytes,
+      mailboxId,
+      mailboxPkBytes: v2Options.mailboxPkBytes,
+      ownerKeyVersion: v2Options.ownerKeyVersion,
+      attachmentId: v2Options.attachmentId,
+    });
+    if (signal?.aborted) {
+      throw new DOMException("Upload aborted", "AbortError");
+    }
+    const cleanName = sanitizeFilenameV2(file.name);
+    const cleanMime = canonicalMimeTypeV2(file.type);
+    const encryptedBlob = new Blob([v2.ciphertextBytes.buffer as ArrayBuffer], {
+      type: "application/octet-stream",
+    });
+    formData.append("file", encryptedBlob, cleanName);
+    formData.append("crypto_version", String(v2.cryptoVersion));
+    formData.append("attachment_id", v2.attachmentId);
+    formData.append("filename", cleanName);
+    formData.append("content_type", cleanMime);
+    formData.append("plaintext_size_bytes", String(v2.plaintextSizeBytes));
+    formData.append("blob_aad_version", String(v2.blobAadVersion));
+    formData.append("owner_wrap_alg", v2.ownerWrapAlg);
+    formData.append("owner_key_version", String(v2.ownerKeyVersion));
+    formData.append("owner_pk_sha256", v2.ownerPkSha256Hex);
+    formData.append("cek_owner_wrapped", v2.cekOwnerWrappedB64);
+    formData.append("plaintext_sha256", v2.plaintextSha256Hex);
+    formData.append("ciphertext_sha256", v2.ciphertextSha256Hex);
+  } else {
+    // Encrypt client-side using Section 12 WASM primitive before network transit (v1 fallback)
+    const ciphertextBytes = encryptAttachmentBytes(plaintextBytes, mailboxKey);
+    if (signal?.aborted) {
+      throw new DOMException("Upload aborted", "AbortError");
+    }
+    const encryptedBlob = new Blob([ciphertextBytes.buffer as ArrayBuffer], { type: "application/octet-stream" });
+    formData.append("file", encryptedBlob, file.name);
+  }
   if (messageId) {
     formData.append("message_id", messageId);
+  }
+
+  const headers: Record<string, string> = { "X-BYOS-Client": "webmail" };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  const activeMb = mailboxId || currentActiveMailboxId;
+  if (activeMb) {
+    headers["X-BYOS-Active-Mailbox"] = activeMb;
   }
 
   const response = await fetch(`${apiBase()}/v1/mailboxes/${mailboxId}/attachments`, {
     method: "POST",
     credentials: "include",
+    headers,
     body: formData,
     signal,
   });
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
-    throw new Error(errorText || `Failed to upload attachment: status ${response.status}`);
+    const err = new Error(errorText || `Failed to upload attachment: status ${response.status}`) as Error & {
+      status?: number;
+    };
+    err.status = response.status;
+    throw err;
   }
 
   return (await response.json()) as AttachmentItem;
@@ -973,16 +1094,46 @@ export async function downloadAndDecryptAttachment(
   attachmentId: string,
   mailboxKey: Uint8Array,
   token?: string,
+  attachmentMeta?: Partial<AttachmentItem>,
 ): Promise<Blob> {
+  let meta = attachmentMeta;
+  if (!meta) {
+    try {
+      meta = await fetchAttachmentMetadata(mailboxId, attachmentId, token);
+    } catch {
+      meta = undefined;
+    }
+  }
+
   const encryptedBlob = await downloadAttachment(mailboxId, attachmentId, token);
   const encryptedBytes = new Uint8Array(await encryptedBlob.arrayBuffer());
 
-  // Decrypt client-side using Section 12 WASM primitive.
+  if (meta?.crypto_version === 2 && meta.cek_owner_wrapped) {
+    const decryptedBytes = await decryptAttachmentV2({
+      ciphertextBytes: encryptedBytes,
+      mailboxId,
+      attachmentId,
+      mailboxSkBytes: mailboxKey,
+      cekOwnerWrappedB64: meta.cek_owner_wrapped,
+      ownerKeyVersion: meta.owner_key_version || 1,
+      expectedPlaintextSha256Hex: meta.plaintext_sha256,
+      expectedSizeBytes: meta.size_bytes,
+      cryptoVersion: meta.crypto_version,
+      blobAadVersion: meta.blob_aad_version || 2,
+    });
+    return new Blob([decryptedBytes.slice().buffer as ArrayBuffer], {
+      type: meta.content_type || encryptedBlob.type || "application/octet-stream",
+    });
+  }
+
+  // Decrypt client-side using Section 12 WASM primitive (v1 fallback).
   // slice() copies into an exact-size ArrayBuffer-backed view so the Blob
   // can never alias bytes outside the decrypted range.
   const decryptedBytes = decryptAttachmentBytes(encryptedBytes, mailboxKey);
 
-  return new Blob([decryptedBytes.slice().buffer as ArrayBuffer], { type: encryptedBlob.type });
+  return new Blob([decryptedBytes.slice().buffer as ArrayBuffer], {
+    type: meta?.content_type || encryptedBlob.type,
+  });
 }
 
 export async function deleteAttachment(mailboxId: string, attachmentId: string): Promise<void> {
@@ -1021,11 +1172,16 @@ export async function prepareOutbound(mailboxId: string, token?: string): Promis
   }, token);
 }
 
-export async function fetchOutboundPubkey(token?: string): Promise<string> {
+export async function fetchOutboundPubkeyDetail(token?: string): Promise<OutboundPubkeyResponse> {
   const res = await apiRequest<OutboundPubkeyResponse>("/v1/outbound/pubkey", undefined, token);
   if (!res.outbound_delivery_pk) {
     throw new Error("Outbound delivery key is not configured");
   }
+  return res;
+}
+
+export async function fetchOutboundPubkey(token?: string): Promise<string> {
+  const res = await fetchOutboundPubkeyDetail(token);
   return res.outbound_delivery_pk;
 }
 
@@ -2415,8 +2571,36 @@ export async function apiRequestWithHeaders<T>(
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
-    const error = new Error(errorText || `API error ${response.status}`) as Error & { status: number };
+    let errorCode: string | undefined;
+    try {
+      const parsed = JSON.parse(errorText);
+      errorCode = parsed?.error || parsed?.code;
+    } catch {}
+
+    const error = new Error(errorText || `API error ${response.status}`) as Error & {
+      status: number;
+      code?: string;
+      retryAfter?: number;
+      headers?: Headers;
+    };
     error.status = response.status;
+    if (errorCode) {
+      error.code = errorCode;
+    }
+    const retryAfterHeader = response.headers?.get ? response.headers.get("Retry-After") : undefined;
+    if (retryAfterHeader) {
+      const parsedSec = parseInt(retryAfterHeader, 10);
+      if (!isNaN(parsedSec) && parsedSec >= 0) {
+        error.retryAfter = parsedSec;
+      } else {
+        const parsedDate = Date.parse(retryAfterHeader);
+        if (!isNaN(parsedDate)) {
+          const diffMs = parsedDate - Date.now();
+          error.retryAfter = Math.max(0, Math.ceil(diffMs / 1000));
+        }
+      }
+    }
+    error.headers = response.headers;
     throw error;
   }
 

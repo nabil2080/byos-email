@@ -380,6 +380,8 @@ func main() {
 	http.HandleFunc("/v1/outbound/schedule-path-a", withSecurityHeaders(withCORS(outboundSchedulePathAHandler)))
 	http.HandleFunc("/v1/outbound/send-internal", withSecurityHeaders(withCORS(internalSendHandler)))
 	http.HandleFunc("/v1/internal/scheduled/complete", scheduledCompleteHandler)
+	http.HandleFunc("GET /v1/internal/outbound/{delivery_id}/attachments", internalOutboundAttachmentsHandler)
+	http.HandleFunc("GET /v1/internal/outbound/{delivery_id}/attachments/{attachment_id}/blob", internalOutboundAttachmentBlobHandler)
 
 	http.HandleFunc("/v1/bridge/authenticate", withSecurityHeaders(withCORS(bridgeAuthenticateHandler)))
 	http.HandleFunc("/v1/bridge/messages", withSecurityHeaders(withCORS(bridgeMessagesHandler)))

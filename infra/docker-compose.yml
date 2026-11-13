@@ -71,6 +71,7 @@ services:
       POSTFIX_non_smtpd_milters: ""
       POSTFIX_milter_default_action: accept
       POSTFIX_milter_protocol: "6"
+      POSTFIX_message_size_limit: "52428800"
     ports:
       - "127.0.0.1:2525:587"
     volumes:

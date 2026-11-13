@@ -16,9 +16,12 @@ import (
 
 func requirePostgres(t *testing.T) {
 	t.Helper()
-	c, err := net.DialTimeout("tcp", "127.0.0.1:5432", 2*time.Second)
+	// Dial the disposable test database on port 55432, NOT the active
+	// development database on 5432. Tests that need a live database must
+	// be run with TEST_DATABASE_URL pointing at the disposable instance.
+	c, err := net.DialTimeout("tcp", "127.0.0.1:55432", 2*time.Second)
 	if err != nil {
-		t.Skipf("postgres unavailable: %v", err)
+		t.Skipf("disposable postgres unavailable on 55432: %v", err)
 	}
 	c.Close()
 }

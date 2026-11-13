@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -34,8 +35,85 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func loadDraftAttachmentIDs(ctx context.Context, conn *pgx.Conn, draftID, mailboxID string) []string {
+	if !hasPublicTable(ctx, conn, "draft_attachments") {
+		return nil
+	}
+	rows, err := conn.Query(ctx, `
+		SELECT attachment_id::text
+		FROM draft_attachments
+		WHERE draft_id = $1 AND mailbox_id = $2
+		ORDER BY position ASC
+	`, draftID, mailboxID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func syncDraftAttachments(ctx context.Context, conn *pgx.Conn, draftID, mailboxID string, rawIDs []string) ([]string, int, string) {
+	if rawIDs == nil {
+		return loadDraftAttachmentIDs(ctx, conn, draftID, mailboxID), 0, ""
+	}
+	if !hasPublicTable(ctx, conn, "draft_attachments") {
+		return nil, 0, ""
+	}
+	seen := make(map[string]bool, len(rawIDs))
+	cleanIDs := make([]string, 0, len(rawIDs))
+	for _, raw := range rawIDs {
+		parsed, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			return nil, http.StatusBadRequest, "invalid attachment_id UUID"
+		}
+		canon := parsed.String()
+		if !seen[canon] {
+			seen[canon] = true
+			cleanIDs = append(cleanIDs, canon)
+		}
+	}
+	if len(cleanIDs) > 100 {
+		return nil, http.StatusBadRequest, "too many draft attachments"
+	}
+	if len(cleanIDs) > 0 {
+		var ownedCount int
+		if err := conn.QueryRow(ctx, `
+			SELECT COUNT(*) FROM attachments WHERE id = ANY($1) AND mailbox_id = $2
+		`, cleanIDs, mailboxID).Scan(&ownedCount); err != nil || ownedCount != len(cleanIDs) {
+			return nil, http.StatusBadRequest, "draft attachment not found or not owned by mailbox"
+		}
+	}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, "failed to sync draft attachments"
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM draft_attachments WHERE draft_id=$1 AND mailbox_id=$2`, draftID, mailboxID); err != nil {
+		return nil, http.StatusInternalServerError, "failed to clear draft attachments"
+	}
+	for pos, aid := range cleanIDs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO draft_attachments (draft_id, attachment_id, mailbox_id, position, disposition)
+			VALUES ($1, $2, $3, $4, 'attachment')
+		`, draftID, aid, mailboxID, pos); err != nil {
+			return nil, http.StatusInternalServerError, fmt.Sprintf("failed to link draft attachment: %v", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, http.StatusInternalServerError, "failed to commit draft attachments"
+	}
+	return cleanIDs, 0, ""
+}
+
 // draftResponse is the JSON shape for single-draft responses and list items.
-func draftResponse(id, mailboxID, subject, recipient string, envelope []byte, version int, sendFailed bool, createdAt, updatedAt time.Time, folder string, folderID *string) map[string]interface{} {
+func draftResponse(id, mailboxID, subject, recipient string, envelope []byte, version int, sendFailed bool, createdAt, updatedAt time.Time, folder string, folderID *string, attachmentIDs ...string) map[string]interface{} {
 	resp := map[string]interface{}{
 		"id":                 id,
 		"mailbox_id":         mailboxID,
@@ -50,6 +128,9 @@ func draftResponse(id, mailboxID, subject, recipient string, envelope []byte, ve
 	}
 	if folderID != nil {
 		resp["folder_id"] = *folderID
+	}
+	if len(attachmentIDs) > 0 {
+		resp["attachment_ids"] = attachmentIDs
 	}
 	return resp
 }
@@ -136,8 +217,9 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "draft not found", http.StatusNotFound)
 			return
 		}
+		attIDs := loadDraftAttachmentIDs(ctx, conn, id, mailboxID)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, sendFailed, createdAt, updatedAt, folder, folderID))
+		json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, sendFailed, createdAt, updatedAt, folder, folderID, attIDs...))
 		return
 	}
 
@@ -157,7 +239,8 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer rows.Close()
-		drafts := []map[string]interface{}{}
+		draftIDs := make([]map[string]interface{}, 0)
+		var draftRawIDs []string
 		for rows.Next() {
 			var id, subject, recipient, folder string
 			var folderID *string
@@ -168,10 +251,35 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 			if err := rows.Scan(&id, &subject, &recipient, &envelope, &version, &sendFailed, &createdAt, &updatedAt, &folder, &folderID); err != nil {
 				continue
 			}
-			drafts = append(drafts, draftResponse(id, mailboxID, subject, recipient, envelope, version, sendFailed, createdAt, updatedAt, folder, folderID))
+			draftRawIDs = append(draftRawIDs, id)
+			draftIDs = append(draftIDs, draftResponse(id, mailboxID, subject, recipient, envelope, version, sendFailed, createdAt, updatedAt, folder, folderID))
+		}
+		rows.Close()
+		if len(draftRawIDs) > 0 && hasPublicTable(ctx, conn, "draft_attachments") {
+			attMap := make(map[string][]string)
+			aRows, aErr := conn.Query(ctx, `
+				SELECT draft_id::text, attachment_id::text
+				FROM draft_attachments
+				WHERE mailbox_id = $1 AND draft_id = ANY($2)
+				ORDER BY position ASC
+			`, mailboxID, draftRawIDs)
+			if aErr == nil {
+				for aRows.Next() {
+					var did, aid string
+					if aRows.Scan(&did, &aid) == nil {
+						attMap[did] = append(attMap[did], aid)
+					}
+				}
+				aRows.Close()
+			}
+			for _, d := range draftIDs {
+				if did, _ := d["id"].(string); len(attMap[did]) > 0 {
+					d["attachment_ids"] = attMap[did]
+				}
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"drafts": drafts})
+		json.NewEncoder(w).Encode(map[string]interface{}{"drafts": draftIDs})
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -180,10 +288,11 @@ func draftsHandler(w http.ResponseWriter, r *http.Request) {
 func draftUpdateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, ctx context.Context, mailboxID, userID, draftID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req struct {
-		Subject           string `json:"subject"`
-		Recipient         string `json:"recipient"`
-		EncryptedEnvelope string `json:"encrypted_envelope"`
-		Version           int    `json:"version"`
+		Subject           string   `json:"subject"`
+		Recipient         string   `json:"recipient"`
+		EncryptedEnvelope string   `json:"encrypted_envelope"`
+		Version           int      `json:"version"`
+		AttachmentIDs     []string `json:"attachment_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -239,6 +348,11 @@ func draftUpdateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 		http.Error(w, "failed to update draft", http.StatusInternalServerError)
 		return
 	}
+	attIDs, attStatus, attErrMsg := syncDraftAttachments(ctx, conn, draftID, mailboxID, req.AttachmentIDs)
+	if attStatus != 0 {
+		http.Error(w, attErrMsg, attStatus)
+		return
+	}
 	var orgID string
 	_ = conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&orgID)
 	auditLog(ctx, conn, orgID, userID, "draft_update", "draft", draftID, map[string]interface{}{"mailbox_id": mailboxID, "version": version})
@@ -250,7 +364,7 @@ func draftUpdateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 		UnreadDelta: 0,
 	})
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, false, createdAt, updatedAt, folder, folderID))
+	json.NewEncoder(w).Encode(draftResponse(id, mailboxID, subject, recipient, envelope, version, false, createdAt, updatedAt, folder, folderID, attIDs...))
 }
 
 func draftDeleteHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, ctx context.Context, mailboxID, userID, draftID string) {
@@ -280,9 +394,10 @@ func draftDeleteHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 func draftCreateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, ctx context.Context, mailboxID, userID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req struct {
-		Subject           string `json:"subject"`
-		Recipient         string `json:"recipient"`
-		EncryptedEnvelope string `json:"encrypted_envelope"`
+		Subject           string   `json:"subject"`
+		Recipient         string   `json:"recipient"`
+		EncryptedEnvelope string   `json:"encrypted_envelope"`
+		AttachmentIDs     []string `json:"attachment_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -322,6 +437,12 @@ func draftCreateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 		http.Error(w, "failed to save draft", http.StatusInternalServerError)
 		return
 	}
+	attIDs, attStatus, attErrMsg := syncDraftAttachments(ctx, conn, draftID, mailboxID, req.AttachmentIDs)
+	if attStatus != 0 {
+		_, _ = conn.Exec(ctx, `DELETE FROM drafts WHERE id=$1 AND mailbox_id=$2`, draftID, mailboxID)
+		http.Error(w, attErrMsg, attStatus)
+		return
+	}
 	auditLog(ctx, conn, orgID, userID, "draft_create", "draft", draftID, map[string]interface{}{"mailbox_id": mailboxID})
 	publishMailboxEvent(ctx, MailboxEvent{
 		Type:        "message.created",
@@ -332,5 +453,5 @@ func draftCreateHandler(w http.ResponseWriter, r *http.Request, conn *pgx.Conn, 
 	})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(draftResponse(draftID, mailboxID, subject, recipient, envelope, 1, false, createdAt, updatedAt, "drafts", nil))
+	json.NewEncoder(w).Encode(draftResponse(draftID, mailboxID, subject, recipient, envelope, 1, false, createdAt, updatedAt, "drafts", nil, attIDs...))
 }

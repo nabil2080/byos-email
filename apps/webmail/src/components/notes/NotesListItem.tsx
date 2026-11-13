@@ -65,9 +65,13 @@ export const NotesListItem: Component<NotesListItemProps> = (props) => {
     return { done, total };
   };
 
+  const colorTheme = () => {
+    if (!props.note.color || props.note.color === "default") return null;
+    return NOTE_COLORS.find((c) => c.id === props.note.color) || null;
+  };
+
   const getColorBorder = () => {
-    if (!props.note.color || props.note.color === "default") return "";
-    const found = NOTE_COLORS.find((c) => c.id === props.note.color);
+    const found = colorTheme();
     return found ? found.borderLight : "";
   };
 
@@ -87,6 +91,8 @@ export const NotesListItem: Component<NotesListItemProps> = (props) => {
       class={`group relative w-full text-left p-3.5 transition-all duration-150 cursor-pointer select-none border-b border-[#E2DFD8]/60 dark:border-[#2E3138]/60 focus:outline-none ${
         props.isSelected
           ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-l-4 border-l-[#9E725F] dark:border-l-[#D4A38F]"
+          : colorTheme()
+          ? `${colorTheme()!.lightBg} ${colorTheme()!.darkBg} hover:opacity-95 border-l-4 border-l-transparent`
           : "bg-white dark:bg-[#1E2025] hover:bg-[#F9F7F2] dark:hover:bg-[#26282E] border-l-4 border-l-transparent"
       }`}
     >
@@ -109,9 +115,14 @@ export const NotesListItem: Component<NotesListItemProps> = (props) => {
               title="Pinned note"
               class="text-[#9E725F] dark:text-[#D4A38F] flex items-center"
             >
-              <svg class="w-3.5 h-3.5 stroke-current fill-current" viewBox="0 0 24 24">
-                <path d="M16 3l1 1-4 4 3 3-2 2-3-3-4 4-2-2 4-4-3-3 2-2 3 3 4-4z" />
-                <path d="M4 20l4-4" stroke-width="2" stroke-linecap="round" />
+              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
+                <line x1="12" y1="17" x2="12" y2="22" stroke-linecap="round" />
+                <path
+                  d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  fill="currentColor"
+                />
               </svg>
             </span>
           </Show>

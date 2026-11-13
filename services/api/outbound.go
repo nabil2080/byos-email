@@ -61,18 +61,21 @@ type OutboundPrepareResponse struct {
 }
 
 type OutboundSendRequest struct {
-	ReservationID     string   `json:"reservation_id"`
-	MailboxID         string   `json:"mailbox_id"`
-	Recipient         string   `json:"recipient"`
-	EncryptedMessage  string   `json:"encrypted_message"`
-	SendTokenWrapped  string   `json:"send_token_wrapped"`
-	OutboxSeq         int64    `json:"outbox_seq"`
-	EncryptionVersion int      `json:"encryption_version"`
-	AADVersion        int      `json:"aad_version"`
-	EncryptionIV      string   `json:"encryption_iv"`
-	AttachmentIDs     []string `json:"attachment_ids,omitempty"`
-	AliasID           string   `json:"alias_id,omitempty"`
-	ClientQueueID     *string  `json:"client_queue_id,omitempty"`
+	ReservationID     string                         `json:"reservation_id"`
+	MailboxID         string                         `json:"mailbox_id"`
+	Recipient         string                         `json:"recipient"`
+	EncryptedMessage  string                         `json:"encrypted_message"`
+	SendTokenWrapped  string                         `json:"send_token_wrapped"`
+	OutboxSeq         int64                          `json:"outbox_seq"`
+	EncryptionVersion int                            `json:"encryption_version"`
+	AADVersion        int                            `json:"aad_version"`
+	EncryptionIV      string                         `json:"encryption_iv"`
+	AttachmentIDs     []string                       `json:"attachment_ids,omitempty"`
+	Attachments       []OutboundAttachmentGrantInput `json:"attachments,omitempty"`
+	SendTokenKeyEpoch int                            `json:"send_token_key_epoch,omitempty"`
+	SendTokenKeyID    string                         `json:"send_token_key_id,omitempty"`
+	AliasID           string                         `json:"alias_id,omitempty"`
+	ClientQueueID     *string                        `json:"client_queue_id,omitempty"`
 }
 
 type OutboundSendResponse struct {
@@ -81,20 +84,23 @@ type OutboundSendResponse struct {
 }
 
 type OutboundScheduleRequest struct {
-	ReservationID     string   `json:"reservation_id"`
-	MailboxID         string   `json:"mailbox_id"`
-	Recipient         string   `json:"recipient"`
-	EncryptedMessage  string   `json:"encrypted_message"`
-	SendTokenWrapped  string   `json:"send_token_wrapped"`
-	OutboxSeq         int64    `json:"outbox_seq"`
-	EncryptionVersion int      `json:"encryption_version"`
-	AADVersion        int      `json:"aad_version"`
-	EncryptionIV      string   `json:"encryption_iv"`
-	ScheduledAt       string   `json:"scheduled_at"`
-	AttachmentIDs     []string `json:"attachment_ids,omitempty"`
-	DraftEnvelope     string   `json:"draft_envelope,omitempty"`
-	DraftStorageRef   string   `json:"draft_storage_ref,omitempty"`
-	Subject           string   `json:"subject,omitempty"`
+	ReservationID     string                         `json:"reservation_id"`
+	MailboxID         string                         `json:"mailbox_id"`
+	Recipient         string                         `json:"recipient"`
+	EncryptedMessage  string                         `json:"encrypted_message"`
+	SendTokenWrapped  string                         `json:"send_token_wrapped"`
+	OutboxSeq         int64                          `json:"outbox_seq"`
+	EncryptionVersion int                            `json:"encryption_version"`
+	AADVersion        int                            `json:"aad_version"`
+	EncryptionIV      string                         `json:"encryption_iv"`
+	ScheduledAt       string                         `json:"scheduled_at"`
+	AttachmentIDs     []string                       `json:"attachment_ids,omitempty"`
+	Attachments       []OutboundAttachmentGrantInput `json:"attachments,omitempty"`
+	SendTokenKeyEpoch int                            `json:"send_token_key_epoch,omitempty"`
+	SendTokenKeyID    string                         `json:"send_token_key_id,omitempty"`
+	DraftEnvelope     string                         `json:"draft_envelope,omitempty"`
+	DraftStorageRef   string                         `json:"draft_storage_ref,omitempty"`
+	Subject           string                         `json:"subject,omitempty"`
 }
 
 type OutboundScheduleResponse struct {
@@ -135,13 +141,21 @@ func outboundPubkeyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	pk := getOutboundDeliveryPK()
-	if pk == "" {
+	var conn *pgx.Conn
+	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+		if c, err := pgx.Connect(r.Context(), dsn); err == nil {
+			conn = c
+			defer conn.Close(r.Context())
+		}
+	}
+	resp, _, err := loadActiveOutboundKeyInfo(r.Context(), conn)
+	if err != nil || resp.OutboundDeliveryPK == "" {
 		http.Error(w, "outbound public key not configured", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(OutboundPubkeyResponse{OutboundDeliveryPK: pk})
+	w.Header().Set("Cache-Control", "public, max-age=300, must-revalidate")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func outboundPrepareHandler(w http.ResponseWriter, r *http.Request) {
@@ -492,13 +506,47 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to queue message", http.StatusInternalServerError)
 		return
 	}
-	if len(req.AttachmentIDs) > 0 {
-		// Note: attachments.message_id stores the outbound
-		// delivery_id (text column, see 020_attachments.sql). There is no
-		// separate delivery_id column by design for V1; keep the identifier
-		// consistent between send and schedule paths. Validate UUID shape,
-		// scope to the same mailbox, and only link currently-unlinked rows
-		// so one message cannot hijack another message's attachments.
+	if hasAttachmentV2Schema(ctx, conn) && hasOutboundDeliveryAttachmentsTable(ctx, conn) {
+		attCount, epoch, keyID, errStatus, errBody, attErr := validateAndPersistOutboundAttachmentsTx(
+			ctx, tx, conn, req.MailboxID, deliveryID, resSeq, req.Attachments, req.AttachmentIDs,
+		)
+		if attErr != nil {
+			_ = tx.Rollback(ctx)
+			if errStatus == http.StatusConflict || errStatus == http.StatusUnprocessableEntity || errStatus == http.StatusRequestEntityTooLarge || (len(errBody) > 0 && errBody[0] == '{') {
+				w.Header().Set("Content-Type", "application/json")
+			}
+			w.WriteHeader(errStatus)
+			_, _ = w.Write(errBody)
+			return
+		}
+		stEpoch := req.SendTokenKeyEpoch
+		if stEpoch <= 0 {
+			stEpoch = epoch
+		}
+		stKeyID := strings.TrimSpace(req.SendTokenKeyID)
+		if stKeyID == "" {
+			stKeyID = keyID
+		}
+		var stKeyIDPtr *string
+		if stKeyID != "" {
+			stKeyIDPtr = &stKeyID
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE outbound_queue
+			SET attachment_count = $1,
+			    send_token_key_epoch = $2,
+			    send_token_key_id = $3
+			WHERE delivery_id = $4
+		`, attCount, stEpoch, stKeyIDPtr, deliveryID); err != nil {
+			_ = tx.Rollback(ctx)
+			http.Error(w, "failed to record attachment delivery metadata", http.StatusInternalServerError)
+			return
+		}
+	} else if len(req.Attachments) > 0 {
+		_ = tx.Rollback(ctx)
+		http.Error(w, "attachment protocol v2 schema not available", http.StatusServiceUnavailable)
+		return
+	} else if len(req.AttachmentIDs) > 0 {
 		uniqueIDsMap := make(map[string]bool)
 		uniqueIDs := []string{}
 		for _, id := range req.AttachmentIDs {
@@ -513,10 +561,6 @@ func outboundSendHandler(w http.ResponseWriter, r *http.Request) {
 				uniqueIDs = append(uniqueIDs, canonicalID)
 			}
 		}
-		// BUG-002: check the link result before consuming the reservation.
-		// A short count means an ID is unknown, belongs to another mailbox,
-		// or is already linked elsewhere; fail loud instead of queuing a
-		// message whose attachments silently stayed unlinked.
 		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, uniqueIDs, req.MailboxID)
 		if linkErr != nil {
 			_ = tx.Rollback(ctx)
@@ -665,6 +709,9 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		AADVersion:        req.AADVersion,
 		EncryptionIV:      req.EncryptionIV,
 		AttachmentIDs:     req.AttachmentIDs,
+		Attachments:       req.Attachments,
+		SendTokenKeyEpoch: req.SendTokenKeyEpoch,
+		SendTokenKeyID:    req.SendTokenKeyID,
 	}
 	encryptedMsg, sendTokenBytes, encIV, errMsg, errStatus := validateOutboundEnvelope(sendReq)
 	if errStatus != 0 {
@@ -819,10 +866,47 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[SCHEDULE_STEP] step=db_insert row_id=%s object_key=%s result=ok", rowID, objectKey)
-	// Propagate attachment IDs on the schedule path, mirroring the
-	// send handler. Uses the same delivery_id-as-message_id convention (see
-	// note above) so scheduled messages list attachments consistently.
-	if len(req.AttachmentIDs) > 0 {
+	if hasAttachmentV2Schema(ctx, conn) && hasOutboundDeliveryAttachmentsTable(ctx, conn) {
+		attCount, epoch, keyID, errStatus, errBody, attErr := validateAndPersistOutboundAttachmentsTx(
+			ctx, tx, conn, req.MailboxID, deliveryID, resSeq, req.Attachments, req.AttachmentIDs,
+		)
+		if attErr != nil {
+			_ = tx.Rollback(ctx)
+			if len(errBody) > 0 && errBody[0] == '{' {
+				w.Header().Set("Content-Type", "application/json")
+			}
+			w.WriteHeader(errStatus)
+			_, _ = w.Write(errBody)
+			return
+		}
+		stEpoch := req.SendTokenKeyEpoch
+		if stEpoch <= 0 {
+			stEpoch = epoch
+		}
+		stKeyID := strings.TrimSpace(req.SendTokenKeyID)
+		if stKeyID == "" {
+			stKeyID = keyID
+		}
+		var stKeyIDPtr *string
+		if stKeyID != "" {
+			stKeyIDPtr = &stKeyID
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE scheduled_messages
+			SET attachment_count = $1,
+			    send_token_key_epoch = $2,
+			    send_token_key_id = $3
+			WHERE id = $4
+		`, attCount, stEpoch, stKeyIDPtr, rowID); err != nil {
+			_ = tx.Rollback(ctx)
+			http.Error(w, "failed to record scheduled attachment metadata", http.StatusInternalServerError)
+			return
+		}
+	} else if len(req.Attachments) > 0 {
+		_ = tx.Rollback(ctx)
+		http.Error(w, "attachment protocol v2 schema not available", http.StatusServiceUnavailable)
+		return
+	} else if len(req.AttachmentIDs) > 0 {
 		uniqueIDsMap := make(map[string]bool)
 		uniqueIDs := []string{}
 		for _, id := range req.AttachmentIDs {
@@ -837,7 +921,6 @@ func outboundScheduleHandler(w http.ResponseWriter, r *http.Request) {
 				uniqueIDs = append(uniqueIDs, canonicalID)
 			}
 		}
-		// BUG-002: same strict link check as the send handler (see above).
 		linkRes, linkErr := tx.Exec(ctx, `UPDATE attachments SET message_id = $1 WHERE id = ANY($2) AND mailbox_id = $3 AND message_id IS NULL`, deliveryID, uniqueIDs, req.MailboxID)
 		if linkErr != nil {
 			_ = tx.Rollback(ctx)
@@ -932,6 +1015,10 @@ func outboundScheduledCancelHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "scheduled message not found or not pending", http.StatusNotFound)
 		return
 	}
+	if hasOutboundDeliveryAttachmentsTable(ctx, conn) {
+		_, _ = conn.Exec(ctx, `DELETE FROM outbound_delivery_attachments WHERE delivery_id=$1`, req.DeliveryID)
+	}
+	_, _ = conn.Exec(ctx, `UPDATE attachments SET message_id = NULL WHERE message_id=$1`, req.DeliveryID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(OutboundScheduledCancelResponse{DeliveryID: req.DeliveryID, Status: "cancelled"})
 }
@@ -1276,13 +1363,13 @@ func mailboxScheduledCancelHandler(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 
 	var subj, rcpt, draftRef string
-	var resID *string
+	var deliveryIDPtr, resID *string
 	err = tx.QueryRow(ctx, `
-		SELECT COALESCE(subject, ''), recipient, COALESCE(draft_storage_ref, ''), reservation_id::text
+		SELECT COALESCE(subject, ''), recipient, COALESCE(draft_storage_ref, ''), delivery_id::text, reservation_id::text
 		FROM scheduled_messages
 		WHERE id=$1 AND mailbox_id=$2 AND status='pending'
 		FOR UPDATE
-	`, schedID, mailboxID).Scan(&subj, &rcpt, &draftRef, &resID)
+	`, schedID, mailboxID).Scan(&subj, &rcpt, &draftRef, &deliveryIDPtr, &resID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			log.Printf("[SCHEDULE_CANCEL] requested_id=%s mailbox_id=%s status=not_found found=false", schedID, mailboxID)
@@ -1299,21 +1386,39 @@ func mailboxScheduledCancelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Expire reservation if applicable
+	// Expire reservation if applicable and revoke outbound attachment grants
 	if resID != nil && *resID != "" {
 		_, _ = tx.Exec(ctx, `UPDATE outbound_reservations SET status='expired' WHERE reservation_id=$1`, *resID)
 	}
-
 	draftID := uuid.New().String()
+	draftCreated := false
 	// Retrieve encrypted envelope from customer storage and copy into drafts
 	if draftRef != "" && strings.HasPrefix(draftRef, "mailboxes/") {
 		envBytes, retErr := retrieveScheduledDraftEnvelope(ctx, mailboxID, draftRef)
 		if retErr == nil && len(envBytes) > 0 {
-			_, _ = tx.Exec(ctx, `
+			if _, dErr := tx.Exec(ctx, `
 				INSERT INTO drafts (id, mailbox_id, subject, recipient, encrypted_envelope, version, created_at, updated_at)
 				VALUES ($1, $2, $3, $4, $5, 1, now(), now())
-			`, draftID, mailboxID, subj, rcpt, envBytes)
+			`, draftID, mailboxID, subj, rcpt, envBytes); dErr == nil {
+				draftCreated = true
+			}
 		}
+	}
+
+	if deliveryIDPtr != nil && *deliveryIDPtr != "" {
+		if draftCreated && hasPublicTable(ctx, tx, "draft_attachments") && hasPublicTable(ctx, tx, "outbound_delivery_attachments") {
+			_, _ = tx.Exec(ctx, `
+				INSERT INTO draft_attachments (draft_id, attachment_id, mailbox_id, position, disposition, content_id)
+				SELECT $1, attachment_id, mailbox_id, position, disposition, content_id
+				FROM outbound_delivery_attachments
+				WHERE delivery_id = $2 AND mailbox_id = $3
+				ON CONFLICT (draft_id, attachment_id) DO NOTHING
+			`, draftID, *deliveryIDPtr, mailboxID)
+		}
+		if hasPublicTable(ctx, tx, "outbound_delivery_attachments") {
+			_, _ = tx.Exec(ctx, `DELETE FROM outbound_delivery_attachments WHERE delivery_id=$1`, *deliveryIDPtr)
+		}
+		_, _ = tx.Exec(ctx, `UPDATE attachments SET message_id = NULL WHERE message_id=$1 AND mailbox_id=$2`, *deliveryIDPtr, mailboxID)
 	}
 
 	if err := tx.Commit(ctx); err != nil {

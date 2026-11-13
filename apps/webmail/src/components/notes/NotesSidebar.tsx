@@ -78,7 +78,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
   return (
     <aside
       data-testid="notes-sidebar"
-      class={`w-full md:w-60 md:min-w-[240px] md:max-w-[240px] flex-shrink-0 bg-[#F0EEE9] dark:bg-[#18191D] flex flex-col justify-between select-none h-full relative ${
+      class={`w-full md:w-64 md:min-w-[256px] md:max-w-[256px] flex-shrink-0 bg-[#F0EEE9] dark:bg-[#18191D] flex flex-col justify-between select-none h-full relative ${
         props.class || ""
       }`}
     >
@@ -134,7 +134,7 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
         />
 
         {/* ── Prominent Refined "+ New Note" Action Button ── */}
-        <div class="pt-1">
+        <div class="space-y-1.5">
           <button
             type="button"
             onClick={() => {
@@ -142,13 +142,16 @@ export const NotesSidebar: Component<NotesSidebarProps> = (props) => {
               props.onCloseMobile?.();
             }}
             data-testid="notes-new-note-btn"
-            class="w-full py-2.5 px-4 bg-[#9E725F] hover:bg-[#865E4D] text-white rounded-xl font-semibold text-xs tracking-wide transition-all shadow-2xs hover:shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-[0.99] border border-[#865E4D]/20 focus:outline-none focus:ring-2 focus:ring-[#9E725F]/40"
+            class="w-full bg-gradient-to-b from-[#A27561] via-[#986A57] to-[#8E6351] hover:from-[#966855] hover:to-[#825746] text-white text-[13px] tracking-wide font-semibold py-2.5 px-4 min-h-[44px] h-[44px] rounded-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_2px_4px_rgba(162,117,97,0.25)] hover:shadow-[inset_0_1px_1px_rgba(255,255,255,0.35),0_3px_8px_rgba(162,117,97,0.3)] transition-all duration-150 flex items-center justify-between cursor-pointer active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/40"
           >
-            <svg class="w-4 h-4 stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-            <span>New Note</span>
+            <div class="flex items-center gap-2">
+              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              <span>New Note</span>
+            </div>
+            <kbd class="hidden sm:inline-block text-xs font-mono text-white/80 bg-black/20 px-1.5 py-0.5 rounded border border-white/15 leading-none">N</kbd>
           </button>
         </div>
       </div>

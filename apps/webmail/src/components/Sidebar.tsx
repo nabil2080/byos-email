@@ -411,7 +411,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
               props.onCompose();
               props.onCloseMobile?.();
             }}
-            class="w-full bg-gradient-to-b from-[#A27561] via-[#986A57] to-[#8E6351] hover:from-[#966855] hover:to-[#825746] text-white text-[13px] tracking-wide font-semibold py-2.5 px-4 min-h-[44px] rounded-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_2px_4px_rgba(162,117,97,0.25)] hover:shadow-[inset_0_1px_1px_rgba(255,255,255,0.35),0_3px_8px_rgba(162,117,97,0.3)] transition-all duration-150 flex items-center justify-between cursor-pointer active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/40"
+            class="w-full bg-gradient-to-b from-[#A27561] via-[#986A57] to-[#8E6351] hover:from-[#966855] hover:to-[#825746] text-white text-[13px] tracking-wide font-semibold py-2.5 px-4 min-h-[44px] h-[44px] rounded-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_2px_4px_rgba(162,117,97,0.25)] hover:shadow-[inset_0_1px_1px_rgba(255,255,255,0.35),0_3px_8px_rgba(162,117,97,0.3)] transition-all duration-150 flex items-center justify-between cursor-pointer active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-[#9E725F]/40"
           >
             <div class="flex items-center gap-2">
               <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24">

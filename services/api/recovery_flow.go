@@ -396,6 +396,10 @@ func recoveryFlowResetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 					    wrapped_sk_user = $1,
 					    mailbox_sk_wrapped = $2,
 					    mailbox_pk = $3,
+					    mailbox_sk_version = CASE
+					        WHEN mailbox_pk IS DISTINCT FROM $3 THEN COALESCE(mailbox_sk_version, 1) + 1
+					        ELSE COALESCE(mailbox_sk_version, 1)
+					    END,
 					    updated_at = NOW()
 					WHERE user_id = $4 AND is_active = true
 				`, newWrappedSkUser, []byte(newWrappedSkUser), pkBytes, userID)
@@ -1080,6 +1084,10 @@ func mailboxReactivateKeysFinalizeHandler(w http.ResponseWriter, r *http.Request
 			SET wrapped_sk_user = $1,
 			    mailbox_sk_wrapped = $2,
 			    mailbox_pk = $3,
+			    mailbox_sk_version = CASE
+			        WHEN mailbox_pk IS DISTINCT FROM $3 THEN COALESCE(mailbox_sk_version, 1) + 1
+			        ELSE COALESCE(mailbox_sk_version, 1)
+			    END,
 			    previous_wrapped_sk_user = NULL,
 			    previous_key_archived_at = NULL,
 			    updated_at = $4
@@ -1430,6 +1438,10 @@ func mailboxReactivateKeysHandler(w http.ResponseWriter, r *http.Request) {
 			SET wrapped_sk_user = $1,
 			    mailbox_sk_wrapped = $2,
 			    mailbox_pk = $3,
+			    mailbox_sk_version = CASE
+			        WHEN mailbox_pk IS DISTINCT FROM $3 THEN COALESCE(mailbox_sk_version, 1) + 1
+			        ELSE COALESCE(mailbox_sk_version, 1)
+			    END,
 			    previous_wrapped_sk_user = NULL,
 			    previous_key_archived_at = NULL,
 			    updated_at = $4

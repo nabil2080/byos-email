@@ -46,7 +46,17 @@ func TestAttachmentsAuthentication(t *testing.T) {
 	}
 }
 
-// TestAttachmentsAuthorization verifies org isolation and mailbox access controls.
+// TestAttachmentsAuthorization verifies the fail-closed authorization boundary.
+//
+// Security contract:
+//   - An authenticated caller MUST receive 403 for any mailbox they cannot access,
+//     regardless of whether the mailbox exists. No existence information is leaked
+//     to unauthorized callers via distinct status codes.
+//   - Unauthenticated callers receive 401 before any mailbox lookup.
+//   - An authenticated owner receives 200 for their own mailbox.
+//
+// The consistent-403 policy means nonexistent-mailbox and foreign-mailbox requests
+// from an authenticated but unauthorized caller are indistinguishable.
 func TestAttachmentsAuthorization(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -60,35 +70,59 @@ func TestAttachmentsAuthorization(t *testing.T) {
 	token1 := createTestSession(t, db, owner1ID)
 	token2 := createTestSession(t, db, owner2ID)
 
-	// 1. Nonexistent mailbox -> 404
-	fakeMailboxID := "00000000-0000-0000-0000-000000000000"
-	req := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+fakeMailboxID+"/attachments", nil)
-	req.SetPathValue("mailbox_id", fakeMailboxID)
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: token1})
+	// 1. Unauthenticated request -> 401 (no session cookie, before any DB lookup).
+	req := httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailbox1ID+"/attachments", nil)
+	req.SetPathValue("mailbox_id", mailbox1ID)
 	rec := httptest.NewRecorder()
 	attachmentsHandler(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("nonexistent mailbox status = %d, want 404", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want 401", rec.Code)
 	}
 
-	// 2. Cross-org mailbox access -> 403 Forbidden
-	req = httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailbox1ID+"/attachments", nil)
-	req.SetPathValue("mailbox_id", mailbox1ID)
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: token2})
-	rec = httptest.NewRecorder()
-	attachmentsHandler(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("cross-org access status = %d, want 403", rec.Code)
-	}
-
-	// 3. Authorized owner access -> 200 OK
+	// 2. Authenticated owner accessing their own mailbox -> 200 OK.
 	req = httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailbox1ID+"/attachments", nil)
 	req.SetPathValue("mailbox_id", mailbox1ID)
 	req.AddCookie(&http.Cookie{Name: "byos_session", Value: token1})
 	rec = httptest.NewRecorder()
 	attachmentsHandler(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("authorized GET status = %d, want 200", rec.Code)
+		t.Fatalf("authorized owner access status = %d, want 200", rec.Code)
+	}
+
+	// 3. Authenticated user (org2) attempting to access org1's mailbox -> 403.
+	//    The mailbox exists but the caller has no access to it.
+	req = httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+mailbox1ID+"/attachments", nil)
+	req.SetPathValue("mailbox_id", mailbox1ID)
+	req.AddCookie(&http.Cookie{Name: "byos_session", Value: token2})
+	rec = httptest.NewRecorder()
+	attachmentsHandler(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("foreign mailbox access status = %d, want 403", rec.Code)
+	}
+
+	// 4. Authenticated user requesting a nonexistent mailbox UUID -> also 403.
+	//    The response is identical to case 3: the caller cannot distinguish
+	//    "mailbox exists but you can't access it" from "mailbox doesn't exist".
+	fakeMailboxID := "00000000-0000-0000-0000-000000000000"
+	req = httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+fakeMailboxID+"/attachments", nil)
+	req.SetPathValue("mailbox_id", fakeMailboxID)
+	req.AddCookie(&http.Cookie{Name: "byos_session", Value: token2})
+	rec = httptest.NewRecorder()
+	attachmentsHandler(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("nonexistent mailbox (concealed) status = %d, want 403", rec.Code)
+	}
+
+	// 5. Consistent concealment: even the mailbox owner receives 403 (not 404)
+	//    for a nonexistent mailbox — there is no special owner bypass that reveals
+	//    existence to owners of other mailboxes.
+	req = httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+fakeMailboxID+"/attachments", nil)
+	req.SetPathValue("mailbox_id", fakeMailboxID)
+	req.AddCookie(&http.Cookie{Name: "byos_session", Value: token1})
+	rec = httptest.NewRecorder()
+	attachmentsHandler(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("nonexistent mailbox (owner session, concealed) status = %d, want 403", rec.Code)
 	}
 }
 

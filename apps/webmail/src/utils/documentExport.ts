@@ -514,6 +514,11 @@ export interface DocBlock {
   imageSrc?: string;
   imageWidth?: number;
   imageHeight?: number;
+  imageHref?: string;
+  imageAlt?: string;
+  imageWrap?: "inline" | "square" | "top-bottom";
+  imageRotate?: number;
+  imageCrop?: string;
 }
 
 /**
@@ -577,22 +582,80 @@ export function parseNoteToDocumentBlocks(content: string): DocBlock[] {
         }
       } else if (tagName === "img") {
         const img = el as HTMLImageElement;
+        const styleW = parseInt(img.style.width, 10);
+        const attrW = parseInt(img.getAttribute("width") || "", 10);
+        const dataW = parseInt(img.getAttribute("data-width") || "", 10);
+        const imageWidth = !isNaN(styleW) ? styleW : !isNaN(dataW) ? dataW : !isNaN(attrW) ? attrW : undefined;
+
+        const styleH = parseInt(img.style.height, 10);
+        const attrH = parseInt(img.getAttribute("height") || "", 10);
+        const dataH = parseInt(img.getAttribute("data-height") || "", 10);
+        const imageHeight = !isNaN(styleH) ? styleH : !isNaN(dataH) ? dataH : !isNaN(attrH) ? attrH : undefined;
+
+        const parentA = img.closest("a");
+        const imageHref = img.getAttribute("data-href") || parentA?.getAttribute("href") || undefined;
+        const imageAlt = img.getAttribute("alt") || undefined;
+        const imageWrap = (img.getAttribute("data-wrap") || (img.style.float ? "square" : "inline")) as any;
+        const imageCrop = img.getAttribute("data-crop") || undefined;
+        const rotVal = parseInt(img.getAttribute("data-rotate") || "", 10);
+        const imageRotate = !isNaN(rotVal) ? rotVal : undefined;
+
         blocks.push({
           type: "image",
           imageSrc: img.getAttribute("src") || "",
+          imageWidth,
+          imageHeight,
+          imageHref,
+          imageAlt,
+          imageWrap,
+          imageCrop,
+          imageRotate,
           align,
           runs: [],
         });
       } else {
-        // Look for nested images inside paragraphs or divs
+        // Look for nested images inside paragraphs, links or divs
         const nestedImgs = el.querySelectorAll("img");
-        if (nestedImgs.length > 0 && el.textContent?.trim() === "") {
+        if (nestedImgs.length > 0) {
           for (const img of Array.from(nestedImgs)) {
+            const styleW = parseInt(img.style.width, 10);
+            const dataW = parseInt(img.getAttribute("data-width") || "", 10);
+            const attrW = parseInt(img.getAttribute("width") || "", 10);
+            const imageWidth = !isNaN(styleW) ? styleW : !isNaN(dataW) ? dataW : !isNaN(attrW) ? attrW : undefined;
+
+            const styleH = parseInt(img.style.height, 10);
+            const dataH = parseInt(img.getAttribute("data-height") || "", 10);
+            const attrH = parseInt(img.getAttribute("height") || "", 10);
+            const imageHeight = !isNaN(styleH) ? styleH : !isNaN(dataH) ? dataH : !isNaN(attrH) ? attrH : undefined;
+
+            const parentA = img.closest("a") || (tagName === "a" ? el : null);
+            const imageHref = img.getAttribute("data-href") || parentA?.getAttribute("href") || undefined;
+            const imageAlt = img.getAttribute("alt") || undefined;
+            const imageWrap = (img.getAttribute("data-wrap") || (img.style.float ? "square" : "inline")) as any;
+            const imgAlign = ((img.getAttribute("data-align") || align) as "left" | "center" | "right") || "left";
+            const imageCrop = img.getAttribute("data-crop") || undefined;
+            const rotVal = parseInt(img.getAttribute("data-rotate") || "", 10);
+            const imageRotate = !isNaN(rotVal) ? rotVal : undefined;
+
             blocks.push({
               type: "image",
               imageSrc: img.getAttribute("src") || "",
-              align,
+              imageWidth,
+              imageHeight,
+              imageHref,
+              imageAlt,
+              imageWrap,
+              imageCrop,
+              imageRotate,
+              align: imgAlign,
               runs: [],
+            });
+          }
+          if (el.textContent?.trim()) {
+            blocks.push({
+              type: "paragraph",
+              align,
+              runs: parseRunsFromElement(el),
             });
           }
         } else {
@@ -656,12 +719,66 @@ export function parseNoteToDocumentBlocks(content: string): DocBlock[] {
       } else if (tag === "img") {
         const srcMatch = attrs.match(/src="([^"]+)"/i);
         if (srcMatch) {
+          const wMatch =
+            attrs.match(/width:\s*(\d+)px/i) ||
+            attrs.match(/data-width="(\d+)/i) ||
+            attrs.match(/width="(\d+)"/i);
+          const hMatch =
+            attrs.match(/height:\s*(\d+)px/i) ||
+            attrs.match(/data-height="(\d+)/i) ||
+            attrs.match(/height="(\d+)"/i);
+          const hrefMatch = attrs.match(/data-href="([^"]+)"/i);
+          const altMatch = attrs.match(/alt="([^"]+)"/i);
+          const wrapMatch = attrs.match(/data-wrap="([^"]+)"/i);
           blocks.push({
             type: "image",
             imageSrc: srcMatch[1],
+            imageWidth: wMatch ? parseInt(wMatch[1], 10) : undefined,
+            imageHeight: hMatch ? parseInt(hMatch[1], 10) : undefined,
+            imageHref: hrefMatch ? hrefMatch[1] : undefined,
+            imageAlt: altMatch ? altMatch[1] : undefined,
+            imageWrap: wrapMatch ? (wrapMatch[1] as any) : undefined,
             align,
             runs: [],
           });
+        }
+      } else if (/<img[^>]*\/?>/i.test(inner)) {
+        const imgRegex = /<img([^>]*)\/?>/gi;
+        let imgMatch: RegExpExecArray | null;
+        while ((imgMatch = imgRegex.exec(inner)) !== null) {
+          const imgAttrs = imgMatch[1] || "";
+          const srcMatch = imgAttrs.match(/src="([^"]+)"/i);
+          if (srcMatch) {
+            const wMatch =
+              imgAttrs.match(/width:\s*(\d+)px/i) ||
+              imgAttrs.match(/data-width="(\d+)/i) ||
+              imgAttrs.match(/width="(\d+)"/i);
+            const hMatch =
+              imgAttrs.match(/height:\s*(\d+)px/i) ||
+              imgAttrs.match(/data-height="(\d+)/i) ||
+              imgAttrs.match(/height="(\d+)"/i);
+            const hrefMatch =
+              imgAttrs.match(/data-href="([^"]+)"/i) ||
+              inner.match(/<a[^>]*href="([^"]+)"/i);
+            const altMatch = imgAttrs.match(/alt="([^"]+)"/i);
+            const wrapMatch = imgAttrs.match(/data-wrap="([^"]+)"/i);
+            const cropMatch = imgAttrs.match(/data-crop="([^"]+)"/i);
+            const rotMatch = imgAttrs.match(/data-rotate="(\d+)"/i);
+            const alignMatchImg = imgAttrs.match(/data-align="([^"]+)"/i);
+            blocks.push({
+              type: "image",
+              imageSrc: srcMatch[1],
+              imageWidth: wMatch ? parseInt(wMatch[1], 10) : undefined,
+              imageHeight: hMatch ? parseInt(hMatch[1], 10) : undefined,
+              imageHref: hrefMatch ? hrefMatch[1] : undefined,
+              imageAlt: altMatch ? altMatch[1] : undefined,
+              imageWrap: wrapMatch ? (wrapMatch[1] as any) : undefined,
+              imageCrop: cropMatch ? cropMatch[1] : undefined,
+              imageRotate: rotMatch ? parseInt(rotMatch[1], 10) : undefined,
+              align: (alignMatchImg ? alignMatchImg[1].toLowerCase() : align) as any,
+              runs: [],
+            });
+          }
         }
       } else if (inner.trim()) {
         const text = inner.trim();
@@ -967,6 +1084,7 @@ export async function generatePdfFromNote(
   const printableWidth = pageWidth - marginX * 2; // ~487.28 pt
 
   let currentPageStream = "";
+  let currentPageAnnots: string[] = [];
   let y = pageHeight - 60; // 781.89
   let pageNum = 0;
 
@@ -978,11 +1096,14 @@ export async function generatePdfFromNote(
       `<< /Length ${streamBytes.length} >>`,
       streamBytes
     );
+    const annotsStr =
+      currentPageAnnots.length > 0 ? `/Annots [ ${currentPageAnnots.join(" ")} ]` : "";
     const pageObjIdx = addObject(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Contents ${contentObjIdx} 0 R /Resources << /Font << /F1 ${fHelvetica} 0 R /F2 ${fHelveticaBold} 0 R /F3 ${fHelveticaOblique} 0 R /F4 ${fTimes} 0 R /F5 ${fCourier} 0 R >> ${xObjectResDict} >> >>`
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Contents ${contentObjIdx} 0 R /Resources << /Font << /F1 ${fHelvetica} 0 R /F2 ${fHelveticaBold} 0 R /F3 ${fHelveticaOblique} 0 R /F4 ${fTimes} 0 R /F5 ${fCourier} 0 R >> ${xObjectResDict} >> ${annotsStr} >>`
     );
     pageIds.push(pageObjIdx);
     currentPageStream = "";
+    currentPageAnnots = [];
     y = pageHeight - 60;
   }
 
@@ -1135,8 +1256,9 @@ export async function generatePdfFromNote(
       if (img) {
         renderedInlineImages.add(block.imageSrc);
         const maxW = printableWidth;
-        let dispW = Math.min(img.width, maxW);
-        let dispH = Math.round(dispW * (img.height / img.width));
+        const targetW = block.imageWidth ? Math.min(block.imageWidth, maxW) : Math.min(img.width, maxW);
+        let dispW = targetW;
+        let dispH = block.imageHeight ? Math.min(block.imageHeight, 420) : Math.round(dispW * (img.height / img.width));
 
         if (dispH > 420) {
           dispW = Math.round(dispW * (420 / dispH));
@@ -1154,8 +1276,59 @@ export async function generatePdfFromNote(
         }
 
         const yBottom = y - dispH;
-        currentPageStream += `q ${dispW.toFixed(2)} 0 0 ${dispH.toFixed(2)} ${xPos.toFixed(2)} ${yBottom.toFixed(2)} cm /${img.resName} Do Q\n`;
-        y = yBottom - 18;
+
+        let hasCrop = false;
+        let cropLeft = 0;
+        let cropRight = 0;
+        let cropTop = 0;
+        let cropBottom = 0;
+        if (block.imageCrop) {
+          const parts = block.imageCrop
+            .split(",")
+            .map((p) => parseFloat(p.trim()) || 0);
+          if (parts.length === 4) {
+            hasCrop = true;
+            cropTop = (parts[0] / 100) * dispH;
+            cropRight = (parts[1] / 100) * dispW;
+            cropBottom = (parts[2] / 100) * dispH;
+            cropLeft = (parts[3] / 100) * dispW;
+          }
+        }
+
+        const hasRotate =
+          typeof block.imageRotate === "number" && block.imageRotate !== 0;
+        const rad = hasRotate
+          ? -((block.imageRotate! % 360) * Math.PI) / 180
+          : 0;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const cx = xPos + dispW / 2;
+        const cy = yBottom + dispH / 2;
+
+        currentPageStream += `q\n`;
+        if (hasCrop) {
+          const clipX = xPos + cropLeft;
+          const clipY = yBottom + cropBottom;
+          const clipW = dispW - cropLeft - cropRight;
+          const clipH = dispH - cropTop - cropBottom;
+          currentPageStream += `${clipX.toFixed(2)} ${clipY.toFixed(2)} ${clipW.toFixed(2)} ${clipH.toFixed(2)} re W n\n`;
+        }
+        if (hasRotate) {
+          currentPageStream += `1 0 0 1 ${cx.toFixed(2)} ${cy.toFixed(2)} cm ${cos.toFixed(4)} ${sin.toFixed(4)} ${(-sin).toFixed(4)} ${cos.toFixed(4)} cm 1 0 0 1 ${(-cx).toFixed(2)} ${(-cy).toFixed(2)} cm\n`;
+        }
+        currentPageStream += `${dispW.toFixed(2)} 0 0 ${dispH.toFixed(2)} ${xPos.toFixed(2)} ${yBottom.toFixed(2)} cm /${img.resName} Do\n`;
+        currentPageStream += `Q\n`;
+
+        if (block.imageHref) {
+          currentPageAnnots.push(
+            `<< /Type /Annot /Subtype /Link /Rect [${xPos.toFixed(2)} ${yBottom.toFixed(2)} ${(xPos + dispW).toFixed(2)} ${(yBottom + dispH).toFixed(2)}] /Border [0 0 0] /A << /Type /Action /S /URI /URI (${escapePdfString(block.imageHref)}) >> >>`
+          );
+          currentPageStream += `0.62 0.447 0.373 rg\n`;
+          currentPageStream += `BT /F1 8 Tf ${xPos.toFixed(2)} ${(yBottom - 10).toFixed(2)} Td (${escapePdfString(`Link: ${block.imageHref}`)}) Tj ET\n`;
+          y = yBottom - 24;
+        } else {
+          y = yBottom - 18;
+        }
       }
     }
   }
@@ -1327,7 +1500,13 @@ export async function generateDocxFromNote(
   zipEntries.push({ name: "word/styles.xml", data: stylesXml });
 
   // Embedded images collection
-  const documentRels: Array<{ id: string; target: string; type: string }> = [
+  interface DocxRel {
+    id: string;
+    target: string;
+    type: string;
+    targetMode?: "External";
+  }
+  const documentRels: DocxRel[] = [
     {
       id: "rIdStyles",
       target: "styles.xml",
@@ -1335,8 +1514,15 @@ export async function generateDocxFromNote(
     },
   ];
 
+  interface DocxImageEntry {
+    relId: string;
+    fileName: string;
+    dims: { width: number; height: number };
+    defaultDrawingXml: string;
+  }
+  const imageMediaMap = new Map<string, DocxImageEntry>();
   let imageCounter = 0;
-  const imageDrawingsXml: Record<string, string> = {};
+  let linkCounter = 0;
 
   // Process note attached images and any inline images
   const allImageUris: string[] = [];
@@ -1376,7 +1562,7 @@ export async function generateDocxFromNote(
       const emuWidth = Math.min(dims.width * 9525, 5400000); // Clamp to ~5.6 inches max
       const emuHeight = Math.round(emuWidth * (dims.height / dims.width));
 
-      imageDrawingsXml[uri] = `
+      const defaultDrawingXml = `
       <w:drawing>
         <wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0">
           <wp:extent cx="${emuWidth}" cy="${emuHeight}"/>
@@ -1408,19 +1594,97 @@ export async function generateDocxFromNote(
           </a:graphic>
         </wp:inline>
       </w:drawing>`;
+
+      imageMediaMap.set(uri, {
+        relId,
+        fileName,
+        dims,
+        defaultDrawingXml,
+      });
     }
   }
 
-  // Word Document Relationships XML
-  const docRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  ${documentRels
-    .map(
-      (r) => `<Relationship Id="${r.id}" Type="${r.type}" Target="${r.target}"/>`
-    )
-    .join("\n  ")}
-</Relationships>`;
-  zipEntries.push({ name: "word/_rels/document.xml.rels", data: docRelsXml });
+  // Helper to generate customized drawing XML for an image block
+  function buildDocxDrawingXml(block: DocBlock): string {
+    if (!block.imageSrc) return "";
+    const entry = imageMediaMap.get(block.imageSrc);
+    if (!entry) return "";
+
+    const aspect = entry.dims.width / (entry.dims.height || 1);
+    let targetPixelW = block.imageWidth || entry.dims.width;
+    let targetPixelH = block.imageHeight || Math.round(targetPixelW / aspect);
+
+    // Clamp width to max 560px (~5.6 in / 5,334,000 EMUs)
+    if (targetPixelW > 560) {
+      targetPixelW = 560;
+      targetPixelH = Math.round(targetPixelW / aspect);
+    }
+    const emuWidth = Math.round(targetPixelW * 9525);
+    const emuHeight = Math.round(targetPixelH * 9525);
+
+    let docPrHlink = "";
+    if (block.imageHref) {
+      linkCounter++;
+      const linkRelId = `rIdLink${linkCounter}`;
+      documentRels.push({
+        id: linkRelId,
+        target: block.imageHref,
+        type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+        targetMode: "External",
+      });
+      docPrHlink = `<a:hlinkClick xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:id="${linkRelId}"/>`;
+    }
+
+    let srcRectXml = "";
+    if (block.imageCrop) {
+      const parts = block.imageCrop.split(",").map((p) => Math.round(parseFloat(p.trim()) * 1000) || 0);
+      if (parts.length === 4) {
+        const [top, right, bottom, left] = parts;
+        srcRectXml = `<a:srcRect t="${top}" r="${right}" b="${bottom}" l="${left}"/>`;
+      }
+    }
+
+    const rotAttr = block.imageRotate ? ` rot="${block.imageRotate * 60000}"` : "";
+    const docPrDescr = block.imageAlt ? ` descr="${escapeXml(block.imageAlt)}"` : "";
+    const docPrContent = docPrHlink ? `>${docPrHlink}</wp:docPr>` : "/>";
+    const cNvPrContent = docPrHlink ? `>${docPrHlink}</pic:cNvPr>` : "/>";
+    imageCounter++;
+    const figureId = imageCounter;
+
+    return `
+      <w:drawing>
+        <wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0">
+          <wp:extent cx="${emuWidth}" cy="${emuHeight}"/>
+          <wp:docPr id="${figureId}" name="Figure ${figureId}"${docPrDescr}${docPrContent}
+          <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+            <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+              <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                <pic:nvPicPr>
+                  <pic:cNvPr id="${figureId}" name="Figure ${figureId}"${docPrDescr}${cNvPrContent}
+                  <pic:cNvPicPr/>
+                </pic:nvPicPr>
+                <pic:blipFill>
+                  <a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${entry.relId}"/>
+                  ${srcRectXml}
+                  <a:stretch>
+                    <a:fillRect/>
+                  </a:stretch>
+                </pic:blipFill>
+                <pic:spPr>
+                  <a:xfrm${rotAttr}>
+                    <a:off x="0" y="0"/>
+                    <a:ext cx="${emuWidth}" cy="${emuHeight}"/>
+                  </a:xfrm>
+                  <a:prstGeom prst="rect">
+                    <a:avLst/>
+                  </a:prstGeom>
+                </pic:spPr>
+              </pic:pic>
+            </a:graphicData>
+          </a:graphic>
+        </wp:inline>
+      </w:drawing>`;
+  }
 
   // Generate word/document.xml content
   let bodyXml = "";
@@ -1498,7 +1762,7 @@ export async function generateDocxFromNote(
       ${renderRunsToDocx(block.runs)}
     </w:p>`;
     } else if (block.type === "image" && block.imageSrc) {
-      const drawing = imageDrawingsXml[block.imageSrc];
+      const drawing = buildDocxDrawingXml(block);
       if (drawing) {
         renderedDocxInlineImages.add(block.imageSrc);
         bodyXml += `
@@ -1527,19 +1791,33 @@ export async function generateDocxFromNote(
   if ((note.images || []).length > 0) {
     for (const uri of note.images!) {
       if (renderedDocxInlineImages.has(uri)) continue;
-      const drawing = imageDrawingsXml[uri];
-      if (drawing) {
+      const entry = imageMediaMap.get(uri);
+      if (entry) {
         bodyXml += `
     <w:p>
       <w:pPr>
         <w:jc w:val="center"/>
         <w:spacing w:before="240" w:after="240"/>
       </w:pPr>
-      <w:r>${drawing}</w:r>
+      <w:r>${entry.defaultDrawingXml}</w:r>
     </w:p>`;
       }
     }
   }
+
+  // Word Document Relationships XML (built after processing all blocks and inline links)
+  const docRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  ${documentRels
+    .map(
+      (r) =>
+        `<Relationship Id="${r.id}" Type="${r.type}" Target="${escapeXml(r.target)}"${
+          r.targetMode ? ` TargetMode="${r.targetMode}"` : ""
+        }/>`
+    )
+    .join("\n  ")}
+</Relationships>`;
+  zipEntries.push({ name: "word/_rels/document.xml.rels", data: docRelsXml });
 
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"

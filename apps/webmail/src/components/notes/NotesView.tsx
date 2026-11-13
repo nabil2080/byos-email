@@ -511,11 +511,11 @@ export const NotesView: Component<NotesViewProps> = (props) => {
       data-testid="notes-view"
       class="flex flex-1 min-w-0 min-h-0 h-full overflow-hidden bg-[#F0EEE9] dark:bg-[#18191D] gap-0 sm:gap-2.5 lg:gap-3"
     >
-      {/* ── PANE 1: Notes Navigation Sidebar (240px desktop, full width mobile when mobilePane === 'sidebar') ── */}
+      {/* ── PANE 1: Notes Navigation Sidebar (256px desktop, full width mobile when mobilePane === 'sidebar') ── */}
       <div
         class={`${
           mobilePane() === "sidebar" ? "block w-full" : "hidden"
-        } md:block md:w-60 md:min-w-[240px] md:max-w-[240px] flex-shrink-0 h-full`}
+        } md:block md:w-64 md:min-w-[256px] md:max-w-[256px] flex-shrink-0 h-full`}
       >
         <NotesSidebar
           currentUser={props.currentUser}

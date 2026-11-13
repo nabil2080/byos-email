@@ -12,6 +12,7 @@ import {
   updateDraft,
   deleteDraft,
   fetchAttachments,
+  fetchAttachmentMetadata,
   downloadAndDecryptAttachment,
   downloadAttachment,
   uploadEncryptedAttachment,
@@ -38,11 +39,14 @@ import {
   fetchMessages,
   fetchMessageBody,
   fetchOutboundPubkey,
+  fetchOutboundPubkeyDetail,
   prepareOutbound,
   setActiveMailboxContext,
   sendOutbound,
   PrepareResponse,
   SendPayload,
+  UploadAttachmentV2Options,
+  OutboundAttachmentGrantV2,
   scheduleOutbound,
   schedulePathA,
   cancelScheduledMessage,
@@ -126,7 +130,10 @@ import {
 import {
   preparePathAAttachment,
   decryptPathAAttachment,
+  sealOutboundAttachmentGrantV2,
   MAX_ATTACHMENT_SIZE,
+  ATTACHMENT_MAX_PATH_B_BYTES,
+  ATTACHMENT_MAX_PATH_B_COUNT,
   CHUNK_SIZE,
   decryptChunk,
 } from "./attachment_crypto";
@@ -137,6 +144,7 @@ import {
   formatBytes,
 } from "./attachment_upload_pipeline";
 import { cryptoWorkerBridge } from "./crypto_worker_bridge";
+import type { QueuedSendItem } from "./offline_cache";
 import {
   unlockMailboxKey,
   autoUnwrapMailboxKey,
@@ -285,7 +293,7 @@ import {
   getOfflineDrafts,
   removeOfflineDraft,
 } from "./offline_cache";
-import { enqueueSend, replayQueue } from "./send_queue";
+import { enqueueSend, replayQueue, retryFailedSends, getFailedQueue, type ReplayQueueDeps } from "./send_queue";
 
 type Folder = "inbox" | "sent" | "scheduled" | "drafts" | "snoozed" | "archive" | "spam" | "trash" | "unified_inbox";
 
@@ -313,6 +321,7 @@ interface DisplayMessage {
   hasAttachments?: boolean;
   attachmentCount?: number;
   attachmentTypes?: string[];
+  attachmentIds?: string[];
   trackingToken?: string;
   trackingInfo?: {
     openCount: number;
@@ -809,6 +818,115 @@ const AppContent: Component = () => {
   const setEditingScheduledId = mail.setEditingScheduledId;
   const pendingSend = mail.pendingSend;
   const setPendingSend = mail.setPendingSend;
+
+  const [failedQueueItems, setFailedQueueItems] = createSignal<QueuedSendItem[]>([]);
+  async function refreshFailedQueue(mailboxId?: string) {
+    try {
+      const items = await getFailedQueue(mailboxId);
+      setFailedQueueItems(items);
+    } catch (err) {
+      console.warn("Failed to load failed queue items:", err);
+    }
+  }
+
+  function getReplayDeps(): ReplayQueueDeps {
+    return {
+      sendInternal: (req, token) => sendInternal(req, token),
+      sendOutbound: async (item: any, token) => {
+        const offlineAtts = Array.isArray(item.payload?.offline_attachments)
+          ? (item.payload.offline_attachments as NonNullable<QueuedSendItem["payload"]["offline_attachments"]>)
+          : [];
+        const expectedAttIds = Array.isArray(item.payload?.attachment_ids)
+          ? (item.payload.attachment_ids as string[])
+          : [];
+        if (expectedAttIds.length > 0 && offlineAtts.length !== expectedAttIds.length) {
+          throw new Error("Queued message attachment metadata is incomplete; cannot send without attachments.");
+        }
+        const senderMailboxSk = offlineAtts.length > 0 ? getMailboxKeyFor(item.mailbox_id) : null;
+        if (offlineAtts.length > 0 && !senderMailboxSk) {
+          throw new Error("Mailbox key must be unlocked to send queued attachments.");
+        }
+
+        const reservation = await prepareOutbound(item.mailbox_id, token);
+        const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+        const mailboxIdHex = item.mailbox_id.replace(/-/g, "");
+        const mime = item.payload?.mime_message || item.mime_message || item.payload?.envelope_json || "";
+        const plaintextB64 = bytesToBase64(new TextEncoder().encode(mime));
+
+        let lastErr: unknown = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const pubkeyDetail = await fetchOutboundPubkeyDetail(token);
+          const pubkey = pubkeyDetail.outbound_delivery_pk;
+          const encrypted = JSON.parse(
+            wasm.wasm_encrypt_outbound(pubkey, mailboxIdHex, BigInt(reservation.outbox_seq), plaintextB64),
+          ) as { ciphertext: string; send_token_wrapped: string; iv: string };
+
+          const outboundGrants: OutboundAttachmentGrantV2[] = [];
+          for (let pos = 0; pos < offlineAtts.length; pos++) {
+            const att = offlineAtts[pos];
+            if (att.crypto_version !== 2 || !att.cek_owner_wrapped || !att.plaintext_sha256) {
+              throw new Error(`Queued attachment "${att.filename}" is missing Protocol v2 metadata.`);
+            }
+            outboundGrants.push(
+              await sealOutboundAttachmentGrantV2({
+                mailboxId: item.mailbox_id,
+                mailboxSkBytes: senderMailboxSk!,
+                attachmentId: att.id,
+                filename: att.filename,
+                contentType: att.content_type || "application/octet-stream",
+                sizeBytes: att.size_bytes ?? 0,
+                plaintextSha256Hex: att.plaintext_sha256,
+                cekOwnerWrappedB64: att.cek_owner_wrapped,
+                ownerKeyVersion: Math.max(1, att.owner_key_version || 1),
+                outboxSeq: reservation.outbox_seq,
+                outboundPkB64: pubkey,
+                outboundKeyEpoch: pubkeyDetail.key_epoch || 1,
+                outboundKeyIdHex: pubkeyDetail.key_id,
+                position: pos,
+                disposition: att.disposition || "attachment",
+                contentId: att.content_id,
+              }),
+            );
+          }
+
+          try {
+            return await sendOutbound(
+              {
+                reservation_id: reservation.reservation_id,
+                mailbox_id: item.mailbox_id,
+                recipient: item.recipient,
+                encrypted_message: encrypted.ciphertext,
+                send_token_wrapped: encrypted.send_token_wrapped,
+                outbox_seq: reservation.outbox_seq,
+                encryption_version: reservation.encryption_version,
+                aad_version: reservation.aad_version,
+                encryption_iv: encrypted.iv,
+                send_token_key_epoch: pubkeyDetail.key_epoch,
+                send_token_key_id: pubkeyDetail.key_id,
+                attachment_ids: outboundGrants.length > 0 ? outboundGrants.map((g) => g.attachment_id) : undefined,
+                attachments: outboundGrants.length > 0 ? outboundGrants : undefined,
+                alias_id: item.payload?.alias_id || item.alias_id || undefined,
+                client_queue_id: item.client_queue_id,
+              },
+              token,
+            );
+          } catch (sendErr: any) {
+            const msg = String(sendErr?.message || "");
+            if (attempt === 0 && (sendErr?.status === 409 || sendErr?.code === "outbound_key_epoch_expired" || msg.includes("outbound_key_epoch_expired") || msg.includes("stale_epoch"))) {
+              lastErr = sendErr;
+              continue;
+            }
+            throw sendErr;
+          }
+        }
+        throw lastErr instanceof Error ? lastErr : new Error("Failed replaying queued outbound message");
+      },
+      getToken: (mId) => {
+        const acc = connectedAccounts().find((a) => a.id === mId);
+        return acc?.sessionToken || undefined;
+      },
+    };
+  }
 
   const [isMobile, setIsMobile] = createSignal(typeof window !== "undefined" ? window.innerWidth < 768 : false);
   const [isTabletOrMobile, setIsTabletOrMobile] = createSignal(typeof window !== "undefined" ? window.innerWidth < 1024 : false);
@@ -2790,6 +2908,17 @@ const AppContent: Component = () => {
       if (user.profile_photo_ref || targetBox.profile_photo_ref) {
         loadDecryptedProfilePhoto(mailboxKey());
       }
+      if (!isOffline()) {
+        const replayDeps = getReplayDeps();
+        replayQueue(replayDeps)
+          .then(async (res) => {
+            await refreshFailedQueue(targetBox.id);
+            if (res.sent > 0 && res.failed === 0) {
+              showToast(`Sent ${res.sent} queued message${res.sent > 1 ? "s" : ""}.`);
+            }
+          })
+          .catch(() => {});
+      }
     } else {
       setMailboxes([]);
       setSelectedMailbox(null);
@@ -3167,47 +3296,48 @@ const AppContent: Component = () => {
   onMount(async () => {
     initNetworkListeners();
     registerServiceWorker().catch(() => {});
+    refreshFailedQueue().catch(() => {});
     onNetworkReconnect(async () => {
       try {
-        const res = await replayQueue({
-          sendInternal: (req, token) => sendInternal(req, token),
-          sendOutbound: async (item: any, token) => {
-            const [pubkey, reservation] = await Promise.all([
-              fetchOutboundPubkey(token),
-              prepareOutbound(item.mailbox_id, token),
-            ]);
-            const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-            const mailboxIdHex = item.mailbox_id.replace(/-/g, "");
-            const mime = item.payload?.mime_message || item.mime_message || item.payload?.envelope_json || "";
-            const plaintextB64 = bytesToBase64(new TextEncoder().encode(mime));
-            const encrypted = JSON.parse(
-              wasm.wasm_encrypt_outbound(pubkey, mailboxIdHex, BigInt(reservation.outbox_seq), plaintextB64),
-            ) as { ciphertext: string; send_token_wrapped: string; iv: string };
-            return sendOutbound(
-              {
-                reservation_id: reservation.reservation_id,
-                mailbox_id: item.mailbox_id,
-                recipient: item.recipient,
-                encrypted_message: encrypted.ciphertext,
-                send_token_wrapped: encrypted.send_token_wrapped,
-                outbox_seq: reservation.outbox_seq,
-                encryption_version: reservation.encryption_version,
-                aad_version: reservation.aad_version,
-                encryption_iv: encrypted.iv,
-                alias_id: item.payload?.alias_id || item.alias_id || undefined,
-                client_queue_id: item.client_queue_id,
+        const replayDeps = getReplayDeps();
+        const res = await replayQueue(replayDeps);
+        await refreshFailedQueue();
+
+        if (res.failed > 0) {
+          const failMsg = res.failed === 1
+            ? "A queued message failed to send and needs attention."
+            : `${res.failed} queued messages failed to send and need attention.`;
+          addToast({
+            id: "replay-failed-" + Date.now(),
+            message: failMsg,
+            duration: 8000,
+            action: {
+              label: "Retry",
+              onClick: async () => {
+                const retryRes = await retryFailedSends(replayDeps);
+                await refreshFailedQueue();
+                if (retryRes.sent > 0 && retryRes.failed === 0) {
+                  showToast(`Sent ${retryRes.sent} queued message${retryRes.sent > 1 ? "s" : ""}.`);
+                } else if (retryRes.failed > 0) {
+                  showToast("Message still could not be sent. Please check details.");
+                }
               },
-              token,
-            );
-          },
-          getToken: (mId) => {
-            const acc = connectedAccounts().find((a) => a.id === mId);
-            return acc?.sessionToken || undefined;
-          },
-        });
-        showToast("Back online. Pending messages synced.");
-        if (res.sent > 0) {
+            },
+          });
+          if (res.sent > 0) {
+            showToast(`Sent ${res.sent} queued message${res.sent > 1 ? "s" : ""}.`);
+          }
+        } else if (res.pending > 0) {
+          if (res.sent > 0) {
+            showToast(`Sent ${res.sent} queued message${res.sent > 1 ? "s" : ""}. ${res.pending} remaining will retry.`);
+          } else {
+            showToast("Back online, but pending messages could not be sent yet. Will retry automatically.");
+          }
+        } else if (res.sent > 0) {
+          showToast("Back online. Pending messages synced.");
           showToast(`Sent ${res.sent} queued message${res.sent > 1 ? "s" : ""}.`);
+        } else {
+          showToast("Back online.");
         }
         try {
           const offlineDrafts = await getOfflineDrafts();
@@ -4371,6 +4501,7 @@ const AppContent: Component = () => {
           sendFailed: d.send_failed,
           mailboxId: mailboxId,
           accountEmail: currentUser()?.email,
+          attachmentIds: Array.isArray(d.attachment_ids) ? d.attachment_ids : undefined,
         };
       });
 
@@ -5225,7 +5356,7 @@ const AppContent: Component = () => {
       if (keyMaterial?.mailboxSkHex) {
         const key = new Uint8Array(keyMaterial.mailboxSkHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
         // Decrypt locally with the unlocked mailbox key.
-        const decrypted = await downloadAndDecryptAttachment(targetBoxId, att.id, key, targetToken);
+        const decrypted = await downloadAndDecryptAttachment(targetBoxId, att.id, key, targetToken, att);
         const url = URL.createObjectURL(decrypted);
         const a = document.createElement("a");
         a.href = url;
@@ -5907,6 +6038,47 @@ const AppContent: Component = () => {
     }
   }
 
+  const mailboxV2OwnerCache = new Map<string, UploadAttachmentV2Options>();
+
+  function invalidateMailboxV2OwnerCache(mailboxId: string) {
+    mailboxV2OwnerCache.delete(mailboxId);
+  }
+
+  function isOwnerKeyVersionStaleError(err: unknown): boolean {
+    if (!err || typeof err !== "object") return false;
+    const status = (err as { status?: number }).status;
+    const msg = err instanceof Error ? err.message : String((err as { message?: string }).message || "");
+    return status === 409 || msg.includes("owner_key_version_stale");
+  }
+
+  async function getMailboxV2OwnerOptions(
+    mailboxId: string,
+    token?: string,
+    forceRefresh = false,
+  ): Promise<UploadAttachmentV2Options | undefined> {
+    if (!forceRefresh) {
+      const cached = mailboxV2OwnerCache.get(mailboxId);
+      if (cached) return cached;
+    }
+    try {
+      const detail = await fetchMailboxDetail(mailboxId, token);
+      if (detail?.mailbox_pk) {
+        const pkBytes = base64ToBytes(detail.mailbox_pk);
+        if (pkBytes.length === 32) {
+          const opts: UploadAttachmentV2Options = {
+            mailboxPkBytes: pkBytes,
+            ownerKeyVersion: Math.max(1, detail.mailbox_sk_version || 1),
+          };
+          mailboxV2OwnerCache.set(mailboxId, opts);
+          return opts;
+        }
+      }
+    } catch (err) {
+      console.warn("[attachment-v2] failed fetching mailbox detail:", err);
+    }
+    return undefined;
+  }
+
   async function runAttachmentUpload(
     attId: string,
     file: File,
@@ -5938,6 +6110,8 @@ const AppContent: Component = () => {
         ),
       );
 
+      const v2Opts = await getMailboxV2OwnerOptions(box.id);
+
       // Step 2: Uploading
       setComposeAttachments((prev) =>
         prev.map((a) =>
@@ -5957,14 +6131,34 @@ const AppContent: Component = () => {
         ),
       );
 
-      const uploaded = await uploadEncryptedAttachment(
-        box.id,
-        file,
-        key,
-        undefined,
-        undefined,
-        controller.signal,
-      );
+      let uploaded: AttachmentItem;
+      try {
+        uploaded = await uploadEncryptedAttachment(
+          box.id,
+          file,
+          key,
+          undefined,
+          undefined,
+          controller.signal,
+          v2Opts,
+        );
+      } catch (uploadErr: unknown) {
+        if (v2Opts && isOwnerKeyVersionStaleError(uploadErr) && !controller.signal.aborted) {
+          invalidateMailboxV2OwnerCache(box.id);
+          const refreshedOpts = await getMailboxV2OwnerOptions(box.id, undefined, true);
+          uploaded = await uploadEncryptedAttachment(
+            box.id,
+            file,
+            key,
+            undefined,
+            undefined,
+            controller.signal,
+            refreshedOpts,
+          );
+        } else {
+          throw uploadErr;
+        }
+      }
 
       // Step 3: Completed (guarded against stale retry or race cancellation)
       setComposeAttachments((prev) =>
@@ -6288,11 +6482,34 @@ const AppContent: Component = () => {
     const sigPlain = targetBoxId ? loadSignature(targetBoxId) : "";
     const hasSig = sigPlain ? bodyVal.includes(`-- \n${sigPlain}`) : false;
     setComposeSignatureApplied(hasSig);
+    const initialAttIds = Array.isArray(msg.attachmentIds) ? msg.attachmentIds : [];
     setLastSavedDraftSnapshot(
-      JSON.stringify({ to: toVal.trim(), subject: subVal.trim(), richContent: msg.bodyHtml || bodyVal })
+      JSON.stringify({ to: toVal.trim(), subject: subVal.trim(), richContent: msg.bodyHtml || bodyVal, attachmentIds: initialAttIds })
     );
     setDraftDirty(false);
     setComposeOpen(true);
+
+    if (targetBoxId && initialAttIds.length > 0) {
+      void (async () => {
+        try {
+          const loaded = await Promise.all(
+            initialAttIds.map(async (id) => {
+              const meta = await fetchAttachmentMetadata(targetBoxId, id);
+              return {
+                ...meta,
+                uploadStatus: "completed" as const,
+                uploadError: null,
+              };
+            }),
+          );
+          if (editingDraft()?.id === msg.id) {
+            setComposeAttachments(loaded);
+          }
+        } catch (err) {
+          console.warn("[draft-attachments] failed loading draft attachment metadata:", err);
+        }
+      })();
+    }
   }
 
   // NOTE: no Reply All — the send API accepts exactly one recipient per
@@ -6621,6 +6838,46 @@ const AppContent: Component = () => {
           } catch {}
         }
 
+        const offlineRawAttachments = payload.attachments || [];
+        let offlinePathBPayload: Pick<
+          QueuedSendItem["payload"],
+          "attachment_ids" | "offline_attachments"
+        > = {};
+        if (!sealedPathA && offlineRawAttachments.length > 0) {
+          if (offlineRawAttachments.length > ATTACHMENT_MAX_PATH_B_COUNT) {
+            throw new Error(`Maximum ${ATTACHMENT_MAX_PATH_B_COUNT} attachments allowed per external message`);
+          }
+          const totalOfflineBytes = offlineRawAttachments.reduce(
+            (sum, a) => sum + (a.plaintext_size_bytes ?? a.size_bytes ?? a.byte_size ?? 0),
+            0,
+          );
+          if (totalOfflineBytes > ATTACHMENT_MAX_PATH_B_BYTES) {
+            throw new Error("Total external attachment size exceeds the 25 MiB SMTP limit");
+          }
+          const mappedOffline = offlineRawAttachments.map((a) => {
+            if (a.crypto_version !== 2 || !a.cek_owner_wrapped || !a.plaintext_sha256) {
+              throw new Error(
+                `Attachment "${a.filename}" cannot be queued offline without Protocol v2 upload metadata; reconnect to send.`,
+              );
+            }
+            return {
+              id: a.id,
+              filename: a.filename,
+              content_type: a.content_type || "application/octet-stream",
+              size_bytes: a.plaintext_size_bytes ?? a.size_bytes ?? a.byte_size ?? 0,
+              crypto_version: a.crypto_version,
+              cek_owner_wrapped: a.cek_owner_wrapped,
+              owner_key_version: Math.max(1, a.owner_key_version || 1),
+              plaintext_sha256: a.plaintext_sha256,
+              disposition: "attachment" as const,
+            };
+          });
+          offlinePathBPayload = {
+            attachment_ids: mappedOffline.map((a) => a.id),
+            offline_attachments: mappedOffline,
+          };
+        }
+
         await enqueueSend({
           client_queue_id: clientQueueId,
           mailbox_id: box.id,
@@ -6635,6 +6892,7 @@ const AppContent: Component = () => {
             envelope_json: "",
             sender_email: senderFrom,
             alias_id: payload.fromAlias,
+            ...offlinePathBPayload,
           },
           is_path_a: sealedPathA,
         });
@@ -6701,7 +6959,7 @@ const AppContent: Component = () => {
               if (att.rawFile) {
                 fileData = new Uint8Array(await att.rawFile.arrayBuffer());
               } else if (key) {
-                const blob = await downloadAndDecryptAttachment(box.id, att.id, key);
+                const blob = await downloadAndDecryptAttachment(box.id, att.id, key, undefined, att);
                 fileData = new Uint8Array(await blob.arrayBuffer());
               } else {
                 throw new Error("Cannot read attachment data for Path A encryption");
@@ -6904,7 +7162,7 @@ const AppContent: Component = () => {
                   if (att.rawFile) {
                     fileData = new Uint8Array(await att.rawFile.arrayBuffer());
                   } else if (key) {
-                    const blob = await downloadAndDecryptAttachment(box.id, att.id, key);
+                    const blob = await downloadAndDecryptAttachment(box.id, att.id, key, undefined, att);
                     fileData = new Uint8Array(await blob.arrayBuffer());
                   } else {
                     throw new Error("Cannot read attachment data for Path A encryption");
@@ -6977,59 +7235,177 @@ const AppContent: Component = () => {
         }
       }
 
-      const [pubkey, reservation] = await Promise.all([
-        fetchOutboundPubkey(),
-        prepareOutbound(box.id),
-      ]);
-      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
-      const mailboxIdHex = box.id.replace(/-/g, "");
-
-      const plaintextB64 = bytesToBase64(new TextEncoder().encode(mimeMessage));
-      const encrypted = JSON.parse(
-        wasm.wasm_encrypt_outbound(pubkey, mailboxIdHex, BigInt(reservation.outbox_seq), plaintextB64)
-      ) as {
-        ciphertext: string;
-        send_token_wrapped: string;
-        iv: string;
-      };
-
-      if (!encrypted.ciphertext || !encrypted.send_token_wrapped || !encrypted.iv) {
-        throw new Error("Crypto core returned an incomplete outbound envelope");
+      const rawAttachments = payload.attachments || [];
+      if (rawAttachments.length > ATTACHMENT_MAX_PATH_B_COUNT) {
+        throw new Error(`Maximum ${ATTACHMENT_MAX_PATH_B_COUNT} attachments allowed per external message`);
+      }
+      const totalPlaintextBytes = rawAttachments.reduce(
+        (sum, a) => sum + (a.plaintext_size_bytes ?? a.size_bytes ?? a.byte_size ?? 0),
+        0,
+      );
+      if (totalPlaintextBytes > ATTACHMENT_MAX_PATH_B_BYTES) {
+        throw new Error("Total external attachment size exceeds the 25 MiB SMTP limit");
       }
 
-      const attIDs = (payload.attachments || []).map((a: any) => a.id);
+      const senderMailboxSk = getMailboxKeyFor(box.id);
+      if (rawAttachments.length > 0 && !senderMailboxSk) {
+        throw new Error("Mailbox key must be unlocked to send attachments externally");
+      }
 
-      if (payload.scheduledTime) {
-        await scheduleOutbound({
-          reservation_id: reservation.reservation_id,
-          mailbox_id: box.id,
-          recipient: envelopeRecipients,
-          encrypted_message: encrypted.ciphertext,
-          send_token_wrapped: encrypted.send_token_wrapped,
-          outbox_seq: reservation.outbox_seq,
-          encryption_version: reservation.encryption_version,
-          aad_version: reservation.aad_version,
-          encryption_iv: encrypted.iv,
-          scheduled_at: new Date(payload.scheduledTime).toISOString(),
-          attachment_ids: attIDs.length > 0 ? attIDs : undefined,
-          draft_envelope: schedDraftRef || undefined,
-          draft_storage_ref: schedDraftRef || undefined,
-          subject: subject || "(no subject)",
-        });
-      } else {
-        await sendOutbound({
-          reservation_id: reservation.reservation_id,
-          mailbox_id: box.id,
-          recipient: envelopeRecipients,
-          encrypted_message: encrypted.ciphertext,
-          send_token_wrapped: encrypted.send_token_wrapped,
-          outbox_seq: reservation.outbox_seq,
-          encryption_version: reservation.encryption_version,
-          aad_version: reservation.aad_version,
-          encryption_iv: encrypted.iv,
-          attachment_ids: attIDs.length > 0 ? attIDs : undefined,
-          alias_id: payload.fromAlias || undefined,
-        });
+      // Lazy-upgrade any legacy v=1 compose/draft attachment to Protocol v2 before external Path B dispatch.
+      const v2Attachments: AttachmentItem[] = [];
+      for (const att of rawAttachments) {
+        if (att.crypto_version === 2 && att.cek_owner_wrapped && att.plaintext_sha256) {
+          v2Attachments.push(att);
+        } else if (senderMailboxSk) {
+          const v2Opts = await getMailboxV2OwnerOptions(box.id);
+          if (!v2Opts) {
+            throw new Error(`Cannot upgrade attachment "${att.filename}" to Protocol v2 without mailbox public key`);
+          }
+          let ptFile: File;
+          if (att.rawFile) {
+            ptFile = att.rawFile;
+          } else {
+            const decryptedBlob = await downloadAndDecryptAttachment(box.id, att.id, senderMailboxSk, undefined, att);
+            ptFile = new File([decryptedBlob], att.filename, {
+              type: att.content_type || "application/octet-stream",
+            });
+          }
+          let upgraded: AttachmentItem;
+          try {
+            upgraded = await uploadEncryptedAttachment(
+              box.id,
+              ptFile,
+              senderMailboxSk,
+              undefined,
+              undefined,
+              undefined,
+              v2Opts,
+            );
+          } catch (upgradeErr: unknown) {
+            if (isOwnerKeyVersionStaleError(upgradeErr)) {
+              invalidateMailboxV2OwnerCache(box.id);
+              const refreshedOpts = await getMailboxV2OwnerOptions(box.id, undefined, true);
+              if (!refreshedOpts) {
+                throw upgradeErr;
+              }
+              upgraded = await uploadEncryptedAttachment(
+                box.id,
+                ptFile,
+                senderMailboxSk,
+                undefined,
+                undefined,
+                undefined,
+                refreshedOpts,
+              );
+            } else {
+              throw upgradeErr;
+            }
+          }
+          v2Attachments.push(upgraded);
+        } else {
+          throw new Error(`Attachment "${att.filename}" requires Protocol v2 encryption`);
+        }
+      }
+
+      const wasm = await import("./generated/crypto-core/byos_crypto_core.js");
+      const mailboxIdHex = box.id.replace(/-/g, "");
+      const plaintextB64 = bytesToBase64(new TextEncoder().encode(mimeMessage));
+      const reservation = await prepareOutbound(box.id);
+
+      let lastEpochErr: unknown = null;
+      for (let pubkeyAttempt = 0; pubkeyAttempt < 2; pubkeyAttempt++) {
+        const pubkeyDetail = await fetchOutboundPubkeyDetail();
+        const pubkey = pubkeyDetail.outbound_delivery_pk;
+        const encrypted = JSON.parse(
+          wasm.wasm_encrypt_outbound(pubkey, mailboxIdHex, BigInt(reservation.outbox_seq), plaintextB64)
+        ) as {
+          ciphertext: string;
+          send_token_wrapped: string;
+          iv: string;
+        };
+
+        if (!encrypted.ciphertext || !encrypted.send_token_wrapped || !encrypted.iv) {
+          throw new Error("Crypto core returned an incomplete outbound envelope");
+        }
+
+        const outboundGrants: OutboundAttachmentGrantV2[] = [];
+        for (let pos = 0; pos < v2Attachments.length; pos++) {
+          const att = v2Attachments[pos];
+          const grant = await sealOutboundAttachmentGrantV2({
+            mailboxId: box.id,
+            mailboxSkBytes: senderMailboxSk!,
+            attachmentId: att.id,
+            filename: att.filename,
+            contentType: att.content_type || "application/octet-stream",
+            sizeBytes: att.plaintext_size_bytes ?? att.size_bytes ?? 0,
+            plaintextSha256Hex: att.plaintext_sha256!,
+            cekOwnerWrappedB64: att.cek_owner_wrapped!,
+            ownerKeyVersion: Math.max(1, att.owner_key_version || 1),
+            outboxSeq: reservation.outbox_seq,
+            outboundPkB64: pubkey,
+            outboundKeyEpoch: pubkeyDetail.key_epoch || 1,
+            outboundKeyIdHex: pubkeyDetail.key_id,
+            position: pos,
+            disposition: "attachment",
+          });
+          outboundGrants.push(grant);
+        }
+
+        const attIDs = v2Attachments.map((a) => a.id);
+
+        try {
+          if (payload.scheduledTime) {
+            await scheduleOutbound({
+              reservation_id: reservation.reservation_id,
+              mailbox_id: box.id,
+              recipient: envelopeRecipients,
+              encrypted_message: encrypted.ciphertext,
+              send_token_wrapped: encrypted.send_token_wrapped,
+              outbox_seq: reservation.outbox_seq,
+              encryption_version: reservation.encryption_version,
+              aad_version: reservation.aad_version,
+              encryption_iv: encrypted.iv,
+              send_token_key_epoch: pubkeyDetail.key_epoch,
+              send_token_key_id: pubkeyDetail.key_id,
+              scheduled_at: new Date(payload.scheduledTime).toISOString(),
+              attachment_ids: attIDs.length > 0 ? attIDs : undefined,
+              attachments: outboundGrants.length > 0 ? outboundGrants : undefined,
+              draft_envelope: schedDraftRef || undefined,
+              draft_storage_ref: schedDraftRef || undefined,
+              subject: subject || "(no subject)",
+            });
+          } else {
+            await sendOutbound({
+              reservation_id: reservation.reservation_id,
+              mailbox_id: box.id,
+              recipient: envelopeRecipients,
+              encrypted_message: encrypted.ciphertext,
+              send_token_wrapped: encrypted.send_token_wrapped,
+              outbox_seq: reservation.outbox_seq,
+              encryption_version: reservation.encryption_version,
+              aad_version: reservation.aad_version,
+              encryption_iv: encrypted.iv,
+              send_token_key_epoch: pubkeyDetail.key_epoch,
+              send_token_key_id: pubkeyDetail.key_id,
+              attachment_ids: attIDs.length > 0 ? attIDs : undefined,
+              attachments: outboundGrants.length > 0 ? outboundGrants : undefined,
+              alias_id: payload.fromAlias || undefined,
+            });
+          }
+          lastEpochErr = null;
+          break;
+        } catch (sendErr: any) {
+          const msg = String(sendErr?.message || "");
+          if (pubkeyAttempt === 0 && (sendErr?.status === 409 || msg.includes("outbound_key_epoch_expired"))) {
+            lastEpochErr = sendErr;
+            continue;
+          }
+          throw sendErr;
+        }
+      }
+      if (lastEpochErr) {
+        throw lastEpochErr;
       }
 
       setComposeStatus(payload.scheduledTime ? "Encrypted message scheduled." : "Encrypted message queued for delivery.");
@@ -7168,6 +7544,9 @@ const AppContent: Component = () => {
         body: richContent,
       });
       const envelope = encryptDraftEnvelope(wasm, key, box.id, draftPayload);
+      const readyAttachmentIds = composeAttachments()
+        .filter((a) => !a.uploadStatus || a.uploadStatus === "completed")
+        .map((a) => a.id);
       const editing = editingDraft();
       if (editing) {
         try {
@@ -7175,6 +7554,7 @@ const AppContent: Component = () => {
             recipient: "",
             subject: "",
             encrypted_envelope: envelope,
+            attachment_ids: readyAttachmentIds,
             version: editing.version,
           });
           setMessages((prev) =>
@@ -7189,6 +7569,7 @@ const AppContent: Component = () => {
                     bodyPlaintext: body || richContent,
                     bodyHtml: richContent,
                     encryptedBody: envelope,
+                    attachmentIds: readyAttachmentIds,
                     version: updated.version,
                     date: "Just now",
                   }
@@ -7216,6 +7597,7 @@ const AppContent: Component = () => {
         recipient: "",
         subject: "",
         encrypted_envelope: envelope,
+        attachment_ids: readyAttachmentIds,
       });
 
       const draftDisplay: DisplayMessage = {
@@ -7230,6 +7612,8 @@ const AppContent: Component = () => {
         bodyPlaintext: body || richContent,
         bodyHtml: richContent,
         encryptedBody: envelope,
+        attachmentIds: readyAttachmentIds,
+        mailboxId: box.id,
         date: "Just now",
         read: true,
         starred: false,
@@ -7257,9 +7641,13 @@ const AppContent: Component = () => {
     const bodyHtml = composeBodyHtml();
     const richContent = bodyHtml.trim() ? bodyHtml : body;
 
-    if (!to && !subject && !richContent.trim()) return;
+    const readyAttachmentIds = composeAttachments()
+      .filter((a) => !a.uploadStatus || a.uploadStatus === "completed")
+      .map((a) => a.id);
 
-    const currentSnapshot = JSON.stringify({ to, subject, richContent });
+    if (!to && !subject && !richContent.trim() && readyAttachmentIds.length === 0) return;
+
+    const currentSnapshot = JSON.stringify({ to, subject, richContent, attachmentIds: readyAttachmentIds });
     if (currentSnapshot === lastSavedDraftSnapshot()) {
       setDraftDirty(false);
       return;
@@ -7283,6 +7671,7 @@ const AppContent: Component = () => {
             recipient: "",
             subject: "",
             encrypted_envelope: envelope,
+            attachment_ids: readyAttachmentIds,
             version: editing.version,
           });
           setEditingDraft({ id: editing.id, version: updated.version });
@@ -7298,6 +7687,7 @@ const AppContent: Component = () => {
                     bodyPlaintext: body || richContent,
                     bodyHtml: richContent,
                     encryptedBody: envelope,
+                    attachmentIds: readyAttachmentIds,
                     version: updated.version,
                     date: "Just now",
                   }
@@ -7316,6 +7706,7 @@ const AppContent: Component = () => {
           recipient: "",
           subject: "",
           encrypted_envelope: envelope,
+          attachment_ids: readyAttachmentIds,
         });
         setEditingDraft({ id: created.id, version: created.version });
         const draftDisplay: DisplayMessage = {
@@ -7330,6 +7721,8 @@ const AppContent: Component = () => {
           bodyPlaintext: body || richContent,
           bodyHtml: richContent,
           encryptedBody: envelope,
+          attachmentIds: readyAttachmentIds,
+          mailboxId: box.id,
           date: "Just now",
           read: true,
           starred: false,
@@ -7363,13 +7756,16 @@ const AppContent: Component = () => {
     const body = composeBody();
     const bodyHtml = composeBodyHtml();
     const richContent = bodyHtml.trim() ? bodyHtml : body;
+    const readyAttachmentIds = composeAttachments()
+      .filter((a) => !a.uploadStatus || a.uploadStatus === "completed")
+      .map((a) => a.id);
 
-    if (!to.trim() && !subject.trim() && !richContent.trim()) {
+    if (!to.trim() && !subject.trim() && !richContent.trim() && readyAttachmentIds.length === 0) {
       setDraftDirty(false);
       return;
     }
 
-    const currentSnapshot = JSON.stringify({ to: to.trim(), subject: subject.trim(), richContent });
+    const currentSnapshot = JSON.stringify({ to: to.trim(), subject: subject.trim(), richContent, attachmentIds: readyAttachmentIds });
     if (currentSnapshot !== lastSavedDraftSnapshot()) {
       setDraftDirty(true);
       if (autoSaveDebounceTimer) clearTimeout(autoSaveDebounceTimer);
@@ -7420,7 +7816,7 @@ const AppContent: Component = () => {
           }
         } else if (keyMaterial?.mailboxSkHex) {
           const key = new Uint8Array(keyMaterial.mailboxSkHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-          const decryptedBlob = await downloadAndDecryptAttachment(targetBoxId, att.id, key, targetToken);
+          const decryptedBlob = await downloadAndDecryptAttachment(targetBoxId, att.id, key, targetToken, att);
           const buf = await decryptedBlob.arrayBuffer();
           exportedAttachments.push({
             filename: att.filename,
@@ -8788,6 +9184,44 @@ const AppContent: Component = () => {
           </div>
         </Show>
 
+        {/* Failed Outbox/Send Queue Banner (Requirement 7) */}
+        <Show when={failedQueueItems().length > 0}>
+          <div
+            role="alert"
+            data-testid="failed-queue-banner"
+            class="bg-rose-500/15 border border-rose-500/30 text-rose-900 dark:text-rose-200 px-3 sm:px-4 py-2 sm:py-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between text-xs font-medium rounded-xl shadow-xs gap-2"
+          >
+            <div class="flex items-center gap-2.5">
+              <svg class="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>
+                <strong class="font-semibold">
+                  {failedQueueItems().length === 1
+                    ? "1 queued message failed to send:"
+                    : `${failedQueueItems().length} queued messages failed to send:`}
+                </strong>{" "}
+                {failedQueueItems()[0]?.error || "Delivery error. Needs attention."}
+              </span>
+            </div>
+            <button
+              onClick={async () => {
+                const replayDeps = getReplayDeps();
+                const retryRes = await retryFailedSends(replayDeps);
+                await refreshFailedQueue();
+                if (retryRes.sent > 0 && retryRes.failed === 0) {
+                  showToast(`Sent ${retryRes.sent} queued message${retryRes.sent > 1 ? "s" : ""}.`);
+                } else if (retryRes.failed > 0) {
+                  showToast("Message still could not be sent. Please check details.");
+                }
+              }}
+              class="bg-rose-600 hover:bg-rose-700 text-white text-xs px-3 py-1.5 rounded-lg transition font-semibold cursor-pointer shrink-0 shadow-xs"
+            >
+              Retry
+            </button>
+          </div>
+        </Show>
+
         {/* Mobile Navigation Drawer with Backdrop */}
         <Show when={mobileSidebarOpen()}>
           <div
@@ -9459,7 +9893,8 @@ const AppContent: Component = () => {
           const localUrl = URL.createObjectURL(file);
           if (boxId && key && !isOffline()) {
             try {
-              const att = await uploadEncryptedAttachment(boxId, file, key);
+              const v2Opts = await getMailboxV2OwnerOptions(boxId);
+              const att = await uploadEncryptedAttachment(boxId, file, key, undefined, undefined, undefined, v2Opts);
               return {
                 storageRef: `byos-storage://${boxId}/${att.id}`,
                 alt: file.name,

@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/smtp"
 	"os"
 	"os/signal"
@@ -215,14 +216,174 @@ func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Co
 		}
 	}
 
-	host, _, err := net.SplitHostPort(cfg.PostfixAddr)
-	if err != nil {
-		host = cfg.PostfixAddr
+	return deliverToSmtpServer(cfg.PostfixAddr, envelopeFrom, msg.Recipient, plaintext)
+}
+
+func splitRecipientTokens(input string) []string {
+	var parts []string
+	inQuotes := false
+	escaped := false
+	start := 0
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && inQuotes {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inQuotes = !inQuotes
+			continue
+		}
+		if !inQuotes && (ch == ',' || ch == ';') {
+			parts = append(parts, input[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, input[start:])
+	return parts
+}
+
+// parseAndValidateRecipients splits comma/semicolon-delimited recipients (respecting quoted display names),
+// trims whitespace, validates against RFC 5322 syntax and header injection, and deduplicates addresses.
+func parseAndValidateRecipients(recipientStr string) ([]string, error) {
+	if strings.ContainsAny(recipientStr, "\r\n\x00") {
+		return nil, fmt.Errorf("recipient list contains invalid control characters")
+	}
+	clean := strings.TrimSpace(recipientStr)
+	if clean == "" {
+		return nil, fmt.Errorf("recipient list is empty")
 	}
 
-	c, err := smtp.Dial(cfg.PostfixAddr)
+	rawList := splitRecipientTokens(clean)
+
+	seen := make(map[string]bool)
+	recipients := make([]string, 0, len(rawList))
+
+	for _, raw := range rawList {
+		addrStr := strings.TrimSpace(raw)
+		if addrStr == "" {
+			continue
+		}
+		parsed, err := mail.ParseAddress(addrStr)
+		if err != nil || parsed.Address == "" || !strings.Contains(parsed.Address, "@") {
+			return nil, fmt.Errorf("invalid recipient email address: %s", addrStr)
+		}
+		parts := strings.Split(parsed.Address, "@")
+		if len(parts) != 2 || len(parts[0]) == 0 || len(parts[1]) < 3 || !strings.Contains(parts[1], ".") {
+			return nil, fmt.Errorf("invalid recipient email domain: %s", addrStr)
+		}
+		canonical := strings.ToLower(parsed.Address)
+		if !seen[canonical] {
+			seen[canonical] = true
+			recipients = append(recipients, parsed.Address)
+		}
+	}
+
+	if len(recipients) == 0 {
+		return nil, fmt.Errorf("recipient list contains no valid addresses")
+	}
+	return recipients, nil
+}
+
+// stripBccHeaders removes all Bcc headers (case-insensitive, including multiline folded continuations)
+// strictly within the RFC 5322 header section prior to the first blank-line boundary.
+func stripBccHeaders(raw []byte) []byte {
+	var headerBytes, bodyBytes, delimiter []byte
+	if bytes.HasPrefix(raw, []byte("\r\n")) {
+		headerBytes = nil
+		delimiter = []byte("\r\n")
+		bodyBytes = raw[2:]
+	} else if bytes.HasPrefix(raw, []byte("\n")) {
+		headerBytes = nil
+		delimiter = []byte("\n")
+		bodyBytes = raw[1:]
+	} else {
+		crlfIdx := bytes.Index(raw, []byte("\r\n\r\n"))
+		lfIdx := bytes.Index(raw, []byte("\n\n"))
+		if crlfIdx >= 0 && (lfIdx < 0 || crlfIdx <= lfIdx) {
+			headerBytes = raw[:crlfIdx+2]
+			delimiter = []byte("\r\n")
+			bodyBytes = raw[crlfIdx+4:]
+		} else if lfIdx >= 0 {
+			headerBytes = raw[:lfIdx+1]
+			delimiter = []byte("\n")
+			bodyBytes = raw[lfIdx+2:]
+		} else {
+			headerBytes = raw
+			bodyBytes = nil
+			delimiter = nil
+		}
+	}
+
+	var sanitizedHeaders bytes.Buffer
+	skippingBcc := false
+	cursor := 0
+
+	for cursor < len(headerBytes) {
+		nextNL := bytes.IndexByte(headerBytes[cursor:], '\n')
+		var lineWithEnding []byte
+		var nextCursor int
+		if nextNL >= 0 {
+			lineWithEnding = headerBytes[cursor : cursor+nextNL+1]
+			nextCursor = cursor + nextNL + 1
+		} else {
+			lineWithEnding = headerBytes[cursor:]
+			nextCursor = len(headerBytes)
+		}
+
+		if len(lineWithEnding) > 0 && (lineWithEnding[0] == ' ' || lineWithEnding[0] == '\t') {
+			if skippingBcc {
+				cursor = nextCursor
+				continue
+			}
+			sanitizedHeaders.Write(lineWithEnding)
+		} else {
+			isBcc := false
+			if colonIdx := bytes.IndexByte(lineWithEnding, ':'); colonIdx >= 0 {
+				hdrName := strings.TrimSpace(string(lineWithEnding[:colonIdx]))
+				if strings.EqualFold(hdrName, "bcc") {
+					isBcc = true
+				}
+			}
+			if isBcc {
+				skippingBcc = true
+				cursor = nextCursor
+				continue
+			}
+			skippingBcc = false
+			sanitizedHeaders.Write(lineWithEnding)
+		}
+		cursor = nextCursor
+	}
+
+	var out bytes.Buffer
+	out.Grow(sanitizedHeaders.Len() + len(delimiter) + len(bodyBytes))
+	out.Write(sanitizedHeaders.Bytes())
+	out.Write(delimiter)
+	out.Write(bodyBytes)
+	return out.Bytes()
+}
+
+func deliverToSmtpServer(smtpAddr, envelopeFrom, recipientStr string, plaintext []byte) error {
+	recipients, err := parseAndValidateRecipients(recipientStr)
 	if err != nil {
-		return fmt.Errorf("smtp dial %s: %w", cfg.PostfixAddr, err)
+		return fmt.Errorf("recipient validation: %w", err)
+	}
+
+	sanitizedPayload := stripBccHeaders(plaintext)
+
+	host, _, err := net.SplitHostPort(smtpAddr)
+	if err != nil {
+		host = smtpAddr
+	}
+
+	c, err := smtp.Dial(smtpAddr)
+	if err != nil {
+		return fmt.Errorf("smtp dial %s: %w", smtpAddr, err)
 	}
 	defer c.Close()
 
@@ -230,8 +391,10 @@ func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Co
 		return fmt.Errorf("smtp mail: %w", err)
 	}
 
-	if err := c.Rcpt(msg.Recipient); err != nil {
-		return fmt.Errorf("smtp rcpt %s: %w", msg.Recipient, err)
+	for _, rcpt := range recipients {
+		if err := c.Rcpt(rcpt); err != nil {
+			return fmt.Errorf("smtp rcpt: %w", err)
+		}
 	}
 
 	w, err := c.Data()
@@ -239,8 +402,8 @@ func deliverMessage(ctx context.Context, tx *sql.Tx, msg OutboundMessage, cfg Co
 		return fmt.Errorf("smtp data: %w", err)
 	}
 
-	// Write plaintext as-is (already DKIM-signed, full MIME). No re-wrapping.
-	_, err = w.Write(plaintext)
+	// Write sanitized payload (Bcc headers removed).
+	_, err = w.Write(sanitizedPayload)
 	if err != nil {
 		return fmt.Errorf("smtp write: %w", err)
 	}

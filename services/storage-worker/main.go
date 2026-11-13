@@ -734,6 +734,7 @@ func main() {
 	http.HandleFunc("/health", worker.healthHandler)
 	http.HandleFunc("/api/store", worker.storeHandler)
 	http.HandleFunc("/api/retrieve", worker.retrieveHandler)
+	http.HandleFunc("/api/retrieve-stream", worker.retrieveStreamHandler)
 	http.HandleFunc("/api/delete", worker.deleteHandler)
 	http.HandleFunc("/api/list", worker.listHandler)
 	http.HandleFunc("/api/head", worker.headHandler)
@@ -1023,6 +1024,93 @@ func (w *StorageWorker) retrieveHandler(resp http.ResponseWriter, req *http.Requ
 		Data: data,
 		Size: int64(len(data)),
 	})
+}
+
+func (w *StorageWorker) retrieveStreamHandler(resp http.ResponseWriter, req *http.Request) {
+	if !requireInternalKey(resp, req) {
+		return
+	}
+	if req.Method != http.MethodPost {
+		http.Error(resp, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var retrieveReq RetrieveRequest
+	if err := json.NewDecoder(http.MaxBytesReader(resp, req.Body, 64*1024)).Decode(&retrieveReq); err != nil {
+		http.Error(resp, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	mailboxID := strings.TrimSpace(retrieveReq.MailboxID)
+	objectKey := strings.TrimSpace(retrieveReq.ObjectKey)
+	if mailboxID == "" || objectKey == "" {
+		http.Error(resp, "mailbox_id and object_key required", http.StatusBadRequest)
+		return
+	}
+	expectedPrefix := "mailboxes/" + mailboxID + "/"
+	if !strings.HasPrefix(objectKey, expectedPrefix) || strings.Contains(objectKey, "..") {
+		http.Error(resp, "object_key must be within caller mailbox prefix", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), 180*time.Second)
+	defer cancel()
+	st, bucket, err := w.getStorageForMailbox(ctx, mailboxID)
+	if err != nil {
+		if errors.Is(err, ErrStorageDisconnected) {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(resp).Encode(map[string]string{
+				"status":  "error",
+				"code":    "storage_disconnected",
+				"message": "Mailbox storage is currently unavailable. Please reconnect storage.",
+			})
+			return
+		}
+		http.Error(resp, fmt.Sprintf("Failed to get storage: %v", err), http.StatusBadGateway)
+		return
+	}
+	if st == nil {
+		http.Error(resp, "No storage available", http.StatusBadGateway)
+		return
+	}
+	if retrieveReq.Bucket != "" {
+		bucket = retrieveReq.Bucket
+	}
+	isNotFoundErr := func(e error) bool {
+		if e == nil {
+			return false
+		}
+		if os.IsNotExist(e) || errors.Is(e, os.ErrNotExist) {
+			return true
+		}
+		el := strings.ToLower(e.Error())
+		return strings.Contains(el, "nosuchkey") ||
+			strings.Contains(el, "not found") ||
+			strings.Contains(el, "404") ||
+			strings.Contains(el, "does not exist") ||
+			strings.Contains(el, "no such file") ||
+			strings.Contains(el, "cannot find the file")
+	}
+	info, headErr := st.HeadObject(ctx, bucket, objectKey)
+	if isNotFoundErr(headErr) {
+		http.Error(resp, "object not found", http.StatusNotFound)
+		return
+	}
+	rc, err := st.GetObject(ctx, bucket, objectKey)
+	if err != nil {
+		if isNotFoundErr(err) {
+			http.Error(resp, "object not found", http.StatusNotFound)
+			return
+		}
+		http.Error(resp, fmt.Sprintf("Failed to retrieve object: %v", err), http.StatusBadGateway)
+		return
+	}
+	defer rc.Close()
+
+	resp.Header().Set("Content-Type", "application/octet-stream")
+	if headErr == nil && info.Size >= 0 {
+		resp.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size))
+	}
+	resp.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(resp, rc)
 }
 
 func (w *StorageWorker) deleteHandler(resp http.ResponseWriter, req *http.Request) {

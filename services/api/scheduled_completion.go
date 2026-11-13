@@ -121,6 +121,15 @@ func completeScheduledDeliveryTx(ctx context.Context, tx pgx.Tx, deliveryID stri
 			return fmt.Errorf("create sent message copy for %s: %w", row.id, err)
 		}
 
+		// Re-link any Path B attachments from delivery_id -> sentMsgID so the Sent message owns them.
+		if _, err := tx.Exec(ctx, `
+			UPDATE attachments
+			SET message_id = $1
+			WHERE message_id = $2 AND mailbox_id = $3
+		`, sentMsgID, deliveryID, row.mailboxID); err != nil {
+			return fmt.Errorf("relink sent attachments for %s: %w", row.id, err)
+		}
+
 		if _, err := tx.Exec(ctx, `
 			UPDATE scheduled_messages
 			SET status = 'sent', sent_at = now(), updated_at = now()
@@ -177,6 +186,25 @@ func completeScheduledDeliveryTx(ctx context.Context, tx pgx.Tx, deliveryID stri
 			VALUES ($1, $2, $3, $4, $5, 1, true, now(), now())
 		`, draftID, row.mailboxID, cleanSubject, row.recipient, draftBytes); err != nil {
 			return fmt.Errorf("insert failed draft for %s: %w", row.id, err)
+		}
+
+		if hasPublicTable(ctx, tx, "draft_attachments") && hasPublicTable(ctx, tx, "outbound_delivery_attachments") {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO draft_attachments (draft_id, attachment_id, mailbox_id, position, disposition, content_id)
+				SELECT $1, attachment_id, mailbox_id, position, disposition, content_id
+				FROM outbound_delivery_attachments
+				WHERE delivery_id = $2 AND mailbox_id = $3
+				ON CONFLICT (draft_id, attachment_id) DO NOTHING
+			`, draftID, deliveryID, row.mailboxID); err != nil {
+				return fmt.Errorf("preserve failed draft attachments for %s: %w", row.id, err)
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE attachments
+			SET message_id = NULL
+			WHERE message_id = $1 AND mailbox_id = $2
+		`, deliveryID, row.mailboxID); err != nil {
+			return fmt.Errorf("unlink failed delivery attachments for %s: %w", row.id, err)
 		}
 
 		log.Printf("[scheduled-complete] marked failed delivery_id=%s row_id=%s draftID=%s err=%s", deliveryID, row.id, draftID, errMsg)

@@ -152,6 +152,41 @@ describe("documentExport", () => {
       expect(text).toContain("Strategic Initiatives");
       expect(text).toContain("9E725F");
     });
+
+    it("generates DOCX with custom image dimensions, alt text, and external hyperlink click", async () => {
+      const tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+      const note: NoteItem = {
+        id: "note-img-export-1",
+        title: "Image Document Test",
+        content: `
+          <p>Text before image</p>
+          <p><a href="https://byos.dev"><img src="${tinyPng}" alt="Architecture Diagram" data-width="450px" data-height="300px" data-align="center" data-wrap="square" /></a></p>
+          <p>Text after image</p>
+        `,
+        color: "default",
+        isPinned: false,
+        isArchived: false,
+        isInBin: false,
+        labels: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      const docxBlob = await generateDocxFromNote(note, (uri) => uri);
+      expect(docxBlob).toBeInstanceOf(Blob);
+      const arrayBuf = await docxBlob.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuf);
+      const text = new TextDecoder().decode(bytes);
+
+      // Verify custom dimensions (450 * 9525 = 4286250 EMU)
+      expect(text).toContain("4286250");
+      // Verify alt text in wp:docPr
+      expect(text).toContain('descr="Architecture Diagram"');
+      // Verify external hyperlink relationship
+      expect(text).toContain('Target="https://byos.dev"');
+      expect(text).toContain('TargetMode="External"');
+      expect(text).toContain("<a:hlinkClick");
+    });
   });
 
   describe("getSafeExportFilename and createDocumentExportFile", () => {

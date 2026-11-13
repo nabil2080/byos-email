@@ -20,6 +20,9 @@ use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
+pub use zeroize::Zeroizing;
+pub use hex;
 
 pub mod xwing;
 pub mod xwing_hpke;
@@ -1044,6 +1047,169 @@ impl OutboundDeliveryKeypair {
 }
 
 // =============================================
+// Attachment Encryption Protocol v2 (Release B2)
+// =============================================
+
+pub const ATTACHMENT_CRYPTO_VERSION_V2: u32 = 2;
+pub const ATTACHMENT_AAD_VERSION_V2: u8 = 2;
+pub const ATTACHMENT_DISPOSITION_ATTACHMENT: u8 = 0x01;
+pub const ATTACHMENT_DISPOSITION_INLINE: u8 = 0x02;
+
+/// Computes the 8-byte key fingerprint (`outbound_key_id`) from a 32-byte X25519 public key:
+/// `SHA-256("byos-outbound-pk-v1" || outbound_pk)[0..8]`.
+pub fn sha256_digest(data: &[u8]) -> [u8; 32] {
+    Sha256::digest(data).into()
+}
+
+pub fn outbound_key_id(outbound_pk: &[u8; 32]) -> [u8; 8] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"byos-outbound-pk-v1");
+    hasher.update(outbound_pk);
+    let digest = hasher.finalize();
+    let mut id = [0u8; 8];
+    id.copy_from_slice(&digest[..8]);
+    id
+}
+
+/// Computes the 16-character lowercase hex `outbound_key_id` for a 32-byte X25519 public key.
+pub fn outbound_key_id_hex(outbound_pk: &[u8; 32]) -> String {
+    hex::encode(outbound_key_id(outbound_pk))
+}
+
+/// Canonical 53-byte `blob_aad` for Protocol v2 attachment ciphertext:
+/// `"byos-att-blob-v2"(16) || mailbox_id(16) || attachment_id(16) || crypto_version(4 BE) || aad_version(1)`.
+pub fn attachment_blob_aad_v2(
+    mailbox_id: &[u8; 16],
+    attachment_id: &[u8; 16],
+    crypto_version: u32,
+    aad_version: u8,
+) -> [u8; 53] {
+    let mut out = [0u8; 53];
+    out[0..16].copy_from_slice(b"byos-att-blob-v2");
+    out[16..32].copy_from_slice(mailbox_id);
+    out[32..48].copy_from_slice(attachment_id);
+    out[48..52].copy_from_slice(&crypto_version.to_be_bytes());
+    out[52] = aad_version;
+    out
+}
+
+/// Canonical 53-byte `owner_wrap_aad` for Protocol v2 owner CEK wrapping:
+/// `"byos-att-ownr-v2"(16) || mailbox_id(16) || attachment_id(16) || owner_key_version(4 BE) || crypto_version(1)`.
+pub fn attachment_owner_wrap_aad_v2(
+    mailbox_id: &[u8; 16],
+    attachment_id: &[u8; 16],
+    owner_key_version: u32,
+    crypto_version: u8,
+) -> [u8; 53] {
+    let mut out = [0u8; 53];
+    out[0..16].copy_from_slice(b"byos-att-ownr-v2");
+    out[16..32].copy_from_slice(mailbox_id);
+    out[32..48].copy_from_slice(attachment_id);
+    out[48..52].copy_from_slice(&owner_key_version.to_be_bytes());
+    out[52] = crypto_version;
+    out
+}
+
+/// Canonical 32-byte `metadata_sha256` binding filename, MIME type, size, plaintext digest, disposition, and CID.
+pub fn attachment_metadata_sha256_v2(
+    sanitized_filename_utf8: &str,
+    mime_type_ascii: &str,
+    plaintext_size_bytes: u64,
+    plaintext_sha256: &[u8; 32],
+    disposition_tag: u8,
+    content_id_utf8: &str,
+) -> [u8; 32] {
+    let fname = sanitized_filename_utf8.as_bytes();
+    let mime = mime_type_ascii.as_bytes();
+    let cid = content_id_utf8.as_bytes();
+    let mut hasher = Sha256::new();
+    hasher.update(b"byos-att-meta-v2");
+    hasher.update(&(fname.len() as u32).to_be_bytes());
+    hasher.update(fname);
+    hasher.update(&(mime.len() as u32).to_be_bytes());
+    hasher.update(mime);
+    hasher.update(&plaintext_size_bytes.to_be_bytes());
+    hasher.update(plaintext_sha256);
+    hasher.update(&[disposition_tag]);
+    hasher.update(&(cid.len() as u32).to_be_bytes());
+    hasher.update(cid);
+    hasher.finalize().into()
+}
+
+/// Canonical 101-byte `outbound_wrap_aad` for Protocol v2 outbound CEK wrapping:
+/// `"byos-att-outb-v2"(16) || mailbox_id(16) || outbox_seq(8 BE) || attachment_id(16) || outbound_key_id(8) || outbound_key_epoch(4 BE) || crypto_version(1) || metadata_sha256(32)`.
+pub fn attachment_outbound_wrap_aad_v2(
+    mailbox_id: &[u8; 16],
+    outbox_seq: u64,
+    attachment_id: &[u8; 16],
+    outbound_key_id: &[u8; 8],
+    outbound_key_epoch: u32,
+    crypto_version: u8,
+    metadata_sha256: &[u8; 32],
+) -> [u8; 101] {
+    let mut out = [0u8; 101];
+    out[0..16].copy_from_slice(b"byos-att-outb-v2");
+    out[16..32].copy_from_slice(mailbox_id);
+    out[32..40].copy_from_slice(&outbox_seq.to_be_bytes());
+    out[40..56].copy_from_slice(attachment_id);
+    out[56..64].copy_from_slice(outbound_key_id);
+    out[64..68].copy_from_slice(&outbound_key_epoch.to_be_bytes());
+    out[68] = crypto_version;
+    out[69..101].copy_from_slice(metadata_sha256);
+    out
+}
+
+/// Seals a 32-byte attachment CEK under an X25519 public key with `outbound_wrap_aad`.
+pub fn wrap_cek_outbound_v2(
+    outbound_pk: &[u8; 32],
+    cek: &[u8; 32],
+    outbound_aad: &[u8; 101],
+) -> Result<Vec<u8>, CryptoError> {
+    hpke_seal(outbound_pk, cek, outbound_aad)
+}
+
+/// Opens a Protocol v2 `cek_outbound_wrapped` (81 bytes) using `OUTBOUND_DELIVERY_SK` and `outbound_wrap_aad`.
+pub fn unwrap_cek_outbound_v2(
+    outbound_sk: &[u8; 32],
+    wrapped: &[u8],
+    outbound_aad: &[u8; 101],
+) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+    if wrapped.len() != 81 {
+        return Err(CryptoError::InvalidFormat);
+    }
+    let mut raw = hpke_open(outbound_sk, wrapped, outbound_aad)?;
+    if raw.len() != 32 {
+        raw.zeroize();
+        return Err(CryptoError::InvalidFormat);
+    }
+    let mut cek = Zeroizing::new([0u8; 32]);
+    cek.copy_from_slice(&raw);
+    raw.zeroize();
+    Ok(cek)
+}
+
+/// Decrypts a Protocol v2 attachment blob and verifies `plaintext_size_bytes` and `plaintext_sha256`.
+pub fn decrypt_attachment_blob_v2(
+    cek: &[u8; 32],
+    ciphertext: &[u8],
+    blob_aad: &[u8; 53],
+    expected_plaintext_sha256: &[u8; 32],
+    expected_plaintext_size: u64,
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    let mut pt = aes_gcm_decrypt(cek, ciphertext, blob_aad)?;
+    if pt.len() as u64 != expected_plaintext_size {
+        pt.zeroize();
+        return Err(CryptoError::DecryptionFailed);
+    }
+    let digest: [u8; 32] = Sha256::digest(&pt).into();
+    if digest != *expected_plaintext_sha256 {
+        pt.zeroize();
+        return Err(CryptoError::DecryptionFailed);
+    }
+    Ok(Zeroizing::new(pt))
+}
+
+// =============================================
 // DKIM Key Generation and Encryption
 // =============================================
 
@@ -1127,108 +1293,474 @@ pub fn derive_dek(dek_b64: &str) -> Result<[u8; 32], CryptoError> {
     Ok(dek)
 }
 
-/// Relaxed canonicalization for DKIM headers (RFC 6376 Section 3.4.6)
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DkimCanonMode {
+    Relaxed,
+    Simple,
+}
+
+/// Split an RFC 5322 byte message into (header_block, body) at the earliest empty-line boundary.
+fn split_dkim_header_body(message: &[u8]) -> Option<(&[u8], &[u8])> {
+    if let Some(rest) = message.strip_prefix(b"\r\n") {
+        return Some((&[], rest));
+    }
+    if let Some(rest) = message.strip_prefix(b"\n") {
+        return Some((&[], rest));
+    }
+    let crlf_pos = message.windows(4).position(|w| w == b"\r\n\r\n");
+    let lf_pos = message.windows(2).position(|w| w == b"\n\n");
+    match (crlf_pos, lf_pos) {
+        (Some(c), Some(l)) if c <= l => Some((&message[..c], &message[c + 4..])),
+        (Some(c), None) => Some((&message[..c], &message[c + 4..])),
+        (_, Some(l)) => Some((&message[..l], &message[l + 2..])),
+        _ => None,
+    }
+}
+
+/// Group raw header lines into logical header fields, preserving folded continuation lines
+/// separated by CRLF so both relaxed and simple canonicalization operate on complete headers.
+fn unfold_raw_headers_bytes(header_bytes: &[u8]) -> Vec<Vec<u8>> {
+    let mut headers: Vec<Vec<u8>> = Vec::new();
+    let mut pos = 0;
+    while pos < header_bytes.len() {
+        let line_end = header_bytes[pos..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|rel| pos + rel)
+            .unwrap_or(header_bytes.len());
+        let mut line = &header_bytes[pos..line_end];
+        if line.ends_with(b"\r") {
+            line = &line[..line.len() - 1];
+        }
+        pos = if line_end < header_bytes.len() {
+            line_end + 1
+        } else {
+            line_end
+        };
+
+        if line.is_empty() {
+            continue;
+        }
+        if matches!(line.first(), Some(b' ') | Some(b'\t')) {
+            if let Some(prev) = headers.last_mut() {
+                prev.extend_from_slice(b"\r\n");
+                prev.extend_from_slice(line);
+            }
+        } else {
+            headers.push(line.to_vec());
+        }
+    }
+    headers
+}
+
+/// Byte-oriented RFC 6376 Section 3.4.2 relaxed header canonicalization.
+/// Returns lowercase header name + single colon + unfolded/collapsed/trimmed header value,
+/// with no trailing CRLF.
+fn relaxed_header_canonicalize_bytes(header: &[u8]) -> Vec<u8> {
+    let Some(colon_pos) = header.iter().position(|&b| b == b':') else {
+        let mut out = Vec::new();
+        for &b in header {
+            if !matches!(b, b' ' | b'\t' | b'\r' | b'\n') {
+                out.push(b.to_ascii_lowercase());
+            }
+        }
+        return out;
+    };
+
+    let raw_name = &header[..colon_pos];
+    let name_start = raw_name
+        .iter()
+        .position(|&b| !matches!(b, b' ' | b'\t'))
+        .unwrap_or(raw_name.len());
+    let name_end = raw_name
+        .iter()
+        .rposition(|&b| !matches!(b, b' ' | b'\t'))
+        .map(|i| i + 1)
+        .unwrap_or(name_start);
+
+    let mut out = Vec::with_capacity(header.len());
+    for &b in &raw_name[name_start..name_end] {
+        out.push(b.to_ascii_lowercase());
+    }
+    out.push(b':');
+
+    // RFC 6376 §3.4.2 steps 2-5: unfold CRLF, collapse WSP runs to single 0x20, strip leading/trailing WSP.
+    let mut val = Vec::with_capacity(header.len() - colon_pos);
+    let mut in_wsp = false;
+    let mut started = false;
+    for &b in &header[colon_pos + 1..] {
+        if b == b'\r' || b == b'\n' {
+            continue;
+        }
+        if b == b' ' || b == b'\t' {
+            if started {
+                in_wsp = true;
+            }
+        } else {
+            if in_wsp {
+                val.push(b' ');
+                in_wsp = false;
+            }
+            val.push(b);
+            started = true;
+        }
+    }
+    out.extend_from_slice(&val);
+    out
+}
+
+/// Relaxed canonicalization for DKIM headers (RFC 6376 Section 3.4.2).
+#[allow(dead_code)]
 fn relaxed_header_canonicalize(header: &str) -> String {
-    // Unfold lines (replace CRLF + WSP with single space)
-    let mut unfolded = String::new();
-    let mut lines = header.lines().peekable();
-    while let Some(line) = lines.next() {
-        unfolded.push_str(line.trim());
-        if lines.peek().is_some() {
-            unfolded.push(' ');
-        }
-    }
-    // Lowercase header name
-    if let Some(colon_pos) = unfolded.find(':') {
-        let name = unfolded[..colon_pos].to_lowercase();
-        let value = &unfolded[colon_pos..];
-        format!("{}:{}", name, value)
-    } else {
-        unfolded
-    }
+    String::from_utf8_lossy(&relaxed_header_canonicalize_bytes(header.as_bytes())).into_owned()
 }
 
-/// Relaxed canonicalization for DKIM body (RFC 6376 Section 3.4.5)
+/// Relaxed canonicalization for DKIM body (RFC 6376 Section 3.4.5).
+/// Operates in raw bytes without lossy UTF-8 conversion:
+/// - Strips trailing WSP per line
+/// - Collapses internal runs of SP/HTAB per line to a single SP (0x20)
+/// - Terminates every line with CRLF
+/// - Removes all trailing empty lines; empty bodies return 0 bytes
 fn relaxed_body_canonicalize(body: &[u8]) -> Vec<u8> {
-    let mut result = Vec::new();
-    let mut prev_was_cr = false;
-    let mut prev_was_lf = false;
-    
-    for &byte in body {
-        match byte {
-            b'\r' => {
-                if !prev_was_cr {
-                    result.push(b'\r');
+    if body.is_empty() {
+        return Vec::new();
+    }
+
+    let mut canon_lines: Vec<Vec<u8>> = Vec::new();
+    let mut i = 0;
+    while i < body.len() {
+        let line_start = i;
+        while i < body.len()
+            && body[i] != b'\n'
+            && !(body[i] == b'\r' && body.get(i + 1) == Some(&b'\n'))
+        {
+            i += 1;
+        }
+        let line_slice = &body[line_start..i];
+        if i < body.len() {
+            i += if body[i] == b'\r' { 2 } else { 1 };
+        }
+
+        let mut trimmed_end = line_slice.len();
+        while trimmed_end > 0 && matches!(line_slice[trimmed_end - 1], b' ' | b'\t') {
+            trimmed_end -= 1;
+        }
+
+        let mut line_out = Vec::with_capacity(trimmed_end);
+        let mut in_wsp = false;
+        for &b in &line_slice[..trimmed_end] {
+            if b == b' ' || b == b'\t' {
+                if !in_wsp {
+                    line_out.push(b' ');
+                    in_wsp = true;
                 }
-                prev_was_cr = true;
-                prev_was_lf = false;
-            }
-            b'\n' => {
-                if prev_was_cr {
-                    result.push(b'\n');
-                } else if !prev_was_lf || !result.is_empty() {
-                    result.push(b'\n');
-                }
-                prev_was_lf = true;
-                prev_was_cr = false;
-            }
-            b' ' | b'\t' => {
-                if prev_was_cr || prev_was_lf {
-                    // At start of line, keep single space
-                    result.push(b' ');
-                } else {
-                    result.push(byte);
-                }
-                prev_was_cr = false;
-                prev_was_lf = false;
-            }
-            _ => {
-                if prev_was_cr {
-                    result.push(b'\r');
-                }
-                if prev_was_lf {
-                    result.push(b'\n');
-                }
-                result.push(byte);
-                prev_was_cr = false;
-                prev_was_lf = false;
+            } else {
+                line_out.push(b);
+                in_wsp = false;
             }
         }
+        canon_lines.push(line_out);
     }
-    
-    // Remove trailing whitespace from each line
-    let mut final_result = Vec::new();
-    let mut line_start = 0;
-    for (i, &byte) in result.iter().enumerate() {
-        if byte == b'\n' {
-            // Trim trailing whitespace from line
-            let mut end = i;
-            while end > line_start && (result[end - 1] == b' ' || result[end - 1] == b'\t' || result[end - 1] == b'\r') {
-                end -= 1;
-            }
-            final_result.extend_from_slice(&result[line_start..end]);
-            final_result.push(b'\n');
-            line_start = i + 1;
-        }
+
+    while matches!(canon_lines.last(), Some(last) if last.is_empty()) {
+        canon_lines.pop();
     }
-    // Handle last line if no trailing newline
-    if line_start < result.len() {
-        let mut end = result.len();
-        while end > line_start && (result[end - 1] == b' ' || result[end - 1] == b'\t' || result[end - 1] == b'\r') {
-            end -= 1;
-        }
-        final_result.extend_from_slice(&result[line_start..end]);
+
+    let mut out = Vec::new();
+    for line in canon_lines {
+        out.extend_from_slice(&line);
+        out.extend_from_slice(b"\r\n");
     }
-    
-    // Ensure body ends with CRLF
-    if !final_result.ends_with(b"\r\n") {
-        final_result.extend_from_slice(b"\r\n");
-    }
-    
-    final_result
+    out
 }
 
-/// Sign an RFC5322 message with DKIM.
+/// Simple canonicalization for DKIM body (RFC 6376 Section 3.4.3).
+fn simple_body_canonicalize(body: &[u8]) -> Vec<u8> {
+    if body.is_empty() {
+        return b"\r\n".to_vec();
+    }
+    let mut lines: Vec<&[u8]> = Vec::new();
+    let mut i = 0;
+    while i < body.len() {
+        let line_start = i;
+        while i < body.len()
+            && body[i] != b'\n'
+            && !(body[i] == b'\r' && body.get(i + 1) == Some(&b'\n'))
+        {
+            i += 1;
+        }
+        lines.push(&body[line_start..i]);
+        if i < body.len() {
+            i += if body[i] == b'\r' { 2 } else { 1 };
+        }
+    }
+    while matches!(lines.last(), Some(last) if last.is_empty()) {
+        lines.pop();
+    }
+    if lines.is_empty() {
+        return b"\r\n".to_vec();
+    }
+    let mut out = Vec::new();
+    for line in lines {
+        out.extend_from_slice(line);
+        out.extend_from_slice(b"\r\n");
+    }
+    out
+}
+
+/// Extract tag-value pairs from a raw DKIM-Signature header (unfolding FWS inside tag values).
+fn parse_dkim_signature_tags(dkim_raw: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
+    let colon_pos = dkim_raw.iter().position(|&b| b == b':')?;
+    let val_bytes = &dkim_raw[colon_pos + 1..];
+    let mut tags = Vec::new();
+    for part in val_bytes.split(|&b| b == b';') {
+        let Some(eq_pos) = part.iter().position(|&b| b == b'=') else {
+            continue;
+        };
+        let key: String = part[..eq_pos]
+            .iter()
+            .filter(|&&b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+            .map(|&b| b.to_ascii_lowercase() as char)
+            .collect();
+        if key.is_empty() {
+            continue;
+        }
+        let raw_v = &part[eq_pos + 1..];
+        let v_start = raw_v
+            .iter()
+            .position(|&b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+            .unwrap_or(raw_v.len());
+        let v_end = raw_v
+            .iter()
+            .rposition(|&b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+            .map(|idx| idx + 1)
+            .unwrap_or(v_start);
+        tags.push((key, raw_v[v_start..v_end].to_vec()));
+    }
+    Some(tags)
+}
+
+/// Produce a raw copy of DKIM-Signature with ONLY the `b=` tag value emptied,
+/// preserving exact tag order, folding, and surrounding whitespace (RFC 6376 §3.7).
+fn strip_b_tag_preserving_layout(dkim_raw: &[u8]) -> Option<Vec<u8>> {
+    let colon_pos = dkim_raw.iter().position(|&b| b == b':')?;
+    let val = &dkim_raw[colon_pos + 1..];
+    let mut seg_start = 0;
+    while seg_start <= val.len() {
+        let seg_end = val[seg_start..]
+            .iter()
+            .position(|&b| b == b';')
+            .map(|rel| seg_start + rel)
+            .unwrap_or(val.len());
+        let seg = &val[seg_start..seg_end];
+        if let Some(eq_rel) = seg.iter().position(|&b| b == b'=') {
+            let tag_name: Vec<u8> = seg[..eq_rel]
+                .iter()
+                .copied()
+                .filter(|&b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+                .map(|b| b.to_ascii_lowercase())
+                .collect();
+            if tag_name == b"b" {
+                let mut out = Vec::with_capacity(dkim_raw.len());
+                out.extend_from_slice(&dkim_raw[..colon_pos + 1]);
+                out.extend_from_slice(&val[..seg_start + eq_rel + 1]);
+                out.extend_from_slice(&val[seg_end..]);
+                return Some(out);
+            }
+        }
+        if seg_end == val.len() {
+            break;
+        }
+        seg_start = seg_end + 1;
+    }
+    None
+}
+
+fn dkim_header_name_lower(raw_header: &[u8]) -> Option<String> {
+    let colon_pos = raw_header.iter().position(|&b| b == b':')?;
+    let raw_name = &raw_header[..colon_pos];
+    let start = raw_name
+        .iter()
+        .position(|&b| !matches!(b, b' ' | b'\t'))
+        .unwrap_or(raw_name.len());
+    let end = raw_name
+        .iter()
+        .rposition(|&b| !matches!(b, b' ' | b'\t'))
+        .map(|i| i + 1)
+        .unwrap_or(start);
+    Some(
+        raw_name[start..end]
+            .iter()
+            .map(|&b| b.to_ascii_lowercase() as char)
+            .collect(),
+    )
+}
+
+fn parse_canon_modes(c_tag: &[u8]) -> Option<(DkimCanonMode, DkimCanonMode)> {
+    let s = std::str::from_utf8(c_tag).ok()?.trim().to_ascii_lowercase();
+    if s.is_empty() {
+        return Some((DkimCanonMode::Simple, DkimCanonMode::Simple));
+    }
+    let (h, b) = match s.split_once('/') {
+        Some((h, b)) => (h.trim(), b.trim()),
+        None => (s.as_str(), "simple"),
+    };
+    let h_mode = match h {
+        "relaxed" => DkimCanonMode::Relaxed,
+        "simple" => DkimCanonMode::Simple,
+        _ => return None,
+    };
+    let b_mode = match b {
+        "relaxed" => DkimCanonMode::Relaxed,
+        "simple" => DkimCanonMode::Simple,
+        _ => return None,
+    };
+    Some((h_mode, b_mode))
+}
+
+fn verify_single_dkim_header(
+    verifying_key: &rsa::pkcs1v15::VerifyingKey<Sha256>,
+    headers: &[Vec<u8>],
+    dkim_idx: usize,
+    body: &[u8],
+) -> bool {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    use rsa::signature::Verifier;
+
+    let Some(tags) = parse_dkim_signature_tags(&headers[dkim_idx]) else {
+        return false;
+    };
+    let get_tag = |name: &str| -> Option<&[u8]> {
+        tags.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_slice())
+    };
+
+    // Require RFC 6376 v=1 and RSA-SHA256
+    if get_tag("v").map(|v| v != b"1").unwrap_or(true) {
+        return false;
+    }
+    let Some(a_val) = get_tag("a") else {
+        return false;
+    };
+    let a_lower: String = a_val
+        .iter()
+        .filter(|&&b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+        .map(|&b| b.to_ascii_lowercase() as char)
+        .collect();
+    if a_lower != "rsa-sha256" {
+        return false;
+    }
+
+    let (hdr_mode, body_mode) = match get_tag("c") {
+        Some(c) => match parse_canon_modes(c) {
+            Some(modes) => modes,
+            None => return false,
+        },
+        None => (DkimCanonMode::Simple, DkimCanonMode::Simple),
+    };
+
+    let Some(bh_raw) = get_tag("bh") else {
+        return false;
+    };
+    let bh_clean: String = bh_raw
+        .iter()
+        .filter(|&&b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+        .map(|&b| b as char)
+        .collect();
+    if bh_clean.is_empty() {
+        return false;
+    }
+
+    let Some(h_raw) = get_tag("h") else {
+        return false;
+    };
+    let h_str = match std::str::from_utf8(h_raw) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let h_list: Vec<String> = h_str
+        .split(':')
+        .map(|part| {
+            part.chars()
+                .filter(|c| !c.is_ascii_whitespace())
+                .collect::<String>()
+                .to_ascii_lowercase()
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    if h_list.is_empty() {
+        return false;
+    }
+
+    let Some(b_raw) = get_tag("b") else {
+        return false;
+    };
+    let b_clean: Vec<u8> = b_raw
+        .iter()
+        .copied()
+        .filter(|&b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+        .collect();
+    let Ok(sig_bytes) = BASE64.decode(&b_clean) else {
+        return false;
+    };
+    let Ok(sig) = rsa::pkcs1v15::Signature::try_from(sig_bytes.as_slice()) else {
+        return false;
+    };
+
+    let canonical_body = match body_mode {
+        DkimCanonMode::Relaxed => relaxed_body_canonicalize(body),
+        DkimCanonMode::Simple => simple_body_canonicalize(body),
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(&canonical_body);
+    let bh_calc = BASE64.encode(hasher.finalize());
+    if bh_calc != bh_clean {
+        return false;
+    }
+
+    let Some(dkim_without_b) = strip_b_tag_preserving_layout(&headers[dkim_idx]) else {
+        return false;
+    };
+
+    // Match signed headers per RFC 6376 Section 5.4 bottom-up occurrence matching (excluding dkim_idx itself)
+    let mut used = vec![false; headers.len()];
+    used[dkim_idx] = true;
+    let mut signing_input = Vec::new();
+    for target_name in &h_list {
+        for idx in (0..headers.len()).rev() {
+            if used[idx] {
+                continue;
+            }
+            if dkim_header_name_lower(&headers[idx]).as_deref() == Some(target_name.as_str()) {
+                used[idx] = true;
+                match hdr_mode {
+                    DkimCanonMode::Relaxed => {
+                        signing_input.extend_from_slice(&relaxed_header_canonicalize_bytes(&headers[idx]));
+                        signing_input.extend_from_slice(b"\r\n");
+                    }
+                    DkimCanonMode::Simple => {
+                        signing_input.extend_from_slice(&headers[idx]);
+                        signing_input.extend_from_slice(b"\r\n");
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // RFC 6376 §3.7: canonicalized DKIM-Signature header is last, with NO trailing CRLF.
+    match hdr_mode {
+        DkimCanonMode::Relaxed => {
+            signing_input.extend_from_slice(&relaxed_header_canonicalize_bytes(&dkim_without_b));
+        }
+        DkimCanonMode::Simple => {
+            signing_input.extend_from_slice(&dkim_without_b);
+        }
+    }
+
+    verifying_key.verify(&signing_input, &sig).is_ok()
+}
+
+/// Sign an RFC5322 message with DKIM (RFC 6376, `rsa-sha256`, `c=relaxed/relaxed`).
 /// Returns the message with DKIM-Signature header prepended.
 pub fn dkim_sign(
     private_key_pem: &str,
@@ -1243,96 +1775,123 @@ pub fn dkim_sign(
         RsaPrivateKey,
     };
 
+    if selector.trim().is_empty() || domain.trim().is_empty() {
+        return Err(CryptoError::InvalidFormat);
+    }
+
     // Parse private key from PKCS#8 PEM
     let private_key = RsaPrivateKey::from_pkcs8_pem(private_key_pem)
         .map_err(|_| CryptoError::InvalidFormat)?;
-    
     let signing_key = SigningKey::<Sha256>::new(private_key);
 
-    // Parse message into headers and body (handle both CRLF and LF)
-    let message_str = String::from_utf8_lossy(message);
-    let (headers_str, body) = if let Some((h, b)) = message_str.split_once("\r\n\r\n") {
-        (h, b)
-    } else if let Some((h, b)) = message_str.split_once("\n\n") {
-        (h, b)
-    } else {
+    // Byte-oriented split preserves arbitrary non-UTF-8 content and header folding
+    let Some((headers_bytes, body_bytes)) = split_dkim_header_body(message) else {
         return Err(CryptoError::InvalidFormat);
     };
-    
-    // Parse headers
-    let mut headers: Vec<(String, String)> = Vec::new();
-    for line in headers_str.lines() {
-        if let Some(colon_pos) = line.find(':') {
-            let name = line[..colon_pos].trim().to_string();
-            let value = line[colon_pos + 1..].trim().to_string();
-            headers.push((name, value));
-        }
-    }
+    let headers = unfold_raw_headers_bytes(headers_bytes);
 
-    // Compute body hash (bh=)
-    let canonical_body = relaxed_body_canonicalize(body.as_bytes());
+    // Compute body hash (bh=) using RFC 6376 Section 3.4.5 relaxed body canonicalization
+    let canonical_body = relaxed_body_canonicalize(body_bytes);
     let mut hasher = Sha256::new();
     hasher.update(&canonical_body);
     let body_hash = hasher.finalize();
     let body_hash_b64 = BASE64.encode(&body_hash);
 
-    // Select headers to sign (standard DKIM headers)
-    let signed_headers: Vec<&str> = headers.iter()
-        .filter(|(name, _)| {
-            let lower = name.to_lowercase();
-            matches!(lower.as_str(),
-                "from" | "to" | "cc" | "subject" | "date" | "message-id" |
-                "mime-version" | "content-type" | "content-transfer-encoding" |
-                "reply-to" | "sender" | "in-reply-to" | "references"
-            )
-        })
-        .map(|(name, _)| name.as_str())
-        .collect();
-    
-    let signed_headers_str = signed_headers.join(":");
+    // Select signed headers bottom-to-top per RFC 6376 Section 5.4 so repeated header names
+    // map 1:1 with verifier bottom-up occurrence matching.
+    let mut selected_indices: Vec<usize> = Vec::new();
+    let mut signed_header_names: Vec<String> = Vec::new();
+    for idx in (0..headers.len()).rev() {
+        if let Some(name_lower) = dkim_header_name_lower(&headers[idx]) {
+            if matches!(
+                name_lower.as_str(),
+                "from"
+                    | "to"
+                    | "cc"
+                    | "subject"
+                    | "date"
+                    | "message-id"
+                    | "mime-version"
+                    | "content-type"
+                    | "content-transfer-encoding"
+                    | "reply-to"
+                    | "sender"
+                    | "in-reply-to"
+                    | "references"
+            ) {
+                selected_indices.push(idx);
+                signed_header_names.push(name_lower);
+            }
+        }
+    }
+
+    let signed_headers_str = signed_header_names.join(":");
 
     // Create DKIM-Signature header without signature (b=)
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    
+
     let mut dkim_header = format!(
         "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d={}; s={}; h={}; bh={}; t={}; b=",
-        domain, selector, signed_headers_str, body_hash_b64, timestamp
+        domain.trim(),
+        selector.trim(),
+        signed_headers_str,
+        body_hash_b64,
+        timestamp
     );
 
-    // Canonicalize headers for signing
-    let mut canonical_headers = Vec::new();
-    for (name, value) in &headers {
-        if signed_headers.iter().any(|&h| h.eq_ignore_ascii_case(name)) {
-            let canon = relaxed_header_canonicalize(&format!("{}: {}", name, value));
-            canonical_headers.push(canon);
-        }
+    // Build signing input per RFC 6376 Section 3.7 (no trailing CRLF after DKIM-Signature)
+    let mut signing_input = Vec::new();
+    for &idx in &selected_indices {
+        signing_input.extend_from_slice(&relaxed_header_canonicalize_bytes(&headers[idx]));
+        signing_input.extend_from_slice(b"\r\n");
     }
-    // Add DKIM-Signature header (without b= value) to canonicalization
-    canonical_headers.push(relaxed_header_canonicalize(&dkim_header));
-
-    // Build signing input
-    let signing_input = canonical_headers.join("\r\n") + "\r\n";
+    signing_input.extend_from_slice(&relaxed_header_canonicalize_bytes(dkim_header.as_bytes()));
 
     // Sign with RSA blinding (RUSTSEC-2023-0071 Marvin Attack mitigation).
-    // rsa crate docs: if rng is Some, RSA blinding is used to avoid timing side-channel.
-    // Using sign_with_rng enables blinding; signature bytes remain deterministic.
     let mut rng = rsa::rand_core::OsRng;
-    let signature = signing_key.sign_with_rng(&mut rng, signing_input.as_bytes());
+    let signature = signing_key.sign_with_rng(&mut rng, &signing_input);
     let signature_b64 = BASE64.encode(signature.to_bytes());
 
     // Complete DKIM-Signature header
     dkim_header.push_str(&signature_b64);
     dkim_header.push_str("\r\n");
 
-    // Prepend to message
-    let mut result = Vec::new();
+    // Prepend to original message bytes verbatim
+    let mut result = Vec::with_capacity(dkim_header.len() + message.len());
     result.extend_from_slice(dkim_header.as_bytes());
     result.extend_from_slice(message);
 
     Ok(result)
+}
+
+/// Verify an RFC 6376 RSA-SHA256 DKIM-Signature present in an RFC 5322 message
+/// using an RSA SPKI PEM public key. Supports headers preceding DKIM-Signature
+/// (e.g., Authentication-Results), folded headers, repeated headers (§5.4 bottom-up),
+/// relaxed/simple canonicalization, and multiple DKIM-Signature headers.
+pub fn verify_dkim_signature(signed: &[u8], public_key_pem: &str) -> bool {
+    use rsa::{pkcs1v15::VerifyingKey, pkcs8::DecodePublicKey, RsaPublicKey};
+    let public_key = match RsaPublicKey::from_public_key_pem(public_key_pem) {
+        Ok(k) => k,
+        Err(_) => return false,
+    };
+    let verifying_key = VerifyingKey::<Sha256>::new(public_key);
+
+    let Some((headers_bytes, body_bytes)) = split_dkim_header_body(signed) else {
+        return false;
+    };
+    let headers = unfold_raw_headers_bytes(headers_bytes);
+
+    for (idx, hdr) in headers.iter().enumerate() {
+        if dkim_header_name_lower(hdr).as_deref() == Some("dkim-signature")
+            && verify_single_dkim_header(&verifying_key, &headers, idx, body_bytes)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 // =============================================
@@ -2745,79 +3304,6 @@ fn test_decrypt_outbound_invalid_format() {
         assert_ne!(bh1, bh2);
     }
 
-    fn verify_dkim_signature(signed: &[u8], public_key_pem: &str) -> bool {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-        use rsa::{pkcs1v15::VerifyingKey, pkcs8::DecodePublicKey, RsaPublicKey};
-        use rsa::signature::Verifier;
-        // Parse public key
-        let public_key = match RsaPublicKey::from_public_key_pem(public_key_pem) {
-            Ok(k) => k,
-            Err(_) => return false,
-        };
-        let verifying_key = VerifyingKey::<Sha256>::new(public_key);
-        // Extract DKIM-Signature header (first line, may be folded? we generate single line)
-        let signed_str = match String::from_utf8(signed.to_vec()) {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
-        let dkim_line = match signed_str.lines().next() {
-            Some(l) if l.starts_with("DKIM-Signature:") => l,
-            _ => return false,
-        };
-        // Extract b= and bh= and h= for verification – simplified: recompute signing input as done in dkim_sign
-        // Re-parse original message (after DKIM header)
-        let original = match signed_str.split_once("\r\n") {
-            Some((_, rest)) => rest,
-            None => return false,
-        };
-        // Re-split headers/body
-        let (headers_str, body) = match original.split_once("\r\n\r\n") {
-            Some(v) => v,
-            None => return false,
-        };
-        let mut headers: Vec<(String, String)> = Vec::new();
-        for line in headers_str.lines() {
-            if let Some(pos) = line.find(':') {
-                headers.push((line[..pos].trim().to_string(), line[pos + 1..].trim().to_string()));
-            }
-        }
-        // Recompute body hash
-        let canonical_body = relaxed_body_canonicalize(body.as_bytes());
-        let mut hasher = Sha256::new();
-        hasher.update(&canonical_body);
-        let bh_calc = BASE64.encode(hasher.finalize());
-        // Extract bh from DKIM header
-        let bh_in_header = dkim_line.split("bh=").nth(1).and_then(|s| s.split(';').next()).map(|s| s.trim()).unwrap_or("");
-        if bh_calc != bh_in_header {
-            return false;
-        }
-        // Rebuild signing input (same logic as dkim_sign)
-        let signed_headers: Vec<&str> = headers.iter().filter(|(n, _)| {
-            matches!(n.to_lowercase().as_str(), "from" | "to" | "cc" | "subject" | "date" | "message-id" | "mime-version" | "content-type" | "content-transfer-encoding" | "reply-to" | "sender" | "in-reply-to" | "references")
-        }).map(|(n, _)| n.as_str()).collect();
-        let mut canonical_headers: Vec<String> = Vec::new();
-        for (name, value) in &headers {
-            if signed_headers.iter().any(|&h| h.eq_ignore_ascii_case(name)) {
-                canonical_headers.push(relaxed_header_canonicalize(&format!("{}: {}", name, value)));
-            }
-        }
-        // DKIM header without b value for verification: truncate at b=
-        let dkim_without_b = dkim_line.split("b=").next().unwrap().to_string() + "b=";
-        canonical_headers.push(relaxed_header_canonicalize(&dkim_without_b));
-        let signing_input = canonical_headers.join("\r\n") + "\r\n";
-        // Extract signature b
-        let b_b64 = dkim_line.split("b=").nth(1).unwrap().trim();
-        let sig_bytes = match BASE64.decode(b_b64) {
-            Ok(v) => v,
-            Err(_) => return false,
-        };
-        let sig = match rsa::pkcs1v15::Signature::try_from(sig_bytes.as_slice()) {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
-        verifying_key.verify(signing_input.as_bytes(), &sig).is_ok()
-    }
-
     #[test]
     fn test_dkim_verify_valid() {
         let kp = DkimKeypair::generate("byos").unwrap();
@@ -2896,5 +3382,301 @@ fn test_decrypt_outbound_invalid_format() {
         let mut tampered = String::from_utf8(signed).unwrap();
         tampered = tampered.replacen("Subject: x", "Subject: y", 1);
         assert!(!verify_dkim_signature(tampered.as_bytes(), &kp1.public_key_pem), "tampered header must fail verification");
+    }
+
+    #[test]
+    fn test_dkim_rfc6376_header_canonicalization_and_wsp() {
+        assert_eq!(relaxed_header_canonicalize("A: X"), "a:X");
+        assert_eq!(relaxed_header_canonicalize("B : Y\t\r\n\tZ  "), "b:Y Z");
+        assert_eq!(
+            relaxed_header_canonicalize("From:   \"Alice\"   <alice@byos.local>  "),
+            "from:\"Alice\" <alice@byos.local>"
+        );
+        assert_eq!(
+            relaxed_header_canonicalize("Subject: First line\r\n\tsecond folded part  \r\n   third part"),
+            "subject:First line second folded part third part"
+        );
+        assert_eq!(relaxed_header_canonicalize("X-Empty : \t \r\n\t "), "x-empty:");
+        assert!(!relaxed_header_canonicalize("From: a@byos.local").contains("::"));
+    }
+
+    #[test]
+    fn test_dkim_rfc6376_body_canonicalization_vectors_and_crlf() {
+        for empty in [&b""[..], &b"\r\n"[..], &b"\r\n\r\n"[..], &b"   \t\r\n\r\n"[..]] {
+            let canon = relaxed_body_canonicalize(empty);
+            assert_eq!(canon, b"");
+            assert_eq!(
+                BASE64.encode(Sha256::digest(&canon)),
+                "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+            );
+        }
+
+        for simple_empty in [&b""[..], &b"\r\n"[..], &b"\r\n\r\n"[..]] {
+            let s_canon = simple_body_canonicalize(simple_empty);
+            assert_eq!(s_canon, b"\r\n");
+            assert_eq!(
+                BASE64.encode(Sha256::digest(&s_canon)),
+                "frcCV1k9oG9oKj3dpUqdJg1PxRT2RSN/XKdLCPjaYaY="
+            );
+        }
+
+        // RFC 6376 §3.4.5 example
+        assert_eq!(
+            relaxed_body_canonicalize(b" C \r\nD \t E\r\n\r\n\r\n"),
+            b" C\r\nD E\r\n"
+        );
+
+        // Intra-line whitespace collapse + trailing WSP removal + multi-trailing-blank-line removal
+        let ml = relaxed_body_canonicalize(b"Line  one \t \r\nLine\t\ttwo\t\r\n\r\n\r\n");
+        assert_eq!(ml, b"Line one\r\nLine two\r\n");
+        // Verify zero bare LF bytes exist in canonical output
+        assert!(!ml.windows(2).any(|w| w[1] == b'\n' && w[0] != b'\r'));
+        assert_ne!(ml[0], b'\n');
+
+        // No final newline
+        assert_eq!(relaxed_body_canonicalize(b"Hello"), b"Hello\r\n");
+    }
+
+    #[test]
+    fn test_dkim_folded_repeated_headers_and_bottom_up_matching() {
+        let kp = DkimKeypair::generate("byos").unwrap();
+        let msg = concat!(
+            "From:   \"Alice\"   <alice@byos.local>  \r\n",
+            "Subject: Top   Header\r\n",
+            "To: bob@example.org,\r\n carol@example.org\r\n",
+            "Subject: Bottom\r\n\tFolded  Continuation  \r\n",
+            "\r\n",
+            "Body\r\n"
+        );
+        let signed = dkim_sign(&kp.private_key_pem, "byos", "byos.local", msg.as_bytes()).unwrap();
+        let signed_str = String::from_utf8(signed.clone()).unwrap();
+        assert!(verify_dkim_signature(&signed, &kp.public_key_pem));
+
+        // Verify signed h= lists bottom-up repeated Subject twice
+        let dkim_hdr = signed_str.lines().next().unwrap();
+        let h_val = dkim_hdr.split("h=").nth(1).unwrap().split(';').next().unwrap();
+        assert_eq!(h_val.matches("subject").count(), 2);
+
+        // Tampering folded continuation line must break verification
+        let tampered_cont = signed_str.replace("Folded  Continuation", "Folded Tampered");
+        assert!(!verify_dkim_signature(tampered_cont.as_bytes(), &kp.public_key_pem));
+
+        // Tampering top repeated Subject must break verification
+        let tampered_top = signed_str.replacen("Top   Header", "Top Hacked", 1);
+        assert!(!verify_dkim_signature(tampered_top.as_bytes(), &kp.public_key_pem));
+    }
+
+    #[test]
+    fn test_dkim_auth_results_preceding_multiple_sigs_and_non_utf8() {
+        let kp1 = DkimKeypair::generate("sel1").unwrap();
+        let kp2 = DkimKeypair::generate("sel2").unwrap();
+
+        let msg = b"From: alice@byos.local\r\nTo: bob@example.org\r\nSubject: Binary\r\n\r\n\xff\xfe  raw\tbytes \r\n\r\n";
+        let signed1 = dkim_sign(&kp1.private_key_pem, "sel1", "byos.local", msg).unwrap();
+        // Prepend a second DKIM signature plus Authentication-Results header above both
+        let signed2 = dkim_sign(&kp2.private_key_pem, "sel2", "relay.example", &signed1).unwrap();
+        let mut with_ar = b"Authentication-Results: mx.example; dkim=pass\r\n".to_vec();
+        with_ar.extend_from_slice(&signed2);
+
+        assert!(verify_dkim_signature(&with_ar, &kp1.public_key_pem));
+        assert!(verify_dkim_signature(&with_ar, &kp2.public_key_pem));
+
+        // Corrupting single non-UTF-8 byte invalidates signature (no lossy conversion)
+        let mut bad_bin = with_ar.clone();
+        let pos = bad_bin.iter().position(|&b| b == 0xff).unwrap();
+        bad_bin[pos] = 0xfa;
+        assert!(!verify_dkim_signature(&bad_bin, &kp1.public_key_pem));
+        assert!(!verify_dkim_signature(&bad_bin, &kp2.public_key_pem));
+    }
+
+    #[test]
+    fn test_dkim_ordinary_multipart_and_nested_inline_cid_mime() {
+        let kp = DkimKeypair::generate("byos").unwrap();
+
+        // 1. Ordinary text without trailing newline
+        let plain_no_crlf = b"From: a@byos.local\r\nTo: b@example.org\r\nSubject: Plain\r\n\r\nHello";
+        let s_plain = dkim_sign(&kp.private_key_pem, "byos", "byos.local", plain_no_crlf).unwrap();
+        assert!(verify_dkim_signature(&s_plain, &kp.public_key_pem));
+
+        // 2. Ordinary multipart/alternative with empty/indented lines
+        let alt = concat!(
+            "From: a@byos.local\r\nTo: b@example.org\r\nSubject: Alt\r\nMIME-Version: 1.0\r\n",
+            "Content-Type: multipart/alternative; boundary=\"alt-b\"\r\n\r\n",
+            "--alt-b\r\nContent-Type: text/plain\r\n\r\nHello  world \r\n",
+            "--alt-b\r\nContent-Type: text/html\r\n\r\n<html>\r\n  <p>Hello</p>\r\n</html>\r\n",
+            "--alt-b--\r\n"
+        );
+        let s_alt = dkim_sign(&kp.private_key_pem, "byos", "byos.local", alt.as_bytes()).unwrap();
+        assert!(verify_dkim_signature(&s_alt, &kp.public_key_pem));
+
+        // 3. Nested multipart/mixed -> multipart/related -> multipart/alternative + inline CID + Auth-Results
+        let nested = concat!(
+            "From: a@byos.local\r\nTo: b@example.org\r\nSubject: NestedCID\r\nMIME-Version: 1.0\r\n",
+            "Content-Type: multipart/mixed; boundary=\"mix-b\"\r\n\r\n",
+            "--mix-b\r\nContent-Type: multipart/related; boundary=\"rel-b\"\r\n\r\n",
+            "--rel-b\r\nContent-Type: multipart/alternative; boundary=\"alt-b\"\r\n\r\n",
+            "--alt-b\r\nContent-Type: text/plain\r\n\r\nInline image.\r\n",
+            "--alt-b\r\nContent-Type: text/html\r\n\r\n<img src=\"cid:img1@byos.local\">\r\n",
+            "--alt-b--\r\n",
+            "--rel-b\r\nContent-Type: image/png\r\nContent-Transfer-Encoding: base64\r\nContent-ID: <img1@byos.local>\r\n\r\n",
+            "iVBORw0KGgo=\r\n--rel-b--\r\n",
+            "--mix-b\r\nContent-Type: application/pdf; name=\"doc.pdf\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"doc.pdf\"\r\n\r\n",
+            "JVBERi0xLjQK\r\n--mix-b--\r\n"
+        );
+        let s_nested = dkim_sign(&kp.private_key_pem, "byos", "byos.local", nested.as_bytes()).unwrap();
+        let mut with_ar = b"Authentication-Results: byos.local; dkim=pass\r\n".to_vec();
+        with_ar.extend_from_slice(&s_nested);
+        assert!(verify_dkim_signature(&with_ar, &kp.public_key_pem));
+
+        // Negative: reject historical broken double-colon / stripped-algorithm tamper
+        let s_nested_str = String::from_utf8(with_ar).unwrap();
+        assert!(!verify_dkim_signature(
+            s_nested_str.replace("v=1;", "v=2;").as_bytes(),
+            &kp.public_key_pem
+        ));
+        assert!(!verify_dkim_signature(
+            s_nested_str.replace("a=rsa-sha256;", "a=rsa-sha1;").as_bytes(),
+            &kp.public_key_pem
+        ));
+    }
+
+    #[test]
+    fn test_attachment_v2_golden_test_vectors() {
+        let mailbox_id: [u8; 16] = hex::decode("550e8400e29b41d4a716446655440000")
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let attachment_id: [u8; 16] = hex::decode("f47ac10b58cc4372a5670e02b2c3d479")
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let outbound_pk: [u8; 32] = [0x11u8; 32];
+        let owner_pk: [u8; 32] = [0x22u8; 32];
+        let cek: [u8; 32] = [0x33u8; 32];
+        let nonce: [u8; 12] = [0x44u8; 12];
+        let plaintext = b"BYOS-V2-ATTACHMENT-TEST-VECTOR";
+
+        let key_id = outbound_key_id(&outbound_pk);
+        assert_eq!(hex::encode(key_id), "2f85927d7d6955b4");
+
+        let owner_pk_sha256: [u8; 32] = Sha256::digest(owner_pk).into();
+        assert_eq!(
+            hex::encode(owner_pk_sha256),
+            "9f72ea0cf49536e3c66c787f705186df9a4378083753ae9536d65b3ad7fcddc4"
+        );
+
+        let plaintext_sha256: [u8; 32] = Sha256::digest(plaintext).into();
+        assert_eq!(
+            hex::encode(plaintext_sha256),
+            "10f0d751402a8f3724af9323e7b6afed3b232effea92b90e9eeb383080a47a74"
+        );
+
+        let metadata_sha256 = attachment_metadata_sha256_v2(
+            "quarterly-report.pdf",
+            "application/pdf",
+            plaintext.len() as u64,
+            &plaintext_sha256,
+            ATTACHMENT_DISPOSITION_ATTACHMENT,
+            "",
+        );
+        assert_eq!(
+            hex::encode(metadata_sha256),
+            "771f01f61c58580ad77d09bc09aacf651f2c6e69d9cc0f317f53bc467eaa4a8d"
+        );
+
+        let blob_aad = attachment_blob_aad_v2(&mailbox_id, &attachment_id, 2, 2);
+        assert_eq!(
+            hex::encode(blob_aad),
+            "62796f732d6174742d626c6f622d7632550e8400e29b41d4a716446655440000f47ac10b58cc4372a5670e02b2c3d4790000000202"
+        );
+
+        let owner_aad = attachment_owner_wrap_aad_v2(&mailbox_id, &attachment_id, 1, 2);
+        assert_eq!(
+            hex::encode(owner_aad),
+            "62796f732d6174742d6f776e722d7632550e8400e29b41d4a716446655440000f47ac10b58cc4372a5670e02b2c3d4790000000102"
+        );
+
+        let outbound_aad = attachment_outbound_wrap_aad_v2(
+            &mailbox_id,
+            42,
+            &attachment_id,
+            &key_id,
+            2,
+            2,
+            &metadata_sha256,
+        );
+        assert_eq!(
+            hex::encode(outbound_aad),
+            "62796f732d6174742d6f7574622d7632550e8400e29b41d4a716446655440000000000000000002af47ac10b58cc4372a5670e02b2c3d4792f85927d7d6955b40000000202771f01f61c58580ad77d09bc09aacf651f2c6e69d9cc0f317f53bc467eaa4a8d"
+        );
+
+        let raw_ct = aes_gcm_encrypt_with_nonce(&cek, &nonce, plaintext, &blob_aad).unwrap();
+        let mut ct = Vec::with_capacity(1 + 12 + raw_ct.len());
+        ct.push(AES_GCM_ENVELOPE_VERSION);
+        ct.extend_from_slice(&nonce);
+        ct.extend_from_slice(&raw_ct);
+        assert_eq!(
+            hex::encode(&ct),
+            "0144444444444444444444444472c88bc1e750bd46e1d6f0d3b5d5873454d83cde258ceb66b30b912751b3530ad6a119598a971fcdb28dd31d2233"
+        );
+        let ct_sha: [u8; 32] = Sha256::digest(&ct).into();
+        assert_eq!(
+            hex::encode(ct_sha),
+            "c31d9319d755565ae8d3a1be2c116f0389bee1e2a6b17ddf1937f451537a11e7"
+        );
+    }
+
+    #[test]
+    fn test_attachment_v2_hpke_wrap_unwrap_and_tamper_rejection() {
+        let (sk, pk) = generate_outbound_delivery_keypair();
+        let (wrong_sk, _) = generate_outbound_delivery_keypair();
+        let mailbox_id = [0x12u8; 16];
+        let attachment_id = [0x34u8; 16];
+        let cek = [0x56u8; 32];
+        let plaintext = b"Confidential attachment bytes";
+        let pt_sha: [u8; 32] = Sha256::digest(plaintext).into();
+        let meta_sha = attachment_metadata_sha256_v2(
+            "contract.pdf",
+            "application/pdf",
+            plaintext.len() as u64,
+            &pt_sha,
+            ATTACHMENT_DISPOSITION_ATTACHMENT,
+            "",
+        );
+        let key_id = outbound_key_id(&pk);
+        let blob_aad = attachment_blob_aad_v2(&mailbox_id, &attachment_id, 2, 2);
+        let out_aad = attachment_outbound_wrap_aad_v2(&mailbox_id, 99, &attachment_id, &key_id, 1, 2, &meta_sha);
+
+        let wrapped = wrap_cek_outbound_v2(&pk, &cek, &out_aad).unwrap();
+        assert_eq!(wrapped.len(), 81);
+        let ct = aes_gcm_encrypt(&cek, plaintext, &blob_aad).unwrap();
+
+        let unwrapped = unwrap_cek_outbound_v2(&sk, &wrapped, &out_aad).unwrap();
+        assert_eq!(*unwrapped, cek);
+        let decrypted = decrypt_attachment_blob_v2(&unwrapped, &ct, &blob_aad, &pt_sha, plaintext.len() as u64).unwrap();
+        assert_eq!(decrypted.as_slice(), plaintext);
+
+        // Negative: wrong sk rejected
+        assert!(unwrap_cek_outbound_v2(&wrong_sk, &wrapped, &out_aad).is_err());
+
+        // Negative: spoofed filename/metadata_sha256 fails HPKE open
+        let spoofed_meta = attachment_metadata_sha256_v2(
+            "malware.exe",
+            "application/pdf",
+            plaintext.len() as u64,
+            &pt_sha,
+            ATTACHMENT_DISPOSITION_ATTACHMENT,
+            "",
+        );
+        let spoofed_aad = attachment_outbound_wrap_aad_v2(&mailbox_id, 99, &attachment_id, &key_id, 1, 2, &spoofed_meta);
+        assert!(unwrap_cek_outbound_v2(&sk, &wrapped, &spoofed_aad).is_err());
+
+        // Negative: replayed outbox_seq fails HPKE open
+        let replayed_aad = attachment_outbound_wrap_aad_v2(&mailbox_id, 100, &attachment_id, &key_id, 1, 2, &meta_sha);
+        assert!(unwrap_cek_outbound_v2(&sk, &wrapped, &replayed_aad).is_err());
+
+        // Negative: wrong expected digest fails decrypt_attachment_blob_v2
+        let wrong_sha = [0xAAu8; 32];
+        assert!(decrypt_attachment_blob_v2(&unwrapped, &ct, &blob_aad, &wrong_sha, plaintext.len() as u64).is_err());
     }
 }

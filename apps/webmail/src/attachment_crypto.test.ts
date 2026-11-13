@@ -6,10 +6,26 @@ import {
   wrapAttachmentContentKey,
   unwrapAttachmentContentKey,
   computeSHA256,
+  computeOutboundKeyIdHex,
+  buildBlobAadV2,
+  buildOwnerWrapAadV2,
+  computeMetadataSha256V2,
+  buildOutboundWrapAadV2,
+  encryptAttachmentV2,
+  decryptAttachmentV2,
+  sealOutboundAttachmentGrantV2,
+  sanitizeFilenameV2,
+  canonicalMimeTypeV2,
+  base64ToBytes,
   bytesToHex,
   hexToBytes,
 } from "./attachment_crypto";
-import { wasm_xwing_public_key_from_seed } from "./generated/crypto-core/byos_crypto_core.js";
+import {
+  wasm_xwing_public_key_from_seed,
+  wasm_generate_outbound_keypair,
+  wasm_hpke_open,
+  wasm_aes_gcm_decrypt,
+} from "./generated/crypto-core/byos_crypto_core.js";
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -622,6 +638,201 @@ export async function runAttachmentCryptoTests(): Promise<{ passed: number; fail
     );
     assert(result.isCorrupted === true, "Recipient MUST NOT be able to decrypt sender chunks");
     assert(result.data === undefined, "Corrupted attempt must produce no plaintext data");
+  });
+
+  // 21. Protocol v2 golden vectors match Rust crypto-core byte-for-byte
+  await runAsyncTest("Protocol v2 golden test vectors match Rust crypto-core", async () => {
+    const mailboxId = "550e8400-e29b-41d4-a716-446655440000";
+    const attachmentId = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
+    const outboundPk = new Uint8Array(32).fill(0x11);
+    const plaintext = new TextEncoder().encode("BYOS-V2-ATTACHMENT-TEST-VECTOR");
+
+    const keyIdHex = await computeOutboundKeyIdHex(outboundPk);
+    assert(keyIdHex === "2f85927d7d6955b4", `keyId mismatch: ${keyIdHex}`);
+
+    const blobAad = buildBlobAadV2(mailboxId, attachmentId, 2, 2);
+    assert(
+      bytesToHex(blobAad) ===
+        "62796f732d6174742d626c6f622d7632550e8400e29b41d4a716446655440000f47ac10b58cc4372a5670e02b2c3d4790000000202",
+      "blobAad mismatch"
+    );
+
+    const ownerAad = buildOwnerWrapAadV2(mailboxId, attachmentId, 1, 2);
+    assert(
+      bytesToHex(ownerAad) ===
+        "62796f732d6174742d6f776e722d7632550e8400e29b41d4a716446655440000f47ac10b58cc4372a5670e02b2c3d4790000000102",
+      "ownerAad mismatch"
+    );
+
+    const ptShaBytes = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", plaintext as unknown as BufferSource)
+    );
+    assert(
+      bytesToHex(ptShaBytes) ===
+        "10f0d751402a8f3724af9323e7b6afed3b232effea92b90e9eeb383080a47a74",
+      "plaintext SHA-256 mismatch"
+    );
+
+    const metaSha = await computeMetadataSha256V2({
+      filename: "quarterly-report.pdf",
+      contentType: "application/pdf",
+      sizeBytes: plaintext.length,
+      plaintextSha256Bytes: ptShaBytes,
+      disposition: "attachment",
+      contentId: "",
+    });
+    assert(
+      bytesToHex(metaSha) ===
+        "771f01f61c58580ad77d09bc09aacf651f2c6e69d9cc0f317f53bc467eaa4a8d",
+      `metadataSha256 mismatch: ${bytesToHex(metaSha)}`
+    );
+
+    const outboundAad = buildOutboundWrapAadV2({
+      mailboxId,
+      outboxSeq: 42,
+      attachmentId,
+      outboundKeyIdHex: keyIdHex,
+      outboundKeyEpoch: 2,
+      cryptoVersion: 2,
+      metadataSha256Bytes: metaSha,
+    });
+    assert(
+      bytesToHex(outboundAad) ===
+        "62796f732d6174742d6f7574622d7632550e8400e29b41d4a716446655440000000000000000002af47ac10b58cc4372a5670e02b2c3d4792f85927d7d6955b40000000202771f01f61c58580ad77d09bc09aacf651f2c6e69d9cc0f317f53bc467eaa4a8d",
+      "outboundAad mismatch"
+    );
+  });
+
+  // 22. Protocol v2 encrypt -> owner decrypt & outbound grant seal/open roundtrip (including 0-byte & Unicode)
+  await runAsyncTest("Protocol v2 owner encrypt/decrypt + outbound grant roundtrip + tamper rejection", async () => {
+    const ownerKp = JSON.parse(wasm_generate_outbound_keypair()) as { private_key: string; public_key: string };
+    const outboundKp = JSON.parse(wasm_generate_outbound_keypair()) as { private_key: string; public_key: string };
+    const wrongKp = JSON.parse(wasm_generate_outbound_keypair()) as { private_key: string; public_key: string };
+
+    const ownerSkBytes = base64ToBytes(ownerKp.private_key);
+    const ownerPkBytes = base64ToBytes(ownerKp.public_key);
+    const outboundSkBytes = base64ToBytes(outboundKp.private_key);
+    const mailboxId = "550e8400-e29b-41d4-a716-446655440000";
+
+    const samples: Array<{ name: string; mime: string; data: Uint8Array }> = [
+      {
+        name: "résumé_日本語_2026.pdf",
+        mime: "application/pdf; charset=utf-8",
+        data: new TextEncoder().encode("%PDF-1.7 Unicode attachment payload"),
+      },
+      {
+        name: "empty.txt",
+        mime: "",
+        data: new Uint8Array(0),
+      },
+    ];
+
+    for (let idx = 0; idx < samples.length; idx++) {
+      const sample = samples[idx];
+      const cleanName = sanitizeFilenameV2(sample.name);
+      const cleanMime = canonicalMimeTypeV2(sample.mime);
+
+      const enc = await encryptAttachmentV2({
+        plaintextBytes: sample.data,
+        mailboxId,
+        mailboxPkBytes: ownerPkBytes,
+        ownerKeyVersion: 3,
+      });
+      assert(enc.ciphertextSizeBytes === sample.data.length + 29, "v2 ciphertext size must be pt + 29");
+
+      const ownerPt = await decryptAttachmentV2({
+        ciphertextBytes: enc.ciphertextBytes,
+        mailboxId,
+        attachmentId: enc.attachmentId,
+        mailboxSkBytes: ownerSkBytes,
+        cekOwnerWrappedB64: enc.cekOwnerWrappedB64,
+        ownerKeyVersion: 3,
+        expectedPlaintextSha256Hex: enc.plaintextSha256Hex,
+        expectedSizeBytes: sample.data.length,
+      });
+      assert(ownerPt.length === sample.data.length, "Owner decrypted length mismatch");
+      assert(ownerPt.every((b, i) => b === sample.data[i]), "Owner decrypted bytes mismatch");
+
+      const grant = await sealOutboundAttachmentGrantV2({
+        mailboxId,
+        mailboxSkBytes: ownerSkBytes,
+        attachmentId: enc.attachmentId,
+        filename: cleanName,
+        contentType: cleanMime,
+        sizeBytes: sample.data.length,
+        plaintextSha256Hex: enc.plaintextSha256Hex,
+        cekOwnerWrappedB64: enc.cekOwnerWrappedB64,
+        ownerKeyVersion: 3,
+        outboxSeq: 77 + idx,
+        outboundPkB64: outboundKp.public_key,
+        outboundKeyEpoch: 5,
+        position: idx,
+      });
+
+      const grantWrappedBytes = base64ToBytes(grant.cek_outbound_wrapped);
+      assert(grantWrappedBytes.length === 81, "cek_outbound_wrapped must be 81 bytes");
+
+      const expectedOutAad = buildOutboundWrapAadV2({
+        mailboxId,
+        outboxSeq: 77 + idx,
+        attachmentId: enc.attachmentId,
+        outboundKeyIdHex: grant.outbound_key_id,
+        outboundKeyEpoch: 5,
+        cryptoVersion: 2,
+        metadataSha256Bytes: hexToBytes(grant.metadata_sha256),
+      });
+      const unwrappedCekHex = wasm_hpke_open(
+        bytesToHex(outboundSkBytes),
+        bytesToHex(grantWrappedBytes),
+        bytesToHex(expectedOutAad)
+      );
+      const blobAad = buildBlobAadV2(mailboxId, enc.attachmentId, 2, 2);
+      const workerPtHex = wasm_aes_gcm_decrypt(
+        unwrappedCekHex,
+        bytesToHex(enc.ciphertextBytes),
+        bytesToHex(blobAad)
+      );
+      const workerPt = hexToBytes(workerPtHex);
+      assert(workerPt.length === sample.data.length, "Outbound decrypted length mismatch");
+      assert(workerPt.every((b, i) => b === sample.data[i]), "Outbound decrypted bytes mismatch");
+
+      // Negative: wrong outbound SK rejected
+      let wrongKeyRejected = false;
+      try {
+        wasm_hpke_open(
+          bytesToHex(base64ToBytes(wrongKp.private_key)),
+          bytesToHex(grantWrappedBytes),
+          bytesToHex(expectedOutAad)
+        );
+      } catch {
+        wrongKeyRejected = true;
+      }
+      assert(wrongKeyRejected, "Wrong outbound SK MUST fail HPKE open");
+
+      // Negative: tampered metadata_sha256 rejected
+      const tamperedMeta = hexToBytes(grant.metadata_sha256);
+      tamperedMeta[0] ^= 0xff;
+      const tamperedAad = buildOutboundWrapAadV2({
+        mailboxId,
+        outboxSeq: 77 + idx,
+        attachmentId: enc.attachmentId,
+        outboundKeyIdHex: grant.outbound_key_id,
+        outboundKeyEpoch: 5,
+        cryptoVersion: 2,
+        metadataSha256Bytes: tamperedMeta,
+      });
+      let spoofRejected = false;
+      try {
+        wasm_hpke_open(
+          bytesToHex(outboundSkBytes),
+          bytesToHex(grantWrappedBytes),
+          bytesToHex(tamperedAad)
+        );
+      } catch {
+        spoofRejected = true;
+      }
+      assert(spoofRejected, "Tampered metadata_sha256 MUST fail HPKE open");
+    }
   });
 
   return { passed, failed };

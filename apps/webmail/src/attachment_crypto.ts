@@ -1,6 +1,8 @@
 import {
   wasm_aes_gcm_encrypt,
   wasm_aes_gcm_decrypt,
+  wasm_hpke_seal,
+  wasm_hpke_open,
   wasm_seal_xwing_envelope,
   wasm_open_xwing_envelope,
 } from "./generated/crypto-core/byos_crypto_core.js";
@@ -308,4 +310,450 @@ export function decryptAttachmentBytes(
 
   const plaintextHex = wasm_aes_gcm_decrypt(keyHex, envelopeHex, aadHex);
   return hexToBytes(plaintextHex);
+}
+
+// =============================================
+// Attachment Encryption Protocol v2 (Release B2)
+// =============================================
+
+export const ATTACHMENT_CRYPTO_VERSION_V2 = 2;
+export const ATTACHMENT_AAD_VERSION_V2 = 2;
+export const ATTACHMENT_OWNER_WRAP_ALG_V2 = "HPKE-X25519-AES256GCM-v1";
+export const ATTACHMENT_MAX_PATH_B_BYTES = 25 * 1024 * 1024; // 25 MiB aggregate plaintext
+export const ATTACHMENT_MAX_PATH_B_COUNT = 100;
+
+export interface EncryptedAttachmentV2Result {
+  attachmentId: string;
+  ciphertextBytes: Uint8Array;
+  plaintextSizeBytes: number;
+  ciphertextSizeBytes: number;
+  plaintextSha256Hex: string;
+  ciphertextSha256Hex: string;
+  ownerPkSha256Hex: string;
+  cekOwnerWrappedB64: string;
+  ownerWrapAlg: string;
+  ownerKeyVersion: number;
+  cryptoVersion: number;
+  blobAadVersion: number;
+}
+
+export interface OutboundAttachmentGrantV2 {
+  attachment_id: string;
+  position: number;
+  disposition: "attachment" | "inline";
+  content_id?: string;
+  wrap_alg: string;
+  outbound_key_id: string;
+  outbound_key_epoch: number;
+  cek_outbound_wrapped: string;
+  metadata_sha256: string;
+}
+
+export function generateAttachmentUUIDv4(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = bytesToHex(b);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+export function uuidToBytes16(uuid: string): Uint8Array {
+  const hex = uuid.replace(/-/g, "").trim().toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(hex)) {
+    throw new Error(`Invalid UUID: ${uuid}`);
+  }
+  return hexToBytes(hex);
+}
+
+export async function computeSha256Bytes(data: Uint8Array): Promise<Uint8Array> {
+  const digest = await crypto.subtle.digest("SHA-256", data as unknown as BufferSource);
+  return new Uint8Array(digest);
+}
+
+export async function computeSha256Hex(data: Uint8Array): Promise<string> {
+  return bytesToHex(await computeSha256Bytes(data));
+}
+
+export function sanitizeFilenameV2(name: string): string {
+  let clean = name || "";
+  const lastSlash = Math.max(clean.lastIndexOf("/"), clean.lastIndexOf("\\"));
+  if (lastSlash >= 0) {
+    clean = clean.slice(lastSlash + 1);
+  }
+  clean = clean.trim();
+  let out = "";
+  for (let i = 0; i < clean.length; i++) {
+    const code = clean.charCodeAt(i);
+    const ch = clean[i];
+    if (code < 0x20 || code === 0x7f || ch === "/" || ch === "\\" || ch === '"' || ch === "'" || ch === ";") {
+      out += "_";
+    } else {
+      out += ch;
+    }
+  }
+  if (!out || out === "." || out === "..") {
+    return "attachment.bin";
+  }
+  if (out.length > 255) {
+    out = out.slice(0, 255);
+  }
+  return out;
+}
+
+export function canonicalMimeTypeV2(raw: string): string {
+  const trimmed = (raw || "").trim().toLowerCase();
+  if (!trimmed) {
+    return "application/octet-stream";
+  }
+  const semi = trimmed.indexOf(";");
+  const media = (semi >= 0 ? trimmed.slice(0, semi) : trimmed).trim();
+  if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(media)) {
+    return "application/octet-stream";
+  }
+  return media;
+}
+
+export async function computeOutboundKeyIdHex(outboundPkBytes: Uint8Array): Promise<string> {
+  if (outboundPkBytes.length !== 32) {
+    throw new Error(`Outbound public key must be 32 bytes, got ${outboundPkBytes.length}`);
+  }
+  const prefix = new TextEncoder().encode("byos-outbound-pk-v1");
+  const buf = new Uint8Array(prefix.length + 32);
+  buf.set(prefix, 0);
+  buf.set(outboundPkBytes, prefix.length);
+  const digest = await computeSha256Bytes(buf);
+  return bytesToHex(digest.slice(0, 8));
+}
+
+export function buildBlobAadV2(
+  mailboxId: string,
+  attachmentId: string,
+  cryptoVersion: number = ATTACHMENT_CRYPTO_VERSION_V2,
+  aadVersion: number = ATTACHMENT_AAD_VERSION_V2
+): Uint8Array {
+  const out = new Uint8Array(53);
+  out.set(new TextEncoder().encode("byos-att-blob-v2"), 0);
+  out.set(uuidToBytes16(mailboxId), 16);
+  out.set(uuidToBytes16(attachmentId), 32);
+  const view = new DataView(out.buffer);
+  view.setUint32(48, cryptoVersion >>> 0, false);
+  out[52] = aadVersion & 0xff;
+  return out;
+}
+
+export function buildOwnerWrapAadV2(
+  mailboxId: string,
+  attachmentId: string,
+  ownerKeyVersion: number,
+  cryptoVersion: number = ATTACHMENT_CRYPTO_VERSION_V2
+): Uint8Array {
+  const out = new Uint8Array(53);
+  out.set(new TextEncoder().encode("byos-att-ownr-v2"), 0);
+  out.set(uuidToBytes16(mailboxId), 16);
+  out.set(uuidToBytes16(attachmentId), 32);
+  const view = new DataView(out.buffer);
+  view.setUint32(48, ownerKeyVersion >>> 0, false);
+  out[52] = cryptoVersion & 0xff;
+  return out;
+}
+
+export async function computeMetadataSha256V2(params: {
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  plaintextSha256Bytes: Uint8Array;
+  disposition?: "attachment" | "inline";
+  contentId?: string;
+}): Promise<Uint8Array> {
+  if (params.plaintextSha256Bytes.length !== 32) {
+    throw new Error("plaintextSha256Bytes must be 32 bytes");
+  }
+  const encoder = new TextEncoder();
+  const domain = encoder.encode("byos-att-meta-v2");
+  const fnameBytes = encoder.encode(sanitizeFilenameV2(params.filename));
+  const mimeBytes = encoder.encode(canonicalMimeTypeV2(params.contentType));
+  const cidBytes = encoder.encode(params.contentId || "");
+  const dispTag = params.disposition === "inline" ? 0x02 : 0x01;
+
+  const totalLen =
+    domain.length +
+    4 + fnameBytes.length +
+    4 + mimeBytes.length +
+    8 +
+    32 +
+    1 +
+    4 + cidBytes.length;
+
+  const buf = new Uint8Array(totalLen);
+  const view = new DataView(buf.buffer);
+  let off = 0;
+
+  buf.set(domain, off); off += domain.length;
+  view.setUint32(off, fnameBytes.length >>> 0, false); off += 4;
+  buf.set(fnameBytes, off); off += fnameBytes.length;
+  view.setUint32(off, mimeBytes.length >>> 0, false); off += 4;
+  buf.set(mimeBytes, off); off += mimeBytes.length;
+  view.setBigUint64(off, BigInt(params.sizeBytes), false); off += 8;
+  buf.set(params.plaintextSha256Bytes, off); off += 32;
+  buf[off++] = dispTag;
+  view.setUint32(off, cidBytes.length >>> 0, false); off += 4;
+  buf.set(cidBytes, off);
+
+  return computeSha256Bytes(buf);
+}
+
+export function buildOutboundWrapAadV2(params: {
+  mailboxId: string;
+  outboxSeq: number;
+  attachmentId: string;
+  outboundKeyIdHex: string;
+  outboundKeyEpoch: number;
+  cryptoVersion?: number;
+  metadataSha256Bytes: Uint8Array;
+}): Uint8Array {
+  const keyIdBytes = hexToBytes(params.outboundKeyIdHex);
+  if (keyIdBytes.length !== 8) {
+    throw new Error("outboundKeyIdHex must decode to 8 bytes");
+  }
+  if (params.metadataSha256Bytes.length !== 32) {
+    throw new Error("metadataSha256Bytes must be 32 bytes");
+  }
+  const out = new Uint8Array(101);
+  out.set(new TextEncoder().encode("byos-att-outb-v2"), 0);
+  out.set(uuidToBytes16(params.mailboxId), 16);
+  const view = new DataView(out.buffer);
+  view.setBigUint64(32, BigInt(params.outboxSeq), false);
+  out.set(uuidToBytes16(params.attachmentId), 40);
+  out.set(keyIdBytes, 56);
+  view.setUint32(64, params.outboundKeyEpoch >>> 0, false);
+  out[68] = (params.cryptoVersion ?? ATTACHMENT_CRYPTO_VERSION_V2) & 0xff;
+  out.set(params.metadataSha256Bytes, 69);
+  return out;
+}
+
+export async function encryptAttachmentV2(params: {
+  plaintextBytes: Uint8Array;
+  mailboxId: string;
+  mailboxPkBytes: Uint8Array;
+  ownerKeyVersion: number;
+  attachmentId?: string;
+}): Promise<EncryptedAttachmentV2Result> {
+  if (params.mailboxPkBytes.length !== 32) {
+    throw new Error(`Mailbox public key must be 32 bytes, got ${params.mailboxPkBytes.length}`);
+  }
+  if (!Number.isInteger(params.ownerKeyVersion) || params.ownerKeyVersion <= 0) {
+    throw new Error("ownerKeyVersion must be a positive integer");
+  }
+  const attachmentId = params.attachmentId || generateAttachmentUUIDv4();
+  const cek = new Uint8Array(32);
+  crypto.getRandomValues(cek);
+  try {
+    const [plaintextSha256Hex, ownerPkSha256Hex] = await Promise.all([
+      computeSha256Hex(params.plaintextBytes),
+      computeSha256Hex(params.mailboxPkBytes),
+    ]);
+    const blobAad = buildBlobAadV2(
+      params.mailboxId,
+      attachmentId,
+      ATTACHMENT_CRYPTO_VERSION_V2,
+      ATTACHMENT_AAD_VERSION_V2
+    );
+    const ownerWrapAad = buildOwnerWrapAadV2(
+      params.mailboxId,
+      attachmentId,
+      params.ownerKeyVersion,
+      ATTACHMENT_CRYPTO_VERSION_V2
+    );
+
+    const cekHex = bytesToHex(cek);
+    const ciphertextHex = wasm_aes_gcm_encrypt(
+      cekHex,
+      bytesToHex(params.plaintextBytes),
+      bytesToHex(blobAad)
+    );
+    const ciphertextBytes = hexToBytes(ciphertextHex);
+    const ciphertextSha256Hex = await computeSha256Hex(ciphertextBytes);
+
+    const cekOwnerWrappedHex = wasm_hpke_seal(
+      bytesToHex(params.mailboxPkBytes),
+      cekHex,
+      bytesToHex(ownerWrapAad)
+    );
+    const cekOwnerWrappedB64 = bytesToBase64(hexToBytes(cekOwnerWrappedHex));
+
+    return {
+      attachmentId,
+      ciphertextBytes,
+      plaintextSizeBytes: params.plaintextBytes.length,
+      ciphertextSizeBytes: ciphertextBytes.length,
+      plaintextSha256Hex,
+      ciphertextSha256Hex,
+      ownerPkSha256Hex,
+      cekOwnerWrappedB64,
+      ownerWrapAlg: ATTACHMENT_OWNER_WRAP_ALG_V2,
+      ownerKeyVersion: params.ownerKeyVersion,
+      cryptoVersion: ATTACHMENT_CRYPTO_VERSION_V2,
+      blobAadVersion: ATTACHMENT_AAD_VERSION_V2,
+    };
+  } finally {
+    cek.fill(0);
+  }
+}
+
+export async function decryptAttachmentV2(params: {
+  ciphertextBytes: Uint8Array;
+  mailboxId: string;
+  attachmentId: string;
+  mailboxSkBytes: Uint8Array;
+  cekOwnerWrappedB64: string;
+  ownerKeyVersion: number;
+  expectedPlaintextSha256Hex?: string;
+  expectedSizeBytes?: number;
+  cryptoVersion?: number;
+  blobAadVersion?: number;
+}): Promise<Uint8Array> {
+  if (params.mailboxSkBytes.length !== 32) {
+    throw new Error("Mailbox secret key must be exactly 32 bytes");
+  }
+  const cryptoVersion = params.cryptoVersion ?? ATTACHMENT_CRYPTO_VERSION_V2;
+  const blobAadVersion = params.blobAadVersion ?? ATTACHMENT_AAD_VERSION_V2;
+  const ownerWrapAad = buildOwnerWrapAadV2(
+    params.mailboxId,
+    params.attachmentId,
+    params.ownerKeyVersion,
+    cryptoVersion
+  );
+  const cekWrappedBytes = base64ToBytes(params.cekOwnerWrappedB64);
+  const cekHex = wasm_hpke_open(
+    bytesToHex(params.mailboxSkBytes),
+    bytesToHex(cekWrappedBytes),
+    bytesToHex(ownerWrapAad)
+  );
+  const cekBytes = hexToBytes(cekHex);
+  try {
+    if (cekBytes.length !== 32) {
+      throw new Error("Unwrapped CEK is not 32 bytes");
+    }
+    const blobAad = buildBlobAadV2(
+      params.mailboxId,
+      params.attachmentId,
+      cryptoVersion,
+      blobAadVersion
+    );
+    const plaintextHex = wasm_aes_gcm_decrypt(
+      bytesToHex(cekBytes),
+      bytesToHex(params.ciphertextBytes),
+      bytesToHex(blobAad)
+    );
+    const plaintextBytes = hexToBytes(plaintextHex);
+    if (
+      typeof params.expectedSizeBytes === "number" &&
+      plaintextBytes.length !== params.expectedSizeBytes
+    ) {
+      throw new Error(
+        `Attachment size mismatch: expected ${params.expectedSizeBytes}, got ${plaintextBytes.length}`
+      );
+    }
+    if (params.expectedPlaintextSha256Hex) {
+      const actualHex = await computeSha256Hex(plaintextBytes);
+      if (actualHex !== params.expectedPlaintextSha256Hex.toLowerCase()) {
+        throw new Error("Attachment plaintext SHA-256 verification failed");
+      }
+    }
+    return plaintextBytes;
+  } finally {
+    cekBytes.fill(0);
+  }
+}
+
+export async function sealOutboundAttachmentGrantV2(params: {
+  mailboxId: string;
+  mailboxSkBytes: Uint8Array;
+  attachmentId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  plaintextSha256Hex: string;
+  cekOwnerWrappedB64: string;
+  ownerKeyVersion: number;
+  outboxSeq: number;
+  outboundPkB64: string;
+  outboundKeyEpoch: number;
+  outboundKeyIdHex?: string;
+  position: number;
+  disposition?: "attachment" | "inline";
+  contentId?: string;
+}): Promise<OutboundAttachmentGrantV2> {
+  if (params.mailboxSkBytes.length !== 32) {
+    throw new Error("Mailbox secret key must be exactly 32 bytes");
+  }
+  const outboundPkBytes = base64ToBytes(params.outboundPkB64);
+  if (outboundPkBytes.length !== 32) {
+    throw new Error(`Outbound delivery public key must be 32 bytes, got ${outboundPkBytes.length}`);
+  }
+  const computedKeyIdHex = await computeOutboundKeyIdHex(outboundPkBytes);
+  if (params.outboundKeyIdHex && params.outboundKeyIdHex.toLowerCase() !== computedKeyIdHex) {
+    throw new Error("Outbound delivery key_id mismatch against public key");
+  }
+
+  const plaintextShaBytes = hexToBytes(params.plaintextSha256Hex);
+  const disposition = params.disposition === "inline" ? "inline" : "attachment";
+  const contentId = params.contentId || "";
+  const metadataShaBytes = await computeMetadataSha256V2({
+    filename: params.filename,
+    contentType: params.contentType,
+    sizeBytes: params.sizeBytes,
+    plaintextSha256Bytes: plaintextShaBytes,
+    disposition,
+    contentId,
+  });
+
+  const ownerWrapAad = buildOwnerWrapAadV2(
+    params.mailboxId,
+    params.attachmentId,
+    params.ownerKeyVersion,
+    ATTACHMENT_CRYPTO_VERSION_V2
+  );
+  const cekHex = wasm_hpke_open(
+    bytesToHex(params.mailboxSkBytes),
+    bytesToHex(base64ToBytes(params.cekOwnerWrappedB64)),
+    bytesToHex(ownerWrapAad)
+  );
+  const cekBytes = hexToBytes(cekHex);
+  try {
+    if (cekBytes.length !== 32) {
+      throw new Error("Unwrapped attachment CEK is not 32 bytes");
+    }
+    const outboundWrapAad = buildOutboundWrapAadV2({
+      mailboxId: params.mailboxId,
+      outboxSeq: params.outboxSeq,
+      attachmentId: params.attachmentId,
+      outboundKeyIdHex: computedKeyIdHex,
+      outboundKeyEpoch: params.outboundKeyEpoch,
+      cryptoVersion: ATTACHMENT_CRYPTO_VERSION_V2,
+      metadataSha256Bytes: metadataShaBytes,
+    });
+    const cekOutboundWrappedHex = wasm_hpke_seal(
+      bytesToHex(outboundPkBytes),
+      bytesToHex(cekBytes),
+      bytesToHex(outboundWrapAad)
+    );
+    return {
+      attachment_id: params.attachmentId,
+      position: params.position,
+      disposition,
+      content_id: contentId || undefined,
+      wrap_alg: ATTACHMENT_OWNER_WRAP_ALG_V2,
+      outbound_key_id: computedKeyIdHex,
+      outbound_key_epoch: params.outboundKeyEpoch,
+      cek_outbound_wrapped: bytesToBase64(hexToBytes(cekOutboundWrappedHex)),
+      metadata_sha256: bytesToHex(metadataShaBytes),
+    };
+  } finally {
+    cekBytes.fill(0);
+  }
 }
