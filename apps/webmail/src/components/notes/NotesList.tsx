@@ -31,16 +31,12 @@ export const NotesList: Component<NotesListProps> = (props) => {
     setShowSortMenu(false);
   };
 
-  // Sort notes
+  // Sort notes (a flat list, matching the email list — no pin grouping)
   const sortedNotes = createMemo(() => {
     const list = [...props.notes];
     const s = activeSort();
 
     return list.sort((a, b) => {
-      // Pinned notes always come first
-      if (a.isPinned && !b.isPinned) return -1;
-      if (!a.isPinned && b.isPinned) return 1;
-
       if (s === "title") {
         const titleA = (a.title || a.content || "").toLowerCase();
         const titleB = (b.title || b.content || "").toLowerCase();
@@ -54,18 +50,17 @@ export const NotesList: Component<NotesListProps> = (props) => {
     });
   });
 
-  const pinnedNotes = createMemo(() => sortedNotes().filter((n) => n.isPinned));
-  const unpinnedNotes = createMemo(() => sortedNotes().filter((n) => !n.isPinned));
-
   return (
     <div
       data-testid="notes-list-pane"
-      class={`w-full md:w-[320px] lg:w-[350px] md:min-w-[320px] lg:min-w-[350px] flex-shrink-0 border-r border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] flex flex-col min-h-0 h-full overflow-hidden select-none ${
+      class={`w-full h-full bg-white dark:bg-[#18191D] flex flex-col min-h-0 overflow-hidden select-none transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+        props.selectedNote ? "border-r border-[#E2DFD8] dark:border-[#2E3138]" : ""
+      } ${
         props.class || ""
       }`}
     >
       {/* ── Top Header Bar ── */}
-      <div class="px-3.5 py-2.5 border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between gap-2 bg-[#FAF9F5]/70 dark:bg-[#18191D]/70 flex-shrink-0">
+      <div class="px-3.5 py-2.5 border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between gap-2 bg-white dark:bg-[#18191D] flex-shrink-0">
         <div class="flex items-center gap-2 min-w-0">
           {/* Mobile Categories Menu Toggle */}
           <Show when={props.onOpenMobileSidebar}>
@@ -198,7 +193,7 @@ export const NotesList: Component<NotesListProps> = (props) => {
 
       {/* ── Search Input (Collapsible or Active) ── */}
       <Show when={showSearchInput() || props.searchQuery}>
-        <div class="px-3 py-2 border-b border-[#E2DFD8] dark:border-[#2E3138] bg-[#FAF9F5] dark:bg-[#18191D] flex items-center gap-1.5 flex-shrink-0 animate-in fade-in duration-100">
+        <div class="px-3 py-2 border-b border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#18191D] flex items-center gap-1.5 flex-shrink-0 animate-in fade-in duration-100">
           <div class="relative flex-1">
             <input
               type="text"
@@ -240,41 +235,16 @@ export const NotesList: Component<NotesListProps> = (props) => {
             />
           }
         >
-          {/* Pinned Section */}
-          <Show when={pinnedNotes().length > 0}>
-            <div class="sticky top-0 z-10 px-3.5 py-1 text-[10px] font-bold uppercase tracking-wider font-mono text-[#6F7173] dark:text-[#878A8E] bg-[#FAF9F5]/90 dark:bg-[#18191D]/90 backdrop-blur-xs border-b border-[#E2DFD8]/40 dark:border-[#2E3138]/40 flex items-center justify-between">
-              <span>PINNED</span>
-              <span class="text-[9px] font-mono tabular-nums">{pinnedNotes().length}</span>
-            </div>
-            <For each={pinnedNotes()}>
-              {(note) => (
-                <NotesListItem
-                  note={note}
-                  isSelected={props.selectedNote?.id === note.id}
-                  onSelect={props.onSelectNote}
-                />
-              )}
-            </For>
-          </Show>
-
-          {/* Unpinned Section */}
-          <Show when={unpinnedNotes().length > 0}>
-            <Show when={pinnedNotes().length > 0}>
-              <div class="sticky top-0 z-10 px-3.5 py-1 text-[10px] font-bold uppercase tracking-wider font-mono text-[#6F7173] dark:text-[#878A8E] bg-[#FAF9F5]/90 dark:bg-[#18191D]/90 backdrop-blur-xs border-b border-[#E2DFD8]/40 dark:border-[#2E3138]/40 flex items-center justify-between">
-                <span>ALL NOTES</span>
-                <span class="text-[9px] font-mono tabular-nums">{unpinnedNotes().length}</span>
-              </div>
-            </Show>
-            <For each={unpinnedNotes()}>
-              {(note) => (
-                <NotesListItem
-                  note={note}
-                  isSelected={props.selectedNote?.id === note.id}
-                  onSelect={props.onSelectNote}
-                />
-              )}
-            </For>
-          </Show>
+          {/* Flat note list — no pinned/unpinned sections */}
+          <For each={sortedNotes()}>
+            {(note) => (
+              <NotesListItem
+                note={note}
+                isSelected={props.selectedNote?.id === note.id}
+                onSelect={props.onSelectNote}
+              />
+            )}
+          </For>
         </Show>
       </div>
     </div>

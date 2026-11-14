@@ -392,14 +392,18 @@ async function run() {
     await page.setViewport({ width: 375, height: 812 });
     await sleep(800);
 
-    // Check if sidebar is showing on mobile
-    const sidebarVisible = await page.evaluate(() => {
-      const sb = document.querySelector('[data-testid="notes-sidebar"]');
-      return Boolean(sb && sb.offsetParent !== null);
+    // The navigation drawer stays mounted off-canvas, so drawer visibility must be read
+    // from the computed style (visibility + translate), not offsetParent.
+    const drawerOpen = await page.evaluate(() => {
+      const shell = document.querySelector('[data-testid="notes-sidebar-shell"]');
+      if (!shell) return false;
+      const style = window.getComputedStyle(shell);
+      const translateX = Number.parseFloat((style.translate || "none").split(" ")[0]) || 0;
+      return style.visibility !== "hidden" && translateX === 0;
     });
 
-    if (sidebarVisible) {
-      console.log("  Mobile on sidebar -> selecting 'All Notes'...");
+    if (drawerOpen) {
+      console.log("  Mobile drawer open -> selecting 'All Notes'...");
       const allNotesBtn = await page.waitForSelector('[data-testid="notes-nav-notes"]', { timeout: 5000 });
       await allNotesBtn.click();
       await sleep(800);

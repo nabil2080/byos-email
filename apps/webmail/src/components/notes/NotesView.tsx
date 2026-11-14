@@ -11,7 +11,6 @@ import {
   restoreNoteFromBin,
   archiveNote,
   unarchiveNote,
-  togglePinNote,
   toggleFavoriteNote,
   duplicateNote,
   loadLabels,
@@ -81,10 +80,8 @@ export const NotesView: Component<NotesViewProps> = (props) => {
   const [sortOrder, setSortOrder] = createSignal<NoteSortOrder>("updated");
 
   // Mobile single-pane navigation flow: 'sidebar' | 'list' | 'editor'
-  // When on narrow mobile screens (< 768px), show the Notes sidebar first per spec
-  const [mobilePane, setMobilePane] = createSignal<"sidebar" | "list" | "editor">(
-    typeof window !== "undefined" && window.innerWidth < 768 ? "sidebar" : "list"
-  );
+  // Always default to 'list' on mobile — the note list is the entry point, not the sidebar.
+  const [mobilePane, setMobilePane] = createSignal<"sidebar" | "list" | "editor">("list");
 
   // Modals state
   const [isEditLabelsOpen, setIsEditLabelsOpen] = createSignal(false);
@@ -157,8 +154,17 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     };
     window.addEventListener("storage", handleStorageChange);
 
+    // Escape closes the mobile navigation drawer and returns to the note list.
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && mobilePane() === "sidebar") {
+        setMobilePane("list");
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
     onCleanup(() => {
       window.removeEventListener("storage", handleStorageChange);
+      window.removeEventListener("keydown", handleKeyDown);
     });
   });
 
@@ -269,21 +275,23 @@ export const NotesView: Component<NotesViewProps> = (props) => {
     return notes().find((n) => n.id === id) || null;
   });
 
-  // Automatically select the first note if on desktop and none is selected
+  // Keep selectedNoteId valid when the filtered list changes.
+  // If the currently selected note disappears from the filtered list, deselect.
+  // Do NOT auto-select any note — the editor only opens on an explicit click.
   createEffect(() => {
     const currentId = selectedNoteId();
+    if (!currentId) return;
     const currentList = searchFilteredNotes();
+    const exists = currentList.some((n) => n.id === currentId);
+    if (!exists) {
+      setSelectedNoteId(null);
+    }
+  });
 
-    // If current selected note doesn't exist in filtered list, select first available or null
-    if (currentId) {
-      const exists = currentList.some((n) => n.id === currentId);
-      if (!exists && currentList.length > 0) {
-        setSelectedNoteId(currentList[0].id);
-      } else if (!exists && currentList.length === 0) {
-        setSelectedNoteId(null);
-      }
-    } else if (currentList.length > 0 && typeof window !== "undefined" && window.innerWidth >= 768) {
-      setSelectedNoteId(currentList[0].id);
+  // With no selection there is no editor pane, so the phone view must stay on the list.
+  createEffect(() => {
+    if (!selectedNote() && mobilePane() === "editor") {
+      setMobilePane("list");
     }
   });
 
@@ -360,16 +368,6 @@ export const NotesView: Component<NotesViewProps> = (props) => {
       setSaveStatus("failed");
       setSaveErrorMessage("Failed to save note.");
     }
-  }
-
-  function handleTogglePin() {
-    const n = selectedNote();
-    if (!n) return;
-    const mb = effectiveMailboxId();
-    const key =
-      (props.isUnlocked !== false ? props.mailboxKey : null) || (mb ? getMailboxKeyFor(mb) : null);
-    togglePinNote(mb, n.id, key);
-    refreshAll();
   }
 
   function handleToggleFavorite() {
@@ -511,11 +509,24 @@ export const NotesView: Component<NotesViewProps> = (props) => {
       data-testid="notes-view"
       class="flex flex-1 min-w-0 min-h-0 h-full overflow-hidden bg-[#F0EEE9] dark:bg-[#18191D] gap-0 sm:gap-2.5 lg:gap-3"
     >
-      {/* ── PANE 1: Notes Navigation Sidebar (256px desktop, full width mobile when mobilePane === 'sidebar') ── */}
+      {/* ── Mobile Navigation Backdrop (fades with the drawer, matches Mail/Calendar) ── */}
       <div
-        class={`${
-          mobilePane() === "sidebar" ? "block w-full" : "hidden"
-        } md:block md:w-64 md:min-w-[256px] md:max-w-[256px] flex-shrink-0 h-full`}
+        data-testid="notes-mobile-nav-backdrop"
+        class={`fixed inset-0 bg-black/40 backdrop-blur-xs z-50 md:hidden transition-opacity duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+          mobilePane() === "sidebar" ? "opacity-100" : "opacity-0 pointer-events-none"
+        }`}
+        onClick={() => setMobilePane("list")}
+        aria-hidden="true"
+      />
+
+      {/* ── PANE 1: Notes Navigation Sidebar (256px in-flow on desktop, sliding overlay drawer on mobile) ── */}
+      <div
+        data-testid="notes-sidebar-shell"
+        class={`fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] flex-shrink-0 h-full transition-[translate,visibility] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none ${
+          mobilePane() === "sidebar"
+            ? "translate-x-0 visible shadow-2xl"
+            : "-translate-x-full invisible"
+        } md:static md:visible md:translate-x-0 md:w-64 md:min-w-[256px] md:max-w-[256px] md:shadow-none md:transition-none`}
       >
         <NotesSidebar
           currentUser={props.currentUser}
@@ -548,11 +559,7 @@ export const NotesView: Component<NotesViewProps> = (props) => {
       </div>
 
       {/* ── Right Content Column beside NotesSidebar: TopFixedBar + 2-Pane Workspace Card ── */}
-      <div
-        class={`flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden gap-1.5 sm:gap-2 ${
-          mobilePane() === "sidebar" ? "hidden md:flex" : "flex"
-        }`}
-      >
+      <div class="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden gap-1.5 sm:gap-2">
         {/* Top Fixed Bar (Beside NotesSidebar, not on top of it) */}
         <TopFixedBar
           activeModule={props.activeModule}
@@ -569,12 +576,16 @@ export const NotesView: Component<NotesViewProps> = (props) => {
         />
 
         {/* ── Main Three-Pane Container Card (Pane 2: List + Pane 3: Reading/Editing Panel) ── */}
-        <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#1E2025] shadow-2xs overflow-hidden flex min-w-0 min-h-0">
-          {/* ── PANE 2: Notes List (320px–350px desktop, full width mobile when mobilePane === 'list') ── */}
+        <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex min-w-0 min-h-0">
+          {/* ── PANE 2: Notes List (full-width alone, 320–350px beside the editor) ── */}
           <div
             class={`${
-              mobilePane() === "list" ? "block w-full" : "hidden"
-            } md:block md:w-[320px] lg:w-[350px] md:min-w-[320px] lg:min-w-[350px] flex-shrink-0 h-full`}
+              mobilePane() === "list" ? "block" : "hidden"
+            } md:block h-full min-w-0 overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+              selectedNote()
+                ? "w-full md:w-[320px] lg:w-[350px] md:min-w-[320px] lg:min-w-[350px] md:max-w-[350px] md:flex-shrink-0"
+                : "w-full md:flex-1"
+            }`}
           >
             <NotesList
               notes={searchFilteredNotes()}
@@ -593,44 +604,45 @@ export const NotesView: Component<NotesViewProps> = (props) => {
             />
           </div>
 
-          {/* ── PANE 3: Reading and Editing Panel (Remaining Width desktop, full width mobile when mobilePane === 'editor') ── */}
-          <div
-            class={`${
-              mobilePane() === "editor" ? "block w-full" : "hidden"
-            } md:block md:flex-1 min-w-0 h-full`}
-          >
-            <NotesEditor
-              note={selectedNote()}
-              allLabels={labels()}
-              onUpdateNote={handleUpdateNote}
-              onTogglePin={handleTogglePin}
-              onToggleFavorite={handleToggleFavorite}
-              onDeleteNote={handleDeleteNote}
-              onDeleteForever={handleDeleteForever}
-              onRestoreFromBin={handleRestoreFromBin}
-              onArchiveNote={handleArchiveNote}
-              onUnarchiveNote={handleUnarchiveNote}
-              onDuplicateNote={handleDuplicateNote}
-              onOpenDrawingModal={() => {
-                setDrawingTargetNoteId(selectedNoteId());
-                setIsDrawingModalOpen(true);
-              }}
-              onOpenVersionHistory={() => {
-                setVersionHistoryTargetNote(selectedNote());
-                setIsVersionHistoryOpen(true);
-              }}
-              onUploadImage={handleUploadImage}
-              onRemoveImage={handleRemoveImage}
-              onRemoveDrawing={handleRemoveDrawing}
-              resolveMediaUri={resolveMedia}
-              saveStatus={saveStatus()}
-              saveErrorMessage={saveErrorMessage()}
-              syncStatus={syncStatus()}
-              onBackToNotesList={() => setMobilePane("list")}
-              onNewNote={handleNewNote}
-              onShareViaMail={props.onShareViaMail}
-            />
-          </div>
+          {/* ── PANE 3: Reading and Editing Panel — mounted only when a note is open, like the mail reading pane ── */}
+          <Show when={selectedNote()}>
+            <div
+              class={`${
+                mobilePane() === "editor" ? "block" : "hidden"
+              } md:flex md:flex-1 min-w-0 h-full transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]`}
+            >
+              <NotesEditor
+                note={selectedNote()}
+                allLabels={labels()}
+                onUpdateNote={handleUpdateNote}
+                onToggleFavorite={handleToggleFavorite}
+                onDeleteNote={handleDeleteNote}
+                onDeleteForever={handleDeleteForever}
+                onRestoreFromBin={handleRestoreFromBin}
+                onArchiveNote={handleArchiveNote}
+                onUnarchiveNote={handleUnarchiveNote}
+                onDuplicateNote={handleDuplicateNote}
+                onOpenDrawingModal={() => {
+                  setDrawingTargetNoteId(selectedNoteId());
+                  setIsDrawingModalOpen(true);
+                }}
+                onOpenVersionHistory={() => {
+                  setVersionHistoryTargetNote(selectedNote());
+                  setIsVersionHistoryOpen(true);
+                }}
+                onUploadImage={handleUploadImage}
+                onRemoveImage={handleRemoveImage}
+                onRemoveDrawing={handleRemoveDrawing}
+                resolveMediaUri={resolveMedia}
+                saveStatus={saveStatus()}
+                saveErrorMessage={saveErrorMessage()}
+                syncStatus={syncStatus()}
+                onBackToNotesList={() => setMobilePane("list")}
+                onNewNote={handleNewNote}
+                onShareViaMail={props.onShareViaMail}
+              />
+            </div>
+          </Show>
         </div>
       </div>
 

@@ -3,10 +3,11 @@
  * BYOS Webmail: Redesign Notes into a Notesnook-Inspired Three-Pane Workspace
  *
  * Verifies:
- * 1. Full 3-pane desktop workspace (NotesSidebar, NotesList, NotesEditor).
+ * 1. List-first desktop workspace: sidebar + note list on load, expanding to three
+ *    panes (sidebar, list column, editor) once a note is opened.
  * 2. Creating, typing, formatting, and auto-saving notes directly in the editor.
  * 3. Notesnook-inspired rich-text formatting toolbar.
- * 4. Pinned, Favorited, Reminder, and Label status indicators.
+ * 4. Favorited, Reminder, and Label status indicators (pin system retired).
  * 5. Favorites and Label filtering in the sidebar.
  * 6. Dark mode styling and visual hierarchy.
  * 7. Mobile single-pane navigation flow at 375px viewport (Sidebar -> List -> Editor).
@@ -109,10 +110,10 @@ async function run() {
     await page.click('[data-testid="nav-notes-tab"]');
     await sleep(1500);
 
-    // Verify 3 Panes Exist on Desktop
+    // List-first workspace: the navigation sidebar and the note list render on load.
+    // The editor pane (Pane 3) mounts only after a note is clicked or created.
     await page.waitForSelector('[data-testid="notes-sidebar"]', { timeout: 5000 });
     await page.waitForSelector('[data-testid="notes-list-pane"]', { timeout: 5000 });
-    await page.waitForSelector('[data-testid="notes-editor-pane"]', { timeout: 5000 });
 
     const panesLayout = await page.evaluate(() => {
       const sidebar = document.querySelector('[data-testid="notes-sidebar"]');
@@ -125,15 +126,19 @@ async function run() {
         sidebarWidth: sidebar ? sidebar.getBoundingClientRect().width : 0,
         listWidth: list ? list.getBoundingClientRect().width : 0,
         editorWidth: editor ? editor.getBoundingClientRect().width : 0,
+        viewportWidth: window.innerWidth,
       };
     });
 
-    console.log("  Desktop 3-Pane Layout status:", JSON.stringify(panesLayout));
+    console.log("  Desktop list-first layout status:", JSON.stringify(panesLayout));
     recordResult(
       "LAYOUT_01",
-      "Three panes rendered simultaneously on desktop",
-      panesLayout.hasSidebar && panesLayout.hasList && panesLayout.hasEditor && panesLayout.editorWidth > 400,
-      `Sidebar: ${panesLayout.sidebarWidth}px, List: ${panesLayout.listWidth}px, Editor: ${panesLayout.editorWidth}px`
+      "Notes opens list-first on desktop: sidebar and list render, editor stays closed until a note is opened",
+      panesLayout.hasSidebar &&
+        panesLayout.hasList &&
+        !panesLayout.hasEditor &&
+        panesLayout.listWidth > 400,
+      `Sidebar: ${panesLayout.sidebarWidth}px, List: ${panesLayout.listWidth}px (viewport ${panesLayout.viewportWidth}px), Editor mounted: ${panesLayout.hasEditor}`
     );
 
     // Screenshot 1: Full desktop Notes workspace (1440px)
@@ -198,6 +203,41 @@ async function run() {
     recordResult("EDITOR_01", "Direct in-canvas note title and content editing", true, "Saved note content directly");
 
     // -------------------------------------------------------------------------
+    // STEP 3B: Opening a note grows the list into a column and mounts Pane 3
+    // -------------------------------------------------------------------------
+    const splitLayout = await page.evaluate(() => {
+      const sidebar = document.querySelector('[data-testid="notes-sidebar"]');
+      const list = document.querySelector('[data-testid="notes-list-pane"]');
+      const editor = document.querySelector('[data-testid="notes-editor-pane"]');
+      return {
+        hasSidebar: Boolean(sidebar),
+        hasList: Boolean(list),
+        hasEditor: Boolean(editor),
+        sidebarWidth: sidebar ? sidebar.getBoundingClientRect().width : 0,
+        listWidth: list ? list.getBoundingClientRect().width : 0,
+        editorWidth: editor ? editor.getBoundingClientRect().width : 0,
+      };
+    });
+
+    console.log("  Desktop three-pane split status:", JSON.stringify(splitLayout));
+    recordResult(
+      "LAYOUT_02",
+      "Three panes render simultaneously once a note is opened: sidebar, 320-350px list, and editor",
+      splitLayout.hasSidebar &&
+        splitLayout.hasList &&
+        splitLayout.hasEditor &&
+        splitLayout.listWidth >= 320 &&
+        splitLayout.listWidth <= 350 &&
+        splitLayout.editorWidth > 400,
+      `Sidebar: ${splitLayout.sidebarWidth}px, List: ${splitLayout.listWidth}px, Editor: ${splitLayout.editorWidth}px`
+    );
+
+    // Screenshot: full three-pane workspace with a note open
+    const shotSplit = path.join(artifactsDir, "notes_three_pane_desktop_split.png");
+    await page.screenshot({ path: shotSplit });
+    console.log(`  Saved screenshot: ${path.relative(process.cwd(), shotSplit)}`);
+
+    // -------------------------------------------------------------------------
     // STEP 4: Test Rich-Text Toolbar & Formatting
     // -------------------------------------------------------------------------
     console.log("\n--- [STEP 4] Test Notesnook-Inspired Rich-Text Toolbar ---");
@@ -237,16 +277,23 @@ async function run() {
     console.log(`  Saved screenshot: ${path.relative(process.cwd(), shotToolbar)}`);
 
     // -------------------------------------------------------------------------
-    // STEP 5: Test Pinning and Favoriting Note Lifecycle
+    // STEP 5: Test Favoriting Note Lifecycle (pin system retired)
     // -------------------------------------------------------------------------
-    console.log("\n--- [STEP 5] Test Pinning & Favoriting Note ---");
+    console.log("\n--- [STEP 5] Test Favoriting Note (pin retired) ---");
     // Click Favorite button in note header
     await page.click('[data-testid="notes-editor-favorite-btn"]');
     await sleep(600);
 
-    // Click Pin button in note header
-    await page.click('[data-testid="notes-editor-pin-btn"]');
-    await sleep(600);
+    // The pin action must not exist anywhere in the editor toolbar
+    const pinBtnCount = await page.evaluate(
+      () => document.querySelectorAll('[data-testid="notes-editor-pin-btn"]').length
+    );
+    recordResult(
+      "PIN_RETIRED",
+      "Pin action is removed from the note editor toolbar",
+      pinBtnCount === 0,
+      `notes-editor-pin-btn count: ${pinBtnCount}`
+    );
 
     // Filter to Favorites category in sidebar
     await page.click('[data-testid="notes-nav-favorites"]');
@@ -320,6 +367,39 @@ async function run() {
     // Restore desktop resolution
     await page.setViewport({ width: 1440, height: 900 });
     await sleep(400);
+
+    // Editor opens only on explicit click. Re-open the note created in STEP 3, normalize
+    // it to text mode (an interrupted run can leave the stored mode toggled), and wait
+    // for its decrypted content so async rehydration cannot reset the editor mode
+    // mid-assertion.
+    await page.waitForSelector('[data-testid="notes-list-item"]', { timeout: 5000 });
+    const createdNoteRow = await page.evaluateHandle(() =>
+      Array.from(document.querySelectorAll('[data-testid="notes-list-item"]')).find((el) =>
+        (el.textContent || "").includes("BYOS Zero-Knowledge Infrastructure Note")
+      )
+    );
+    const createdNoteEl = createdNoteRow.asElement();
+    if (createdNoteEl) {
+      await createdNoteEl.click();
+    } else {
+      await page.click('[data-testid="notes-list-item"]');
+    }
+    await page.waitForSelector('[data-testid="notes-editor-title-input"]', { timeout: 5000 });
+    await sleep(800);
+
+    if (await page.evaluate(() => Boolean(document.querySelector('[data-testid="notes-editor-checklist-items"]')))) {
+      await page.click('[data-testid="notes-editor-more-btn"]');
+      await sleep(400);
+      await page.click('[data-testid="editor-menu-toggle-checklist"]');
+      await sleep(700);
+    }
+    await page.waitForFunction(
+      () => {
+        const content = document.querySelector('[data-testid="notes-editor-content-input"]');
+        return Boolean(content && (content.innerText || "").trim().length > 0);
+      },
+      { timeout: 5000 }
+    );
 
     // -------------------------------------------------------------------------
     // STEP 5C: Test Existing Functionality Regression (Checklist, Duplicate, Archive)
@@ -396,24 +476,33 @@ async function run() {
       await sleep(1000);
     }
 
-    // 7A. In mobile single-pane flow: Check if sidebar is showing, tap "All Notes" to enter note list
-    const sidebarVisible = await page.evaluate(() => {
-      const sb = document.querySelector('[data-testid="notes-sidebar"]');
-      return Boolean(sb && sb.offsetParent !== null);
+    // 7A. Mobile opens on the note list. The navigation drawer stays mounted
+    // off-canvas, so visibility must be read from the computed style, not offsetParent.
+    const mobilePaneState = await page.evaluate(() => {
+      const shell = document.querySelector('[data-testid="notes-sidebar-shell"]');
+      let drawerOpen = false;
+      if (shell) {
+        const style = window.getComputedStyle(shell);
+        const translateX = Number.parseFloat((style.translate || "none").split(" ")[0]) || 0;
+        drawerOpen = style.visibility !== "hidden" && translateX === 0;
+      }
+      const editor = document.querySelector('[data-testid="notes-editor-pane"]');
+      const editorVisible = Boolean(editor && editor.getClientRects().length > 0);
+      return { drawerOpen, editorVisible };
     });
 
-    if (sidebarVisible) {
-      console.log("  Mobile starts on Notes Sidebar (Pane 1) -> selecting 'All Notes'...");
+    if (mobilePaneState.drawerOpen) {
+      console.log("  Mobile drawer is open -> selecting 'All Notes'...");
       const allNotesBtn = await page.waitForSelector('[data-testid="notes-nav-notes"]', { timeout: 5000 });
       await allNotesBtn.click();
       await sleep(800);
-    } else {
-      // If currently on editor, tap back to list
-      const editorBack = await page.$('[data-testid="notes-editor-back-btn"]');
-      if (editorBack && await page.evaluate(el => el.offsetParent !== null, editorBack)) {
-        await editorBack.click();
-        await sleep(600);
-      }
+    }
+
+    if (mobilePaneState.editorVisible) {
+      console.log("  Mobile editor is open -> tapping back to the note list...");
+      const editorBack = await page.waitForSelector('[data-testid="notes-editor-back-btn"]', { timeout: 5000 });
+      await editorBack.click();
+      await sleep(600);
     }
 
     // Screenshot 7: Mobile note list (Pane 2)

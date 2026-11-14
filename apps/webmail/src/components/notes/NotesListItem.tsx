@@ -1,12 +1,11 @@
 import { Component, Show, For } from "solid-js";
-import { NoteItem, NOTE_COLORS } from "./notesStore";
+import { NoteItem } from "./notesStore";
 import { formatMessageDate } from "../../utils/dateTime";
 
 export interface NotesListItemProps {
   note: NoteItem;
   isSelected: boolean;
   onSelect: (note: NoteItem) => void;
-  onTogglePin?: (e: MouseEvent, note: NoteItem) => void;
   onToggleFavorite?: (e: MouseEvent, note: NoteItem) => void;
 }
 
@@ -65,16 +64,6 @@ export const NotesListItem: Component<NotesListItemProps> = (props) => {
     return { done, total };
   };
 
-  const colorTheme = () => {
-    if (!props.note.color || props.note.color === "default") return null;
-    return NOTE_COLORS.find((c) => c.id === props.note.color) || null;
-  };
-
-  const getColorBorder = () => {
-    const found = colorTheme();
-    return found ? found.borderLight : "";
-  };
-
   return (
     <div
       role="button"
@@ -91,12 +80,10 @@ export const NotesListItem: Component<NotesListItemProps> = (props) => {
       class={`group relative w-full text-left p-3.5 transition-all duration-150 cursor-pointer select-none border-b border-[#E2DFD8]/60 dark:border-[#2E3138]/60 focus:outline-none ${
         props.isSelected
           ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-l-4 border-l-[#9E725F] dark:border-l-[#D4A38F]"
-          : colorTheme()
-          ? `${colorTheme()!.lightBg} ${colorTheme()!.darkBg} hover:opacity-95 border-l-4 border-l-transparent`
-          : "bg-white dark:bg-[#1E2025] hover:bg-[#F9F7F2] dark:hover:bg-[#26282E] border-l-4 border-l-transparent"
+          : "bg-white dark:bg-[#18191D] hover:bg-[#F9F7F2] dark:hover:bg-[#26282E] border-l-4 border-l-transparent"
       }`}
     >
-      {/* Top Row: Title, Date, Pin/Favorite status */}
+      {/* Top Row: Title, Date, Favorite status */}
       <div class="flex items-start justify-between gap-2 mb-1">
         <h4
           class={`text-sm font-semibold truncate leading-tight flex-1 ${
@@ -109,25 +96,7 @@ export const NotesListItem: Component<NotesListItemProps> = (props) => {
         </h4>
 
         <div class="flex items-center gap-1.5 flex-shrink-0">
-          {/* Pin Indicator */}
-          <Show when={props.note.isPinned}>
-            <span
-              title="Pinned note"
-              class="text-[#9E725F] dark:text-[#D4A38F] flex items-center"
-            >
-              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
-                <line x1="12" y1="17" x2="12" y2="22" stroke-linecap="round" />
-                <path
-                  d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  fill="currentColor"
-                />
-              </svg>
-            </span>
-          </Show>
-
-          {/* Favorite Indicator */}
+          {/* Favorite Indicator (replaces the retired pin marker) */}
           <Show when={props.note.isFavorite}>
             <span
               title="Favorite note"
@@ -208,15 +177,6 @@ export const NotesListItem: Component<NotesListItemProps> = (props) => {
           </Show>
         </div>
 
-        {/* Note Color Indicator */}
-        <Show when={props.note.color && props.note.color !== "default"}>
-          <span
-            title={`Color: ${props.note.color}`}
-            class={`w-2.5 h-2.5 rounded-full flex-shrink-0 border border-black/10 dark:border-white/10 ${
-              NOTE_COLORS.find((c) => c.id === props.note.color)?.swatchClass || ""
-            }`}
-          />
-        </Show>
       </div>
     </div>
   );

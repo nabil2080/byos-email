@@ -1,6 +1,6 @@
 import { Component, createSignal, createMemo, createEffect, onMount, onCleanup, Show, For } from "solid-js";
 import DOMPurify from "dompurify";
-import { NoteItem, NoteChecklistItem, NOTE_COLORS } from "./notesStore";
+import { NoteItem, NoteChecklistItem } from "./notesStore";
 import { NotesEditorToolbar } from "./NotesEditorToolbar";
 import { NotesEmptyState } from "./NotesEmptyState";
 import { formatFullDateTime } from "../../utils/dateTime";
@@ -89,7 +89,6 @@ export interface NotesEditorProps {
   note: NoteItem | null;
   allLabels: string[];
   onUpdateNote: (patch: Partial<NoteItem>) => void;
-  onTogglePin: () => void;
   onToggleFavorite: () => void;
   onDeleteNote: () => void;
   onDeleteForever?: () => void;
@@ -109,6 +108,10 @@ export interface NotesEditorProps {
   onBackToNotesList?: () => void;
   onNewNote?: () => void;
   onShareViaMail?: (file: File, defaultSubject: string, defaultBody: string) => void;
+  onPrevNote?: () => void;
+  onNextNote?: () => void;
+  hasPrevNote?: boolean;
+  hasNextNote?: boolean;
   class?: string;
 }
 
@@ -248,7 +251,6 @@ export const NotesEditor: Component<NotesEditorProps> = (props) => {
   const [altTextInput, setAltTextInput] = createSignal("");
 
   // Popover menus state
-  const [showPaletteMenu, setShowPaletteMenu] = createSignal(false);
   const [showReminderMenu, setShowReminderMenu] = createSignal(false);
   const [showLabelMenu, setShowLabelMenu] = createSignal(false);
   const [showMoreMenu, setShowMoreMenu] = createSignal(false);
@@ -1288,18 +1290,6 @@ export const NotesEditor: Component<NotesEditorProps> = (props) => {
     setNewLabelInput("");
   };
 
-  const getColorTheme = () => {
-    return NOTE_COLORS.find((c) => c.id === color()) || NOTE_COLORS[0];
-  };
-
-  const editorBgClass = () => {
-    const theme = getColorTheme();
-    if (theme.id === "default") {
-      return "bg-[#FAF9F5] dark:bg-[#14161A]";
-    }
-    return `${theme.lightBg} ${theme.darkBg}`;
-  };
-
   const formattedUpdatedTime = () => {
     if (!props.note?.updatedAt) return "Just now";
     return formatFullDateTime(new Date(props.note.updatedAt).toISOString());
@@ -1308,7 +1298,7 @@ export const NotesEditor: Component<NotesEditorProps> = (props) => {
   return (
     <div
       data-testid="notes-editor-pane"
-      class={`flex-1 min-w-0 min-h-0 h-full ${editorBgClass()} flex flex-col overflow-hidden relative transition-colors duration-200 ${
+      class={`flex-1 min-w-0 min-h-0 h-full bg-white dark:bg-[#18191D] flex flex-col overflow-hidden relative transition-colors duration-200 ${
         props.class || ""
       }`}
     >
@@ -1360,53 +1350,62 @@ export const NotesEditor: Component<NotesEditorProps> = (props) => {
         />
 
         {/* ── Top Header Actions Bar ── */}
-        <div class="h-13 px-4 border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between gap-3 bg-white dark:bg-[#1E2025] flex-shrink-0 select-none">
-          {/* Left: Mobile Back + Note Quick Actions */}
-          <div class="flex items-center gap-1.5 min-w-0">
-            {/* Mobile Back to Notes Button */}
-            <Show when={props.onBackToNotesList}>
-              <button
-                type="button"
-                onClick={props.onBackToNotesList}
-                data-testid="notes-editor-back-btn"
-                class="md:hidden flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-[#9E725F] dark:text-[#D4A38F] hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer"
-              >
-                <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24">
-                  <polyline points="15 18 9 12 15 6" />
-                </svg>
-                <span>Notes</span>
-              </button>
-            </Show>
-
-            {/* Pin / Unpin Action */}
+        <div class="h-13 px-2.5 sm:px-4 border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between gap-2 bg-white dark:bg-[#1E2025] flex-shrink-0 select-none">
+          {/* Left: Back button + Prev/Next navigation (matches email ReadingPane) */}
+          <div class="flex items-center gap-1.5 sm:gap-2">
+            {/* Back to Notes List */}
             <button
               type="button"
-              onClick={props.onTogglePin}
-              data-testid="notes-editor-pin-btn"
-              title={props.note?.isPinned ? "Unpin note" : "Pin note"}
-              class={`w-8 h-8 rounded-lg flex items-center justify-center transition cursor-pointer ${
-                props.note?.isPinned
-                  ? "bg-[#F2E8E2] dark:bg-[#2D2522] text-[#9E725F] dark:text-[#D4A38F]"
-                  : "text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5"
-              }`}
+              onClick={props.onBackToNotesList}
+              data-testid="notes-editor-back-btn"
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] hover:text-[#A27561] dark:hover:text-[#A27561] hover:bg-[#F3ECE8] dark:hover:bg-[#26282E] transition cursor-pointer border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] shadow-2xs min-h-[36px]"
+              title="Back to notes list (Esc)"
+              aria-label="Back to notes list"
             >
-              <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
-                <line x1="12" y1="17" x2="12" y2="22" stroke-linecap="round" />
-                <path
-                  d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  fill={props.note?.isPinned ? "currentColor" : "none"}
-                />
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
               </svg>
+              <span>Back</span>
             </button>
 
-            {/* Favorite Action */}
+            <div class="h-4 w-px bg-[#E2DFD8] dark:bg-[#2E3138] mx-0.5" />
+
+            {/* Sequential Prev/Next Chevrons */}
+            <div class="flex items-center gap-0.5 bg-white dark:bg-[#1E2025] rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] p-0.5 shadow-2xs">
+              <button
+                type="button"
+                onClick={props.onPrevNote}
+                disabled={!props.hasPrevNote}
+                class="p-1 rounded text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                title="Previous note"
+              >
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="18 15 12 9 6 15" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={props.onNextNote}
+                disabled={!props.hasNextNote}
+                class="p-1 rounded text-[#464748] dark:text-[#A3A3A3] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-[#F0EEE9] dark:hover:bg-[#26282E] disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                title="Next note"
+              >
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Right: All action icons + Auto-save status + More Actions Menu */}
+          <div class="flex items-center gap-1 sm:gap-1.5 flex-shrink-0">
+            {/* Favorite / Star Action */}
             <button
               type="button"
               onClick={props.onToggleFavorite}
               data-testid="notes-editor-favorite-btn"
               title={props.note?.isFavorite ? "Remove from favorites" : "Add to favorites"}
+              aria-pressed={props.note?.isFavorite ? "true" : "false"}
               class={`w-8 h-8 rounded-lg flex items-center justify-center transition cursor-pointer ${
                 props.note?.isFavorite
                   ? "text-amber-500 hover:text-amber-600 bg-amber-50 dark:bg-amber-950/30"
@@ -1445,7 +1444,7 @@ export const NotesEditor: Component<NotesEditorProps> = (props) => {
 
               <Show when={showReminderMenu()}>
                 <div
-                  class="absolute left-0 top-full mt-1.5 w-48 rounded-xl bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] shadow-lg p-1.5 z-30 text-xs flex flex-col gap-1"
+                  class="absolute right-0 top-full mt-1.5 w-48 rounded-xl bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] shadow-lg p-1.5 z-30 text-xs flex flex-col gap-1"
                   onClick={() => setShowReminderMenu(false)}
                 >
                   <div class="text-[10px] font-mono text-[#878A8E] px-2 py-0.5 uppercase tracking-wider">
@@ -1514,7 +1513,7 @@ export const NotesEditor: Component<NotesEditorProps> = (props) => {
 
               <Show when={showLabelMenu()}>
                 <div
-                  class="absolute left-0 top-full mt-1.5 w-56 rounded-xl bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] shadow-xl p-2 z-30 text-xs flex flex-col gap-1.5"
+                  class="absolute right-0 top-full mt-1.5 w-56 rounded-xl bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] shadow-xl p-2 z-30 text-xs flex flex-col gap-1.5"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <div class="text-[10px] font-mono text-[#878A8E] px-1 uppercase tracking-wider">
@@ -1567,59 +1566,6 @@ export const NotesEditor: Component<NotesEditorProps> = (props) => {
               </Show>
             </div>
 
-            {/* Color Palette Popover */}
-            <div class="relative">
-              <button
-                type="button"
-                onClick={() => setShowPaletteMenu(!showPaletteMenu())}
-                data-testid="notes-editor-palette-btn"
-                title="Note color"
-                class="w-8 h-8 rounded-lg flex items-center justify-center text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer"
-              >
-                <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="10" />
-                  <circle cx="12" cy="7" r="1.5" />
-                  <circle cx="16.5" cy="10.5" r="1.5" />
-                  <circle cx="16.5" cy="15.5" r="1.5" />
-                  <circle cx="7.5" cy="10.5" r="1.5" />
-                  <circle cx="7.5" cy="15.5" r="1.5" />
-                </svg>
-              </button>
-
-              <Show when={showPaletteMenu()}>
-                <div
-                  data-testid="notes-color-picker-menu"
-                  class="absolute left-0 top-full mt-1.5 p-2 rounded-xl bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] shadow-lg flex items-center gap-1.5 z-30"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <For each={NOTE_COLORS}>
-                    {(c) => (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setColor(c.id);
-                          props.onUpdateNote({ color: c.id });
-                          setShowPaletteMenu(false);
-                        }}
-                        title={c.name}
-                        data-testid={`notes-color-option-${c.id}`}
-                        class={`w-6 h-6 rounded-full border transition-transform hover:scale-110 cursor-pointer flex items-center justify-center ${
-                          c.swatchClass
-                        } ${color() === c.id ? "ring-2 ring-[#9E725F] ring-offset-1 scale-110" : ""}`}
-                      >
-                        <Show when={color() === c.id}>
-                          <span class="w-1.5 h-1.5 rounded-full bg-[#9E725F] dark:bg-[#D4A38F]" />
-                        </Show>
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </Show>
-            </div>
-          </div>
-
-          {/* Right: Auto-save status + More Actions Menu */}
-          <div class="flex items-center gap-2 flex-shrink-0">
             {/* Auto-save / Sync State Indicator */}
             <div class="flex items-center gap-1 text-xs text-[#878A8E] dark:text-[#A1A1AA]">
               <Show when={props.saveStatus === "saving"}>
@@ -1628,7 +1574,7 @@ export const NotesEditor: Component<NotesEditorProps> = (props) => {
                     <circle cx="12" cy="10" r="10" stroke-opacity="0.25" />
                     <path d="M12 2a10 10 0 0 1 10 10" />
                   </svg>
-                  <span>Saving…</span>
+                  <span class="hidden sm:inline">Saving…</span>
                 </span>
               </Show>
               <Show when={props.saveStatus === "saved" || props.saveStatus === "idle"}>
@@ -1907,7 +1853,7 @@ export const NotesEditor: Component<NotesEditorProps> = (props) => {
         <Show when={selectedImageEl()}>
           <div
             data-testid="image-floating-controls"
-            class="sticky top-0 z-30 px-3 py-1.5 bg-[#FAF9F5] dark:bg-[#1E2025] border-b border-[#E2DFD8] dark:border-[#2E3138] shadow-xs flex items-center justify-between gap-2 flex-wrap text-xs select-none"
+            class="sticky top-0 z-30 px-3 py-1.5 bg-white dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2E3138] shadow-xs flex items-center justify-between gap-2 flex-wrap text-xs select-none"
           >
             <div class="flex items-center gap-1 flex-wrap">
               {/* Category indicator */}

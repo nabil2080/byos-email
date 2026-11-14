@@ -18,31 +18,28 @@
  *    - Calendar "New Event" (min-height 44px, py-2.5 px-4, rounded-xl, gradient, kbd 'E').
  *    - Notes "New Note" (min-height 44px, py-2.5 px-4, rounded-xl, gradient, kbd 'N').
  * 4. Action Toolbar Icons & Mapping:
- *    - Pin button: clean Lucide Pin icon, correct tooltip and toggle state.
- *    - Favorite button: Star icon, correct tooltip.
+ *    - Favorite star is the first note action; the retired Pin button must not render.
+ *    - Favorite button: Star icon, correct tooltip and pressed state.
  *    - Reminder button: Bell icon, correct tooltip.
  *    - Label button: Tag icon, correct tooltip.
- *    - Note Color button: Palette icon, correct tooltip.
  *    - More actions button: Three vertical dots, correct tooltip.
- * 5. Note Color Functionality:
- *    - Palette button opens compact color picker with 8 soft BYOS-branded colors.
- *    - Selecting a color updates store, auto-saves, and applies soft tint to editor and list item.
- *    - Survives page reload.
+ *    - Note Color button: retired — must not render.
+ * 5. Neutral Note Surfaces (color system retired):
+ *    - Editor pane and list rows use the neutral surface (bg-white / dark:bg-[#18191D]).
+ *    - No palette button, no color picker menu, no per-note tint or color dot.
  * 6. Save & Sync Status:
  *    - Healthy states display "✓ Saved" and "Sync: Synced" (or "Sync: idle").
  * 7. Mobile Responsiveness:
  *    - Viewport 375px scales smoothly with zero horizontal scroll.
  *
- * Saves 10 required screenshots in tests/browser/artifacts/:
+ * Saves 8 required screenshots in tests/browser/artifacts/:
  * - notes_editor_spacious_width.png
  * - notes_sidebar_standard_width.png
  * - mail_sidebar_standard_width.png
  * - calendar_sidebar_standard_width.png
  * - sidebar_action_buttons_comparison.png
  * - notes_action_toolbar_icons.png
- * - notes_color_picker_open.png
- * - notes_color_selected_background.png
- * - notes_color_persisted_reload.png
+ * - notes_neutral_surfaces_reload.png
  * - notes_editor_mobile_375px.png
  */
 
@@ -338,7 +335,7 @@ async function runSuite() {
     });
 
     // -------------------------------------------------------------------------
-    // STEP 6: Verify Action Toolbar Icons & Lucide Pin Icon
+    // STEP 6: Verify Action Toolbar Icons & Retired Pin Button
     // -------------------------------------------------------------------------
     console.log("\n--- [STEP 6] Verify Notes Action Toolbar Icons ---");
     const toolbarInfo = await page.evaluate(() => {
@@ -349,60 +346,77 @@ async function runSuite() {
       const palBtn = document.querySelector('[data-testid="notes-editor-palette-btn"]');
       const morBtn = document.querySelector('[data-testid="notes-editor-more-btn"]');
 
-      const pinSvg = pinBtn?.querySelector("svg")?.innerHTML || "";
       const favSvg = favBtn?.querySelector("svg")?.innerHTML || "";
       const remSvg = remBtn?.querySelector("svg")?.innerHTML || "";
       const lblSvg = lblBtn?.querySelector("svg")?.innerHTML || "";
-      const palSvg = palBtn?.querySelector("svg")?.innerHTML || "";
       const morSvg = morBtn?.querySelector("svg")?.innerHTML || "";
 
+      // The visible note actions in the left toolbar group, in DOM order.
+      const leftGroup = favBtn?.parentElement;
+      const visibleActionIds = Array.from(
+        leftGroup?.querySelectorAll('button[data-testid$="-btn"]') || []
+      )
+        .filter((btn) => btn.getClientRects().length > 0)
+        .map((btn) => btn.getAttribute("data-testid"));
+
       return {
-        pinTitle: pinBtn?.getAttribute("title"),
+        pinBtnAbsent: !pinBtn,
+        favPressed: favBtn?.getAttribute("aria-pressed"),
+        visibleActionIds,
+        favIsFirstAction: visibleActionIds[0] === "notes-editor-favorite-btn",
         favTitle: favBtn?.getAttribute("title"),
         remTitle: remBtn?.getAttribute("title"),
         lblTitle: lblBtn?.getAttribute("title"),
-        palTitle: palBtn?.getAttribute("title"),
         morTitle: morBtn?.getAttribute("title"),
-        hasPinLine: pinSvg.includes('line x1="12" y1="17" x2="12" y2="22"'),
-        hasPinPath: pinSvg.includes("M5 17h14v-1.76"),
+        paletteBtnAbsent: !palBtn,
         hasFavPolygon: favSvg.includes("polygon points="),
         hasRemPath: remSvg.includes("M18 8A6 6"),
         hasLblPath: lblSvg.includes("M20.59 13.41"),
-        hasPalCircles: palSvg.includes("circle cx="),
         hasMorCircles: morSvg.includes("circle cx="),
       };
     });
 
     recordResult(
-      "PIN_ICON_LUCIDE",
-      "Pin button displays recognizable clean Lucide Pin icon",
-      toolbarInfo.hasPinLine && toolbarInfo.hasPinPath,
-      `Pin title: "${toolbarInfo.pinTitle}", contains Lucide pin geometry`
+      "PIN_RETIRED",
+      "Pin button is gone and the favorite star takes the first toolbar slot",
+      toolbarInfo.pinBtnAbsent && toolbarInfo.favIsFirstAction && toolbarInfo.hasFavPolygon,
+      `pinBtnAbsent=${toolbarInfo.pinBtnAbsent} visibleActions=${JSON.stringify(toolbarInfo.visibleActionIds)}`
     );
 
     recordResult(
       "TOOLBAR_ICONS_MAPPING",
-      "All action toolbar icons (Pin, Favorite, Reminder, Label, Palette, More) correctly mapped",
+      "Active action toolbar icons (Favorite, Reminder, Label, More) correctly mapped; retired Pin and Palette buttons absent",
       toolbarInfo.hasFavPolygon &&
         toolbarInfo.hasRemPath &&
         toolbarInfo.hasLblPath &&
-        toolbarInfo.hasPalCircles &&
-        toolbarInfo.hasMorCircles,
-      `Tooltips: "${toolbarInfo.pinTitle}", "${toolbarInfo.favTitle}", "${toolbarInfo.remTitle}", "${toolbarInfo.lblTitle}", "${toolbarInfo.palTitle}", "${toolbarInfo.morTitle}"`
+        toolbarInfo.hasMorCircles &&
+        toolbarInfo.paletteBtnAbsent &&
+        toolbarInfo.pinBtnAbsent,
+      `Tooltips: "${toolbarInfo.favTitle}", "${toolbarInfo.remTitle}", "${toolbarInfo.lblTitle}", "${toolbarInfo.morTitle}"; paletteBtnAbsent=${toolbarInfo.paletteBtnAbsent} pinBtnAbsent=${toolbarInfo.pinBtnAbsent}`
     );
 
-    // Pin toggle test
-    await page.click('[data-testid="notes-editor-pin-btn"]');
-    await sleep(400);
-    const pinActive = await page.evaluate(() => {
-      const btn = document.querySelector('[data-testid="notes-editor-pin-btn"]');
-      return btn?.getAttribute("title");
+    // Favorite toggle test (deterministic: normalize to unstarred, then star it)
+    if (toolbarInfo.favPressed === "true") {
+      await page.click('[data-testid="notes-editor-favorite-btn"]');
+      await sleep(400);
+    }
+    await page.click('[data-testid="notes-editor-favorite-btn"]');
+    await sleep(500);
+    const favActive = await page.evaluate(() => {
+      const btn = document.querySelector('[data-testid="notes-editor-favorite-btn"]');
+      return {
+        pressed: btn?.getAttribute("aria-pressed"),
+        title: btn?.getAttribute("title"),
+        fill: btn?.querySelector("svg")?.getAttribute("fill"),
+      };
     });
     recordResult(
-      "PIN_TOGGLE_ACTIVE",
-      "Pin button toggles active state and updates tooltip",
-      pinActive === "Unpin note",
-      `Tooltip after click: "${pinActive}"`
+      "FAVORITE_TOGGLE_ACTIVE",
+      "Favorite star toggles its pressed state, tooltip and filled icon",
+      favActive.pressed === "true" &&
+        favActive.title === "Remove from favorites" &&
+        favActive.fill === "currentColor",
+      `aria-pressed="${favActive.pressed}" title="${favActive.title}" fill="${favActive.fill}"`
     );
 
     // Capture toolbar screenshot
@@ -412,66 +426,25 @@ async function runSuite() {
     });
 
     // -------------------------------------------------------------------------
-    // STEP 7: Verify Note Color Palette Functionality
+    // STEP 7: Note color system retired — no palette UI may render
     // -------------------------------------------------------------------------
-    console.log("\n--- [STEP 7] Verify Note Color Palette Picker ---");
-    await page.click('[data-testid="notes-editor-palette-btn"]');
-    await sleep(400);
-
-    await page.waitForSelector('[data-testid="notes-color-picker-menu"]', { timeout: 3000 });
-    const colorPickerVisible = await page.evaluate(() => {
-      const menu = document.querySelector('[data-testid="notes-color-picker-menu"]');
-      const buttons = menu?.querySelectorAll("button") || [];
-      return {
-        visible: !!menu,
-        count: buttons.length,
-      };
-    });
-
+    console.log("\n--- [STEP 7] Verify Note Color System Is Retired ---");
+    const paletteState = await page.evaluate(() => ({
+      paletteBtn: !!document.querySelector('[data-testid="notes-editor-palette-btn"]'),
+      pickerMenu: !!document.querySelector('[data-testid="notes-color-picker-menu"]'),
+      colorOption: !!document.querySelector('[data-testid^="notes-color-option-"]'),
+    }));
     recordResult(
-      "COLOR_PICKER_MOUNTED",
-      "Color picker opens with 8 approved BYOS color options",
-      colorPickerVisible.visible && colorPickerVisible.count === 8,
-      `Option count: ${colorPickerVisible.count}`
+      "COLOR_SYSTEM_RETIRED",
+      "Palette button, color picker menu and color options are absent",
+      !paletteState.paletteBtn && !paletteState.pickerMenu && !paletteState.colorOption,
+      `paletteBtn=${paletteState.paletteBtn} pickerMenu=${paletteState.pickerMenu} colorOption=${paletteState.colorOption}`
     );
 
-    await page.screenshot({
-      path: path.join(artifactsDir, "notes_color_picker_open.png"),
-      clip: { x: 620, y: 35, width: 300, height: 80 },
-    });
-
-    // Select Peach color
-    await page.waitForSelector('[data-testid="notes-color-option-peach"]', { timeout: 3000 });
-    await page.click('[data-testid="notes-color-option-peach"]');
-    await sleep(600);
-
-    const noteColorApplied = await page.evaluate(() => {
-      const pane = document.querySelector('[data-testid="notes-editor-pane"]');
-      const activeCard = document.querySelector('[data-testid="notes-list-item"]');
-      const paneClass = pane?.className || "";
-      const cardColorDot = activeCard?.querySelector('[title*="Color: peach"]');
-      return {
-        paneHasPeachBg: paneClass.includes("bg-[#FFF2EB]") || paneClass.includes("dark:bg-[#342721]"),
-        hasCardColorDot: !!cardColorDot,
-        paneClass,
-      };
-    });
-
-    recordResult(
-      "NOTE_COLOR_APPLIED",
-      "Selected color applies soft background tint to editor and note indicator in list",
-      noteColorApplied.paneHasPeachBg && noteColorApplied.hasCardColorDot,
-      `Pane background contains peach token: ${noteColorApplied.paneHasPeachBg}, List item dot: ${noteColorApplied.hasCardColorDot}`
-    );
-
-    await page.screenshot({
-      path: path.join(artifactsDir, "notes_color_selected_background.png"),
-    });
-
     // -------------------------------------------------------------------------
-    // STEP 8: Reload Page & Verify Persistence of Spacing & Color
+    // STEP 8: Reload Page & Verify Neutral Surfaces Persist
     // -------------------------------------------------------------------------
-    console.log("\n--- [STEP 8] Verify Persistence Across Page Reload ---");
+    console.log("\n--- [STEP 8] Verify Neutral Surfaces Across Page Reload ---");
     await sleep(800); // Allow debounced auto-save
     await page.reload({ waitUntil: "networkidle2" });
     await sleep(1500);
@@ -480,34 +453,39 @@ async function runSuite() {
     await page.click('[data-testid="nav-notes-tab"]');
     await sleep(1000);
 
-    // Select the note
+    // The editor opens only on an explicit click
     await page.waitForSelector('[data-testid="notes-list-item"]', { timeout: 5000 });
     await page.click('[data-testid="notes-list-item"]');
     await sleep(800);
 
-    const persistedState = await page.evaluate(() => {
+    const neutralState = await page.evaluate(() => {
       const pane = document.querySelector('[data-testid="notes-editor-pane"]');
       const titleInput = document.querySelector('[data-testid="notes-editor-title-input"]');
       const activeCard = document.querySelector('[data-testid="notes-list-item"]');
-      const cardColorDot = activeCard?.querySelector('[title*="Color: peach"]');
       const paneClass = pane?.className || "";
-
+      const cardClass = activeCard?.className || "";
+      const tintedPane = ["bg-[#FFF2EB]", "dark:bg-[#342721]", "bg-[#FAF9F5]", "dark:bg-[#14161A]"].some(
+        (c) => paneClass.includes(c)
+      );
+      const tintedCard = ["bg-[#FFF2EB]", "dark:bg-[#342721]"].some((c) => cardClass.includes(c));
+      const colorDot = activeCard?.querySelector('[title*="Color:"]');
       return {
         title: titleInput?.value,
-        paneHasPeachBg: paneClass.includes("bg-[#FFF2EB]") || paneClass.includes("dark:bg-[#342721]"),
-        hasCardColorDot: !!cardColorDot,
+        paneNeutral: !tintedPane && paneClass.includes("bg-white") && paneClass.includes("dark:bg-[#18191D]"),
+        cardNotTinted: !tintedCard,
+        hasColorDot: !!colorDot,
       };
     });
 
     recordResult(
-      "NOTE_COLOR_PERSISTED",
-      "Note color and content persist completely after page reload",
-      persistedState.paneHasPeachBg && persistedState.hasCardColorDot,
-      `Title: "${persistedState.title}", Peach background: ${persistedState.paneHasPeachBg}`
+      "NEUTRAL_SURFACES_PERSIST",
+      "Editor and list surfaces stay neutral after reload (no per-note tint or color dot)",
+      neutralState.paneNeutral && neutralState.cardNotTinted && !neutralState.hasColorDot,
+      `Title: "${neutralState.title}", paneNeutral=${neutralState.paneNeutral}, cardNotTinted=${neutralState.cardNotTinted}, colorDot=${neutralState.hasColorDot}`
     );
 
     await page.screenshot({
-      path: path.join(artifactsDir, "notes_color_persisted_reload.png"),
+      path: path.join(artifactsDir, "notes_neutral_surfaces_reload.png"),
     });
 
     // -------------------------------------------------------------------------
