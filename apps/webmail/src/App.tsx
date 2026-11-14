@@ -9223,13 +9223,20 @@ const AppContent: Component = () => {
         </Show>
 
         {/* Mobile Navigation Drawer with Backdrop */}
-        <Show when={mobileSidebarOpen()}>
-          <div
-            class="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 md:hidden transition-opacity"
-            onClick={() => setMobileSidebarOpen(false)}
-            aria-hidden="true"
-          />
-          <div class="fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-[#F0EEE9] dark:bg-[#18191D] z-50 md:hidden shadow-2xl flex flex-col transition-transform duration-200">
+        <div
+          class={`fixed inset-0 bg-black/40 backdrop-blur-xs z-50 md:hidden transition-opacity duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+            mobileSidebarOpen() ? "opacity-100" : "opacity-0 pointer-events-none"
+          }`}
+          onClick={() => setMobileSidebarOpen(false)}
+          aria-hidden="true"
+        />
+        <div
+          class={`fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-[#F0EEE9] dark:bg-[#18191D] z-50 md:hidden shadow-2xl flex flex-col transition-[translate,visibility] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none ${
+            mobileSidebarOpen()
+              ? "translate-x-0 visible"
+              : "-translate-x-full invisible"
+          }`}
+        >
             <Sidebar
               currentUser={currentUser()}
               selectedMailbox={selectedMailbox()}
@@ -9361,7 +9368,6 @@ const AppContent: Component = () => {
               onCloseMobile={() => setMobileSidebarOpen(false)}
             />
           </div>
-        </Show>
 
         {/* Legacy Test Compatibility Bridges */}
         <div class="hidden" aria-hidden="true">

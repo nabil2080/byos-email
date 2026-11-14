@@ -1756,12 +1756,20 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
       </div>
 
       {/* ── Mobile & Tablet Sidebar Drawer (< lg) ── */}
-      <Show when={mobileSidebarOpen()}>
-        <div
-          class="fixed inset-0 bg-black/40 z-50 lg:hidden"
-          onClick={() => setMobileSidebarOpen(false)}
-        />
-        <div class="fixed inset-y-0 left-0 w-72 bg-[#F0EEE9] dark:bg-[#18191D] z-50 lg:hidden shadow-xl flex flex-col">
+      <div
+        class={`fixed inset-0 bg-black/40 backdrop-blur-xs z-50 lg:hidden transition-opacity duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+          mobileSidebarOpen() ? "opacity-100" : "opacity-0 pointer-events-none"
+        }`}
+        onClick={() => setMobileSidebarOpen(false)}
+        aria-hidden="true"
+      />
+      <div
+        class={`fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-[#F0EEE9] dark:bg-[#18191D] z-50 lg:hidden shadow-2xl flex flex-col transition-[translate,visibility] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none ${
+          mobileSidebarOpen()
+            ? "translate-x-0 visible"
+            : "-translate-x-full invisible"
+        }`}
+      >
           <CalendarSidebar
             currentUser={props.currentUser}
             selectedMailbox={props.selectedMailbox}
@@ -1854,7 +1862,6 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
             }}
           />
         </div>
-      </Show>
 
       {/* ── Right Content Column beside CalendarSidebar ── */}
       <div class="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden gap-0 md:gap-2 pb-0">

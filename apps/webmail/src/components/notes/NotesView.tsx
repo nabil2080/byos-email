@@ -14,6 +14,7 @@ import {
   toggleFavoriteNote,
   duplicateNote,
   loadLabels,
+  saveLabels,
   addNoteDrawing,
   removeNoteDrawing,
   addNoteImage,
@@ -174,7 +175,24 @@ export const NotesView: Component<NotesViewProps> = (props) => {
       (props.isUnlocked !== false ? props.mailboxKey : null) || (mb ? getMailboxKeyFor(mb) : null);
     const loaded = loadNotes(mb, key);
     setNotes(loaded);
-    setLabels(loadLabels(mb));
+
+    // Merge stored labels with any labels present on existing notes
+    const storedLabels = loadLabels(mb);
+    const noteLabels = new Set<string>(storedLabels);
+    for (const n of loaded) {
+      if (Array.isArray(n.labels)) {
+        for (const l of n.labels) {
+          if (typeof l === "string" && l.trim()) {
+            noteLabels.add(l.trim());
+          }
+        }
+      }
+    }
+    const mergedLabels = Array.from(noteLabels);
+    if (mergedLabels.length > storedLabels.length) {
+      saveLabels(mb, mergedLabels);
+    }
+    setLabels(mergedLabels);
 
     const mbKey = props.mailboxKey || (mb ? getMailboxKeyFor(mb) : null);
     for (const n of loaded) {
@@ -221,8 +239,8 @@ export const NotesView: Component<NotesViewProps> = (props) => {
       return list.filter((n) => !n.isInBin && !n.isArchived && Boolean(n.reminder));
     }
     if (v.startsWith("label:")) {
-      const lblName = v.substring(6);
-      return list.filter((n) => !n.isInBin && !n.isArchived && n.labels.includes(lblName));
+      const lblName = v.substring(6).toLowerCase();
+      return list.filter((n) => !n.isInBin && !n.isArchived && (n.labels || []).some((l) => l.toLowerCase() === lblName));
     }
     // "notes" (all notes)
     return list.filter((n) => !n.isInBin && !n.isArchived);
@@ -253,8 +271,9 @@ export const NotesView: Component<NotesViewProps> = (props) => {
 
     const labelCounts: Record<string, number> = {};
     for (const lbl of labels()) {
+      const lower = lbl.toLowerCase();
       labelCounts[lbl] = list.filter(
-        (n) => !n.isInBin && !n.isArchived && n.labels.includes(lbl)
+        (n) => !n.isInBin && !n.isArchived && (n.labels || []).some((l) => l.toLowerCase() === lower)
       ).length;
     }
 
@@ -294,6 +313,33 @@ export const NotesView: Component<NotesViewProps> = (props) => {
       setMobilePane("list");
     }
   });
+
+  // Sequential Prev / Next note navigation (matches email ReadingPane)
+  const currentNoteIndex = () => {
+    const id = selectedNoteId();
+    if (!id) return -1;
+    return searchFilteredNotes().findIndex((n) => n.id === id);
+  };
+
+  const hasPrevNote = () => currentNoteIndex() > 0;
+  const hasNextNote = () => {
+    const idx = currentNoteIndex();
+    return idx >= 0 && idx < searchFilteredNotes().length - 1;
+  };
+
+  const handlePrevNote = () => {
+    const idx = currentNoteIndex();
+    if (idx > 0) {
+      setSelectedNoteId(searchFilteredNotes()[idx - 1].id);
+    }
+  };
+
+  const handleNextNote = () => {
+    const idx = currentNoteIndex();
+    if (idx >= 0 && idx < searchFilteredNotes().length - 1) {
+      setSelectedNoteId(searchFilteredNotes()[idx + 1].id);
+    }
+  };
 
   function getViewTitle(): string {
     const v = activeView();
@@ -637,7 +683,14 @@ export const NotesView: Component<NotesViewProps> = (props) => {
                 saveStatus={saveStatus()}
                 saveErrorMessage={saveErrorMessage()}
                 syncStatus={syncStatus()}
-                onBackToNotesList={() => setMobilePane("list")}
+                hasPrevNote={hasPrevNote()}
+                hasNextNote={hasNextNote()}
+                onPrevNote={handlePrevNote}
+                onNextNote={handleNextNote}
+                onBackToNotesList={() => {
+                  setSelectedNoteId(null);
+                  setMobilePane("list");
+                }}
                 onNewNote={handleNewNote}
                 onShareViaMail={props.onShareViaMail}
               />
