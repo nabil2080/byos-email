@@ -48,9 +48,9 @@ export const HowItWorks: Component = () => {
   ];
 
   return (
-    <div class="bg-white rounded-3xl border border-[#E2DFD8] shadow-xs overflow-hidden">
+    <div class="bg-[#F6F3ED] rounded-3xl border border-[#D8D3C9] shadow-xs overflow-hidden">
       {/* Step Tabs Header */}
-      <div class="grid grid-cols-3 border-b border-[#E2DFD8] bg-[#F8F7F4]">
+      <div class="grid grid-cols-3 border-b border-[#D8D3C9] bg-[#F8F7F4]">
         <For each={steps}>
           {(s) => {
             const isActive = () => activeStep() === s.step;
@@ -60,19 +60,19 @@ export const HowItWorks: Component = () => {
                 onClick={() => setActiveStep(s.step)}
                 class={`p-4 sm:p-6 text-left transition relative cursor-pointer ${
                   isActive()
-                    ? "bg-white text-[#2B2C2D]"
-                    : "text-[#6F7173] hover:text-[#2B2C2D] hover:bg-[#F3ECE8]/50"
+                    ? "bg-[#F6F3ED] text-[#18212A]"
+                    : "text-[#55616D] hover:text-[#18212A] hover:bg-[#E2E7EB]/50"
                 }`}
               >
-                <div class="flex items-center gap-2.5 mb-1 text-[#9E725F]">
+                <div class="flex items-center gap-2.5 mb-1 text-[#226192]">
                   {s.icon}
-                  <span class="text-xs sm:text-sm font-bold truncate text-[#2B2C2D]">{s.title}</span>
+                  <span class="text-xs sm:text-sm font-bold truncate text-[#18212A]">{s.title}</span>
                 </div>
-                <div class="text-[11px] sm:text-xs text-[#6F7173] truncate hidden sm:block">
+                <div class="text-[11px] sm:text-xs text-[#55616D] truncate hidden sm:block">
                   {s.subtitle}
                 </div>
                 {isActive() && (
-                  <div class="absolute bottom-0 left-0 right-0 h-0.5 bg-[#9E725F]"></div>
+                  <div class="absolute bottom-0 left-0 right-0 h-0.5 bg-[#226192]"></div>
                 )}
               </button>
             );
@@ -86,13 +86,13 @@ export const HowItWorks: Component = () => {
         <Show when={activeStep() === 1}>
           <div class="space-y-6">
             <div>
-              <span class="text-xs uppercase tracking-widest font-mono text-[#9E725F] font-bold">
+              <span class="text-xs uppercase tracking-widest font-mono text-[#226192] font-bold">
                 Step 1: Storage Freedom
               </span>
-              <h3 class="text-xl sm:text-2xl font-bold text-[#2B2C2D] mt-1">
+              <h3 class="text-xl sm:text-2xl font-bold text-[#18212A] mt-1">
                 Connect Your Cloud Storage in One Click
               </h3>
-              <p class="text-xs sm:text-sm text-[#6F7173] mt-1.5 max-w-2xl leading-relaxed">
+              <p class="text-xs sm:text-sm text-[#55616D] mt-1.5 max-w-2xl leading-relaxed">
                 Choose where your emails live. Connect your own Cloudflare R2, Amazon S3, or Google Drive bucket. You pay your provider directly at commodity rates — we take zero cut.
               </p>
             </div>
@@ -104,16 +104,16 @@ export const HowItWorks: Component = () => {
                 onClick={() => setSelectedStorage("r2")}
                 class={`p-4 rounded-2xl border text-left transition cursor-pointer ${
                   selectedStorage() === "r2"
-                    ? "border-[#9E725F] bg-[#F3ECE8] shadow-xs ring-1 ring-[#9E725F]/30"
-                    : "border-[#E2DFD8] bg-[#F8F7F4] hover:bg-white"
+                    ? "border-[#226192] bg-[#E2E7EB] shadow-xs ring-1 ring-[#226192]/30"
+                    : "border-[#D8D3C9] bg-[#F8F7F4] hover:bg-[#F6F3ED]"
                 }`}
               >
-                <div class="font-bold text-sm text-[#2B2C2D] flex items-center gap-2">
+                <div class="font-bold text-sm text-[#18212A] flex items-center gap-2">
                   <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
                   <span>Cloudflare R2</span>
                 </div>
                 <div class="text-xs font-semibold text-emerald-800 mt-1.5">$0.015 / GB &bull; $0 Egress</div>
-                <div class="text-[11px] text-[#6F7173] mt-0.5">Best for growing startups &amp; teams</div>
+                <div class="text-[11px] text-[#55616D] mt-0.5">Best for growing startups &amp; teams</div>
               </button>
 
               <button
@@ -121,16 +121,16 @@ export const HowItWorks: Component = () => {
                 onClick={() => setSelectedStorage("s3")}
                 class={`p-4 rounded-2xl border text-left transition cursor-pointer ${
                   selectedStorage() === "s3"
-                    ? "border-[#9E725F] bg-[#F3ECE8] shadow-xs ring-1 ring-[#9E725F]/30"
-                    : "border-[#E2DFD8] bg-[#F8F7F4] hover:bg-white"
+                    ? "border-[#226192] bg-[#E2E7EB] shadow-xs ring-1 ring-[#226192]/30"
+                    : "border-[#D8D3C9] bg-[#F8F7F4] hover:bg-[#F6F3ED]"
                 }`}
               >
-                <div class="font-bold text-sm text-[#2B2C2D] flex items-center gap-2">
+                <div class="font-bold text-sm text-[#18212A] flex items-center gap-2">
                   <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
                   <span>Amazon AWS S3</span>
                 </div>
-                <div class="text-xs font-semibold text-[#2B2C2D] mt-1.5">~$0.023 / GB</div>
-                <div class="text-[11px] text-[#6F7173] mt-0.5">Standard, IA, and Glacier compliance</div>
+                <div class="text-xs font-semibold text-[#18212A] mt-1.5">~$0.023 / GB</div>
+                <div class="text-[11px] text-[#55616D] mt-0.5">Standard, IA, and Glacier compliance</div>
               </button>
 
               <button
@@ -138,21 +138,21 @@ export const HowItWorks: Component = () => {
                 onClick={() => setSelectedStorage("gdrive")}
                 class={`p-4 rounded-2xl border text-left transition cursor-pointer ${
                   selectedStorage() === "gdrive"
-                    ? "border-[#9E725F] bg-[#F3ECE8] shadow-xs ring-1 ring-[#9E725F]/30"
-                    : "border-[#E2DFD8] bg-[#F8F7F4] hover:bg-white"
+                    ? "border-[#226192] bg-[#E2E7EB] shadow-xs ring-1 ring-[#226192]/30"
+                    : "border-[#D8D3C9] bg-[#F8F7F4] hover:bg-[#F6F3ED]"
                 }`}
               >
-                <div class="font-bold text-sm text-[#2B2C2D] flex items-center gap-2">
+                <div class="font-bold text-sm text-[#18212A] flex items-center gap-2">
                   <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
                   <span>Google Drive / MinIO</span>
                 </div>
-                <div class="text-xs font-semibold text-[#2B2C2D] mt-1.5">Existing Workspace</div>
-                <div class="text-[11px] text-[#6F7173] mt-0.5">Connect personal or self-hosted drive</div>
+                <div class="text-xs font-semibold text-[#18212A] mt-1.5">Existing Workspace</div>
+                <div class="text-[11px] text-[#55616D] mt-0.5">Connect personal or self-hosted drive</div>
               </button>
             </div>
 
             {/* Live Connection Card */}
-            <div class="p-4 sm:p-5 rounded-2xl bg-[#2B2C2D] text-white text-xs space-y-2.5">
+            <div class="p-4 sm:p-5 rounded-2xl bg-[#18212A] text-white text-xs space-y-2.5">
               <div class="flex items-center justify-between text-stone-400 pb-2 border-b border-stone-700">
                 <span class="font-medium text-stone-300">Cloud Storage Connection Test</span>
                 <span class="text-emerald-400 font-bold flex items-center gap-1.5">
@@ -184,53 +184,53 @@ export const HowItWorks: Component = () => {
         <Show when={activeStep() === 2}>
           <div class="space-y-6">
             <div>
-              <span class="text-xs uppercase tracking-widest font-mono text-[#9E725F] font-bold">
+              <span class="text-xs uppercase tracking-widest font-mono text-[#226192] font-bold">
                 Step 2: Instant Setup
               </span>
-              <h3 class="text-xl sm:text-2xl font-bold text-[#2B2C2D] mt-1">
+              <h3 class="text-xl sm:text-2xl font-bold text-[#18212A] mt-1">
                 Add Your Company Domain Name
               </h3>
-              <p class="text-xs sm:text-sm text-[#6F7173] mt-1.5 max-w-2xl leading-relaxed">
+              <p class="text-xs sm:text-sm text-[#55616D] mt-1.5 max-w-2xl leading-relaxed">
                 Type in your business domain. We automatically generate standard DNS records (MX, SPF, DKIM) that ensure 100% inbox deliverability with zero spam penalties.
               </p>
             </div>
 
             {/* Domain Interactive Input */}
             <div class="flex items-center gap-3">
-              <label class="text-xs font-bold text-[#2B2C2D] whitespace-nowrap">Your Company Domain:</label>
+              <label class="text-xs font-bold text-[#18212A] whitespace-nowrap">Your Company Domain:</label>
               <input
                 type="text"
                 value={sampleDomain()}
                 onInput={(e) => setSampleDomain(e.currentTarget.value || "acme-corp.com")}
                 placeholder="company.com"
-                class="px-3.5 py-2 rounded-xl border border-[#E2DFD8] bg-[#F8F7F4] text-xs font-medium text-[#2B2C2D] focus:outline-none focus:ring-2 focus:ring-[#9E725F] focus:bg-white max-w-xs transition"
+                class="px-3.5 py-2 rounded-xl border border-[#D8D3C9] bg-[#F8F7F4] text-xs font-medium text-[#18212A] focus:outline-none focus:ring-2 focus:ring-[#226192] focus:bg-[#F6F3ED] max-w-xs transition"
               />
             </div>
 
             {/* Records Table */}
-            <div class="border border-[#E2DFD8] rounded-2xl overflow-hidden divide-y divide-[#E2DFD8] text-xs">
-              <div class="p-3 bg-[#F8F7F4] font-bold text-[#6F7173] grid grid-cols-12 font-mono text-[11px]">
+            <div class="border border-[#D8D3C9] rounded-2xl overflow-hidden divide-y divide-[#D8D3C9] text-xs">
+              <div class="p-3 bg-[#F8F7F4] font-bold text-[#55616D] grid grid-cols-12 font-mono text-[11px]">
                 <span class="col-span-2">RECORD</span>
                 <span class="col-span-3">HOST</span>
                 <span class="col-span-5">PURPOSE</span>
                 <span class="col-span-2 text-right">STATUS</span>
               </div>
-              <div class="p-3 bg-white grid grid-cols-12 items-center text-[#2B2C2D]">
-                <span class="col-span-2 font-bold text-[#9E725F] font-mono">MX</span>
+              <div class="p-3 bg-[#F6F3ED] grid grid-cols-12 items-center text-[#18212A]">
+                <span class="col-span-2 font-bold text-[#226192] font-mono">MX</span>
                 <span class="col-span-3 truncate font-mono text-xs">@</span>
-                <span class="col-span-5 truncate text-[#6F7173]">Direct email delivery</span>
+                <span class="col-span-5 truncate text-[#55616D]">Direct email delivery</span>
                 <span class="col-span-2 text-right text-emerald-700 font-bold">✓ Verified</span>
               </div>
-              <div class="p-3 bg-[#FAF9F7] grid grid-cols-12 items-center text-[#2B2C2D]">
-                <span class="col-span-2 font-bold text-[#9E725F] font-mono">SPF</span>
+              <div class="p-3 bg-[#FAF9F7] grid grid-cols-12 items-center text-[#18212A]">
+                <span class="col-span-2 font-bold text-[#226192] font-mono">SPF</span>
                 <span class="col-span-3 truncate font-mono text-xs">@</span>
-                <span class="col-span-5 truncate text-[#6F7173]">Spam &amp; spoof protection</span>
+                <span class="col-span-5 truncate text-[#55616D]">Spam &amp; spoof protection</span>
                 <span class="col-span-2 text-right text-emerald-700 font-bold">✓ Verified</span>
               </div>
-              <div class="p-3 bg-white grid grid-cols-12 items-center text-[#2B2C2D]">
-                <span class="col-span-2 font-bold text-[#9E725F] font-mono">DKIM</span>
+              <div class="p-3 bg-[#F6F3ED] grid grid-cols-12 items-center text-[#18212A]">
+                <span class="col-span-2 font-bold text-[#226192] font-mono">DKIM</span>
                 <span class="col-span-3 truncate font-mono text-xs">byos._domainkey</span>
-                <span class="col-span-5 truncate text-[#6F7173]">Authentic sender signature</span>
+                <span class="col-span-5 truncate text-[#55616D]">Authentic sender signature</span>
                 <span class="col-span-2 text-right text-emerald-700 font-bold">✓ Verified</span>
               </div>
             </div>
@@ -241,36 +241,36 @@ export const HowItWorks: Component = () => {
         <Show when={activeStep() === 3}>
           <div class="space-y-6">
             <div>
-              <span class="text-xs uppercase tracking-widest font-mono text-[#9E725F] font-bold">
+              <span class="text-xs uppercase tracking-widest font-mono text-[#226192] font-bold">
                 Step 3: Ready to Go
               </span>
-              <h3 class="text-xl sm:text-2xl font-bold text-[#2B2C2D] mt-1">
+              <h3 class="text-xl sm:text-2xl font-bold text-[#18212A] mt-1">
                 Open Your Inbox &amp; Start Emailing
               </h3>
-              <p class="text-xs sm:text-sm text-[#6F7173] mt-1.5 max-w-2xl leading-relaxed">
+              <p class="text-xs sm:text-sm text-[#55616D] mt-1.5 max-w-2xl leading-relaxed">
                 Log into our fast webmail app, or connect Apple Mail, Outlook, or Thunderbird on your laptop and phone. Your emails stay private, fast, and completely yours.
               </p>
             </div>
 
             {/* Interactive Email Test Simulator */}
-            <div class="p-6 rounded-2xl border border-[#E2DFD8] bg-[#F8F7F4] flex flex-col sm:flex-row items-center justify-between gap-6">
+            <div class="p-6 rounded-2xl border border-[#D8D3C9] bg-[#F8F7F4] flex flex-col sm:flex-row items-center justify-between gap-6">
               <div class="space-y-2 text-xs">
-                <div class="font-bold text-[#2B2C2D] text-sm flex items-center gap-2">
+                <div class="font-bold text-[#18212A] text-sm flex items-center gap-2">
                   <svg class="w-4 h-4 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                     <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
                     <polyline points="22 4 12 14.01 9 11.01" />
                   </svg>
                   <span>Ready for Daily Business Email</span>
                 </div>
-                <p class="text-[#6F7173] max-w-md leading-relaxed">
+                <p class="text-[#55616D] max-w-md leading-relaxed">
                   Send and receive customer emails just like normal. Underneath, your company owns every single message object without relying on proprietary vendor databases.
                 </p>
-                <div class="p-3 rounded-xl bg-white border border-[#E2DFD8] text-[#2B2C2D] space-y-1">
+                <div class="p-3 rounded-xl bg-[#F6F3ED] border border-[#D8D3C9] text-[#18212A] space-y-1">
                   <div class="font-semibold text-[11px] text-emerald-800">
                     {isTestEmailSent() ? "✓ Test email sent successfully to your domain!" : "Simulate sending your first test email:"}
                   </div>
-                  <div class="text-[11px] text-[#6F7173]">
-                    To: <span class="font-medium text-[#2B2C2D]">alex@{sampleDomain()}</span> &bull; Status: Inbox delivery confirmed
+                  <div class="text-[11px] text-[#55616D]">
+                    To: <span class="font-medium text-[#18212A]">alex@{sampleDomain()}</span> &bull; Status: Inbox delivery confirmed
                   </div>
                 </div>
               </div>
@@ -278,7 +278,7 @@ export const HowItWorks: Component = () => {
               <button
                 type="button"
                 onClick={() => setIsTestEmailSent(!isTestEmailSent())}
-                class="px-5 py-3 rounded-xl bg-[#9E725F] text-white text-xs font-semibold hover:bg-[#865E4D] transition shadow-xs whitespace-nowrap cursor-pointer flex-shrink-0"
+                class="px-5 py-3 rounded-xl bg-[#226192] text-white text-xs font-semibold hover:bg-[#1B4E76] transition shadow-xs whitespace-nowrap cursor-pointer flex-shrink-0"
               >
                 {isTestEmailSent() ? "Reset Test Email" : "Send Test Message →"}
               </button>
@@ -288,8 +288,8 @@ export const HowItWorks: Component = () => {
       </div>
 
       {/* Footer step navigation CTA */}
-      <div class="px-6 sm:px-10 py-4 bg-[#F8F7F4] border-t border-[#E2DFD8] flex items-center justify-between">
-        <div class="text-xs text-[#6F7173]">
+      <div class="px-6 sm:px-10 py-4 bg-[#F8F7F4] border-t border-[#D8D3C9] flex items-center justify-between">
+        <div class="text-xs text-[#55616D]">
           Step {activeStep()} of 3: {steps[activeStep() - 1].title}
         </div>
         <div class="flex items-center gap-2">
@@ -297,7 +297,7 @@ export const HowItWorks: Component = () => {
             <button
               type="button"
               onClick={() => setActiveStep((prev) => (prev - 1) as StepId)}
-              class="px-3.5 py-1.5 rounded-lg border border-[#E2DFD8] text-xs font-semibold text-[#2B2C2D] hover:bg-white transition cursor-pointer"
+              class="px-3.5 py-1.5 rounded-lg border border-[#D8D3C9] text-xs font-semibold text-[#18212A] hover:bg-[#F6F3ED] transition cursor-pointer"
             >
               ← Back
             </button>
@@ -306,14 +306,14 @@ export const HowItWorks: Component = () => {
             <button
               type="button"
               onClick={() => setActiveStep((prev) => (prev + 1) as StepId)}
-              class="px-4 py-1.5 rounded-lg bg-[#9E725F] text-white text-xs font-semibold hover:bg-[#865E4D] transition cursor-pointer"
+              class="px-4 py-1.5 rounded-lg bg-[#226192] text-white text-xs font-semibold hover:bg-[#1B4E76] transition cursor-pointer"
             >
               Next Step →
             </button>
           ) : (
             <a
               href="/pricing"
-              class="px-4 py-1.5 rounded-lg bg-[#9E725F] text-white text-xs font-semibold hover:bg-[#865E4D] transition cursor-pointer"
+              class="px-4 py-1.5 rounded-lg bg-[#226192] text-white text-xs font-semibold hover:bg-[#1B4E76] transition cursor-pointer"
             >
               See Pricing &amp; Plans →
             </a>

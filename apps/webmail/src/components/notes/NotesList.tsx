@@ -22,7 +22,6 @@ export interface NotesListProps {
 export const NotesList: Component<NotesListProps> = (props) => {
   const [internalSort, setInternalSort] = createSignal<NoteSortOrder>(props.sortOrder || "updated");
   const [showSortMenu, setShowSortMenu] = createSignal(false);
-  const [showSearchInput, setShowSearchInput] = createSignal(false);
 
   const activeSort = () => props.sortOrder || internalSort();
   const setSort = (s: NoteSortOrder) => {
@@ -62,22 +61,6 @@ export const NotesList: Component<NotesListProps> = (props) => {
       {/* ── Top Header Bar ── */}
       <div class="px-3.5 py-2.5 border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between gap-2 bg-white dark:bg-[#18191D] flex-shrink-0">
         <div class="flex items-center gap-2 min-w-0">
-          {/* Mobile Categories Menu Toggle */}
-          <Show when={props.onOpenMobileSidebar}>
-            <button
-              type="button"
-              onClick={props.onOpenMobileSidebar}
-              data-testid="notes-mobile-categories-btn"
-              title="Back to categories"
-              class="md:hidden flex items-center gap-1 py-1 px-2 rounded-lg text-xs font-semibold text-[#9E725F] dark:text-[#D4A38F] hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer"
-            >
-              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24">
-                <polyline points="15 18 9 12 15 6" />
-              </svg>
-              <span>Views</span>
-            </button>
-          </Show>
-
           <h3 class="text-sm font-bold text-[#1A1B1E] dark:text-[#F3F4F6] truncate tracking-tight">
             {props.activeCategoryTitle}
           </h3>
@@ -89,24 +72,6 @@ export const NotesList: Component<NotesListProps> = (props) => {
 
         {/* Action Controls */}
         <div class="flex items-center gap-1 flex-shrink-0">
-          {/* Search Toggle */}
-          <button
-            type="button"
-            onClick={() => setShowSearchInput(!showSearchInput())}
-            data-testid="notes-list-search-toggle"
-            title="Search notes"
-            class={`w-8 h-8 rounded-lg flex items-center justify-center transition cursor-pointer ${
-              showSearchInput() || props.searchQuery
-                ? "bg-[#F2E8E2] dark:bg-[#2D2522] text-[#9E725F] dark:text-[#D4A38F]"
-                : "text-[#6F7173] dark:text-[#A1A1AA] hover:text-[#1A1B1E] dark:hover:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5"
-            }`}
-          >
-            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-          </button>
-
           {/* Sort Controls Menu */}
           <div class="relative">
             <button
@@ -175,13 +140,13 @@ export const NotesList: Component<NotesListProps> = (props) => {
             </Show>
           </div>
 
-          {/* Quick New Note Button */}
+          {/* Quick New Note Button (hidden on phone view, desktop only) */}
           <button
             type="button"
             onClick={props.onNewNote}
             data-testid="notes-list-new-note-btn"
             title="Create note"
-            class="w-8 h-8 rounded-lg flex items-center justify-center bg-[#9E725F] hover:bg-[#865E4D] text-white transition shadow-2xs cursor-pointer ml-0.5 active:scale-95"
+            class="hidden md:flex w-8 h-8 rounded-lg items-center justify-center bg-[#9E725F] hover:bg-[#865E4D] text-white transition shadow-2xs cursor-pointer ml-0.5 active:scale-95"
           >
             <svg class="w-4 h-4 stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24">
               <line x1="12" y1="5" x2="12" y2="19" />
@@ -190,36 +155,6 @@ export const NotesList: Component<NotesListProps> = (props) => {
           </button>
         </div>
       </div>
-
-      {/* ── Search Input (Collapsible or Active) ── */}
-      <Show when={showSearchInput() || props.searchQuery}>
-        <div class="px-3 py-2 border-b border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#18191D] flex items-center gap-1.5 flex-shrink-0 animate-in fade-in duration-100">
-          <div class="relative flex-1">
-            <input
-              type="text"
-              data-testid="notes-list-search-input"
-              placeholder="Search title, body, or labels…"
-              value={props.searchQuery}
-              onInput={(e) => props.onSearchChange(e.currentTarget.value)}
-              class="w-full pl-7 pr-7 py-1 text-xs rounded-lg border border-[#E2DFD8] dark:border-[#2E3138] bg-white dark:bg-[#1E2025] text-[#1A1B1E] dark:text-[#F3F4F6] placeholder:text-[#A1A1AA] outline-none focus:ring-1 focus:ring-[#9E725F]"
-            />
-            <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2] text-[#878A8E] absolute left-2 top-1/2 -translate-y-1/2" viewBox="0 0 24 24">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <Show when={props.searchQuery}>
-              <button
-                type="button"
-                onClick={() => props.onSearchChange("")}
-                title="Clear search"
-                class="absolute right-2 top-1/2 -translate-y-1/2 text-[#878A8E] hover:text-[#1A1B1E] dark:hover:text-white cursor-pointer"
-              >
-                ✕
-              </button>
-            </Show>
-          </div>
-        </div>
-      </Show>
 
       {/* ── Note Items List (Scrollable) ── */}
       <div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar">

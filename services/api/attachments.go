@@ -12,7 +12,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +44,7 @@ type AttachmentResponse struct {
 }
 
 func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	mailboxID := r.PathValue("mailbox_id")
 	if mailboxID == "" {
 		http.Error(w, "mailbox_id required", http.StatusBadRequest)
@@ -61,10 +61,7 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getDatabaseDSN()
 	ctx := r.Context()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -164,33 +161,40 @@ func attachmentsHandler(w http.ResponseWriter, r *http.Request) {
 					"mailbox_id": mailboxID,
 				})
 				retReq, err := http.NewRequestWithContext(ctx, http.MethodPost, storageWorkerURL()+"/api/retrieve", bytes.NewReader(retPayload))
-				if err == nil {
-					retReq.Header.Set("Content-Type", "application/json")
-					setStorageInternalAuth(retReq)
-					client := &http.Client{Timeout: 30 * time.Second}
-					retResp, err := client.Do(retReq)
-					if err == nil {
-						defer retResp.Body.Close()
-						if retResp.StatusCode == http.StatusOK {
-							// Storage-worker Data is a base64 StdEncoding JSON
-							// string (see storageRetrieveResponse): decode
-							// exactly once to raw bytes, then serve raw.
-							// SEC-005: verify the returned bytes against DB
-							// metadata instead of serving any non-empty body.
-							rawData, reportedSize, decodeErr := decodeStorageRetrieveBody(retResp.Body)
-							if decodeErr == nil && len(rawData) > 0 &&
-								int64(len(rawData)) == expectedBlobSize && reportedSize == expectedBlobSize {
-								cleanFilename := sanitizeFilename(a.Filename)
-								w.Header().Set("Content-Type", a.ContentType)
-								w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", cleanFilename))
-								w.Write(rawData)
-								return
-							}
-							http.Error(w, "attachment content verification failed", http.StatusBadGateway)
-							return
-						}
-					}
+				if err != nil {
+					http.Error(w, "failed to create storage retrieval request", http.StatusInternalServerError)
+					return
 				}
+				retReq.Header.Set("Content-Type", "application/json")
+				setStorageInternalAuth(retReq)
+				client := &http.Client{Timeout: 30 * time.Second}
+				retResp, err := client.Do(retReq)
+				if err != nil {
+					http.Error(w, "storage retrieval failed", http.StatusBadGateway)
+					return
+				}
+				defer retResp.Body.Close()
+				if retResp.StatusCode != http.StatusOK {
+					http.Error(w, "storage retrieval failed", http.StatusBadGateway)
+					return
+				}
+				// Storage-worker Data is a base64 StdEncoding JSON
+				// string (see storageRetrieveResponse): decode
+				// exactly once to raw bytes, then serve raw.
+				// SEC-005: verify the returned bytes against DB
+				// metadata instead of serving any non-empty body.
+				rawData, reportedSize, decodeErr := decodeStorageRetrieveBody(retResp.Body)
+				if decodeErr == nil && len(rawData) > 0 &&
+					int64(len(rawData)) == expectedBlobSize && reportedSize == expectedBlobSize {
+					cleanFilename := sanitizeFilename(a.Filename)
+					w.Header().Set("Content-Type", a.ContentType)
+					w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", cleanFilename))
+					w.Header().Set("X-Content-Type-Options", "nosniff")
+					w.Write(rawData)
+					return
+				}
+				http.Error(w, "attachment content verification failed", http.StatusBadGateway)
+				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")

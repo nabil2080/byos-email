@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 byos-crypto-core = { path = "../../packages/crypto-core" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "fs", "signal"] }
 tokio-postgres = { version = "0.7", features = ["with-uuid-1"] }
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"

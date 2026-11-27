@@ -427,9 +427,13 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "invalid two-factor authentication code", http.StatusUnauthorized)
 				return
 			}
-		} else if hasPasskeys && strings.TrimSpace(req.MFACode) != "" {
+		} else if hasPasskeys {
 			// If a step-up MFA challenge token was provided, validate and consume it
 			mfaCode := strings.TrimSpace(req.MFACode)
+			if mfaCode == "" {
+				http.Error(w, "mfa_code is required: account has passkey two-factor authentication enabled", http.StatusForbidden)
+				return
+			}
 			var chID string
 			err := conn.QueryRow(ctx, `
 				DELETE FROM auth_challenges

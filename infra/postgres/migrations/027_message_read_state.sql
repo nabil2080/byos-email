@@ -1,4 +1,4 @@
-﻿-- Migration 027: Persist read/unread state per message
+-- Migration 027: Persist read/unread state per message
 -- Adds is_read column to message_metadata with default FALSE (unread)
 
 ALTER TABLE message_metadata

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
 
@@ -51,7 +52,8 @@ func TestMockWebAuthnMiddlewareBlocksInProduction(t *testing.T) {
 }
 
 func TestMockLoginEndpointEnabledInDevMode(t *testing.T) {
-	// Assert that when BYOS_DEV_MODE is "1", /admin/v1/auth/mock-login returns 200 and token
+	// Assert that when BYOS_DEV_MODE is "1" and BYOS_ENV is "development", /admin/v1/auth/mock-login returns 200 and token
+	t.Setenv("BYOS_ENV", "development")
 	t.Setenv("BYOS_DEV_MODE", "1")
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/v1/auth/mock-login", nil)
@@ -73,6 +75,7 @@ func TestMockLoginEndpointEnabledInDevMode(t *testing.T) {
 }
 
 func TestMockWebAuthnMiddlewareInDevMode(t *testing.T) {
+	t.Setenv("BYOS_ENV", "development")
 	t.Setenv("BYOS_DEV_MODE", "1")
 
 	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +157,7 @@ func TestAdminAllowedOrigins(t *testing.T) {
 
 	// Subtest 1: Dev mode local origin matching
 	t.Run("DevModeLocalOrigins", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "development")
 		t.Setenv("BYOS_DEV_MODE", "1")
 		t.Setenv("ADMIN_ALLOWED_ORIGINS", "")
 
@@ -172,6 +176,7 @@ func TestAdminAllowedOrigins(t *testing.T) {
 
 	// Subtest 2: Dev mode unauthorized origin rejection
 	t.Run("DevModeUnauthorizedOrigin", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "development")
 		t.Setenv("BYOS_DEV_MODE", "1")
 		t.Setenv("ADMIN_ALLOWED_ORIGINS", "")
 
@@ -432,6 +437,302 @@ func TestAdminCookieSecurityConfiguration(t *testing.T) {
 			t.Error("expected HttpOnly: true in development")
 		}
 	})
+
+	// 3. In staging without BYOS_COOKIE_SECURE, Secure must be true
+	t.Run("StagingCookieSecure", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "staging")
+		t.Setenv("BYOS_COOKIE_SECURE", "")
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/v1/auth/login", nil)
+		setAdminSessionCookie(rec, req, "admin-staging-token")
+
+		var c *http.Cookie
+		for _, cookie := range rec.Result().Cookies() {
+			if cookie.Name == "byos_admin_session" {
+				c = cookie
+				break
+			}
+		}
+		if c == nil {
+			t.Fatal("expected byos_admin_session cookie")
+		}
+		if !c.Secure {
+			t.Error("expected Secure: true in staging")
+		}
+	})
+
+	// 4. In unset/default environment, Secure must be true (fail-closed)
+	t.Run("DefaultUnsetCookieSecure", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "")
+		t.Setenv("BYOS_COOKIE_SECURE", "")
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/v1/auth/login", nil)
+		setAdminSessionCookie(rec, req, "admin-default-token")
+
+		var c *http.Cookie
+		for _, cookie := range rec.Result().Cookies() {
+			if cookie.Name == "byos_admin_session" {
+				c = cookie
+				break
+			}
+		}
+		if c == nil {
+			t.Fatal("expected byos_admin_session cookie")
+		}
+		if !c.Secure {
+			t.Error("expected Secure: true in default unset environment (fail-closed)")
+		}
+	})
+
+	// 5. In development with BYOS_COOKIE_SECURE=true, Secure must be true
+	t.Run("DevelopmentExplicitSecure", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "development")
+		t.Setenv("BYOS_COOKIE_SECURE", "true")
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/v1/auth/login", nil)
+		setAdminSessionCookie(rec, req, "admin-dev-secure-token")
+
+		var c *http.Cookie
+		for _, cookie := range rec.Result().Cookies() {
+			if cookie.Name == "byos_admin_session" {
+				c = cookie
+				break
+			}
+		}
+		if c == nil {
+			t.Fatal("expected byos_admin_session cookie")
+		}
+		if !c.Secure {
+			t.Error("expected Secure: true when BYOS_COOKIE_SECURE=true even in development")
+		}
+	})
 }
+
+func TestValidateStartupEnv_AdminAPI(t *testing.T) {
+	cases := []struct {
+		name      string
+		env       string
+		devMode   string
+		dbURL     string
+		expectErr bool
+	}{
+		{"dev with dev mode and empty db", "development", "1", "", false},
+		{"dev with dev mode=0", "development", "0", "", false},
+		{"prod with dev mode=1 must fail", "production", "1", "postgres://user:pass@host:5432/db", true},
+		{"unset env with dev mode=1 must fail", "", "1", "postgres://user:pass@host:5432/db", true},
+		{"staging with dev mode=true must fail", "staging", "true", "postgres://user:pass@host:5432/db", true},
+		{"prod with empty db must fail", "production", "", "", true},
+		{"unset env with empty db must fail", "", "", "", true},
+		{"prod valid config", "production", "", "postgres://user:pass@host:5432/db", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("BYOS_ENV", tc.env)
+			t.Setenv("BYOS_DEV_MODE", tc.devMode)
+			t.Setenv("SUPPORT_DB_URL", tc.dbURL)
+
+			err := ValidateStartupEnv()
+			if tc.expectErr && err == nil {
+				t.Errorf("expected error, got nil")
+			}
+			if !tc.expectErr && err != nil {
+				t.Errorf("expected no error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestGetSupportDatabaseURL(t *testing.T) {
+	t.Run("DevelopmentFallback", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "development")
+		t.Setenv("SUPPORT_DB_URL", "")
+
+		url, err := GetSupportDatabaseURL()
+		if err != nil {
+			t.Fatalf("expected fallback URL in dev, got err: %v", err)
+		}
+		if url != "postgres://role_support_agent:support_crm_password@localhost:5432/byos" {
+			t.Errorf("unexpected fallback URL: %s", url)
+		}
+	})
+
+	t.Run("ProductionRequiresURL", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "production")
+		t.Setenv("SUPPORT_DB_URL", "")
+
+		_, err := GetSupportDatabaseURL()
+		if err == nil {
+			t.Fatal("expected error when SUPPORT_DB_URL is unset in production")
+		}
+	})
+
+	t.Run("ConfiguredURLReturned", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "production")
+		t.Setenv("SUPPORT_DB_URL", "postgres://custom_user:custom_pass@db.internal:5432/custom_db")
+
+		url, err := GetSupportDatabaseURL()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if url != "postgres://custom_user:custom_pass@db.internal:5432/custom_db" {
+			t.Errorf("unexpected URL: %s", url)
+		}
+	})
+}
+
+func TestMockWebAuthnFailsClosedWhenDevModeSetInProduction(t *testing.T) {
+	// Attacker attempts to enable BYOS_DEV_MODE in production or unset env
+	for _, env := range []string{"production", "", "staging"} {
+		t.Run("Env_"+env, func(t *testing.T) {
+			t.Setenv("BYOS_ENV", env)
+			t.Setenv("BYOS_DEV_MODE", "1")
+
+			// mock-login must return 404
+			reqLogin := httptest.NewRequest(http.MethodGet, "/admin/v1/auth/mock-login", nil)
+			recLogin := httptest.NewRecorder()
+			mockLoginHandler(recLogin, reqLogin)
+			if recLogin.Code != http.StatusNotFound {
+				t.Errorf("expected 404 for mock-login when env=%q with dev_mode=1, got %d", env, recLogin.Code)
+			}
+
+			// mock-support-agent token must return 401
+			called := false
+			dummy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				w.WriteHeader(http.StatusOK)
+			})
+			wrapped := mockWebAuthnMiddleware(dummy)
+
+			reqToken := httptest.NewRequest(http.MethodGet, "/admin/v1/tickets", nil)
+			reqToken.Header.Set("Authorization", "Bearer mock-support-agent")
+			recToken := httptest.NewRecorder()
+			wrapped(recToken, reqToken)
+
+			if recToken.Code != http.StatusUnauthorized {
+				t.Errorf("expected 401 for mock token when env=%q with dev_mode=1, got %d", env, recToken.Code)
+			}
+			if called {
+				t.Errorf("handler must not be executed when mock WebAuthn is rejected")
+			}
+		})
+	}
+}
+
+func TestBooleanConfigurationConsistency_AdminAPI(t *testing.T) {
+	testCases := []struct {
+		val       string
+		isTruthy  bool
+	}{
+		{"1", true},
+		{"true", true},
+		{"TRUE", true},
+		{"false", false},
+		{"0", false},
+		{"", false},
+		{"invalid", false},
+		{"banana", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run("Value_"+tc.val, func(t *testing.T) {
+			// 1. Verify ParseBoolEnv
+			parsed := ParseBoolEnv(tc.val)
+			if parsed != tc.isTruthy {
+				t.Errorf("ParseBoolEnv(%q) = %v, want %v", tc.val, parsed, tc.isTruthy)
+			}
+
+			// 2. In non-development mode (production), if truthy, ValidateStartupEnv MUST fail
+			t.Setenv("BYOS_ENV", "production")
+			t.Setenv("BYOS_DEV_MODE", tc.val)
+			t.Setenv("SUPPORT_DB_URL", "postgres://user:pass@host:5432/db")
+			err := ValidateStartupEnv()
+			if tc.isTruthy && err == nil {
+				t.Errorf("expected ValidateStartupEnv to fail in production with BYOS_DEV_MODE=%q", tc.val)
+			}
+			if !tc.isTruthy && err != nil {
+				t.Errorf("expected ValidateStartupEnv to pass in production with BYOS_DEV_MODE=%q, got: %v", tc.val, err)
+			}
+
+			// 3. In non-development mode (production), runtime authentication MUST fail closed
+			reqLogin := httptest.NewRequest(http.MethodGet, "/admin/v1/auth/mock-login", nil)
+			recLogin := httptest.NewRecorder()
+			mockLoginHandler(recLogin, reqLogin)
+			if recLogin.Code != http.StatusNotFound {
+				t.Errorf("expected mock-login 404 in production with BYOS_DEV_MODE=%q, got %d", tc.val, recLogin.Code)
+			}
+
+			// 4. In development mode, runtime authentication interpretation MUST match isTruthy
+			t.Setenv("BYOS_ENV", "development")
+			t.Setenv("BYOS_DEV_MODE", tc.val)
+			recLoginDev := httptest.NewRecorder()
+			mockLoginHandler(recLoginDev, reqLogin)
+			if tc.isTruthy {
+				if recLoginDev.Code != http.StatusOK {
+					t.Errorf("expected mock-login 200 in dev with BYOS_DEV_MODE=%q, got %d", tc.val, recLoginDev.Code)
+				}
+			} else {
+				if recLoginDev.Code != http.StatusNotFound {
+					t.Errorf("expected mock-login 404 in dev with non-truthy BYOS_DEV_MODE=%q, got %d", tc.val, recLoginDev.Code)
+				}
+			}
+		})
+	}
+
+	// Also verify explicitly unset env variable
+	t.Run("Unset", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "production")
+		os.Unsetenv("BYOS_DEV_MODE")
+		t.Setenv("SUPPORT_DB_URL", "postgres://user:pass@host:5432/db")
+		if err := ValidateStartupEnv(); err != nil {
+			t.Errorf("expected ValidateStartupEnv to pass with unset BYOS_DEV_MODE in prod, got: %v", err)
+		}
+
+		t.Setenv("BYOS_ENV", "development")
+		reqLogin := httptest.NewRequest(http.MethodGet, "/admin/v1/auth/mock-login", nil)
+		recLoginDev := httptest.NewRecorder()
+		mockLoginHandler(recLoginDev, reqLogin)
+		if recLoginDev.Code != http.StatusNotFound {
+			t.Errorf("expected mock-login 404 with unset BYOS_DEV_MODE in dev, got %d", recLoginDev.Code)
+		}
+	})
+}
+
+func TestQueueEndpointsRequireAuthentication(t *testing.T) {
+	mux := http.NewServeMux()
+	setupRoutes(mux)
+
+	endpoints := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/admin/v1/queue/overview"},
+		{http.MethodGet, "/admin/v1/queue/messages"},
+		{http.MethodGet, "/admin/v1/queue/messages/00000000-0000-0000-0000-000000000001"},
+		{http.MethodPost, "/admin/v1/queue/messages/00000000-0000-0000-0000-000000000001/reconcile"},
+		{http.MethodGet, "/admin/v1/queue/alerts"},
+		{http.MethodGet, "/admin/v1/queue/metrics"},
+		{http.MethodGet, "/v1/admin/queue/overview"},
+		{http.MethodGet, "/v1/admin/queue/messages"},
+		{http.MethodGet, "/v1/admin/queue/alerts"},
+		{http.MethodGet, "/v1/admin/queue/metrics"},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
+			req := httptest.NewRequest(ep.method, ep.path, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401 Unauthorized without credentials for %s %s, got %d", ep.method, ep.path, rec.Code)
+			}
+		})
+	}
+}
+
 
 

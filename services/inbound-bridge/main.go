@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -140,8 +141,120 @@ func (s *Session) Mail(from string, _ *smtp.MailOptions) error {
 }
 
 func (s *Session) Rcpt(to string, _ *smtp.RcptOptions) error {
-	s.to = append(s.to, normalizeSMTPAddress(to))
+	norm, err := validateRecipientAddress(to)
+	if err != nil {
+		return err
+	}
+	if err := s.verifyRecipient(norm); err != nil {
+		return err
+	}
+	s.to = append(s.to, norm)
 	return nil
+}
+
+// validateRecipientAddress validates SMTP recipient syntax per RFC 5321 §4.1.2.
+// Returns normalized address or an SMTP 501 error.
+func validateRecipientAddress(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "<>" {
+		return "", &smtp.SMTPError{Code: 501, Message: "Syntax error in parameters or arguments: recipient address required"}
+	}
+	addr := strings.Trim(trimmed, "<>")
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return "", &smtp.SMTPError{Code: 501, Message: "Syntax error in parameters or arguments: empty recipient path"}
+	}
+
+	// Must not contain control characters or spaces
+	for i := 0; i < len(addr); i++ {
+		if addr[i] < 32 || addr[i] == 127 || addr[i] == ' ' || addr[i] == '\t' || addr[i] == '\r' || addr[i] == '\n' {
+			return "", &smtp.SMTPError{Code: 501, Message: "Syntax error in recipient address: invalid character"}
+		}
+	}
+
+	// Must contain exactly one '@'
+	parts := strings.Split(addr, "@")
+	if len(parts) != 2 {
+		return "", &smtp.SMTPError{Code: 501, Message: "Syntax error in recipient address: expected single '@' delimiter"}
+	}
+
+	localPart := parts[0]
+	domainPart := parts[1]
+
+	// RFC 5321 limits: local-part max 64 octets, domain max 255 octets
+	if len(localPart) == 0 {
+		return "", &smtp.SMTPError{Code: 501, Message: "Syntax error in recipient address: missing local-part"}
+	}
+	if len(localPart) > 64 {
+		return "", &smtp.SMTPError{Code: 501, Message: "Syntax error in recipient address: local-part exceeds 64 octets"}
+	}
+	if len(domainPart) == 0 {
+		return "", &smtp.SMTPError{Code: 501, Message: "Syntax error in recipient address: missing domain"}
+	}
+	if len(domainPart) > 255 {
+		return "", &smtp.SMTPError{Code: 501, Message: "Syntax error in recipient address: domain exceeds 255 octets"}
+	}
+
+	// Domain cannot start or end with dot or hyphen
+	if strings.HasPrefix(domainPart, ".") || strings.HasSuffix(domainPart, ".") ||
+		strings.HasPrefix(domainPart, "-") || strings.HasSuffix(domainPart, "-") {
+		return "", &smtp.SMTPError{Code: 501, Message: "Syntax error in recipient address: malformed domain label"}
+	}
+
+	norm := strings.ToLower(localPart + "@" + domainPart)
+	return norm, nil
+}
+
+func (s *Session) verifyRecipient(recipient string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	reqURL := fmt.Sprintf("%s/v1/recipients/verify?recipient=%s", s.app.cfg.RouterURL, url.QueryEscape(recipient))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return &smtp.SMTPError{Code: 451, Message: "Temporary recipient verification failure"}
+	}
+	if s.app.cfg.MailRouterInternalKey != "" {
+		req.Header.Set("X-Internal-Key", s.app.cfg.MailRouterInternalKey)
+	}
+
+	resp, err := s.app.httpClient.Do(req)
+	if err != nil {
+		log.Printf("recipient verify network error: %v (temporary failure)", err)
+		return &smtp.SMTPError{Code: 451, Message: "Temporary recipient verification failure"}
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+
+	case http.StatusNotFound:
+		// Confirmed unknown recipient / unroutable address
+		return &smtp.SMTPError{Code: 550, Message: "5.1.1 Recipient address rejected: User unknown"}
+
+	case http.StatusServiceUnavailable, http.StatusBadGateway, http.StatusGatewayTimeout:
+		// Backend database or internal routing transient failure
+		log.Printf("[WARN] mail-router service unavailable during recipient verify: status=%d", resp.StatusCode)
+		return &smtp.SMTPError{Code: 451, Message: "4.3.0 Mailbox temporarily unavailable"}
+
+	case http.StatusUnauthorized, http.StatusForbidden:
+		// Internal service-to-service auth failure or misconfiguration.
+		// Fail safely with a 451 temporary failure; do not bounce legitimate incoming email.
+		log.Printf("[WARN] mail-router rejected internal auth for recipient verify: status=%d", resp.StatusCode)
+		return &smtp.SMTPError{Code: 451, Message: "4.3.0 Temporary service configuration failure"}
+
+	case http.StatusBadRequest:
+		// HTTP 400 from mail-router indicates internal request formatting / escaping defect.
+		// Fail safely with a 451 temporary failure so mail is deferred rather than permanently dropped.
+		log.Printf("[WARN] mail-router rejected verify request as bad request: recipient=%q", recipient)
+		return &smtp.SMTPError{Code: 451, Message: "4.3.0 Temporary service failure"}
+
+	default:
+		// Any other 4xx/5xx internal code fails safely with 451
+		log.Printf("[WARN] mail-router recipient verify unexpected status=%d", resp.StatusCode)
+		return &smtp.SMTPError{Code: 451, Message: "4.3.0 Temporary failure"}
+	}
 }
 
 func (s *Session) Reset() {
@@ -208,6 +321,9 @@ func (s *Session) Data(r io.Reader) error {
 }
 
 func (s *Session) checkRspamd(rawMessage []byte) error {
+	if s.app.cfg.RspamdURL == "" {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 

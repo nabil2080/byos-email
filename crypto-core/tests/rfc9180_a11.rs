@@ -53,12 +53,12 @@ fn test_rfc9180_vector_a12_key_schedule() {
     ks_context.extend_from_slice(&info_hash);
 
     // 3. AEAD key (16 bytes for AES-128-GCM)
-    let key = labeled_expand(&secret, "key", Some(&ks_context), 16, suite_id);
+    let key = labeled_expand(&secret, "key", Some(&ks_context), 16, suite_id).expect("labeled_expand key");
     let expected_key_hex = "4531685d41d65f03dc48f6b8302c05b0";
     assert_eq!(hex::encode(key), expected_key_hex);
 
     // 4. Base nonce (12 bytes)
-    let base_nonce = labeled_expand(&secret, "base_nonce", Some(&ks_context), 12, suite_id);
+    let base_nonce = labeled_expand(&secret, "base_nonce", Some(&ks_context), 12, suite_id).expect("labeled_expand base_nonce");
     let expected_nonce_hex = "56d890e5accaaf011cff4b7d";
     assert_eq!(hex::encode(base_nonce), expected_nonce_hex);
 }

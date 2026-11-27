@@ -127,9 +127,10 @@ func initRedis() {
 }
 
 func loadRateLimits() {
-	dsn := os.Getenv("DATABASE_URL")
+	dsn := getDatabaseDSN()
 	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+		log.Printf("rate cache load: database not configured")
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -286,6 +287,10 @@ type ServiceHealth struct {
 }
 
 func main() {
+	if err := ValidateStartupEnv(); err != nil {
+		log.Fatalf("[FATAL] Configuration error: %v", err)
+	}
+
 	port := os.Getenv("API_PORT")
 	if port == "" {
 		port = "8080"
@@ -299,9 +304,9 @@ func main() {
 	// Verify the migration has been applied. If not, Path A scheduling 
 	// will fail with confusing errors.
 	func() {
-		dsn := os.Getenv("DATABASE_URL")
-		if dsn == "" {
-			dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+		dsn, err := GetDatabaseURL()
+		if err != nil {
+			log.Fatalf("startup check db config error: %v", err)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -330,9 +335,9 @@ func main() {
 	// Uses a background context tied to the process lifetime.
 	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
 	_ = schedulerCancel // cancelled when process exits; not explicitly called here
-	schedulerDSN := os.Getenv("DATABASE_URL")
-	if schedulerDSN == "" {
-		schedulerDSN = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+	schedulerDSN, err := GetDatabaseURL()
+	if err != nil {
+		log.Fatalf("scheduler db config error: %v", err)
 	}
 	go startScheduledPathADelivery(schedulerCtx, schedulerDSN)
 

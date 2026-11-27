@@ -1327,6 +1327,97 @@ mod tests {
     }
 
     #[test]
+    fn test_multi_epoch_send_token_key_rotation_and_revocation() {
+        use byos_crypto_core::{decrypt_outbound, encrypt_outbound, generate_outbound_delivery_keypair};
+
+        let (sk1, pk1) = generate_outbound_delivery_keypair();
+        let (sk2, pk2) = generate_outbound_delivery_keypair();
+        let (sk3, pk3) = generate_outbound_delivery_keypair(); // revoked / retired key
+        let (_sk4, pk4) = generate_outbound_delivery_keypair(); // unknown / missing key
+
+        let kid1 = outbound_key_id_hex(&pk1);
+        let kid2 = outbound_key_id_hex(&pk2);
+        let kid3 = outbound_key_id_hex(&pk3);
+
+        let json = format!(
+            r#"{{
+              "keys": [
+                {{"key_epoch": 1, "key_id": "{}", "sk_b64": "{}", "status": "decrypt_only"}},
+                {{"key_epoch": 2, "key_id": "{}", "sk_b64": "{}", "status": "active"}},
+                {{"key_epoch": 3, "key_id": "{}", "sk_b64": "{}", "status": "retired"}}
+              ]
+            }}"#,
+            kid1,
+            BASE64.encode(sk1),
+            kid2,
+            BASE64.encode(sk2),
+            kid3,
+            BASE64.encode(sk3)
+        );
+
+        let ring = OutboundKeyring::from_json_str(&json).unwrap();
+        assert_eq!(ring.max_epoch(), 2);
+
+        // Epoch 3 was marked 'retired', so it must be omitted from usable keys
+        assert!(ring.get_sk(3, &kid3).is_none());
+
+        // Prepare sample tenant mailbox and message payload
+        let mailbox_id = [0x42u8; 16];
+        let message_seq = 1001u64;
+        let plaintext_ep1 = b"From: alice@byos.local\r\nTo: bob@target.com\r\nSubject: Epoch 1 Message\r\n\r\nSecret 1";
+        let plaintext_ep2 = b"From: alice@byos.local\r\nTo: bob@target.com\r\nSubject: Epoch 2 Message\r\n\r\nSecret 2";
+        let plaintext_ep4 = b"From: alice@byos.local\r\nTo: bob@target.com\r\nSubject: Epoch 4 Message\r\n\r\nSecret 4";
+
+        // Encrypt with Epoch 1 public key
+        let (ciphertext_ep1, wrapped_ep1, _iv1, _aad1, _ck1) =
+            encrypt_outbound(&pk1, &mailbox_id, message_seq, plaintext_ep1).unwrap();
+
+        // Encrypt with Epoch 2 public key
+        let (ciphertext_ep2, wrapped_ep2, _iv2, _aad2, _ck2) =
+            encrypt_outbound(&pk2, &mailbox_id, message_seq + 1, plaintext_ep2).unwrap();
+
+        // Encrypt with Epoch 4 (unknown) public key
+        let (ciphertext_ep4, wrapped_ep4, _iv4, _aad4, _ck4) =
+            encrypt_outbound(&pk4, &mailbox_id, message_seq + 2, plaintext_ep4).unwrap();
+
+        // 1. Worker selects epoch 1 key for older message (historical epoch compatibility)
+        let selected_sk1 = ring
+            .select_send_token_sk(Some(1), Some(&kid1))
+            .expect("epoch 1 key must be found");
+        assert_eq!(selected_sk1, &sk1);
+        let dec1 = decrypt_outbound(selected_sk1, &wrapped_ep1, &mailbox_id, message_seq, &ciphertext_ep1).unwrap();
+        assert_eq!(dec1, plaintext_ep1);
+
+        // 2. Worker selects epoch 2 key for new message (current active epoch)
+        let selected_sk2 = ring
+            .select_send_token_sk(Some(2), Some(&kid2))
+            .expect("epoch 2 key must be found");
+        assert_eq!(selected_sk2, &sk2);
+        let dec2 = decrypt_outbound(selected_sk2, &wrapped_ep2, &mailbox_id, message_seq + 1, &ciphertext_ep2).unwrap();
+        assert_eq!(dec2, plaintext_ep2);
+
+        // 3. Operator retry scenario:
+        // Message 1 (created under epoch 1) is retried by an operator while active key has rotated to epoch 2.
+        // Worker successfully resolves historical epoch 1 key and decrypts.
+        let operator_retry_sk = ring
+            .select_send_token_sk(Some(1), None)
+            .expect("epoch fallback lookup succeeds");
+        assert_eq!(operator_retry_sk, &sk1);
+        let dec_retry =
+            decrypt_outbound(operator_retry_sk, &wrapped_ep1, &mailbox_id, message_seq, &ciphertext_ep1).unwrap();
+        assert_eq!(dec_retry, plaintext_ep1);
+
+        // 4. Missing or retired key handling (fails closed):
+        // Epoch 3 key was retired. select_send_token_sk falls back to active key (epoch 2).
+        let fallback_sk = ring
+            .select_send_token_sk(Some(3), Some(&kid3))
+            .expect("fallback to active key");
+        assert_eq!(fallback_sk, &sk2); // Fallback is epoch 2, which cannot decrypt epoch 4 ciphertext
+        let dec_fail = decrypt_outbound(fallback_sk, &wrapped_ep4, &mailbox_id, message_seq + 2, &ciphertext_ep4);
+        assert!(dec_fail.is_err(), "decryption with wrong or revoked key must fail");
+    }
+
+    #[test]
     fn test_mime_size_limit_and_cid_sanitization() {
         let raw_text = b"From: alice@byos.local\r\nTo: bob@example.com\r\nSubject: Size Limit\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHi\r\n";
         let atts = vec![DecryptedMimeAttachment::from_plaintext(

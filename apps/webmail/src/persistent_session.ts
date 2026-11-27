@@ -278,7 +278,6 @@ export async function restorePersistentSession(): Promise<UnsealedSessionPayload
     }
 
     if (typeof sessionStorage !== "undefined") {
-      sessionStorage.setItem("byos_active_session_token", token);
       if (unsealed.mailboxId) {
         sessionStorage.removeItem("byos_mailbox_sk_" + unsealed.mailboxId);
         sessionStorage.removeItem("byos_signing_seed_" + unsealed.mailboxId);

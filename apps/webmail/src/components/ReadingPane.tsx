@@ -1,4 +1,4 @@
-import { Component, createSignal, createEffect, Show, For, onMount, onCleanup } from "solid-js";
+import { Component, createSignal, createEffect, createMemo, Show, For, onMount, onCleanup } from "solid-js";
 import DOMPurify from "dompurify";
 import { DisplayMessage } from "./MessageList";
 import { AttachmentItem, MailboxFolder, MailboxLabel, downloadAndDecryptAttachment, ContactItem, ConnectedAccount, OrgMember } from "../api";
@@ -6,7 +6,6 @@ import { AttachmentBadge } from "./AttachmentBadge";
 import { SnoozeMenu } from "./SnoozeMenu";
 import { formatScheduledBanner } from "../utils/dateTime";
 import { sanitizeOnReceive } from "../composer_sanitizer";
-import { highlightCodeBlocks } from "../utils/code_highlight";
 import { getMailboxKeyFor } from "../session_isolation";
 import { formatAddress } from "./MessageRow";
 import { InvitationCard } from "./calendar/InvitationCard";
@@ -70,6 +69,7 @@ export interface ReadingPaneProps {
   onToggleStarred: (msg: DisplayMessage) => void;
   onMoveTo: (msg: DisplayMessage, folder: string) => void;
   onReply: (msg: DisplayMessage) => void;
+  onReplyAll?: (msg: DisplayMessage) => void;
   onForward: (msg: DisplayMessage) => void;
   onEditDraft?: (msg: DisplayMessage) => void;
   onDeleteDraft?: (msg: DisplayMessage) => void;
@@ -85,6 +85,23 @@ export interface ReadingPaneProps {
   onTrashSenderMessages?: (sender: string) => void;
   fontScale?: "default" | "large" | "xlarge";
 }
+
+export {
+  MAX_SINGLE_INLINE_BYTES,
+  MAX_TOTAL_INLINE_BYTES,
+  MAX_INLINE_IMAGE_COUNT,
+  ALLOWED_INLINE_MIME_TYPES,
+  isSafeRasterImage,
+  buildIsolatedIframeDoc,
+  type BuildIsolatedIframeDocOptions
+} from "./reading_pane_isolation";
+import {
+  MAX_SINGLE_INLINE_BYTES,
+  MAX_TOTAL_INLINE_BYTES,
+  MAX_INLINE_IMAGE_COUNT,
+  isSafeRasterImage,
+  buildIsolatedIframeDoc
+} from "./reading_pane_isolation";
 
 
 
@@ -261,8 +278,13 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
     return sanitizeOnReceive(translated, { allowRemoteImages: allowRemoteImages() }).sanitized;
   };
 
-  let readingContentRef: HTMLDivElement | undefined;
-  let createdObjectUrls: string[] = [];
+  const [resolvedStorageUrls, setResolvedStorageUrls] = createSignal<Record<string, string>>({});
+  let activeLoadGeneration = 0;
+
+  onCleanup(() => {
+    activeLoadGeneration++;
+    setResolvedStorageUrls({});
+  });
 
   const sanitizeResult = () => {
     const raw = props.decryptedContent || "";
@@ -271,35 +293,120 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
   };
 
   createEffect(() => {
+    const msgId = props.message?.id || null;
     const raw = props.decryptedContent;
-    const allow = allowRemoteImages();
-    isTranslated();
-    if (!readingContentRef || !raw) return;
 
-    // Highlight code blocks
-    highlightCodeBlocks(readingContentRef);
+    // Reset storage URLs and bump generation counter whenever message changes
+    activeLoadGeneration++;
+    const currentGen = activeLoadGeneration;
+    setResolvedStorageUrls({});
 
-    // Resolve byos-storage:// images
-    const imgs = readingContentRef.querySelectorAll("img");
-    imgs.forEach(async (img) => {
-      const src = img.getAttribute("src") || "";
-      if (src.startsWith("byos-storage://")) {
-        const match = src.match(/^byos-storage:\/\/([^/]+)\/(.+)$/);
-        if (match) {
-          const [, boxId, attId] = match;
-          const key = props.mailboxKey || getMailboxKeyFor(boxId);
-          if (key) {
-            try {
-              const blob = await downloadAndDecryptAttachment(boxId, attId, key);
-              const objUrl = URL.createObjectURL(blob);
-              createdObjectUrls.push(objUrl);
-              img.src = objUrl;
-            } catch (err) {
-              console.warn("Failed to decrypt inline image:", err);
-            }
+    if (!raw || !msgId) return;
+
+    // Search for all byos-storage:// URIs in decrypted/sanitized content
+    const matches = Array.from(raw.matchAll(/byos-storage:\/\/([^/"'\s]+)\/([^/"'\s]+)/gi));
+    if (matches.length === 0) return;
+
+    // Enforce MAX_INLINE_IMAGE_COUNT: truncate matches beyond limit
+    const boundedMatches = matches.slice(0, MAX_INLINE_IMAGE_COUNT);
+    if (matches.length > MAX_INLINE_IMAGE_COUNT) {
+      console.warn(`[ReadingPane] Message ${msgId} contains ${matches.length} inline images; truncated to ${MAX_INLINE_IMAGE_COUNT}`);
+    }
+
+    let accumulatedBytes = 0;
+
+    for (const match of boundedMatches) {
+      const fullUri = match[0];
+      const boxId = match[1];
+      const attId = match[2];
+
+      const key = props.mailboxKey || (typeof getMailboxKeyFor === "function" ? getMailboxKeyFor(boxId) : null);
+      if (!key) continue;
+
+      downloadAndDecryptAttachment(boxId, attId, key)
+        .then(async (blob) => {
+          // Check generation token and message id before processing
+          if (currentGen !== activeLoadGeneration || props.message?.id !== msgId) {
+            return; // Discard stale in-flight decryption result
           }
-        }
+
+          if (blob.size > MAX_SINGLE_INLINE_BYTES) {
+            console.warn(`[ReadingPane] Inline image attId=${attId} exceeds per-image limit (${blob.size} bytes)`);
+            return;
+          }
+
+          if (accumulatedBytes + blob.size > MAX_TOTAL_INLINE_BYTES) {
+            console.warn(`[ReadingPane] Inline image attId=${attId} exceeds aggregate limit (${accumulatedBytes + blob.size} > ${MAX_TOTAL_INLINE_BYTES})`);
+            return;
+          }
+          accumulatedBytes += blob.size;
+
+          const buffer = await blob.arrayBuffer();
+          if (!isSafeRasterImage(buffer, blob.type)) {
+            console.warn(`[ReadingPane] Inline image attId=${attId} failed raster image safety validation`);
+            return;
+          }
+
+          // Check again after async arrayBuffer read
+          if (currentGen !== activeLoadGeneration || props.message?.id !== msgId) {
+            return;
+          }
+
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (currentGen !== activeLoadGeneration || props.message?.id !== msgId) {
+              return;
+            }
+            const dataUrl = reader.result as string;
+            setResolvedStorageUrls((prev) => ({
+              ...prev,
+              [fullUri]: dataUrl,
+            }));
+          };
+          reader.readAsDataURL(blob);
+        })
+        .catch((err) => {
+          if (currentGen === activeLoadGeneration && props.message?.id === msgId) {
+            console.warn(`[ReadingPane] Failed to decrypt inline image attId=${attId}:`, err?.message || "error");
+          }
+        });
+    }
+  });
+
+  const isolatedIframeDoc = createMemo(() => {
+    const raw = props.decryptedContent || "";
+    if (!raw) return "";
+
+    const isHtml = /<[a-z][\s\S]*>/i.test(raw);
+    let bodyHtml: string;
+
+    if (isHtml) {
+      let content = isTranslated() ? translatedBody() : sanitizeResult().sanitized;
+      // Replace byos-storage:// URIs with resolved data URLs
+      const resolved = resolvedStorageUrls();
+      for (const [uri, dataUrl] of Object.entries(resolved)) {
+        content = content.replaceAll(uri, dataUrl);
       }
+      bodyHtml = content;
+    } else {
+      const plainText = isTranslated()
+        ? translateEmail(raw, effectiveSourceLang(), targetLang())
+        : raw;
+      const escaped = plainText
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+      bodyHtml = `<div style="white-space: pre-wrap; font-family: inherit;">${escaped}</div>`;
+    }
+
+    const isDark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
+    return buildIsolatedIframeDoc({
+      contentHtml: bodyHtml,
+      isDark,
+      fontScale: props.fontScale,
+      allowRemoteImages: allowRemoteImages(),
     });
   });
 
@@ -429,7 +536,6 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
   onCleanup(() => {
     document.removeEventListener("mousedown", handleClickOutside);
     document.removeEventListener("keydown", handleKeyDown);
-    createdObjectUrls.forEach((url) => URL.revokeObjectURL(url));
   });
 
   const senderEmail = () => {
@@ -1329,6 +1435,12 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
                         <span class="text-[#6E7075] dark:text-[#878A8E] font-medium">from:</span>
                         <span class="text-[#1A1B1E] dark:text-[#F3F4F6] break-all">{props.message.sender}</span>
                       </div>
+                      <Show when={props.message.replyTo && props.message.replyTo !== props.message.sender}>
+                        <div class="grid grid-cols-[50px_1fr] gap-1">
+                          <span class="text-[#6E7075] dark:text-[#878A8E] font-medium">reply-to:</span>
+                          <span class="text-[#1A1B1E] dark:text-[#F3F4F6] break-all">{props.message.replyTo}</span>
+                        </div>
+                      </Show>
                       <div class="grid grid-cols-[50px_1fr] gap-1">
                         <span class="text-[#6E7075] dark:text-[#878A8E] font-medium">to:</span>
                         <span class="text-[#1A1B1E] dark:text-[#F3F4F6] break-all">{recipientFull()}</span>
@@ -1677,21 +1789,20 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
           </Show>
 
           <Show when={!isMessageLocked() && !props.isDecrypting && props.decryptedContent}>
-            <div class="animate-fade-in">
-            <Show
-              when={/<[a-z][\s\S]*>/i.test(props.decryptedContent || "")}
-              fallback={
-                <div class={`whitespace-pre-wrap font-sans ${props.fontScale === "xlarge" ? "text-scale-xlarge" : props.fontScale === "large" ? "text-scale-large" : "text-scale-default"}`}>
-                  {isTranslated() ? translateEmail(props.decryptedContent || "", effectiveSourceLang(), targetLang()) : props.decryptedContent}
-                </div>
-              }
-            >
-              <div
-                ref={readingContentRef}
-                class={`reading-pane-content ${props.fontScale === "xlarge" ? "text-scale-xlarge" : props.fontScale === "large" ? "text-scale-large" : "text-scale-default"}`}
-                innerHTML={isTranslated() ? translatedBody() : sanitizeResult().sanitized}
+            <div class="animate-fade-in flex-1 flex flex-col min-h-0">
+              <iframe
+                data-testid="reading-pane-iframe"
+                class={`reading-pane-content w-full min-h-[420px] flex-1 border-0 rounded-lg bg-transparent transition-all duration-150 ${
+                  props.fontScale === "xlarge"
+                    ? "text-scale-xlarge"
+                    : props.fontScale === "large"
+                    ? "text-scale-large"
+                    : "text-scale-default"
+                }`}
+                sandbox="allow-popups allow-popups-to-escape-sandbox"
+                srcdoc={isolatedIframeDoc()}
+                title="Email message body"
               />
-            </Show>
             </div>
           </Show>
 
@@ -1756,6 +1867,22 @@ export const ReadingPane: Component<ReadingPaneProps> = (props) => {
             </svg>
             <span>{t("Reply")}</span>
           </button>
+
+          <Show when={props.onReplyAll}>
+            <button
+              type="button"
+              onClick={() => props.onReplyAll && props.onReplyAll(props.message)}
+              data-testid="reading-pane-reply-all-btn"
+              class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white dark:bg-[#1E2025] border border-[#E2DFD8] dark:border-[#2E3138] hover:border-[#A27561] dark:hover:border-[#A27561] text-xs font-semibold text-[#1A1B1E] dark:text-[#F3F4F6] hover:text-[#A27561] dark:hover:text-[#A27561] transition cursor-pointer shadow-2xs"
+            >
+              <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                <polyline points="7 14 2 9 7 4" />
+                <path d="M22 20v-7a4 4 0 0 0-4-4H2" />
+                <polyline points="11 14 6 9 11 4" />
+              </svg>
+              <span>{t("Reply All")}</span>
+            </button>
+          </Show>
 
           <button
             type="button"

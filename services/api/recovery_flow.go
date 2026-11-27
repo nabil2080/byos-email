@@ -524,8 +524,7 @@ func recoveryFlowResetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"token":                    token,
+	resp := map[string]interface{}{
 		"id":                       userID,
 		"email":                    userEmail,
 		"org_id":                   orgID,
@@ -552,7 +551,8 @@ func recoveryFlowResetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 			"wrapped_sk_user":          currWskStr,
 			"previous_wrapped_sk_user": prevWskStr,
 		},
-	})
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 // validateCandidateWrappedSk validates candidate key envelope format before database modification.
@@ -2056,10 +2056,10 @@ func exceptionalRecoveryResetHandler(w http.ResponseWriter, r *http.Request) {
 
 	setSessionCookie(w, r, token, expires)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	resp := map[string]interface{}{
 		"success": true,
-		"token":   token,
 		"message": "Password reset successfully via exceptional recovery.",
-	})
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 

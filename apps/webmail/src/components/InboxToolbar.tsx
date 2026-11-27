@@ -389,7 +389,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
   return (
     <div
       ref={toolbarRef}
-      class="px-3.5 pt-2.5 pb-2 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#18191D] flex flex-col gap-2 select-none relative z-20 flex-shrink-0"
+      class="px-3.5 pt-2.5 pb-2 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] flex flex-col gap-2 select-none relative z-20 flex-shrink-0"
     >
       <Show when={!props.hideSearchRow}>
         {/* Top Header Row: Search Input + Light/Dark Mode Switch all the way to the right */}
@@ -788,7 +788,7 @@ export const InboxToolbar: Component<InboxToolbarProps> = (props) => {
         }
       >
         {/* Two-Row Toolbar for Split View when items are selected */}
-        <div class="flex flex-col gap-1.5 p-1 bg-[#FAF9F6] dark:bg-[#18191D] relative z-20">
+        <div class="flex flex-col gap-1.5 p-1 bg-white dark:bg-[#18191D] relative z-20">
           {/* Row 1: Selection Status & Deselect */}
           <div class="flex items-center justify-between min-h-[36px]">
             <div class="flex items-center gap-2">

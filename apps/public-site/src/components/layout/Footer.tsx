@@ -57,25 +57,25 @@ export function Footer() {
   ];
 
   return (
-    <footer class="bg-[#3C3D3E] text-[#F0EEE9]">
+    <footer class="bg-[#18212A] text-[#EAE6DE]">
       <div class="mx-auto max-w-7xl px-6 pt-16 pb-10">
         {/* Top grid */}
         <div class="grid grid-cols-2 gap-10 border-b border-white/10 pb-12 md:grid-cols-6">
           {/* Brand — spans 2 */}
           <div class="col-span-2">
             <a href="/" class="mb-4 inline-flex items-center gap-2.5 group" aria-label="BYOS home">
-              <span class="rounded-lg bg-[#9E725F] px-2.5 py-1 font-mono text-xs font-bold tracking-wider text-white group-hover:bg-[#865E4D] transition-colors">
+              <span class="rounded-lg bg-[#226192] px-2.5 py-1 font-mono text-xs font-bold tracking-wider text-white group-hover:bg-[#1B4E76] transition-colors">
                 BYOS
               </span>
-              <span class="font-display text-lg font-bold tracking-tight text-[#F0EEE9]">
+              <span class="font-display text-lg font-bold tracking-tight text-[#EAE6DE]">
                 Business Email
               </span>
             </a>
-            <p class="max-w-xs text-sm leading-relaxed text-[#8B8E91]">
+            <p class="max-w-xs text-sm leading-relaxed text-[#647280]">
               Professional business email with customer-controlled storage and privacy-focused
               architecture.
             </p>
-            <p class="mt-4 text-[11px] font-mono uppercase tracking-[0.18em] text-[#6F7173]">
+            <p class="mt-4 text-[11px] font-mono uppercase tracking-[0.18em] text-[#55616D]">
               Your email. Your storage. Your control.
             </p>
 
@@ -86,7 +86,7 @@ export function Footer() {
                   target="_blank"
                   rel="noopener noreferrer"
                   aria-label={s.label}
-                  class="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-[#F0EEE9] transition-all hover:border-[#9E725F] hover:bg-[#9E725F] hover:text-white"
+                  class="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-[#F6F3ED]/5 text-[#EAE6DE] transition-all hover:border-[#226192] hover:bg-[#226192] hover:text-white"
                 >
                   <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
                     <path d={s.path} />
@@ -99,7 +99,7 @@ export function Footer() {
           {/* Link groups */}
           {groups.map((group) => (
             <div>
-              <h3 class="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#F0EEE9]">
+              <h3 class="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#EAE6DE]">
                 {group.title}
               </h3>
               <ul class="mt-4 space-y-2.5">
@@ -107,7 +107,7 @@ export function Footer() {
                   <li>
                     <a
                       href={link.href}
-                      class="text-sm text-[#8B8E91] transition-colors hover:text-[#9E725F]"
+                      class="text-sm text-[#647280] transition-colors hover:text-[#226192]"
                     >
                       {link.label}
                     </a>
@@ -126,10 +126,10 @@ export function Footer() {
         </div>
 
         {/* Bottom bar */}
-        <div class="flex flex-col items-center justify-between gap-4 border-t border-white/10 pt-8 text-xs text-[#8B8E91] sm:flex-row">
+        <div class="flex flex-col items-center justify-between gap-4 border-t border-white/10 pt-8 text-xs text-[#647280] sm:flex-row">
           <span>&copy; 2026 BYOS Business Email. All rights reserved.</span>
-          <span class="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 font-mono text-[11px]">
-            <span class="h-1.5 w-1.5 rounded-full bg-[#9E725F]"></span>
+          <span class="inline-flex items-center gap-2 rounded-full border border-white/10 bg-[#F6F3ED]/5 px-3 py-1 font-mono text-[11px]">
+            <span class="h-1.5 w-1.5 rounded-full bg-[#226192]"></span>
             Privacy-focused architecture
           </span>
         </div>

@@ -169,6 +169,7 @@ import {
 import { loadSignature, loadSignatureHtml, saveSignature, saveSignatureHtml, applySignature, applySignatureHtml, formatQuotedHtml } from "./signature";
 import { PendingSend, buildPendingSendPayload, restoreComposeState } from "./undo_send";
 import { parseMime, getHeader } from "./mime";
+import { computeReplyRecipients } from "./reply_recipients";
 import { SetupAccount } from "./routes/setup-account";
 import { SettingsLayout, SettingsTabId } from "./routes/settings/SettingsLayout";
 import { AccountTab } from "./routes/settings/AccountTab";
@@ -309,6 +310,7 @@ interface DisplayMessage {
   senderName?: string;
   recipient: string;
   recipients?: string[];
+  replyTo?: string;
   subject: string;
   snippet: string;
   encryptedBody: string;
@@ -1016,7 +1018,7 @@ const AppContent: Component = () => {
             a.email?.toLowerCase() === cur?.email?.toLowerCase() ? { ...a, displayName: trimmed } : a
           );
           if (typeof sessionStorage !== "undefined") {
-            sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+            sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(updated)));
           }
           persistAccountListForDisplay(updated);
           return updated;
@@ -4630,7 +4632,7 @@ const AppContent: Component = () => {
                   : a
               );
               if (typeof sessionStorage !== "undefined") {
-                sessionStorage.setItem("byos_connected_accounts", JSON.stringify(updated));
+                sessionStorage.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(updated)));
               }
               persistAccountListForDisplay(updated);
               return updated;
@@ -5639,6 +5641,7 @@ const AppContent: Component = () => {
       }
 
       let extractedSubject = msg.subject;
+      let extractedReplyTo = msg.replyTo;
       const headerEnd = plaintext.search(/\r?\n\r?\n/);
       const rawHeaders = headerEnd !== -1 ? plaintext.slice(0, headerEnd) : "";
       const headerSubject = getHeader(rawHeaders, "subject");
@@ -5649,6 +5652,10 @@ const AppContent: Component = () => {
         if (subMatch && subMatch[1]) {
           extractedSubject = subMatch[1].trim();
         }
+      }
+      const headerReplyTo = getHeader(rawHeaders, "reply-to");
+      if (headerReplyTo && headerReplyTo.trim()) {
+        extractedReplyTo = headerReplyTo.trim();
       }
 
       const parsed = parseMime(plaintext);
@@ -5664,6 +5671,7 @@ const AppContent: Component = () => {
         ...msg,
         subject: extractedSubject,
         snippet: extractedSnippet || msg.snippet,
+        replyTo: extractedReplyTo,
         read: true,
       };
 
@@ -6550,7 +6558,59 @@ const AppContent: Component = () => {
     const sigHtml = replyBoxId ? loadSignatureHtml(replyBoxId) : "";
     const quotedPlain = quoteOriginal(msg, plaintext);
 
-    setComposeTo(msg.sender);
+    const userEmail = currentAccount()?.email || selectedMailbox()?.email || currentUser()?.email || msg.accountEmail;
+    const { to, cc } = computeReplyRecipients(msg, userEmail, false);
+    setComposeTo(to);
+    setComposeCc(cc);
+    setComposeSubject(withSubjectPrefix(msg.subject, "Re:"));
+    if (sigPlain) {
+      setComposeBody(`${quotedPlain}\n\n-- \n${sigPlain}`);
+    } else {
+      setComposeBody(quotedPlain);
+    }
+
+    const quoteHtml = formatQuotedHtml(quotedPlain);
+    if (sigHtml) {
+      setComposeBodyHtml(`${quoteHtml}<div class="byos-signature"><br>-- <br>${sigHtml}</div>`);
+    } else {
+      setComposeBodyHtml(quoteHtml);
+    }
+
+    setScheduledTime("");
+    setComposeAttachments([]);
+    setEditingDraft(null);
+    if (sigPlain || sigHtml) {
+      setComposeSignatureApplied(true);
+    }
+    refreshMaskedAliases();
+    setComposeOpen(true);
+  }
+
+  function startReplyAll(msg: DisplayMessage) {
+    const plaintext = messagePlaintext();
+    if (plaintext === null) return;
+    clearComposeForm();
+    if (msg.replyViaAlias) {
+      setComposeFromAlias(msg.replyViaAlias);
+    }
+    const replyBoxId = msg.mailboxId || selectedMailbox()?.id || null;
+    if (replyBoxId) {
+      setComposeAccountId(replyBoxId);
+      const savedSeed = getSigningSeedFor(replyBoxId);
+      if (!savedSeed) {
+        const acc = connectedAccounts().find((a) => a.id === replyBoxId);
+        const name = acc?.email || "account";
+        showToast(`Unlock ${name} to reply all`);
+      }
+    }
+    const sigPlain = replyBoxId ? loadSignature(replyBoxId) : "";
+    const sigHtml = replyBoxId ? loadSignatureHtml(replyBoxId) : "";
+    const quotedPlain = quoteOriginal(msg, plaintext);
+
+    const userEmail = currentAccount()?.email || selectedMailbox()?.email || currentUser()?.email || msg.accountEmail;
+    const { to, cc } = computeReplyRecipients(msg, userEmail, true);
+    setComposeTo(to);
+    setComposeCc(cc);
     setComposeSubject(withSubjectPrefix(msg.subject, "Re:"));
     if (sigPlain) {
       setComposeBody(`${quotedPlain}\n\n-- \n${sigPlain}`);
@@ -9722,6 +9782,7 @@ const AppContent: Component = () => {
                 onToggleStarred={toggleMessageStarred}
                 onMoveTo={(msg, f) => handleMoveMessages([msg.id], f)}
                 onReply={startReply}
+                onReplyAll={startReplyAll}
                 onForward={startForward}
                 customFolders={customFolders()}
                 labels={labels()}
@@ -10149,14 +10210,17 @@ const AppContent: Component = () => {
           type="button"
           onClick={() => startNewCompose()}
           aria-label="Compose new message"
+          title="Compose new message"
           data-testid="mobile-compose-fab"
-          class="lg:hidden fixed bottom-20 right-4 sm:right-6 z-40 flex items-center gap-2.5 px-4 py-3.5 rounded-2xl bg-[#A27561] hover:bg-[#8F6452] active:scale-95 text-white shadow-xl hover:shadow-2xl transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#A27561]/50 focus:ring-offset-2"
+          class="lg:hidden fixed bottom-20 right-4 sm:right-6 z-40 w-12 h-12 rounded-2xl bg-[#9E725F] hover:bg-[#865E4D] active:scale-95 text-white shadow-xl shadow-[#9E725F]/35 flex items-center justify-center transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#9E725F]/50 focus:ring-offset-2"
         >
-          <svg class="w-5 h-5 stroke-current fill-none stroke-2" viewBox="0 0 24 24">
+          <svg
+            class="w-6 h-6 stroke-current fill-none stroke-[2.2]"
+            viewBox="0 0 24 24"
+          >
             <path d="M12 20h9" />
             <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
           </svg>
-          <span class="text-sm font-semibold tracking-wide hidden sm:inline">Compose</span>
         </button>
       </Show>
 

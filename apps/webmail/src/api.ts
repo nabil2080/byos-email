@@ -2697,7 +2697,7 @@ export async function storeMailboxStorageObject(
   signal?: AbortSignal
 ): Promise<{ status: string; object_key: string; size_bytes: number }> {
   const base = apiBase();
-  const activeToken = token || (typeof sessionStorage !== "undefined" && sessionStorage.getItem("byos_active_session_token")) || undefined;
+  const activeToken = token || undefined;
   const res = await fetch(`${base}/v1/mailboxes/${mailboxId}/storage/store`, {
     method: "POST",
     headers: {
@@ -2727,7 +2727,7 @@ export async function retrieveMailboxStorageObject(
   signal?: AbortSignal
 ): Promise<Uint8Array | null> {
   const base = apiBase();
-  const activeToken = token || (typeof sessionStorage !== "undefined" && sessionStorage.getItem("byos_active_session_token")) || undefined;
+  const activeToken = token || undefined;
   const res = await fetch(
     `${base}/v1/mailboxes/${mailboxId}/storage/retrieve?key=${encodeURIComponent(objectKey)}`,
     {
@@ -2759,7 +2759,7 @@ export async function listMailboxStorageObjects(
   signal?: AbortSignal
 ): Promise<{ objects: string[]; count: number }> {
   const base = apiBase();
-  const activeToken = token || (typeof sessionStorage !== "undefined" && sessionStorage.getItem("byos_active_session_token")) || undefined;
+  const activeToken = token || undefined;
   const res = await fetch(
     `${base}/v1/mailboxes/${mailboxId}/storage/list?prefix=${encodeURIComponent(prefix)}`,
     {
@@ -2789,7 +2789,7 @@ export async function deleteMailboxStorageObject(
   signal?: AbortSignal
 ): Promise<boolean> {
   const base = apiBase();
-  const activeToken = token || (typeof sessionStorage !== "undefined" && sessionStorage.getItem("byos_active_session_token")) || undefined;
+  const activeToken = token || undefined;
   const res = await fetch(`${base}/v1/mailboxes/${mailboxId}/storage/delete`, {
     method: "POST",
     headers: {

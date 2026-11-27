@@ -59,7 +59,7 @@ func getUserID(r *http.Request) (string, bool) {
 }
 
 func isLegacyAuthEnabled() bool {
-	return os.Getenv("BYOS_LEGACY_AUTH_ENABLED") == "true"
+	return IsLegacyAuthEnabled()
 }
 
 func parseIPHost(addr string) string {
@@ -75,29 +75,7 @@ func parseIPHost(addr string) string {
 }
 
 func getClientIP(r *http.Request) string {
-	if r == nil {
-		return "127.0.0.1"
-	}
-	directHost := parseIPHost(r.RemoteAddr)
-
-	// Only trust X-Forwarded-For if explicitly configured via BYOS_TRUST_PROXY=true
-	// or if the request came from local loopback (127.0.0.1 / ::1) in dev/container mode.
-	trustProxy := os.Getenv("BYOS_TRUST_PROXY") == "true" || directHost == "127.0.0.1" || directHost == "::1" || directHost == "localhost"
-	if trustProxy {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.Split(xff, ",")
-			if len(parts) > 0 {
-				client := parseIPHost(parts[0])
-				if client != "" {
-					return client
-				}
-			}
-		}
-	}
-	if directHost != "" {
-		return directHost
-	}
-	return "127.0.0.1"
+	return GetClientIP(r)
 }
 
 func hashPassword(password string) (string, error) {
@@ -161,28 +139,64 @@ func detectClient(r *http.Request) string {
 		return ""
 	}
 	client := strings.TrimSpace(strings.ToLower(r.Header.Get("X-BYOS-Client")))
+	headerClient := ""
 	if client == "control-plane" || client == "control_plane" || client == "admin" {
-		return "control-plane"
+		headerClient = "control-plane"
+	} else if client == "webmail" {
+		headerClient = "webmail"
 	}
-	if client == "webmail" {
-		return "webmail"
-	}
+
 	origin := strings.ToLower(r.Header.Get("Origin"))
 	referer := strings.ToLower(r.Header.Get("Referer"))
-	if strings.Contains(origin, ":3000") || strings.Contains(referer, ":3000") {
-		return "control-plane"
+	originHasCP := strings.Contains(origin, ":3000") || strings.Contains(referer, ":3000")
+	originHasWM := strings.Contains(origin, ":3001") || strings.Contains(referer, ":3001")
+	if originHasCP && originHasWM {
+		return "conflict"
 	}
-	if strings.Contains(origin, ":3001") || strings.Contains(referer, ":3001") {
-		return "webmail"
+	originClient := ""
+	if originHasCP {
+		originClient = "control-plane"
+	} else if originHasWM {
+		originClient = "webmail"
+	}
+
+	if headerClient != "" && originClient != "" && headerClient != originClient {
+		return "conflict"
+	}
+	if headerClient != "" {
+		return headerClient
+	}
+	return originClient
+}
+
+func extractSessionToken(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) != "" {
+		return strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	}
+	switch detectClient(r) {
+	case "control-plane":
+		if cookie, err := r.Cookie("byos_cp_session"); err == nil && cookie.Value != "" {
+			return cookie.Value
+		}
+	case "webmail":
+		if cookie, err := r.Cookie("byos_webmail_session"); err == nil && cookie.Value != "" {
+			return cookie.Value
+		}
+	case "conflict":
+		return ""
+	default:
+		if cookie, err := r.Cookie("byos_session"); err == nil && cookie.Value != "" {
+			return cookie.Value
+		}
 	}
 	return ""
 }
 
 func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time) {
-	secure := os.Getenv("BYOS_COOKIE_SECURE") == "true"
-	if os.Getenv("BYOS_ENV") == "production" {
-		secure = true
-	}
+	secure := IsCookieSecure()
 	maxAge := int(time.Until(expires).Seconds())
 	client := detectClient(r)
 
@@ -209,7 +223,7 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expi
 			Secure:   secure,
 			SameSite: http.SameSiteLaxMode,
 		})
-	} else {
+	} else if client == "" {
 		// Only set generic byos_session for test scripts/CLI without specific client
 		http.SetCookie(w, &http.Cookie{
 			Name:     "byos_session",
@@ -225,10 +239,7 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expi
 }
 
 func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	secure := os.Getenv("BYOS_COOKIE_SECURE") == "true"
-	if os.Getenv("BYOS_ENV") == "production" {
-		secure = true
-	}
+	secure := IsCookieSecure()
 	client := detectClient(r)
 	if client == "control-plane" {
 		http.SetCookie(w, &http.Cookie{
@@ -252,7 +263,7 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 			Secure:   secure,
 			SameSite: http.SameSiteLaxMode,
 		})
-	} else {
+	} else if client == "" {
 		http.SetCookie(w, &http.Cookie{
 			Name:     "byos_session",
 			Value:    "",
@@ -300,9 +311,10 @@ func getAuthDBPool(ctx context.Context) (*pgxpool.Pool, error) {
 
 	var initErr error
 	authDBOnce.Do(func() {
-		dsn := os.Getenv("DATABASE_URL")
-		if dsn == "" {
-			dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+		dsn, err := GetDatabaseURL()
+		if err != nil {
+			initErr = err
+			return
 		}
 		cfg, err := pgxpool.ParseConfig(dsn)
 		if err != nil {
@@ -337,29 +349,7 @@ func getAuthDBPool(ctx context.Context) (*pgxpool.Pool, error) {
 }
 
 func getSessionUserID(r *http.Request) (string, bool) {
-	var token string
-	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) != "" {
-		token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-	} else {
-		client := detectClient(r)
-		if client == "control-plane" {
-			if cookie, err := r.Cookie("byos_cp_session"); err == nil && cookie.Value != "" {
-				token = cookie.Value
-			}
-		} else if client == "webmail" {
-			if cookie, err := r.Cookie("byos_webmail_session"); err == nil && cookie.Value != "" {
-				token = cookie.Value
-			}
-		} else {
-			if cookie, err := r.Cookie("byos_session"); err == nil && cookie.Value != "" {
-				token = cookie.Value
-			} else if cookie, err := r.Cookie("byos_cp_session"); err == nil && cookie.Value != "" {
-				token = cookie.Value
-			} else if cookie, err := r.Cookie("byos_webmail_session"); err == nil && cookie.Value != "" {
-				token = cookie.Value
-			}
-		}
-	}
+	token := extractSessionToken(r)
 	if token == "" {
 		return "", false
 	}
@@ -368,9 +358,9 @@ func getSessionUserID(r *http.Request) (string, bool) {
 	pool, err := getAuthDBPool(r.Context())
 	if err != nil || pool == nil {
 		// Fallback to direct connection if pool fails
-		dsn := os.Getenv("DATABASE_URL")
-		if dsn == "" {
-			dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
+		dsn, err := GetDatabaseURL()
+		if err != nil {
+			return "", false
 		}
 		ctx := r.Context()
 		conn, err := pgx.Connect(ctx, dsn)
@@ -462,10 +452,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	// Deprecated recovery fields in req (org_recovery_pk, wrapped_org_recovery_sk, recovery_salt)
 	// are intentionally ignored and never treated as active cryptographic material.
 	// In post-migration 058 architecture, all organizations store org_recovery_pk = NULL.
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getDatabaseDSN()
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -535,7 +522,13 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	setSessionCookie(w, r, token, expires)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{"id": userID, "email": email, "org_id": orgID, "org_name": orgName, "token": token})
+	resp := map[string]interface{}{
+		"id":       userID,
+		"email":    email,
+		"org_id":   orgID,
+		"org_name": orgName,
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
@@ -581,10 +574,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getDatabaseDSN()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		http.Error(w, "Database connection failed", http.StatusInternalServerError)
@@ -778,7 +768,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 	setSessionCookie(w, r, token, expires)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	resp := map[string]interface{}{
 		"id":                       userID,
 		"email":                    userEmail,
 		"org_id":                   orgID,
@@ -786,13 +776,13 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		"role":                     role,
 		"seat_count":               seatCount,
 		"subscription_status":      subscriptionStatus,
-		"token":                    token,
 		"mailbox_id":               mailboxID,
 		"mailbox_local_part":       mailboxLocalPart,
 		"mailbox_mode":             mailboxMode,
 		"wrapped_sk_user":          wrappedSkUserStr,
 		"previous_wrapped_sk_user": previousWrappedSkUserStr,
-	})
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func meHandler(w http.ResponseWriter, r *http.Request) {
@@ -805,10 +795,7 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getDatabaseDSN()
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -839,7 +826,8 @@ func meHandler(w http.ResponseWriter, r *http.Request) {
 	if activeMailboxID != "" {
 		callerHash, _ := getCallerTokenHash(r)
 		if !isMailboxAuthorizedForSession(callerHash, userID, activeMailboxID, conn, ctx) {
-			activeMailboxID = ""
+			http.Error(w, "Forbidden: not authorized for active mailbox", http.StatusForbidden)
+			return
 		}
 	}
 	if activeMailboxID != "" {
@@ -905,39 +893,14 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var token string
-	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) != "" {
-		token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-	} else {
-		client := detectClient(r)
-		if client == "control-plane" {
-			if cookie, err := r.Cookie("byos_cp_session"); err == nil && cookie.Value != "" {
-				token = cookie.Value
-			}
-		} else if client == "webmail" {
-			if cookie, err := r.Cookie("byos_webmail_session"); err == nil && cookie.Value != "" {
-				token = cookie.Value
-			}
-		} else {
-			if cookie, err := r.Cookie("byos_session"); err == nil && cookie.Value != "" {
-				token = cookie.Value
-			} else if cookie, err := r.Cookie("byos_cp_session"); err == nil && cookie.Value != "" {
-				token = cookie.Value
-			} else if cookie, err := r.Cookie("byos_webmail_session"); err == nil && cookie.Value != "" {
-				token = cookie.Value
-			}
-		}
-	}
+	token := extractSessionToken(r)
 	if token == "" {
 		clearSessionCookie(w, r)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	tokenHash := hashToken(token)
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getDatabaseDSN()
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err == nil {
@@ -1235,10 +1198,7 @@ func linkedAccountsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getDatabaseDSN()
 	ctx := r.Context()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {

@@ -132,29 +132,32 @@ func mailboxTrackingHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	// Authorize user has access to mailbox's org
-	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
-		http.Error(w, errMsg, status)
+	activeHeader := strings.TrimSpace(r.Header.Get("X-BYOS-Active-Mailbox"))
+	if activeHeader != "" && activeHeader != mailboxID {
+		http.Error(w, "X-BYOS-Active-Mailbox mismatch with target mailbox", http.StatusForbidden)
 		return
 	}
-	var userOrgID, mailboxOrgID string
-	err = conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID)
+
+	var userOrgID, userRole string
+	err = conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole)
 	if err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	var userRole string
-	_ = conn.QueryRow(ctx, `SELECT COALESCE(role, 'member') FROM users WHERE id=$1`, userID).Scan(&userRole)
+
+	var mailboxOrgID string
 	var mailboxUserID *string
 	err = conn.QueryRow(ctx, `SELECT org_id::text, user_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID, &mailboxUserID)
 	if err != nil {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	isOwner := mailboxUserID != nil && *mailboxUserID == userID
-	isAdminOrOwner := userRole == "admin" || userRole == "owner"
-	if userOrgID != mailboxOrgID || (!isOwner && !isAdminOrOwner) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+
+	callerHash, _ := getCallerTokenHash(r)
+	isAuthorized := isMailboxAuthorizedForSession(callerHash, userID, mailboxID, conn, ctx)
+	isOrgAdmin := (mailboxOrgID == userOrgID) && (userRole == "admin" || userRole == "owner")
+	if !isAuthorized && !isOrgAdmin {
+		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
 		return
 	}
 
@@ -258,22 +261,28 @@ func mailboxTrackingItemHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	// Auth check
-	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
-		http.Error(w, errMsg, status)
+	activeHeader := strings.TrimSpace(r.Header.Get("X-BYOS-Active-Mailbox"))
+	if activeHeader != "" && activeHeader != mailboxID {
+		http.Error(w, "X-BYOS-Active-Mailbox mismatch with target mailbox", http.StatusForbidden)
 		return
 	}
-	var userOrgID, mailboxOrgID string
-	if err := conn.QueryRow(ctx, `SELECT org_id::text FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID); err != nil {
+
+	var userOrgID, userRole string
+	if err := conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member') FROM users WHERE id=$1 AND is_active=true`, userID).Scan(&userOrgID, &userRole); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	var mailboxOrgID string
 	if err := conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID); err != nil {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
 		return
 	}
-	if userOrgID != mailboxOrgID {
-		http.Error(w, "forbidden", http.StatusForbidden)
+
+	callerHash, _ := getCallerTokenHash(r)
+	isAuthorized := isMailboxAuthorizedForSession(callerHash, userID, mailboxID, conn, ctx)
+	isOrgAdmin := (mailboxOrgID == userOrgID) && (userRole == "admin" || userRole == "owner")
+	if !isAuthorized && !isOrgAdmin {
+		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
 		return
 	}
 

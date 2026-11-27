@@ -92,7 +92,9 @@ func setupMailboxAndAlias(t *testing.T, pool *pgxpool.Pool, prefix string, alias
 	mailboxID = uuid.New().String()
 	storageConnID := uuid.New().String()
 
-	_, err := pool.Exec(ctx, `INSERT INTO organizations (id, name, org_recovery_pk) VALUES ($1, $2, NULL)`, orgID, "Alias Org "+prefix)
+	orgRecoveryPK := make([]byte, 32)
+	copy(orgRecoveryPK, []byte("org-recovery-pk-32bytes-12345678"))
+	_, err := pool.Exec(ctx, `INSERT INTO organizations (id, name, org_recovery_pk) VALUES ($1, $2, $3)`, orgID, "Alias Org "+prefix, orgRecoveryPK)
 	if err != nil {
 		t.Fatalf("insert org: %v", err)
 	}

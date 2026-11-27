@@ -66,6 +66,7 @@ func TestCustomerSupportTicketLifecycleIntegration(t *testing.T) {
 	createAuthCustomerRequest := func(method, path string, userUUID uuid.UUID, body []byte) *http.Request {
 		req := httptest.NewRequest(method, path, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-BYOS-Client", "control-plane")
 		// Insert active session in sessions table with token_hash for getSessionUserID
 		sessionToken := "test_sess_" + userUUID.String()
 		tokHash := hashToken(sessionToken)

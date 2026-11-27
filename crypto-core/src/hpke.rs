@@ -88,7 +88,10 @@ pub fn labeled_expand(
     info: Option<&[u8]>,
     length: usize,
     suite_id: &[u8],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, CryptoError> {
+    if length > u16::MAX as usize || length > 255 * 32 {
+        return Err(CryptoError::SerializationError);
+    }
     let mut labeled_info = Vec::with_capacity(2 + 7 + suite_id.len() + label.len() + info.map_or(0, |i| i.len()));
     labeled_info.extend_from_slice(&(length as u16).to_be_bytes());
     labeled_info.extend_from_slice(b"HPKE-v1");
@@ -99,22 +102,22 @@ pub fn labeled_expand(
             labeled_info.extend_from_slice(info_bytes);
         }
     }
-    hkdf_expand(prk, &labeled_info, length).expect("valid length")
+    hkdf_expand(prk, &labeled_info, length)
 }
 
 /// DHKEMExtractAndExpand derives shared_secret from raw DH output and kem_context
 /// per RFC 9180 §4.1:
 ///   eae_prk = LabeledExtract("", "eae_prk", dh)
 ///   shared_secret = LabeledExpand(eae_prk, "shared_secret", kem_context, Nsecret)
-pub fn dhkem_extract_and_expand(dh: &[u8], enc: &[u8], pk_r: &[u8]) -> [u8; 32] {
+pub fn dhkem_extract_and_expand(dh: &[u8], enc: &[u8], pk_r: &[u8]) -> Result<[u8; 32], CryptoError> {
     let eae_prk = labeled_extract(None, "eae_prk", Some(dh), DHKEM_X25519_SUITE_ID);
     let mut kem_context = Vec::with_capacity(enc.len() + pk_r.len());
     kem_context.extend_from_slice(enc);
     kem_context.extend_from_slice(pk_r);
-    let out = labeled_expand(&eae_prk, "shared_secret", Some(&kem_context), 32, DHKEM_X25519_SUITE_ID);
+    let out = labeled_expand(&eae_prk, "shared_secret", Some(&kem_context), 32, DHKEM_X25519_SUITE_ID)?;
     let mut ss = [0u8; 32];
     ss.copy_from_slice(&out);
-    ss
+    Ok(ss)
 }
 
 /// DeriveAEADKey derives the 32-byte AES-256-GCM symmetric key from shared_secret
@@ -133,7 +136,7 @@ pub fn derive_aead_key(shared_secret: &[u8], suite_id: &[u8]) -> Result<[u8; 32]
     ks_context.extend_from_slice(&info_hash);
 
     let secret = labeled_extract(Some(shared_secret), "secret", None, suite_id);
-    let key_bytes = labeled_expand(&secret, "key", Some(&ks_context), 32, suite_id);
+    let key_bytes = labeled_expand(&secret, "key", Some(&ks_context), 32, suite_id)?;
     let mut key = [0u8; 32];
     key.copy_from_slice(&key_bytes);
     Ok(key)
@@ -148,6 +151,7 @@ pub fn generate_key_pair_x25519() -> ([u8; 32], [u8; 32]) {
 
 /// EncapsulateX25519WithKey encapsulates using a pre-determined ephemeral private key
 /// (used for deterministic test vector validation per RFC 9180 Appendix A.1).
+#[cfg(any(test, feature = "test-support"))]
 pub fn encapsulate_x25519_with_key(
     ephemeral_priv: &[u8; 32],
     recipient_pub: &[u8; 32],
@@ -158,7 +162,7 @@ pub fn encapsulate_x25519_with_key(
     let pub_r = PublicKey::from(*recipient_pub);
     let dh = priv_e.diffie_hellman(&pub_r).to_bytes();
 
-    let shared_secret = dhkem_extract_and_expand(&dh, &enc, recipient_pub);
+    let shared_secret = dhkem_extract_and_expand(&dh, &enc, recipient_pub)?;
     Ok((enc, shared_secret))
 }
 
@@ -173,7 +177,7 @@ pub fn encapsulate_x25519(
     let pub_r = PublicKey::from(*recipient_pub);
     let dh = priv_e.diffie_hellman(&pub_r).to_bytes();
 
-    let shared_secret = dhkem_extract_and_expand(&dh, &enc, recipient_pub);
+    let shared_secret = dhkem_extract_and_expand(&dh, &enc, recipient_pub)?;
     Ok((enc, shared_secret))
 }
 
@@ -196,7 +200,7 @@ pub fn decapsulate_x25519(
     let pub_e = PublicKey::from(enc_bytes);
     let dh = priv_r.diffie_hellman(&pub_e).to_bytes();
 
-    Ok(dhkem_extract_and_expand(&dh, &enc_bytes, &pub_r))
+    dhkem_extract_and_expand(&dh, &enc_bytes, &pub_r)
 }
 
 /// SealX25519 seals plaintext for recipient_pub using HPKE-X25519-AES256GCM-v1.
@@ -273,6 +277,7 @@ pub fn open_x25519(
 }
 
 /// Test-only helper: deterministic X25519 seal for byte-parity verification.
+#[cfg(any(test, feature = "test-support"))]
 pub fn seal_x25519_deterministic(
     recipient_pub: &[u8],
     ephemeral_priv: &[u8],
@@ -431,6 +436,7 @@ pub fn open_xwing(
 }
 
 /// Test-only helper: deterministic X-Wing seal for byte-parity verification.
+#[cfg(any(test, feature = "test-support"))]
 pub fn seal_xwing_deterministic(
     recipient_xwing_pub: &[u8],
     eseed: &[u8],
@@ -481,4 +487,72 @@ pub fn seal_xwing_deterministic(
         sig: None,
         v: CURRENT_VERSION,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_labeled_expand_valid_vector() {
+        let prk = [0x42u8; 32];
+        let suite = SUITE_X25519;
+        let out = labeled_expand(&prk, "test_label", Some(b"context"), 32, suite)
+            .expect("valid 32-byte expansion should succeed");
+        assert_eq!(out.len(), 32);
+    }
+
+    #[test]
+    fn test_labeled_expand_zero_length() {
+        let prk = [0x42u8; 32];
+        let suite = SUITE_X25519;
+        let out = labeled_expand(&prk, "zero_length", None, 0, suite)
+            .expect("0-length expansion should succeed");
+        assert_eq!(out.len(), 0);
+    }
+
+    #[test]
+    fn test_labeled_expand_max_permitted_length() {
+        let prk = [0x42u8; 32];
+        let suite = SUITE_X25519;
+        // 255 * HashLen = 255 * 32 = 8160 bytes
+        let max_len = 255 * 32;
+        let out = labeled_expand(&prk, "max_len", None, max_len, suite)
+            .expect("maximum permitted length 8160 should succeed");
+        assert_eq!(out.len(), max_len);
+    }
+
+    #[test]
+    fn test_labeled_expand_exceeded_hkdf_length() {
+        let prk = [0x42u8; 32];
+        let suite = SUITE_X25519;
+        // 8161 exceeds 255 * 32
+        let res = labeled_expand(&prk, "exceeded_len", None, 8161, suite);
+        assert!(matches!(res, Err(CryptoError::SerializationError)));
+    }
+
+    #[test]
+    fn test_labeled_expand_exceeded_u16_max() {
+        let prk = [0x42u8; 32];
+        let suite = SUITE_X25519;
+        // 65536 exceeds u16::MAX (65535) and 255 * 32
+        let res = labeled_expand(&prk, "u16_overflow", None, 65536, suite);
+        assert!(matches!(res, Err(CryptoError::SerializationError)));
+    }
+
+    #[test]
+    fn test_derive_aead_key_error_propagation() {
+        // Empty shared_secret returns SerializationError
+        let res_empty_ss = derive_aead_key(&[], SUITE_X25519);
+        assert!(matches!(res_empty_ss, Err(CryptoError::SerializationError)));
+
+        // Empty suite_id returns SerializationError
+        let res_empty_suite = derive_aead_key(&[0xaa; 32], &[]);
+        assert!(matches!(res_empty_suite, Err(CryptoError::SerializationError)));
+
+        // Valid derivation succeeds
+        let valid_res = derive_aead_key(&[0xbb; 32], SUITE_X25519);
+        assert!(valid_res.is_ok());
+        assert_eq!(valid_res.unwrap().len(), 32);
+    }
 }

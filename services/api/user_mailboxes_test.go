@@ -279,3 +279,190 @@ func TestConcurrentSSEConnectionsAllowed(t *testing.T) {
 	cancel2()
 	wg.Wait()
 }
+
+func TestUserMailboxesIsolation_PrivatePolicy(t *testing.T) {
+	dsn := getValidatedTestDSN(t)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping test; db unreachable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	orgID := uuid.New().String()
+	domainID := uuid.New().String()
+	domainName := "priv-" + uuid.New().String()[:8] + ".org"
+	_, err = conn.Exec(ctx, `INSERT INTO organizations (id, name, seat_count, org_recovery_pk) VALUES ($1, $2, 10, decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))`, orgID, "Private Isolation Org")
+	if err != nil {
+		t.Fatalf("insert org: %v", err)
+	}
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
+
+	_, err = conn.Exec(ctx, `INSERT INTO domains (id, org_id, name, is_verified) VALUES ($1, $2, $3, true)`, domainID, orgID, domainName)
+	if err != nil {
+		t.Fatalf("insert domain: %v", err)
+	}
+
+	pwHash, _ := hashPassword("password123")
+	aliceID, bobID, adminID := uuid.New().String(), uuid.New().String(), uuid.New().String()
+	_, err = conn.Exec(ctx, `INSERT INTO users (id, org_id, email, password_hash, display_name, role, is_active) VALUES ($1, $2, $3, $4, 'Alice Owner', 'owner', true)`, aliceID, orgID, "alice@"+domainName, pwHash)
+	if err != nil {
+		t.Fatalf("insert alice: %v", err)
+	}
+	_, err = conn.Exec(ctx, `INSERT INTO users (id, org_id, email, password_hash, display_name, role, is_active) VALUES ($1, $2, $3, $4, 'Bob Member', 'member', true)`, bobID, orgID, "bob@"+domainName, pwHash)
+	if err != nil {
+		t.Fatalf("insert bob: %v", err)
+	}
+	_, err = conn.Exec(ctx, `INSERT INTO users (id, org_id, email, password_hash, display_name, role, is_active) VALUES ($1, $2, $3, $4, 'Carol Admin', 'admin', true)`, adminID, orgID, "carol@"+domainName, pwHash)
+	if err != nil {
+		t.Fatalf("insert admin: %v", err)
+	}
+
+	aliceMbID, bobMbID := uuid.New().String(), uuid.New().String()
+	_, err = conn.Exec(ctx, `INSERT INTO mailboxes (id, org_id, user_id, domain_id, local_part, mode, is_active) VALUES ($1, $2, $3, $4, 'alice', 'private', true)`, aliceMbID, orgID, aliceID, domainID)
+	if err != nil {
+		t.Fatalf("insert alice mb: %v", err)
+	}
+	_, err = conn.Exec(ctx, `INSERT INTO mailboxes (id, org_id, user_id, domain_id, local_part, mode, is_active) VALUES ($1, $2, $3, $4, 'bob', 'private', true)`, bobMbID, orgID, bobID, domainID)
+	if err != nil {
+		t.Fatalf("insert bob mb: %v", err)
+	}
+
+	expires := time.Now().Add(24 * time.Hour)
+	aliceTok, aliceHash := generateSessionToken()
+	bobTok, bobHash := generateSessionToken()
+	adminTok, adminHash := generateSessionToken()
+	for _, s := range []struct {
+		uid  string
+		hash []byte
+	}{{aliceID, aliceHash}, {bobID, bobHash}, {adminID, adminHash}} {
+		if _, err := conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`, s.uid, s.hash, expires); err != nil {
+			t.Fatalf("insert session: %v", err)
+		}
+	}
+
+	callList := func(tok string, activeHeader string) []UserMailboxItem {
+		req := httptest.NewRequest(http.MethodGet, "/v1/users/me/mailboxes?mailbox_id="+bobMbID, nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		if activeHeader != "" {
+			req.Header.Set("X-BYOS-Active-Mailbox", activeHeader)
+		}
+		w := httptest.NewRecorder()
+		userMailboxesHandler(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Mailboxes []UserMailboxItem `json:"mailboxes"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return resp.Mailboxes
+	}
+
+	// 1 & 3 & 4 & 6: Alice (owner) sees ONLY Alice's mailbox, never Bob's even with manipulated header/query
+	aliceList := callList(aliceTok, bobMbID)
+	if len(aliceList) != 1 || aliceList[0].ID != aliceMbID {
+		t.Fatalf("owner Alice must see only her own mailbox %s, got %+v", aliceMbID, aliceList)
+	}
+
+	// 2: Bob sees ONLY Bob's mailbox, never Alice's
+	bobList := callList(bobTok, aliceMbID)
+	if len(bobList) != 1 || bobList[0].ID != bobMbID {
+		t.Fatalf("Bob must see only his own mailbox %s, got %+v", bobMbID, bobList)
+	}
+
+	// 5: Admin sees 0 mailboxes (has no owned mailbox and must not see Bob's or Alice's)
+	adminList := callList(adminTok, bobMbID)
+	if len(adminList) != 0 {
+		t.Fatalf("admin without own mailbox must see 0 mailboxes, got %+v", adminList)
+	}
+}
+
+func TestOrgMailboxesRoleEnforcement(t *testing.T) {
+	dsn := getValidatedTestDSN(t)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping test; db unreachable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	orgID, otherOrgID := uuid.New().String(), uuid.New().String()
+	domainID := uuid.New().String()
+	domainName := "orgrole-" + uuid.New().String()[:8] + ".org"
+	_, err = conn.Exec(ctx, `INSERT INTO organizations (id, name, seat_count, org_recovery_pk) VALUES ($1, 'Role Org', 10, decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))`, orgID)
+	if err != nil {
+		t.Fatalf("insert org: %v", err)
+	}
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, orgID)
+	_, err = conn.Exec(ctx, `INSERT INTO organizations (id, name, seat_count, org_recovery_pk) VALUES ($1, 'Other Org', 10, decode('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'base64'))`, otherOrgID)
+	if err != nil {
+		t.Fatalf("insert other org: %v", err)
+	}
+	defer conn.Exec(ctx, `DELETE FROM organizations WHERE id=$1`, otherOrgID)
+
+	_, err = conn.Exec(ctx, `INSERT INTO domains (id, org_id, name, is_verified) VALUES ($1, $2, $3, true)`, domainID, orgID, domainName)
+	if err != nil {
+		t.Fatalf("insert domain: %v", err)
+	}
+
+	pwHash, _ := hashPassword("password123")
+	ownerID, adminID, memberID, outsiderID := uuid.New().String(), uuid.New().String(), uuid.New().String(), uuid.New().String()
+	for _, u := range []struct {
+		id, oid, email, role string
+	}{
+		{ownerID, orgID, "owner@" + domainName, "owner"},
+		{adminID, orgID, "admin@" + domainName, "admin"},
+		{memberID, orgID, "member@" + domainName, "member"},
+		{outsiderID, otherOrgID, "outsider@" + domainName, "owner"},
+	} {
+		if _, err := conn.Exec(ctx, `INSERT INTO users (id, org_id, email, password_hash, display_name, role, is_active) VALUES ($1, $2, $3, $4, $5, $6, true)`, u.id, u.oid, u.email, pwHash, u.role, u.role); err != nil {
+			t.Fatalf("insert user %s: %v", u.role, err)
+		}
+	}
+
+	mbID := uuid.New().String()
+	_, err = conn.Exec(ctx, `INSERT INTO mailboxes (id, org_id, user_id, domain_id, local_part, mode, is_active) VALUES ($1, $2, $3, $4, 'member', 'private', true)`, mbID, orgID, memberID, domainID)
+	if err != nil {
+		t.Fatalf("insert mb: %v", err)
+	}
+
+	expires := time.Now().Add(24 * time.Hour)
+	mkTok := func(uid string) string {
+		tok, h := generateSessionToken()
+		if _, err := conn.Exec(ctx, `INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`, uid, h, expires); err != nil {
+			t.Fatalf("insert session: %v", err)
+		}
+		return tok
+	}
+	ownerTok, adminTok, memberTok, outsiderTok := mkTok(ownerID), mkTok(adminID), mkTok(memberID), mkTok(outsiderID)
+
+	callOrg := func(tok string) int {
+		req := httptest.NewRequest(http.MethodGet, "/v1/organizations/"+orgID+"/mailboxes", nil)
+		req.SetPathValue("org_id", orgID)
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		w := httptest.NewRecorder()
+		mailboxesHandler(w, req)
+		return w.Code
+	}
+
+	if code := callOrg(""); code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated expected 401, got %d", code)
+	}
+	if code := callOrg(memberTok); code != http.StatusForbidden {
+		t.Fatalf("normal member expected 403, got %d", code)
+	}
+	if code := callOrg(outsiderTok); code != http.StatusForbidden {
+		t.Fatalf("unrelated org member expected 403, got %d", code)
+	}
+	if code := callOrg(adminTok); code != http.StatusOK {
+		t.Fatalf("admin expected 200, got %d", code)
+	}
+	if code := callOrg(ownerTok); code != http.StatusOK {
+		t.Fatalf("owner expected 200, got %d", code)
+	}
+}

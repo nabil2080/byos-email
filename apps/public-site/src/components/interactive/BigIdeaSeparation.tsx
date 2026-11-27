@@ -48,30 +48,30 @@ export function BigIdeaSeparation() {
       <div class="relative mx-auto max-w-md">
         {/* Email layer */}
         <div
-          class="relative z-20 card-editorial bg-white p-6 transition-transform duration-100 will-change-transform"
+          class="relative z-20 card-editorial bg-[#F6F3ED] p-6 transition-transform duration-100 will-change-transform"
           style={{ transform: `translateY(-${sep()}px)` }}
         >
           <span class="eyebrow">Layer 1</span>
-          <h3 class="mt-2 font-display text-xl font-bold text-[#2B2C2D]">Email service</h3>
-          <p class="mt-1.5 text-sm text-[#6F7173]">BYOS provides the infrastructure.</p>
+          <h3 class="mt-2 font-display text-xl font-bold text-[#18212A]">Email service</h3>
+          <p class="mt-1.5 text-sm text-[#55616D]">BYOS provides the infrastructure.</p>
         </div>
 
         {/* Connector between layers */}
         <div class="relative z-10 flex justify-center" aria-hidden="true">
           <span
-            class="block w-px bg-gradient-to-b from-[#9E725F]/50 to-[#9E725F]/20 transition-all duration-100"
+            class="block w-px bg-gradient-to-b from-[#226192]/50 to-[#226192]/20 transition-all duration-100"
             style={{ height: `${sep() * 1.4 + 14}px` }}
           ></span>
         </div>
 
         {/* Storage layer */}
         <div
-          class="relative z-20 rounded-[18px] border border-[#9E725F]/25 bg-[#F3ECE8] p-6 transition-transform duration-100 will-change-transform"
+          class="relative z-20 rounded-[18px] border border-[#226192]/25 bg-[#E2E7EB] p-6 transition-transform duration-100 will-change-transform"
           style={{ transform: `translateY(${sep()}px)` }}
         >
           <span class="eyebrow">Layer 2</span>
-          <h3 class="mt-2 font-display text-xl font-bold text-[#2B2C2D]">Storage</h3>
-          <p class="mt-1.5 text-sm text-[#6F7173]">You control the persistent storage.</p>
+          <h3 class="mt-2 font-display text-xl font-bold text-[#18212A]">Storage</h3>
+          <p class="mt-1.5 text-sm text-[#55616D]">You control the persistent storage.</p>
         </div>
       </div>
     </div>

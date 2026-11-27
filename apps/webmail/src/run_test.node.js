@@ -58,6 +58,7 @@ import { runCalendarCategory14Tests } from "./calendar_category_14.test.js";
 import { runCalendarCategory15Tests } from "./calendar_category_15.test.js";
 import { runCalendarLayoutTests } from "./utils/calendarLayout.test.js";
 import { runUnlockAnd2FAPersistenceTests } from "./unlock_and_2fa_persistence.test.js";
+import { runReplyRecipientsTests } from "./reply.test.js";
 import { runKashcalParserTests } from "./components/calendar/kashcalParser.test.js";
 import { runNotesTests } from "./components/notes/notes.test.js";
 import { runNotesSyncTests } from "./components/notes/notesSync.test.js";
@@ -485,6 +486,12 @@ async function main() {
   console.log(`FOLDER & TRASH TESTS: ${folderTrashRes.passed} passed, ${folderTrashRes.failed} failed\n`);
   totalPassed += folderTrashRes.passed;
   totalFailed += folderTrashRes.failed;
+
+  console.log("Running Reply & Reply All Tests...");
+  const replyRes = await runReplyRecipientsTests();
+  console.log(`REPLY & REPLY ALL TESTS: ${replyRes.passed} passed, ${replyRes.failed} failed\n`);
+  totalPassed += replyRes.passed;
+  totalFailed += replyRes.failed;
 
   console.log(`OVERALL: ${totalPassed} passed, ${totalFailed} failed`);
   if (totalFailed > 0) {

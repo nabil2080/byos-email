@@ -521,7 +521,7 @@ export function removeStaleAccount<T extends { id: string; email: string }>(
   clearAccountKeys(accountId, ss);
   const remaining = accounts.filter((a) => a.id !== accountId);
   try {
-    ss.setItem("byos_connected_accounts", JSON.stringify(remaining));
+    ss.setItem("byos_connected_accounts", JSON.stringify(sanitizeConnectedAccounts(remaining as any)));
   } catch {}
   persistAccountListForDisplay(remaining as any, ls);
   return remaining;

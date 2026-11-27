@@ -206,7 +206,8 @@ WHERE id NOT IN (
     '6ee985a3-cb80-466b-98f3-ac78472a8fe6'::uuid,
     '11111111-1111-1111-1111-111111111111'::uuid,
     'cccccccc-0000-0000-0000-000000000001'::uuid
-);
+)
+  AND id NOT IN (SELECT user_id FROM mailboxes WHERE user_id IS NOT NULL);
 
 DELETE FROM user_passkeys WHERE user_id IN (SELECT id FROM target_test_users);
 DELETE FROM auth_challenges WHERE user_id IN (SELECT id FROM target_test_users);
@@ -221,6 +222,15 @@ END $$;
 DELETE FROM google_drive_oauth_states WHERE user_id IN (SELECT id FROM target_test_users);
 DELETE FROM audit_log WHERE user_id IN (SELECT id FROM target_test_users);
 DELETE FROM storage_migrations WHERE created_by IN (SELECT id FROM target_test_users);
+DO $$
+BEGIN
+    IF to_regclass('support_ticket_messages') IS NOT NULL THEN
+        EXECUTE 'DELETE FROM support_ticket_messages WHERE ticket_id IN (SELECT id FROM support_tickets WHERE customer_user_id IN (SELECT id FROM target_test_users))';
+    END IF;
+    IF to_regclass('support_tickets') IS NOT NULL THEN
+        EXECUTE 'DELETE FROM support_tickets WHERE customer_user_id IN (SELECT id FROM target_test_users)';
+    END IF;
+END $$;
 
 WITH del_u AS (
     DELETE FROM users WHERE id IN (SELECT id FROM target_test_users) RETURNING 1
@@ -236,7 +246,8 @@ WHERE id NOT IN (
     'ca1fbf8e-9561-4dc2-8657-dc1ceeee7801'::uuid,
     'd0d0d0d0-d0d0-d0d0-d0d0-d0d0d0d0d0d0'::uuid,
     'bbbbbbbb-0000-0000-0000-000000000001'::uuid
-);
+)
+  AND id NOT IN (SELECT domain_id FROM mailboxes WHERE domain_id IS NOT NULL);
 
 WITH del_d AS (
     DELETE FROM domains WHERE id IN (SELECT id FROM target_test_domains) RETURNING 1
@@ -262,7 +273,14 @@ WHERE id NOT IN (
     'eaee2269-f0b9-4a15-bf99-785285f8d543'::uuid,
     'dddddddd-dddd-dddd-dddd-dddddddddddd'::uuid,
     'aaaaaaaa-0000-0000-0000-000000000001'::uuid
-);
+)
+  AND id NOT IN (
+      SELECT org_id FROM users
+      UNION
+      SELECT org_id FROM domains
+      UNION
+      SELECT org_id FROM mailboxes
+  );
 
 UPDATE organizations SET default_storage_connection_id = NULL WHERE id IN (SELECT id FROM target_test_orgs);
 DO $$

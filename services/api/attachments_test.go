@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -468,6 +469,210 @@ func TestAttachmentQueryCount(t *testing.T) {
 	err = db.QueryRow(`SELECT count(*) FROM attachments WHERE mailbox_id = $1 AND message_id = $2`, mailboxID, deliveryID).Scan(&linkedCount)
 	require.NoError(t, err)
 	assert.Equal(t, 10, linkedCount)
+}
+
+// TestAttachments_XContentTypeOptionsContract verifies that the attachments endpoint
+// unconditionally sets X-Content-Type-Options: nosniff on all response paths (unauthenticated,
+// bad request, errors).
+func TestAttachments_XContentTypeOptionsContract(t *testing.T) {
+	// 1. Missing mailbox_id -> 400 Bad Request
+	req := httptest.NewRequest(http.MethodGet, "/v1/mailboxes//attachments", nil)
+	rec := httptest.NewRecorder()
+	attachmentsHandler(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
+
+	// 2. Invalid mailbox UUID -> 400 Bad Request
+	req = httptest.NewRequest(http.MethodGet, "/v1/mailboxes/invalid-uuid/attachments", nil)
+	req.SetPathValue("mailbox_id", "invalid-uuid")
+	rec = httptest.NewRecorder()
+	attachmentsHandler(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
+
+	// 3. Unauthenticated download request -> 401 Unauthorized
+	validMailboxID := uuid.New().String()
+	attID := uuid.New().String()
+	req = httptest.NewRequest(http.MethodGet, "/v1/mailboxes/"+validMailboxID+"/attachments/"+attID+"?download=true", nil)
+	req.SetPathValue("mailbox_id", validMailboxID)
+	req.SetPathValue("attachment_id", attID)
+	rec = httptest.NewRecorder()
+	attachmentsHandler(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
+}
+
+// TestAttachmentDownload_HeadersAndMimeTypePreservation verifies that attachment downloads:
+// 1. Set X-Content-Type-Options: nosniff
+// 2. Preserve the exact stored Content-Type across diverse MIME types (including text/html, image/svg+xml)
+// 3. Enforce Content-Disposition: attachment; filename="..." with sanitized filenames
+// 4. Return 502 Bad Gateway with nosniff on storage worker failure or size mismatch
+func TestAttachmentDownload_HeadersAndMimeTypePreservation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	orgID, ownerID, _, _ := createTestOrgAndUsers(t, db)
+	_, mailboxID := createTestMailbox(t, db, orgID, ownerID, "download-nosniff")
+	token := createTestSession(t, db, ownerID)
+
+	testCases := []struct {
+		name             string
+		filename         string
+		expectedFilename string
+		contentType      string
+		payload          []byte
+	}{
+		{
+			name:             "standard binary",
+			filename:         "test.bin",
+			expectedFilename: "test.bin",
+			contentType:      "application/octet-stream",
+			payload:          []byte{0x01, 0x02, 0x03, 0x04},
+		},
+		{
+			name:             "html mime type preserved without sniffing",
+			filename:         "report.html",
+			expectedFilename: "report.html",
+			contentType:      "text/html; charset=utf-8",
+			payload:          []byte("<html><body>safe text</body></html>"),
+		},
+		{
+			name:             "svg xml mime type preserved without sniffing",
+			filename:         "diagram.svg",
+			expectedFilename: "diagram.svg",
+			contentType:      "image/svg+xml",
+			payload:          []byte("<svg xmlns='http://www.w3.org/2000/svg'></svg>"),
+		},
+		{
+			name:             "filename with injection characters sanitized",
+			filename:         "malicious\"filename;test.bin",
+			expectedFilename: "malicious_filename_test.bin",
+			contentType:      "application/pdf",
+			payload:          []byte("%PDF-1.4 mock pdf content"),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			attID := uuid.New().String()
+			storageKey := fmt.Sprintf("mailboxes/%s/attachments/%s/payload.bin", mailboxID, attID)
+
+			_, err := db.Exec(`
+				INSERT INTO attachments (id, mailbox_id, filename, content_type, size_bytes, storage_key, encrypted)
+				VALUES ($1, $2, $3, $4, $5, $6, true)
+			`, attID, mailboxID, tc.filename, tc.contentType, len(tc.payload), storageKey)
+			require.NoError(t, err)
+
+			mockStorage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/retrieve" && r.Method == http.MethodPost {
+					resp := map[string]interface{}{
+						"data": base64.StdEncoding.EncodeToString(tc.payload),
+						"size": len(tc.payload),
+					}
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(resp)
+					return
+				}
+				http.Error(w, "not found", http.StatusNotFound)
+			}))
+			defer mockStorage.Close()
+			t.Setenv("STORAGE_WORKER_URL", mockStorage.URL)
+
+			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/mailboxes/%s/attachments/%s?download=true", mailboxID, attID), nil)
+			req.SetPathValue("mailbox_id", mailboxID)
+			req.SetPathValue("attachment_id", attID)
+			req.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+			rec := httptest.NewRecorder()
+
+			attachmentsHandler(rec, req)
+
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
+			assert.Equal(t, tc.contentType, rec.Header().Get("Content-Type"))
+			expectedDisposition := fmt.Sprintf("attachment; filename=\"%s\"", tc.expectedFilename)
+			assert.Equal(t, expectedDisposition, rec.Header().Get("Content-Disposition"))
+			assert.Equal(t, tc.payload, rec.Body.Bytes())
+		})
+	}
+
+	// Test storage worker error response (500) -> returns 502 Bad Gateway with nosniff
+	t.Run("storage worker failure returns 502 with nosniff", func(t *testing.T) {
+		attID := uuid.New().String()
+		storageKey := fmt.Sprintf("mailboxes/%s/attachments/%s/payload.bin", mailboxID, attID)
+
+		_, err := db.Exec(`
+			INSERT INTO attachments (id, mailbox_id, filename, content_type, size_bytes, storage_key, encrypted)
+			VALUES ($1, $2, 'fail.bin', 'application/octet-stream', 10, $3, true)
+		`, attID, mailboxID, storageKey)
+		require.NoError(t, err)
+
+		mockStorage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "storage node disk read error", http.StatusInternalServerError)
+		}))
+		defer mockStorage.Close()
+		t.Setenv("STORAGE_WORKER_URL", mockStorage.URL)
+
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/mailboxes/%s/attachments/%s?download=true", mailboxID, attID), nil)
+		req.SetPathValue("mailbox_id", mailboxID)
+		req.SetPathValue("attachment_id", attID)
+		req.AddCookie(&http.Cookie{Name: "byos_session", Value: token})
+		rec := httptest.NewRecorder()
+
+		attachmentsHandler(rec, req)
+
+		assert.Equal(t, http.StatusBadGateway, rec.Code)
+		assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
+	})
+}
+
+// TestAttachmentStorageDecodeAndSanitizeContract verifies the pure decoding and sanitization
+// invariants used during attachment download without requiring a database connection.
+func TestAttachmentStorageDecodeAndSanitizeContract(t *testing.T) {
+	// 1. Filename sanitization
+	assert.Equal(t, "test.bin", sanitizeFilename("test.bin"))
+	assert.Equal(t, "passwd", sanitizeFilename("../../etc/passwd"))
+	assert.Equal(t, "bar.txt", sanitizeFilename("C:\\foo\\bar.txt"))
+	assert.Equal(t, "malicious_filename_test.bin", sanitizeFilename("malicious\"filename;test.bin"))
+	assert.Equal(t, "attachment.bin", sanitizeFilename(""))
+	assert.Equal(t, "attachment.bin", sanitizeFilename("."))
+	assert.Equal(t, "attachment.bin", sanitizeFilename(".."))
+
+	// 2. decodeStorageRetrieveBody valid payload
+	validPayload := []byte("hello attachment bytes")
+	jsonBody, err := json.Marshal(map[string]interface{}{
+		"data": base64.StdEncoding.EncodeToString(validPayload),
+		"size": len(validPayload),
+	})
+	require.NoError(t, err)
+
+	decoded, size, err := decodeStorageRetrieveBody(bytes.NewReader(jsonBody))
+	require.NoError(t, err)
+	assert.Equal(t, int64(len(validPayload)), size)
+	assert.Equal(t, validPayload, decoded)
+
+	// 3. Size mismatch rejected
+	mismatchBody, _ := json.Marshal(map[string]interface{}{
+		"data": base64.StdEncoding.EncodeToString(validPayload),
+		"size": len(validPayload) + 5,
+	})
+	_, _, err = decodeStorageRetrieveBody(bytes.NewReader(mismatchBody))
+	assert.Error(t, err)
+
+	// 4. Empty data rejected
+	emptyBody, _ := json.Marshal(map[string]interface{}{
+		"data": "",
+		"size": 0,
+	})
+	_, _, err = decodeStorageRetrieveBody(bytes.NewReader(emptyBody))
+	assert.Error(t, err)
+
+	// 5. Corrupted base64 rejected
+	corruptBody, _ := json.Marshal(map[string]interface{}{
+		"data": "not-valid-base-64!!!",
+		"size": 10,
+	})
+	_, _, err = decodeStorageRetrieveBody(bytes.NewReader(corruptBody))
+	assert.Error(t, err)
 }
 
 // Silence unused imports

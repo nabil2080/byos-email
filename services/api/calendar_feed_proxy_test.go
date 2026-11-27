@@ -21,6 +21,7 @@ func TestCalendarFeedProxy_Unauthorized(t *testing.T) {
 }
 
 func TestCalendarFeedProxy_MissingOrInvalidURL(t *testing.T) {
+	t.Setenv("BYOS_ENV", "development")
 	t.Setenv("BYOS_LEGACY_AUTH_ENABLED", "true")
 	testUserID := "11111111-1111-1111-1111-111111111111"
 
@@ -53,6 +54,7 @@ func TestCalendarFeedProxy_MissingOrInvalidURL(t *testing.T) {
 }
 
 func TestCalendarFeedProxy_SSRFProtection(t *testing.T) {
+	t.Setenv("BYOS_ENV", "development")
 	t.Setenv("BYOS_LEGACY_AUTH_ENABLED", "true")
 	testUserID := "11111111-1111-1111-1111-111111111111"
 

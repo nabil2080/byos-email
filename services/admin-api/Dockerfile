@@ -19,7 +19,5 @@ COPY --from=builder /admin-api .
 EXPOSE 8087
 
 ENV PORT=8087
-ENV BYOS_DEV_MODE=1
-ENV SUPPORT_DB_URL=postgres://role_support_agent:support_crm_password@postgres:5432/byos
 
 CMD ["./admin-api"]

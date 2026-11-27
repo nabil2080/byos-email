@@ -287,7 +287,7 @@ func CheckTestPollution(ctx context.Context, dsn, minioAddr, minioUser, minioPas
 
 			// 2b. Mailbox key mismatch check:
 			// "Any mailboxes row has mailbox_ed25519_pk that does not match the pubkey the client would derive from the wrapped seed for that mailbox."
-			if os.Getenv("BYOS_DEV_MODE") == "1" {
+			if IsDevMode() {
 				rows, err := conn.Query(ctx, `
 					SELECT id::text, local_part, COALESCE(wrapped_sk_user, ''), mailbox_ed25519_pk
 					FROM mailboxes
@@ -323,10 +323,7 @@ func CheckTestPollution(ctx context.Context, dsn, minioAddr, minioUser, minioPas
 
 // RunStartupPollutionCheck executes CheckTestPollution using environment variables and logs warnings.
 func RunStartupPollutionCheck() {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getDatabaseDSN()
 	minioAddr := os.Getenv("MINIO_ADDR")
 	if minioAddr == "" {
 		minioAddr = "127.0.0.1:9000"

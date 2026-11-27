@@ -201,13 +201,13 @@ export async function storeEncryptedStorageObject(
   objectKey: string,
   data: Uint8Array
 ): Promise<void> {
-  const token = (typeof sessionStorage !== "undefined" && sessionStorage.getItem("byos_active_session_token")) || undefined;
   const res = await fetch(`${apiBase()}/v1/mailboxes/${mailboxId}/storage/store`, {
     method: "POST",
     headers: {
       "Content-Type": "application/octet-stream",
       "X-Object-Key": objectKey,
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      "X-BYOS-Client": "webmail",
+      "X-BYOS-Active-Mailbox": mailboxId,
     },
     credentials: "include",
     body: data as unknown as BodyInit,
@@ -224,13 +224,13 @@ export async function retrieveEncryptedStorageObject(
   mailboxId: string,
   objectKey: string
 ): Promise<Uint8Array | null> {
-  const token = (typeof sessionStorage !== "undefined" && sessionStorage.getItem("byos_active_session_token")) || undefined;
   const res = await fetch(
     `${apiBase()}/v1/mailboxes/${mailboxId}/storage/retrieve?key=${encodeURIComponent(objectKey)}`,
     {
       method: "GET",
       headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        "X-BYOS-Client": "webmail",
+        "X-BYOS-Active-Mailbox": mailboxId,
       },
       credentials: "include",
     }

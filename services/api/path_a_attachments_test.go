@@ -27,6 +27,7 @@ type mockStorageStore struct {
 
 func setupAttachmentMockStorage(t *testing.T) (*httptest.Server, *mockStorageStore) {
 	t.Helper()
+	t.Setenv("BYOS_ALLOWED_ORIGINS", "http://127.0.0.1:3001")
 	store := &mockStorageStore{
 		objects: make(map[string][]byte),
 	}
@@ -230,7 +231,9 @@ func TestPathAAttachmentSendAcceptsEnvelopes(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -364,7 +367,9 @@ func TestPathAAttachmentSendRejectsMissingChunk(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -448,7 +453,9 @@ func TestPathAAttachmentDeliveryCopiesRefs(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -508,7 +515,9 @@ func TestPathAAttachmentSentCopyReEncrypts(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -595,7 +604,9 @@ func TestPathAAttachmentSizeLimit(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -646,7 +657,9 @@ func TestPathAAttachmentEndpoints(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -722,7 +735,9 @@ func TestPathAAttachmentSentCopyChunksAreReEncrypted(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -821,7 +836,9 @@ func TestPathAAttachmentStoragePrefixIsNamespaced(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -859,7 +876,9 @@ func TestPathAAttachmentPostgresHasNoCiphertext(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -922,7 +941,9 @@ func TestPathAAttachmentSizeLimitServerSide(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -999,7 +1020,9 @@ func TestPathAAttachmentSizeLimitCountsSenderEnvelopes(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -1038,7 +1061,9 @@ func TestPathAAttachmentRecipientRowHasNoSenderEnvelopes(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/outbound/send-internal", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 

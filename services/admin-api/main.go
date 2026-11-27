@@ -27,7 +27,7 @@ func withSecurityHeaders(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 
 		csp := "default-src 'self'; connect-src 'self';"
-		if os.Getenv("BYOS_ENV") != "production" {
+		if IsDevelopment() {
 			csp = "default-src 'self'; connect-src 'self' http://localhost:* http://127.0.0.1:*;"
 		}
 		w.Header().Set("Content-Security-Policy", csp)
@@ -54,7 +54,7 @@ func isAllowedAdminOrigin(origin string) bool {
 		}
 		return false
 	}
-	if os.Getenv("BYOS_DEV_MODE") == "1" || os.Getenv("BYOS_ENV") != "production" {
+	if IsDevelopment() {
 		u, err := url.Parse(origin)
 		if err == nil && (u.Scheme == "http" || u.Scheme == "https") {
 			hostname := u.Hostname()
@@ -96,7 +96,7 @@ func applyCORS(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func setAdminSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
-	secure := os.Getenv("BYOS_COOKIE_SECURE") == "true" || os.Getenv("BYOS_ENV") == "production"
+	secure := IsCookieSecure()
 	http.SetCookie(w, &http.Cookie{
 		Name:     "byos_admin_session",
 		Value:    token,
@@ -109,7 +109,7 @@ func setAdminSessionCookie(w http.ResponseWriter, r *http.Request, token string)
 }
 
 func clearAdminSessionCookie(w http.ResponseWriter, r *http.Request) {
-	secure := os.Getenv("BYOS_COOKIE_SECURE") == "true" || os.Getenv("BYOS_ENV") == "production"
+	secure := IsCookieSecure()
 	http.SetCookie(w, &http.Cookie{
 		Name:     "byos_admin_session",
 		Value:    "",
@@ -165,28 +165,96 @@ func agentAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		if token == "mock-support-agent" {
-			if os.Getenv("BYOS_DEV_MODE") != "1" {
+			if !IsDevMode() {
 				http.Error(w, "Unauthorized: mock WebAuthn disabled in production", http.StatusUnauthorized)
 				return
 			}
-			next.ServeHTTP(w, r)
+			ctx := handlers.ContextWithAgentIdentity(r.Context(), handlers.AgentIdentity{
+				ActorID:  "mock-support-agent",
+				Email:    "admin@byos.local",
+				Role:     "support_agent",
+				AuthType: "mock",
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
+		}
+
+		if IsDevMode() {
+			if token == "mock-admin" {
+				ctx := handlers.ContextWithAgentIdentity(r.Context(), handlers.AgentIdentity{
+					ActorID:  "mock-platform-admin",
+					Email:    "platform-admin@byos.local",
+					Role:     "platform_admin",
+					AuthType: "mock",
+				})
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			if token == "mock-readonly-operator" {
+				ctx := handlers.ContextWithAgentIdentity(r.Context(), handlers.AgentIdentity{
+					ActorID:  "mock-readonly-operator",
+					Email:    "readonly@byos.local",
+					Role:     "read_only_operator",
+					AuthType: "mock",
+				})
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			if token == "mock-org-admin" {
+				ctx := handlers.ContextWithAgentIdentity(r.Context(), handlers.AgentIdentity{
+					ActorID:  "mock-org-admin",
+					Email:    "orgadmin@customer.org",
+					Role:     "org_admin",
+					AuthType: "mock",
+				})
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			if token == "mock-ordinary-user" {
+				ctx := handlers.ContextWithAgentIdentity(r.Context(), handlers.AgentIdentity{
+					ActorID:  "mock-ordinary-user",
+					Email:    "user@customer.org",
+					Role:     "ordinary_user",
+					AuthType: "mock",
+				})
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
 		}
 
 		adminToken := os.Getenv("ADMIN_AGENT_TOKEN")
 		supportToken := os.Getenv("SUPPORT_AGENT_TOKEN")
+		readonlyToken := os.Getenv("READONLY_AGENT_TOKEN")
 
 		tokenBytes := []byte(token)
-		var valid bool
 		if adminToken != "" && subtle.ConstantTimeCompare(tokenBytes, []byte(adminToken)) == 1 {
-			valid = true
+			ctx := handlers.ContextWithAgentIdentity(r.Context(), handlers.AgentIdentity{
+				ActorID:  "platform-admin-system",
+				Email:    "admin@byos.local",
+				Role:     "platform_admin",
+				AuthType: "token",
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
 		}
 		if supportToken != "" && subtle.ConstantTimeCompare(tokenBytes, []byte(supportToken)) == 1 {
-			valid = true
+			ctx := handlers.ContextWithAgentIdentity(r.Context(), handlers.AgentIdentity{
+				ActorID:  "support-agent-system",
+				Email:    "support@byos.local",
+				Role:     "support_agent",
+				AuthType: "token",
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
 		}
-
-		if valid {
-			next.ServeHTTP(w, r)
+		if readonlyToken != "" && subtle.ConstantTimeCompare(tokenBytes, []byte(readonlyToken)) == 1 {
+			ctx := handlers.ContextWithAgentIdentity(r.Context(), handlers.AgentIdentity{
+				ActorID:  "readonly-operator-system",
+				Email:    "readonly@byos.local",
+				Role:     "read_only_operator",
+				AuthType: "token",
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
@@ -199,7 +267,7 @@ func mockWebAuthnMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func mockLoginHandler(w http.ResponseWriter, r *http.Request) {
-	if os.Getenv("BYOS_DEV_MODE") != "1" {
+	if !IsDevMode() {
 		http.NotFound(w, r)
 		return
 	}
@@ -223,6 +291,7 @@ func setupRoutes(mux *http.ServeMux) {
 	handlers.RegisterOrganizationRoutes(mux, db, agentAuthMiddleware)
 	handlers.RegisterTicketRoutes(mux, db, agentAuthMiddleware)
 	handlers.RegisterCustomerRoutes(mux, db, agentAuthMiddleware)
+	handlers.RegisterQueueRoutes(mux, db, agentAuthMiddleware)
 	mux.HandleFunc("/admin/v1/mailboxes/", agentAuthMiddleware(healthHandler))
 	mux.HandleFunc("/admin/v1/interventions/execute", agentAuthMiddleware(interventionHandler))
 	mux.HandleFunc("/admin/v1/auth/mock-login", withSecurityHeaders(mockLoginHandler))
@@ -230,18 +299,22 @@ func setupRoutes(mux *http.ServeMux) {
 }
 
 func main() {
-	if os.Getenv("BYOS_DEV_MODE") == "1" {
+	if err := ValidateStartupEnv(); err != nil {
+		log.Fatalf("[FATAL] Configuration error: %v", err)
+	}
+
+	if IsDevMode() {
 		log.Println("[SECURITY] WARNING: BYOS_DEV_MODE is enabled in admin-api; mock WebAuthn authentication is ACTIVE!")
 	}
 
-	connStr := os.Getenv("SUPPORT_DB_URL")
-	if connStr == "" {
-		connStr = "postgres://role_support_agent:support_crm_password@localhost:5432/byos"
+	connStr, err := GetSupportDatabaseURL()
+	if err != nil {
+		log.Fatalf("[FATAL] Database configuration error: %v", err)
 	}
 
 	pool, err := pgxpool.New(context.Background(), connStr)
 	if err != nil {
-		log.Printf("Warning: failed to connect to DB: %v", err)
+		log.Fatalf("failed to connect to DB: %v", err)
 	} else {
 		db = pool
 		defer db.Close()

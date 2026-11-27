@@ -147,6 +147,7 @@ pub fn encapsulate(pk: &[u8]) -> Result<(Vec<u8>, [u8; 32]), CryptoError> {
 }
 
 /// encapsulate_deterministic encapsulates using explicit randomness for testing parity.
+#[cfg(any(test, feature = "test-support"))]
 pub fn encapsulate_deterministic(pk: &[u8], eseed: &[u8]) -> Result<(Vec<u8>, [u8; 32]), CryptoError> {
     if pk.len() != ENCAPSULATION_KEY_SIZE {
         return Err(CryptoError::InvalidKeyLength);

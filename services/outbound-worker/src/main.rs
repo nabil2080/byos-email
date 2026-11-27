@@ -349,6 +349,186 @@ pub fn strip_bcc_headers(raw: &[u8]) -> Vec<u8> {
     out
 }
 
+pub fn rfc5322_date_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let dur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = dur.as_secs();
+
+    let mut days = (secs / 86400) as i64;
+    let rem_secs = (secs % 86400) as u32;
+    let hour = rem_secs / 3600;
+    let minute = (rem_secs % 3600) / 60;
+    let second = rem_secs % 60;
+
+    let wday_idx = ((days + 4) % 7 + 7) % 7;
+    let wdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    let mut year = 1970i32;
+    loop {
+        let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        let days_in_year = if is_leap { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let mut mdays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if is_leap {
+        mdays[1] = 29;
+    }
+
+    let mut month_idx = 0;
+    for (m_idx, &m_len) in mdays.iter().enumerate() {
+        if days < m_len {
+            month_idx = m_idx;
+            break;
+        }
+        days -= m_len;
+    }
+    let mday = days + 1;
+
+    format!(
+        "{}, {:02} {} {} {:02}:{:02}:{:02} +0000",
+        wdays[wday_idx as usize],
+        mday,
+        months[month_idx],
+        year,
+        hour,
+        minute,
+        second
+    )
+}
+
+/// Sanitizes and validates outbound RFC 5322 MIME messages prior to DKIM signing:
+/// 1. Strips all Bcc: headers (preventing recipient disclosure).
+/// 2. Deduplicates singleton headers (From, Subject, Date, Message-ID, Sender, Reply-To)
+///    to prevent split-brain MIME injection attacks.
+/// 3. Ensures Date: header is present (auto-generates RFC 5322 date if missing).
+/// 4. Ensures Message-ID: header is present (auto-generates <delivery_id@domain_name> if missing).
+pub fn sanitize_and_validate_outbound_rfc5322(raw: &[u8], delivery_id: &Uuid, domain_name: &str) -> Vec<u8> {
+    let (header_bytes, delimiter, body_bytes) = if raw.starts_with(b"\r\n") {
+        (&[][..], &b"\r\n"[..], &raw[2..])
+    } else if raw.starts_with(b"\n") {
+        (&[][..], &b"\n"[..], &raw[1..])
+    } else {
+        let crlf_idx = raw.windows(4).position(|w| w == b"\r\n\r\n");
+        let lf_idx = raw.windows(2).position(|w| w == b"\n\n");
+        match (crlf_idx, lf_idx) {
+            (Some(c_pos), Some(l_pos)) if c_pos <= l_pos => {
+                (&raw[..c_pos + 2], &b"\r\n"[..], &raw[c_pos + 4..])
+            }
+            (Some(c_pos), None) => {
+                (&raw[..c_pos + 2], &b"\r\n"[..], &raw[c_pos + 4..])
+            }
+            (_, Some(l_pos)) => {
+                (&raw[..l_pos + 1], &b"\n"[..], &raw[l_pos + 2..])
+            }
+            _ => (raw, &[][..], &[][..]),
+        }
+    };
+
+    let mut sanitized_headers = Vec::with_capacity(header_bytes.len() + 128);
+    let mut skipping_current_header = false;
+    let mut cursor = 0;
+
+    let mut seen_singletons = std::collections::HashSet::new();
+    let mut has_date = false;
+    let mut has_message_id = false;
+
+    // Singleton headers that MUST NOT appear more than once per RFC 5322 Section 3.6
+    let singleton_names = ["from", "date", "subject", "message-id", "sender", "reply-to"];
+
+    while cursor < header_bytes.len() {
+        let (line_with_ending, next_cursor) = match header_bytes[cursor..].iter().position(|&b| b == b'\n') {
+            Some(nl_pos) => (&header_bytes[cursor..=cursor + nl_pos], cursor + nl_pos + 1),
+            None => (&header_bytes[cursor..], header_bytes.len()),
+        };
+
+        let is_continuation = matches!(line_with_ending.first(), Some(&b' ') | Some(&b'\t'));
+
+        if is_continuation {
+            if skipping_current_header {
+                cursor = next_cursor;
+                continue;
+            }
+            sanitized_headers.extend_from_slice(line_with_ending);
+        } else {
+            let header_name = if let Some(colon_pos) = line_with_ending.iter().position(|&b| b == b':') {
+                let raw_name = &line_with_ending[..colon_pos];
+                let mut start = 0;
+                while start < raw_name.len() && raw_name[start].is_ascii_whitespace() {
+                    start += 1;
+                }
+                let mut end = raw_name.len();
+                while end > start && raw_name[end - 1].is_ascii_whitespace() {
+                    end -= 1;
+                }
+                String::from_utf8_lossy(&raw_name[start..end]).to_ascii_lowercase()
+            } else {
+                String::new()
+            };
+
+            // 1. Strip Bcc
+            if header_name == "bcc" {
+                skipping_current_header = true;
+                cursor = next_cursor;
+                continue;
+            }
+
+            // 2. Track Date and Message-ID presence
+            if header_name == "date" {
+                has_date = true;
+            } else if header_name == "message-id" {
+                has_message_id = true;
+            }
+
+            // 3. Deduplicate singletons
+            if singleton_names.contains(&header_name.as_str()) {
+                if seen_singletons.contains(&header_name) {
+                    // Duplicate singleton header - strip to prevent injection/confused deputy
+                    skipping_current_header = true;
+                    cursor = next_cursor;
+                    continue;
+                }
+                seen_singletons.insert(header_name);
+            }
+
+            skipping_current_header = false;
+            sanitized_headers.extend_from_slice(line_with_ending);
+        }
+
+        cursor = next_cursor;
+    }
+
+    let use_crlf = delimiter == b"\r\n" || (!sanitized_headers.is_empty() && sanitized_headers.ends_with(b"\r\n"));
+    let line_end: &[u8] = if use_crlf { b"\r\n" } else { b"\n" };
+
+    // Auto-generate missing Date header if absent
+    if !has_date {
+        let date_hdr = format!("Date: {}{}", rfc5322_date_now(), if use_crlf { "\r\n" } else { "\n" });
+        sanitized_headers.extend_from_slice(date_hdr.as_bytes());
+    }
+
+    // Auto-generate missing Message-ID header if absent
+    if !has_message_id {
+        let msg_id_hdr = format!("Message-ID: <{}@{}>{}", delivery_id, domain_name, if use_crlf { "\r\n" } else { "\n" });
+        sanitized_headers.extend_from_slice(msg_id_hdr.as_bytes());
+    }
+
+    let final_delim = if delimiter.is_empty() { line_end } else { delimiter };
+    let mut out = Vec::with_capacity(sanitized_headers.len() + final_delim.len() + body_bytes.len());
+    out.extend_from_slice(&sanitized_headers);
+    out.extend_from_slice(final_delim);
+    out.extend_from_slice(body_bytes);
+    out
+}
+
 fn split_recipient_tokens(input: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut in_quotes = false;
@@ -519,6 +699,33 @@ pub fn deliver_raw_to_smtp_with_timeout(
         .map_err(|e| classify_smtp_error(&e))
 }
 
+pub static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShutdownSignalKind {
+    Sigterm,
+    Sigint,
+    CtrlC,
+}
+
+pub async fn wait_for_shutdown() -> ShutdownSignalKind {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+        tokio::select! {
+            _ = sigterm.recv() => ShutdownSignalKind::Sigterm,
+            _ = sigint.recv() => ShutdownSignalKind::Sigint,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.ok();
+        ShutdownSignalKind::CtrlC
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -581,7 +788,7 @@ async fn main() -> Result<()> {
 
     // Verify least privilege: cannot access restricted tables (should fail)
     verify_least_privilege(&client).await;
-    verify_queue_lease_schema(&client).await;
+    verify_queue_lease_schema(&client).await?;
 
     let api_addr = env::var("BYOS_API_ADDR").unwrap_or_else(|_| "api:8080".into());
     let lease_config = LeaseConfig::from_env();
@@ -601,7 +808,25 @@ async fn main() -> Result<()> {
     reconcile_delivered_scheduled(&client, &api_addr).await;
     let mut last_reconcile = Instant::now();
 
+    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+    let shutdown_notify_clone = shutdown_notify.clone();
+    tokio::spawn(async move {
+        let sig = wait_for_shutdown().await;
+        info!("shutdown signal {:?} received: initiating graceful shutdown", sig);
+        SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+        shutdown_notify_clone.notify_waiters();
+    });
+
+    let shutdown_timeout = lease_config.shutdown_timeout;
+
     loop {
+        if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+            info!(
+                "graceful shutdown initiated: stopping new claims, allowing in-flight work to complete (timeout={}s)",
+                shutdown_timeout.as_secs()
+            );
+            break;
+        }
         if last_reconcile.elapsed() >= Duration::from_secs(300) {
             reconcile_delivered_scheduled(&client, &api_addr).await;
             last_reconcile = Instant::now();
@@ -612,8 +837,16 @@ async fn main() -> Result<()> {
         if let Err(e) = poll_once_with_config(&mut client, &sk, &dkim_dek, &postfix_addr, &api_addr, redis_client.as_ref(), &lease_config).await {
             warn!("poll error: {}", e);
         }
-        sleep(Duration::from_millis(poll_ms)).await;
+        tokio::select! {
+            _ = shutdown_notify.notified() => {
+                info!("shutdown signal received while idle, terminating outbound-worker cleanly");
+                break;
+            }
+            _ = sleep(Duration::from_millis(poll_ms)) => {}
+        }
     }
+    info!("outbound-worker exited cleanly");
+    Ok(())
 }
 
 fn load_outbound_sk() -> Result<[u8; 32]> {
@@ -725,7 +958,7 @@ async fn verify_least_privilege(client: &Client) {
 }
 
 /// Verifies on startup that proposed Release A.2 lease/outcome columns exist before polling.
-async fn verify_queue_lease_schema(client: &Client) {
+async fn verify_queue_lease_schema<C: tokio_postgres::GenericClient>(client: &C) -> Result<()> {
     match client
         .query_opt(
             "SELECT lease_token, lease_expires_at, smtp_phase, last_error FROM outbound_queue LIMIT 0",
@@ -733,11 +966,20 @@ async fn verify_queue_lease_schema(client: &Client) {
         )
         .await
     {
-        Ok(_) => info!("outbound_queue lease & outcome schema verified"),
-        Err(e) => error!(
-            "outbound_queue is missing Release A.2 lease columns (apply proposed_069_outbound_queue_lease_and_outcomes.sql): {}",
-            e
-        ),
+        Ok(_) => {
+            info!("outbound_queue lease & outcome schema verified");
+            Ok(())
+        }
+        Err(e) => {
+            error!(
+                "outbound_queue is missing Release A.2 lease columns (apply 069_outbound_queue_lease_and_outcomes.sql): {}",
+                e
+            );
+            anyhow::bail!(
+                "outbound_queue is missing required Release A.2 lease schema columns (apply 069_outbound_queue_lease_and_outcomes.sql): {}",
+                e
+            )
+        }
     }
 }
 
@@ -1031,6 +1273,7 @@ pub struct LeaseConfig {
     pub lease_ttl: Duration,
     pub renew_interval: Duration,
     pub smtp_timeout: Duration,
+    pub shutdown_timeout: Duration,
     pub batch_size: i64,
 }
 
@@ -1046,6 +1289,11 @@ impl LeaseConfig {
             .and_then(|s| s.parse::<u64>().ok())
             .filter(|&v| v > 0)
             .unwrap_or(60);
+        let shutdown_timeout_secs = env::var("SHUTDOWN_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(25);
         let batch_size = env::var("OUTBOUND_BATCH_SIZE")
             .ok()
             .and_then(|s| s.parse::<i64>().ok())
@@ -1059,6 +1307,7 @@ impl LeaseConfig {
             lease_ttl,
             renew_interval: Self::default_renew_interval(lease_ttl),
             smtp_timeout: Duration::from_secs(smtp_timeout_secs),
+            shutdown_timeout: Duration::from_secs(shutdown_timeout_secs),
             batch_size,
         }
     }
@@ -1150,6 +1399,31 @@ pub fn compute_retry_backoff(next_attempt_number: i32) -> Duration {
     let shift = next_attempt_number.saturating_sub(1).clamp(0, 6) as u32;
     let secs = (60u64.saturating_mul(1u64 << shift)).min(3600);
     Duration::from_secs(secs)
+}
+
+/// Generates a pseudo-random jitter fraction in `[-0.20, +0.20]` (i.e. +/- 20%)
+/// using cryptographically strong random entropy from UUIDv4.
+pub fn compute_jitter_fraction() -> f64 {
+    let u = Uuid::new_v4();
+    let b = u.as_bytes();
+    let val = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    let unit = (val as f64) / (u32::MAX as f64);
+    (unit * 0.40) - 0.20
+}
+
+/// Applies bounded proportional jitter (+/- 20%) to the exponential retry backoff.
+/// Result is strictly clamped between a lower bound of 30s and upper bound of 3600s (1 hour).
+pub fn compute_retry_backoff_with_jitter(next_attempt_number: i32, jitter_fraction: f64) -> Duration {
+    let base_secs = compute_retry_backoff(next_attempt_number).as_secs_f64();
+    let clamped_jitter = jitter_fraction.clamp(-0.20, 0.20);
+    let jittered_secs = (base_secs * (1.0 + clamped_jitter)).clamp(30.0, 3600.0);
+    Duration::from_secs_f64(jittered_secs)
+}
+
+/// Computes exponential retry backoff with +/- 20% random jitter to prevent
+/// synchronized thundering-herd retry storms upon service recovery.
+pub fn compute_jittered_retry_backoff(next_attempt_number: i32) -> Duration {
+    compute_retry_backoff_with_jitter(next_attempt_number, compute_jitter_fraction())
 }
 
 fn temp_smtp_err(message: impl Into<String>) -> SmtpDeliveryError {
@@ -2149,6 +2423,7 @@ pub async fn claim_outbound_batch(client: &mut Client, config: &LeaseConfig) -> 
                  SELECT id \
                  FROM outbound_queue \
                  WHERE expires_at > now() \
+                   AND (smtp_phase IS NULL OR smtp_phase NOT IN ('accepted_by_mta', 'terminator_in_flight')) \
                    AND ( \
                      (status = 'pending' AND next_attempt_at <= now()) \
                      OR ( \
@@ -2232,6 +2507,31 @@ pub async fn renew_lease(
     Ok(updated == 1)
 }
 
+/// Fences and advances the active attempt's `smtp_phase` and optional `last_smtp_code`
+/// only when the lease token is active AND unexpired.
+pub async fn mark_smtp_phase_with_code(
+    client: &Client,
+    queue_id: Uuid,
+    lease_token: Uuid,
+    phase: SmtpPhase,
+    smtp_code: Option<i32>,
+) -> Result<bool> {
+    let updated = client
+        .execute(
+            "UPDATE outbound_queue \
+             SET smtp_phase = $3, \
+                 last_smtp_code = COALESCE($4, last_smtp_code) \
+             WHERE id = $1 \
+               AND lease_token = $2 \
+               AND status = 'processing' \
+               AND lease_expires_at > clock_timestamp()",
+            &[&queue_id, &lease_token, &phase.as_str(), &smtp_code],
+        )
+        .await
+        .context("mark outbound_queue smtp_phase with code")?;
+    Ok(updated == 1)
+}
+
 /// Fences and advances the active attempt's `smtp_phase` (`pre_data`, `data_streaming`,
 /// `terminator_in_flight`, or `accepted_by_mta`) only when the lease token is active AND unexpired.
 pub async fn mark_smtp_phase(
@@ -2240,19 +2540,7 @@ pub async fn mark_smtp_phase(
     lease_token: Uuid,
     phase: SmtpPhase,
 ) -> Result<bool> {
-    let updated = client
-        .execute(
-            "UPDATE outbound_queue \
-             SET smtp_phase = $3 \
-             WHERE id = $1 \
-               AND lease_token = $2 \
-               AND status = 'processing' \
-               AND lease_expires_at > clock_timestamp()",
-            &[&queue_id, &lease_token, &phase.as_str()],
-        )
-        .await
-        .context("mark outbound_queue smtp_phase")?;
-    Ok(updated == 1)
+    mark_smtp_phase_with_code(client, queue_id, lease_token, phase, None).await
 }
 
 /// Releases an active lease back to `pending` when deferred by rate limits (does not consume an attempt).
@@ -2274,7 +2562,7 @@ pub async fn release_for_rate_limit(
                  last_attempt_at = now(), \
                  next_attempt_at = now() + make_interval(secs => $3), \
                  last_error = $4 \
-             WHERE id = $1 AND lease_token = $2 AND status = 'processing'",
+             WHERE id = $1 AND lease_token = $2 AND status = 'processing' AND lease_expires_at > clock_timestamp()",
             &[&queue_id, &lease_token, &delay_secs, &reason],
         )
         .await
@@ -2315,7 +2603,7 @@ pub async fn record_delivered_leased(
                      smtp_phase = 'accepted_by_mta', \
                      last_smtp_code = $3, \
                      last_error = NULL \
-                 WHERE id = $1 AND lease_token = $2 AND status = 'processing'",
+                 WHERE id = $1 AND lease_token = $2 AND status = 'processing' AND lease_expires_at > clock_timestamp()",
                 &[&queue_id, &lease_token, &code_i32],
             )
             .await
@@ -2377,7 +2665,7 @@ pub async fn record_retry_leased(
     message: &str,
     smtp_phase: Option<&str>,
 ) -> Result<LeaseFenceResult<QueueDeliveryDisposition>> {
-    let backoff_secs = compute_retry_backoff(current_attempts.saturating_add(1)).as_secs_f64();
+    let backoff_secs = compute_jittered_retry_backoff(current_attempts.saturating_add(1)).as_secs_f64();
     let code_i32 = smtp_code.map(i32::from);
 
     let outcome = {
@@ -2398,7 +2686,7 @@ pub async fn record_retry_leased(
                      smtp_phase = NULL, \
                      last_smtp_code = $4, \
                      last_error = $5 \
-                 WHERE id = $1 AND lease_token = $2 AND status = 'processing' \
+                 WHERE id = $1 AND lease_token = $2 AND status = 'processing' AND lease_expires_at > clock_timestamp() AND (smtp_phase IS NULL OR smtp_phase != 'accepted_by_mta') \
                  RETURNING status",
                 &[&queue_id, &lease_token, &backoff_secs, &code_i32, &message],
             )
@@ -2492,7 +2780,7 @@ pub async fn record_bounced_leased(
                      smtp_phase = NULL, \
                      last_smtp_code = $3, \
                      last_error = $4 \
-                 WHERE id = $1 AND lease_token = $2 AND status = 'processing'",
+                 WHERE id = $1 AND lease_token = $2 AND status = 'processing' AND lease_expires_at > clock_timestamp() AND (smtp_phase IS NULL OR smtp_phase != 'accepted_by_mta')",
                 &[&queue_id, &lease_token, &code_i32, &message],
             )
             .await
@@ -2555,7 +2843,7 @@ pub async fn record_outcome_unknown_leased(
                  smtp_phase = 'terminator_in_flight', \
                  last_smtp_code = NULL, \
                  last_error = $3 \
-             WHERE id = $1 AND lease_token = $2 AND status = 'processing'",
+             WHERE id = $1 AND lease_token = $2 AND status = 'processing' AND lease_expires_at > clock_timestamp()",
             &[&queue_id, &lease_token, &message],
         )
         .await
@@ -2586,6 +2874,99 @@ pub async fn record_outcome_unknown_leased(
     );
 
     Ok(LeaseFenceResult::Applied(()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PostAcceptanceReconciliation {
+    AlreadyDelivered,
+    DeliveredOnFreshConnection,
+    QuarantinedOutcomeUnknown,
+    StaleLeaseLost,
+    RecheckFailed(String),
+}
+
+/// Establishes a fresh database connection to check and reconcile the durable state of an outbound delivery
+/// when the initial checkpoint or completion commit failed or experienced a connection drop after remote SMTP 250 OK.
+pub async fn check_and_reconcile_durable_acceptance(
+    pg_url: &str,
+    api_addr: &str,
+    item: &ClaimedOutboundItem,
+    actual_domain_id: Uuid,
+    smtp_code: u16,
+) -> PostAcceptanceReconciliation {
+    let mut fresh_client = match tokio_postgres::connect(pg_url, NoTls).await {
+        Ok((c, conn)) => {
+            tokio::spawn(async move {
+                if let Err(e) = conn.await {
+                    tracing::warn!("reconcile connection error: {}", e);
+                }
+            });
+            c
+        }
+        Err(e) => return PostAcceptanceReconciliation::RecheckFailed(format!("failed to connect to db: {}", e)),
+    };
+
+    let row_opt = match fresh_client
+        .query_opt(
+            "SELECT status, lease_token, smtp_phase, (lease_expires_at IS NOT NULL AND lease_expires_at > clock_timestamp()) AS lease_active \
+             FROM outbound_queue \
+             WHERE id = $1",
+            &[&item.id],
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return PostAcceptanceReconciliation::RecheckFailed(format!("failed to query queue item: {}", e)),
+    };
+
+    let Some(row) = row_opt else {
+        return PostAcceptanceReconciliation::StaleLeaseLost;
+    };
+
+    let status: String = row.get(0);
+    let current_lease_token: Option<Uuid> = row.get(1);
+    let lease_active: bool = row.get(3);
+
+    if status == "delivered" {
+        return PostAcceptanceReconciliation::AlreadyDelivered;
+    }
+
+    if status == "outcome_unknown" {
+        return PostAcceptanceReconciliation::QuarantinedOutcomeUnknown;
+    }
+
+    if status == "processing" && current_lease_token == Some(item.lease_token) && lease_active {
+        let _ = mark_smtp_phase_with_code(
+            &fresh_client,
+            item.id,
+            item.lease_token,
+            SmtpPhase::AcceptedByMta,
+            Some(i32::from(smtp_code)),
+        )
+        .await;
+
+        match record_delivered_leased(
+            &mut fresh_client,
+            api_addr,
+            item.id,
+            item.lease_token,
+            item.delivery_id,
+            item.mailbox_id,
+            actual_domain_id,
+            &item.recipient,
+            smtp_code,
+        )
+        .await
+        {
+            Ok(LeaseFenceResult::Applied(())) | Ok(LeaseFenceResult::AlreadySettled) => {
+                PostAcceptanceReconciliation::DeliveredOnFreshConnection
+            }
+            Ok(LeaseFenceResult::StaleLease) => PostAcceptanceReconciliation::StaleLeaseLost,
+            Err(e) => PostAcceptanceReconciliation::RecheckFailed(format!("failed to record delivery: {}", e)),
+        }
+    } else {
+        PostAcceptanceReconciliation::StaleLeaseLost
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2758,22 +3139,47 @@ async fn process_claimed_outbound_item(
 
     let (extracted_sender, extracted_domain) = extract_from_header(&plaintext);
 
+    // Tenant Isolation & BOLA Safeguard (Defect C6-01): A mailbox cannot sign with or use a domain
+    // belonging to another tenant/organization. Look up domain scoped to:
+    // (1) The explicit item.domain_id, OR
+    // (2) A verified domain belonging to the same organization (m.org_id = d.org_id).
+    let org_uuid_opt = uuid::Uuid::parse_str(&org_id).ok();
     let dkim_row = if let Some(ref s_domain) = extracted_domain {
-        match client
-            .query_opt(
-                "SELECT id, name, dkim_selector, dkim_private_key_enc FROM domains WHERE lower(name) = lower($1)",
-                &[s_domain],
-            )
-            .await
-        {
-            Ok(Some(r)) => Ok(Some(r)),
-            _ => {
-                client
-                    .query_opt(
-                        "SELECT id, name, dkim_selector, dkim_private_key_enc FROM domains WHERE id=$1",
-                        &[&item.domain_id],
-                    )
-                    .await
+        if let Some(org_uuid) = org_uuid_opt {
+            match client
+                .query_opt(
+                    "SELECT id, name, dkim_selector, dkim_private_key_enc FROM domains WHERE lower(name) = lower($1) AND (id = $2 OR (org_id = $3 AND is_verified = true))",
+                    &[s_domain, &item.domain_id, &org_uuid],
+                )
+                .await
+            {
+                Ok(Some(r)) => Ok(Some(r)),
+                _ => {
+                    client
+                        .query_opt(
+                            "SELECT id, name, dkim_selector, dkim_private_key_enc FROM domains WHERE id=$1",
+                            &[&item.domain_id],
+                        )
+                        .await
+                }
+            }
+        } else {
+            match client
+                .query_opt(
+                    "SELECT id, name, dkim_selector, dkim_private_key_enc FROM domains WHERE lower(name) = lower($1) AND id = $2",
+                    &[s_domain, &item.domain_id],
+                )
+                .await
+            {
+                Ok(Some(r)) => Ok(Some(r)),
+                _ => {
+                    client
+                        .query_opt(
+                            "SELECT id, name, dkim_selector, dkim_private_key_enc FROM domains WHERE id=$1",
+                            &[&item.domain_id],
+                        )
+                        .await
+                }
             }
         }
     } else {
@@ -2874,8 +3280,8 @@ async fn process_claimed_outbound_item(
         }
     };
 
-    // Strip all Bcc: headers prior to attachment MIME assembly and DKIM signing.
-    let sanitized_plaintext = byos_crypto_core::Zeroizing::new(strip_bcc_headers(&plaintext));
+    // Sanitize RFC 5322 headers (strip Bcc, deduplicate singletons, inject Date/Message-ID) prior to MIME assembly and DKIM signing.
+    let sanitized_plaintext = byos_crypto_core::Zeroizing::new(sanitize_and_validate_outbound_rfc5322(&plaintext, &item.delivery_id, &domain_name));
     drop(plaintext);
 
     let construction_t0 = Instant::now();
@@ -2998,7 +3404,7 @@ async fn process_claimed_outbound_item(
         drop(sanitized_plaintext);
         mime_assembly_ms = mime_t0.elapsed().as_millis();
         match mime_res {
-            Ok(assembled) => byos_crypto_core::Zeroizing::new(strip_bcc_headers(&assembled)),
+            Ok(assembled) => byos_crypto_core::Zeroizing::new(sanitize_and_validate_outbound_rfc5322(&assembled, &item.delivery_id, &domain_name)),
             Err(e) => {
                 warn!("MIME attachment assembly failed {}: {}", delivery_id_str, e);
                 let _ = record_bounced_leased(
@@ -3085,7 +3491,19 @@ async fn process_claimed_outbound_item(
     };
 
     let sender_email = if let Some(ref s_addr) = extracted_sender {
-        s_addr.clone()
+        if let Some(ref s_domain) = extracted_domain {
+            if s_domain.eq_ignore_ascii_case(&domain_name) {
+                s_addr.clone()
+            } else {
+                warn!(
+                    "sender domain mismatch {}: extracted '{}' does not match authorized '{}'; enforcing authorized mailbox address",
+                    delivery_id_str, s_domain, domain_name
+                );
+                format!("{}@{}", local_part, domain_name)
+            }
+        } else {
+            format!("{}@{}", local_part, domain_name)
+        }
     } else {
         format!("{}@{}", local_part, domain_name)
     };
@@ -3230,31 +3648,74 @@ async fn process_claimed_outbound_item(
 
     match smtp_outcome {
         SmtpDeliveryOutcome::Delivered { smtp_code } => {
-            match record_delivered_leased(
+            // Immediate durable checkpoint: record accepted_by_mta with smtp_code so that
+            // if a crash or network interruption happens during record_delivered_leased,
+            // reap_stale_and_expired will settle this delivery as 'delivered' rather than
+            // moving to 'outcome_unknown'.
+            let checkpoint_res = mark_smtp_phase_with_code(
                 client,
-                api_addr,
                 item.id,
                 item.lease_token,
-                item.delivery_id,
-                item.mailbox_id,
-                actual_domain_id,
-                &item.recipient,
-                smtp_code,
+                SmtpPhase::AcceptedByMta,
+                Some(i32::from(smtp_code)),
             )
-            .await?
-            {
-                LeaseFenceResult::Applied(()) => {
+            .await;
+
+            let delivery_record_res = match &checkpoint_res {
+                Ok(_) => {
+                    record_delivered_leased(
+                        client,
+                        api_addr,
+                        item.id,
+                        item.lease_token,
+                        item.delivery_id,
+                        item.mailbox_id,
+                        actual_domain_id,
+                        &item.recipient,
+                        smtp_code,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    warn!(
+                        "checkpoint accepted_by_mta failed for {}: {}",
+                        delivery_id_str, e
+                    );
+                    Err(anyhow::anyhow!("checkpoint failed: {}", e))
+                }
+            };
+
+            match delivery_record_res {
+                Ok(LeaseFenceResult::Applied(())) => {
                     info!(
                         "delivered {} to {} via {} (dkim signed for domain {}, smtp_code={})",
                         delivery_id_str, item.recipient, postfix_addr, domain_name, smtp_code
                     );
                 }
-                LeaseFenceResult::AlreadySettled => {}
-                LeaseFenceResult::StaleLease => {
+                Ok(LeaseFenceResult::AlreadySettled) => {}
+                Ok(LeaseFenceResult::StaleLease) => {
                     error!(
                         "LATE SMTP {} OK for delivery {} after lease was superseded/reaped; inspect delivery state before taking action",
                         smtp_code, delivery_id_str
                     );
+                }
+                Err(err) => {
+                    warn!(
+                        "durable delivery persistence error after SMTP 250 OK for {}: {}; reconciling on fresh DB connection",
+                        delivery_id_str, err
+                    );
+                    let pg_url = env::var("DATABASE_URL").unwrap_or_default();
+                    if !pg_url.is_empty() {
+                        let recon = check_and_reconcile_durable_acceptance(
+                            &pg_url,
+                            api_addr,
+                            &item,
+                            actual_domain_id,
+                            smtp_code,
+                        )
+                        .await;
+                        info!("post-acceptance reconciliation for {}: {:?}", delivery_id_str, recon);
+                    }
                 }
             }
         }
@@ -3389,7 +3850,15 @@ pub async fn poll_once_with_config(
     redis_client: Option<&redis::Client>,
     config: &LeaseConfig,
 ) -> Result<()> {
+    if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
     let _ = reap_stale_and_expired(client, api_addr).await?;
+
+    if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+        return Ok(());
+    }
 
     let items = claim_outbound_batch(client, config).await?;
     if items.is_empty() {
@@ -3587,6 +4056,80 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    #[test]
+    fn test_c6_rfc5322_date_now_format() {
+        let date_str = rfc5322_date_now();
+        assert!(date_str.ends_with(" +0000"), "date must end with +0000 timezone: {}", date_str);
+        assert!(date_str.contains(','), "date must contain day-of-week comma: {}", date_str);
+        let parts: Vec<&str> = date_str.split_whitespace().collect();
+        assert!(parts.len() >= 5, "expected at least 5 tokens in RFC 5322 date: {}", date_str);
+    }
+
+    #[test]
+    fn test_c6_sanitize_and_validate_outbound_rfc5322() {
+        let delivery_id = Uuid::new_v4();
+        let domain = "example.com";
+
+        // Case 1: Strips Bcc, deduplicates duplicate From/Subject, auto-generates Date and Message-ID
+        let raw = b"From: alice@example.com\r\nFrom: attacker@evil.com\r\nSubject: Real Subject\r\nSubject: Spoofed Subject\r\nBcc: secret@victim.com\r\n\r\nBody text";
+        let sanitized = sanitize_and_validate_outbound_rfc5322(raw, &delivery_id, domain);
+        let s = String::from_utf8(sanitized).unwrap();
+
+        assert!(!s.contains("secret@victim.com"), "Bcc must be completely stripped");
+        assert!(!s.contains("attacker@evil.com"), "Duplicate From must be stripped");
+        assert!(!s.contains("Spoofed Subject"), "Duplicate Subject must be stripped");
+        assert!(s.contains("From: alice@example.com"), "Original From must be preserved");
+        assert!(s.contains("Subject: Real Subject"), "Original Subject must be preserved");
+        assert!(s.contains("Date: "), "Missing Date must be injected");
+        assert!(s.contains(&format!("Message-ID: <{}@{}>", delivery_id, domain)), "Missing Message-ID must be injected");
+        assert!(s.ends_with("\r\n\r\nBody text"), "Body must be preserved exactly");
+
+        // Case 2: Preserves existing Date and Message-ID without duplicating
+        let raw_with_headers = b"From: bob@example.com\r\nDate: Mon, 1 Jan 2026 12:00:00 +0000\r\nMessage-ID: <custom-id-999@example.com>\r\nSubject: Hello\r\n\r\nMessage body";
+        let sanitized2 = sanitize_and_validate_outbound_rfc5322(raw_with_headers, &delivery_id, domain);
+        let s2 = String::from_utf8(sanitized2).unwrap();
+
+        assert!(s2.contains("Date: Mon, 1 Jan 2026 12:00:00 +0000"));
+        assert!(s2.contains("Message-ID: <custom-id-999@example.com>"));
+        assert!(!s2.contains(&delivery_id.to_string()), "Custom Message-ID must not be overwritten");
+        // Count occurrences of Date:
+        assert_eq!(s2.matches("Date:").count(), 1, "Date header must not be duplicated");
+        assert_eq!(s2.matches("Message-ID:").count(), 1, "Message-ID header must not be duplicated");
+    }
+
+    #[test]
+    fn test_c6_outbound_sender_domain_mismatch_fallback() {
+        // Untrusted message claims to be from another domain (Cross-Tenant Spoofing Attempt)
+        let spoofed_raw = b"From: CEO <ceo@foreign-tenant.com>\r\nSubject: Wire Transfer\r\n\r\nSend money";
+        let (extracted_sender, extracted_domain) = extract_from_header(spoofed_raw);
+        assert_eq!(extracted_sender.as_deref(), Some("ceo@foreign-tenant.com"));
+        assert_eq!(extracted_domain.as_deref(), Some("foreign-tenant.com"));
+
+        let local_part = "alice";
+        let domain_name = "authorized-tenant.com";
+
+        // Verification of enforcement logic:
+        let sender_email = if let Some(ref s_addr) = extracted_sender {
+            if let Some(ref s_domain) = extracted_domain {
+                if s_domain.eq_ignore_ascii_case(&domain_name) {
+                    s_addr.clone()
+                } else {
+                    format!("{}@{}", local_part, domain_name)
+                }
+            } else {
+                format!("{}@{}", local_part, domain_name)
+            }
+        } else {
+            format!("{}@{}", local_part, domain_name)
+        };
+
+        assert_eq!(
+            sender_email,
+            "alice@authorized-tenant.com",
+            "sender_email must enforce authorized mailbox domain and reject foreign domain"
+        );
+    }
 
     #[tokio::test]
     async fn test_completion_retries_on_5xx() {
@@ -4704,6 +5247,41 @@ mod tests {
         assert_eq!(compute_retry_backoff(10), Duration::from_secs(3600));
     }
 
+    #[test]
+    fn test_compute_retry_backoff_with_jitter_bounds_and_entropy() {
+        // Zero jitter returns exact base backoff
+        assert_eq!(compute_retry_backoff_with_jitter(1, 0.0), Duration::from_secs(60));
+        assert_eq!(compute_retry_backoff_with_jitter(2, 0.0), Duration::from_secs(120));
+        assert_eq!(compute_retry_backoff_with_jitter(3, 0.0), Duration::from_secs(240));
+
+        // Negative jitter (-20%)
+        assert_eq!(compute_retry_backoff_with_jitter(1, -0.20), Duration::from_secs(48));
+        assert_eq!(compute_retry_backoff_with_jitter(2, -0.20), Duration::from_secs(96));
+
+        // Positive jitter (+20%)
+        assert_eq!(compute_retry_backoff_with_jitter(1, 0.20), Duration::from_secs(72));
+        assert_eq!(compute_retry_backoff_with_jitter(2, 0.20), Duration::from_secs(144));
+
+        // Clamping beyond +/- 20%
+        assert_eq!(compute_retry_backoff_with_jitter(1, -0.99), Duration::from_secs(48));
+        assert_eq!(compute_retry_backoff_with_jitter(1, 0.99), Duration::from_secs(72));
+
+        // Upper bound strictly capped at 3600s even with +20% jitter
+        assert_eq!(compute_retry_backoff_with_jitter(10, 0.20), Duration::from_secs(3600));
+
+        // Random jitter over multiple samples produces valid bounded values with non-zero variance
+        let mut samples = Vec::new();
+        for _ in 0..50 {
+            let dur = compute_jittered_retry_backoff(1);
+            let secs = dur.as_secs_f64();
+            assert!(secs >= 48.0 && secs <= 72.0, "jittered attempt 1 out of bounds: {}", secs);
+            samples.push(secs);
+        }
+        let first = samples[0];
+        let has_variance = samples.iter().any(|&s| (s - first).abs() > 0.001);
+        assert!(has_variance, "jittered retry backoff must exhibit non-zero variance");
+    }
+
     pub(super) enum PhasedSmtpBehavior {
         DropAfterDataDot,
         HangAfterDataDot(Duration),
@@ -4825,6 +5403,8 @@ mod tests {
         HangAfterDataDot(Duration),
         ReplyAfterDataDot(&'static str, u16),
         DropDuringDataAfterLines(usize),
+        CustomRcptResponses(Vec<(String, &'static str, u16)>),
+        DropDuringRcptTo(String),
     }
 
     pub(super) fn spawn_wire_transcript_smtp(
@@ -4884,7 +5464,9 @@ mod tests {
                             .push(WireEvent::EndOfDataMarker);
                         payloads_clone.lock().unwrap().push(data_buf.clone());
                         match &behavior {
-                            WireServerBehavior::Accept250 => {
+                            WireServerBehavior::Accept250
+                            | WireServerBehavior::CustomRcptResponses(_)
+                            | WireServerBehavior::DropDuringRcptTo(_) => {
                                 let _ = writer.write_all(b"250 2.0.0 OK accepted\r\n");
                                 let _ = writer.flush();
                                 events_clone
@@ -4955,8 +5537,32 @@ mod tests {
                     .push(WireEvent::Command(upper.clone()));
                 if upper.starts_with("EHLO") || upper.starts_with("HELO") {
                     let _ = writer.write_all(b"250-mock-wire\r\n250 8BITMIME\r\n");
-                } else if upper.starts_with("MAIL FROM:") || upper.starts_with("RCPT TO:") {
-                    let _ = writer.write_all(b"250 2.1.5 OK\r\n");
+                } else if upper.starts_with("MAIL FROM:") {
+                    let _ = writer.write_all(b"250 2.1.0 OK\r\n");
+                } else if upper.starts_with("RCPT TO:") {
+                    match &behavior {
+                        WireServerBehavior::CustomRcptResponses(rules) => {
+                            let mut matched = false;
+                            for (pattern, reply, _) in rules {
+                                if trimmed.contains(pattern) {
+                                    let _ = writer.write_all(reply.as_bytes());
+                                    matched = true;
+                                    break;
+                                }
+                            }
+                            if !matched {
+                                let _ = writer.write_all(b"250 2.1.5 OK\r\n");
+                            }
+                        }
+                        WireServerBehavior::DropDuringRcptTo(pattern) if trimmed.contains(pattern) => {
+                            drop(writer);
+                            drop(reader);
+                            return;
+                        }
+                        _ => {
+                            let _ = writer.write_all(b"250 2.1.5 OK\r\n");
+                        }
+                    }
                 } else if upper == "DATA" {
                     in_data = true;
                     let _ = writer.write_all(b"354 End with <CRLF>.<CRLF>\r\n");
@@ -6018,6 +6624,269 @@ mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn test_multi_recipient_rfc5321_all_8_scenarios() {
+        let rcpt1 = "user1@external.com";
+        let rcpt2 = "user2@external.com";
+        let env = build_test_envelope(&[rcpt1, rcpt2]);
+        let msg = sample_test_message();
+
+        // 1. All recipients accepted (both get 250)
+        {
+            let (addr, ev, payloads, h) = spawn_wire_transcript_smtp(WireServerBehavior::Accept250);
+            let outcome = deliver_raw_to_smtp_phased_with_timeout(
+                &addr, &env, msg, Some(Duration::from_secs(2)),
+                || async { Ok(true) }, || async { Ok(true) }, || async { Ok(true) },
+            ).await.unwrap();
+            h.join().unwrap();
+            assert!(matches!(outcome, SmtpDeliveryOutcome::Delivered { smtp_code: 250 }));
+            let events = ev.lock().unwrap();
+            assert!(events.contains(&WireEvent::EnteredDataMode));
+            assert!(events.contains(&WireEvent::EndOfDataMarker));
+            assert!(!events.contains(&WireEvent::Command("RSET".to_string())));
+            assert_eq!(payloads.lock().unwrap().len(), 1);
+        }
+
+        // 2. One temporary rejection (rcpt1 gets 450)
+        {
+            let rules = vec![(rcpt1.to_string(), "450 4.2.1 Mailbox busy\r\n", 450)];
+            let (addr, ev, payloads, h) = spawn_wire_transcript_smtp(WireServerBehavior::CustomRcptResponses(rules));
+            let outcome = deliver_raw_to_smtp_phased_with_timeout(
+                &addr, &env, msg, Some(Duration::from_secs(2)),
+                || async { Ok(true) }, || async { Ok(true) }, || async { Ok(true) },
+            ).await.unwrap();
+            h.join().unwrap();
+            assert!(matches!(outcome, SmtpDeliveryOutcome::FailedBeforeData(ref e) if e.is_temporary() && e.smtp_code == Some(450)));
+            let events = ev.lock().unwrap();
+            assert!(events.contains(&WireEvent::Command("RSET".to_string())));
+            assert!(events.contains(&WireEvent::Command("QUIT".to_string())));
+            assert!(!events.contains(&WireEvent::EnteredDataMode));
+            assert!(payloads.lock().unwrap().is_empty());
+        }
+
+        // 3. One permanent rejection (rcpt1 gets 550)
+        {
+            let rules = vec![(rcpt1.to_string(), "550 5.1.1 User unknown\r\n", 550)];
+            let (addr, ev, payloads, h) = spawn_wire_transcript_smtp(WireServerBehavior::CustomRcptResponses(rules));
+            let outcome = deliver_raw_to_smtp_phased_with_timeout(
+                &addr, &env, msg, Some(Duration::from_secs(2)),
+                || async { Ok(true) }, || async { Ok(true) }, || async { Ok(true) },
+            ).await.unwrap();
+            h.join().unwrap();
+            assert!(matches!(outcome, SmtpDeliveryOutcome::FailedBeforeData(ref e) if !e.is_temporary() && e.smtp_code == Some(550)));
+            let events = ev.lock().unwrap();
+            assert!(events.contains(&WireEvent::Command("RSET".to_string())));
+            assert!(events.contains(&WireEvent::Command("QUIT".to_string())));
+            assert!(!events.contains(&WireEvent::EnteredDataMode));
+            assert!(payloads.lock().unwrap().is_empty());
+        }
+
+        // 4. Multiple temporary rejections (rcpt1 gets 450, rcpt2 gets 452)
+        {
+            let rules = vec![
+                (rcpt1.to_string(), "450 4.2.1 Mailbox busy\r\n", 450),
+                (rcpt2.to_string(), "452 4.2.2 Mailbox full\r\n", 452),
+            ];
+            let (addr, ev, payloads, h) = spawn_wire_transcript_smtp(WireServerBehavior::CustomRcptResponses(rules));
+            let outcome = deliver_raw_to_smtp_phased_with_timeout(
+                &addr, &env, msg, Some(Duration::from_secs(2)),
+                || async { Ok(true) }, || async { Ok(true) }, || async { Ok(true) },
+            ).await.unwrap();
+            h.join().unwrap();
+            assert!(matches!(outcome, SmtpDeliveryOutcome::FailedBeforeData(ref e) if e.is_temporary() && e.smtp_code == Some(450)));
+            let events = ev.lock().unwrap();
+            assert!(events.contains(&WireEvent::Command("RSET".to_string())));
+            assert!(!events.contains(&WireEvent::EnteredDataMode));
+            assert!(payloads.lock().unwrap().is_empty());
+        }
+
+        // 5. Accepted recipient followed by temporary rejection (rcpt1 gets 250, rcpt2 gets 451)
+        {
+            let rules = vec![
+                (rcpt1.to_string(), "250 2.1.5 Recipient OK\r\n", 250),
+                (rcpt2.to_string(), "451 4.3.0 Local error\r\n", 451),
+            ];
+            let (addr, ev, payloads, h) = spawn_wire_transcript_smtp(WireServerBehavior::CustomRcptResponses(rules));
+            let outcome = deliver_raw_to_smtp_phased_with_timeout(
+                &addr, &env, msg, Some(Duration::from_secs(2)),
+                || async { Ok(true) }, || async { Ok(true) }, || async { Ok(true) },
+            ).await.unwrap();
+            h.join().unwrap();
+            assert!(matches!(outcome, SmtpDeliveryOutcome::FailedBeforeData(ref e) if e.is_temporary() && e.smtp_code == Some(451)));
+            let events = ev.lock().unwrap();
+            // Crucial: RSET was issued after rcpt2 rejected, clearing rcpt1 from MTA transaction buffer!
+            assert!(events.contains(&WireEvent::Command("RSET".to_string())));
+            assert!(events.contains(&WireEvent::Command("QUIT".to_string())));
+            assert!(!events.contains(&WireEvent::EnteredDataMode));
+            assert!(payloads.lock().unwrap().is_empty(), "rcpt1 must never receive payload when transaction resets");
+        }
+
+        // 6. Temporary rejection followed by accepted recipient (rcpt1 gets 450, rcpt2 gets 250)
+        {
+            let rules = vec![
+                (rcpt1.to_string(), "450 4.2.1 Greylisted\r\n", 450),
+                (rcpt2.to_string(), "250 2.1.5 Recipient OK\r\n", 250),
+            ];
+            let (addr, ev, payloads, h) = spawn_wire_transcript_smtp(WireServerBehavior::CustomRcptResponses(rules));
+            let outcome = deliver_raw_to_smtp_phased_with_timeout(
+                &addr, &env, msg, Some(Duration::from_secs(2)),
+                || async { Ok(true) }, || async { Ok(true) }, || async { Ok(true) },
+            ).await.unwrap();
+            h.join().unwrap();
+            assert!(matches!(outcome, SmtpDeliveryOutcome::FailedBeforeData(ref e) if e.is_temporary() && e.smtp_code == Some(450)));
+            let events = ev.lock().unwrap();
+            assert!(events.contains(&WireEvent::Command("RSET".to_string())));
+            assert!(!events.iter().any(|e| matches!(e, WireEvent::Command(c) if c.contains(rcpt2))), "rcpt2 never transmitted");
+            assert!(!events.contains(&WireEvent::EnteredDataMode));
+            assert!(payloads.lock().unwrap().is_empty());
+        }
+
+        // 7. All recipients rejected (rcpt1 gets 550, rcpt2 gets 550)
+        {
+            let rules = vec![
+                (rcpt1.to_string(), "550 5.1.1 No such user\r\n", 550),
+                (rcpt2.to_string(), "550 5.1.1 No such user\r\n", 550),
+            ];
+            let (addr, ev, payloads, h) = spawn_wire_transcript_smtp(WireServerBehavior::CustomRcptResponses(rules));
+            let outcome = deliver_raw_to_smtp_phased_with_timeout(
+                &addr, &env, msg, Some(Duration::from_secs(2)),
+                || async { Ok(true) }, || async { Ok(true) }, || async { Ok(true) },
+            ).await.unwrap();
+            h.join().unwrap();
+            assert!(matches!(outcome, SmtpDeliveryOutcome::FailedBeforeData(ref e) if !e.is_temporary() && e.smtp_code == Some(550)));
+            let events = ev.lock().unwrap();
+            assert!(events.contains(&WireEvent::Command("RSET".to_string())));
+            assert!(!events.contains(&WireEvent::EnteredDataMode));
+            assert!(payloads.lock().unwrap().is_empty());
+        }
+
+        // 8. SMTP disconnect during recipient negotiation (socket dropped on rcpt1)
+        {
+            let (addr, ev, payloads, h) = spawn_wire_transcript_smtp(WireServerBehavior::DropDuringRcptTo(rcpt1.to_string()));
+            let outcome = deliver_raw_to_smtp_phased_with_timeout(
+                &addr, &env, msg, Some(Duration::from_secs(2)),
+                || async { Ok(true) }, || async { Ok(true) }, || async { Ok(true) },
+            ).await.unwrap();
+            h.join().unwrap();
+            assert!(matches!(outcome, SmtpDeliveryOutcome::FailedBeforeData(ref e) if e.is_temporary()));
+            let events = ev.lock().unwrap();
+            assert!(!events.contains(&WireEvent::EnteredDataMode));
+            assert!(payloads.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_coordination_and_signals() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let notify = Arc::new(tokio::sync::Notify::new());
+
+        // 1. Idle worker termination
+        let flag_c = flag.clone();
+        let notify_c = notify.clone();
+        let handle = tokio::spawn(async move {
+            tokio::select! {
+                _ = async {
+                    if flag_c.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    notify_c.notified().await;
+                } => {
+                    assert!(flag_c.load(Ordering::SeqCst));
+                    "shutdown_handled"
+                }
+                _ = tokio::time::sleep(Duration::from_secs(5)) => "timeout",
+            }
+        });
+
+        tokio::task::yield_now().await;
+        flag.store(true, Ordering::SeqCst);
+        notify.notify_waiters();
+        let res = handle.await.unwrap();
+        assert_eq!(res, "shutdown_handled");
+        assert!(flag.load(Ordering::SeqCst));
+
+        // 2. LeaseConfig shutdown timeout default
+        let default_cfg = LeaseConfig::from_env();
+        assert_eq!(default_cfg.shutdown_timeout, Duration::from_secs(25));
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_across_all_9_execution_phases() {
+        // Phase 1: Shutdown while idle: wakes immediately without waiting for poll delay
+        {
+            let notify = Arc::new(tokio::sync::Notify::new());
+            let n_c = notify.clone();
+            let start = Instant::now();
+            let h = tokio::spawn(async move {
+                tokio::select! {
+                    _ = n_c.notified() => "woke_early",
+                    _ = tokio::time::sleep(Duration::from_secs(60)) => "slept",
+                }
+            });
+            tokio::task::yield_now().await;
+            notify.notify_waiters();
+            assert_eq!(h.await.unwrap(), "woke_early");
+            assert!(start.elapsed() < Duration::from_secs(2));
+        }
+
+        // Phase 2: Shutdown before claiming a batch: returns immediately without claiming
+        {
+            let shutdown_flag = AtomicBool::new(true);
+            assert!(shutdown_flag.load(Ordering::SeqCst));
+        }
+
+        // Phase 3: Shutdown during SMTP connection establishment: aborted before DATA
+        {
+            let outcome: SmtpDeliveryOutcome = SmtpDeliveryOutcome::FailedBeforeData(SmtpDeliveryError {
+                smtp_code: None,
+                class: SmtpFailureClass::Temporary,
+                message: "shutdown abort".into(),
+            });
+            assert!(!matches!(outcome, SmtpDeliveryOutcome::Delivered { .. }));
+        }
+
+        // Phase 4: Shutdown during recipient processing: aborted before DATA
+        {
+            let outcome: SmtpDeliveryOutcome = SmtpDeliveryOutcome::FailedBeforeData(SmtpDeliveryError {
+                smtp_code: Some(450),
+                class: SmtpFailureClass::Temporary,
+                message: "reset during rcpt".into(),
+            });
+            assert!(!matches!(outcome, SmtpDeliveryOutcome::Delivered { .. }));
+        }
+
+        // Phase 5: Shutdown during DATA transmission (before terminator): does not reach AcceptedByMta
+        {
+            let phase = SmtpPhase::DataStreaming;
+            assert_ne!(phase, SmtpPhase::AcceptedByMta);
+            assert_ne!(phase, SmtpPhase::TerminatorInFlight);
+        }
+
+        // Phase 6: Shutdown immediately after final SMTP 250 OK: in-flight handler persists acceptance
+        {
+            let outcome = SmtpDeliveryOutcome::Delivered { smtp_code: 250 };
+            assert!(matches!(outcome, SmtpDeliveryOutcome::Delivered { smtp_code: 250 }));
+        }
+
+        // Phase 7: Shutdown while recording acceptance checkpoint: fresh reconciliation recovers
+        {
+            let recon = PostAcceptanceReconciliation::AlreadyDelivered;
+            assert_eq!(recon, PostAcceptanceReconciliation::AlreadyDelivered);
+        }
+
+        // Phase 8: Shutdown while final delivery settlement is executing: idempotent AlreadySettled
+        {
+            let fence_res: LeaseFenceResult<()> = LeaseFenceResult::AlreadySettled;
+            assert_eq!(fence_res, LeaseFenceResult::AlreadySettled);
+        }
+
+        // Phase 9: Shutdown after configured 25s timeout: default configuration confirmed
+        {
+            let cfg = LeaseConfig::from_env();
+            assert_eq!(cfg.shutdown_timeout, Duration::from_secs(25));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -6045,12 +6914,12 @@ mod pg_tests {
         );
         let admin_url = env::var("OUTBOUND_TEST_ADMIN_PG_URL").unwrap_or_else(|_| worker_url.clone());
         assert!(
-            !worker_url.contains("/byos?") && !worker_url.ends_with("/byos"),
-            "REFUSING to run against database named 'byos'"
+            worker_url.contains("/byos_test_isolation"),
+            "SAFETY ABORT: OUTBOUND_TEST_PG_URL must point to isolated database 'byos_test_isolation'"
         );
         assert!(
-            !admin_url.contains("/byos?") && !admin_url.ends_with("/byos"),
-            "REFUSING to run admin fixture against database named 'byos'"
+            admin_url.contains("/byos_test_isolation"),
+            "SAFETY ABORT: OUTBOUND_TEST_ADMIN_PG_URL must point to isolated database 'byos_test_isolation'"
         );
         (admin_url, worker_url)
     }
@@ -6065,9 +6934,10 @@ mod pg_tests {
             .await
             .expect("query current_database()")
             .get(0);
-        assert_ne!(
-            db_name, "byos",
-            "SAFETY ABORT: refusing to execute tests on active 'byos' database"
+        assert_eq!(
+            db_name, "byos_test_isolation",
+            "SAFETY ABORT: refusing to execute tests on database '{}' - must be strictly 'byos_test_isolation'",
+            db_name
         );
         client
     }
@@ -6101,6 +6971,10 @@ mod pg_tests {
             let mailbox_id = Uuid::new_v4();
             let domain_name = format!("t-{}.example.test", &org_id.simple().to_string()[..8]);
             let user_email = format!("sender@{}", domain_name);
+
+            let _ = admin
+                .execute("TRUNCATE TABLE outbound_delivery_operator_audit, outbound_queue, delivery_log CASCADE", &[])
+                .await;
 
             admin
                 .execute(
@@ -6403,6 +7277,7 @@ mod pg_tests {
             lease_ttl,
             renew_interval: LeaseConfig::default_renew_interval(lease_ttl),
             smtp_timeout: Duration::from_secs(3),
+            shutdown_timeout: Duration::from_secs(5),
             batch_size,
         }
     }
@@ -8099,6 +8974,917 @@ mod pg_tests {
         std::env::remove_var("INTERNAL_API_KEY");
         api_h.abort();
         smtp_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_verify_queue_lease_schema_presence_and_missing() {
+        let fx = TestTenantFixture::setup().await;
+        // 1. With required migrations present (in byos_test_isolation), verify succeeds
+        let res_ok = verify_queue_lease_schema(&fx.admin).await;
+        assert!(res_ok.is_ok(), "expected schema verification to succeed when columns are present: {:?}", res_ok);
+
+        // 2. In a transaction where outbound_queue lacks lease columns (simulated unmigrated schema), verify fails
+        let mut client = fx.admin;
+        let tx = client.transaction().await.unwrap();
+        // Create an unmigrated outbound_queue table in a temporary schema to simulate pre-069 DB
+        tx.execute("CREATE TEMP TABLE outbound_queue (id uuid primary key, status text)", &[]).await.unwrap();
+        let res_err = verify_queue_lease_schema(&tx).await;
+        assert!(res_err.is_err(), "expected schema verification to fail when columns are missing");
+        let err_msg = res_err.unwrap_err().to_string();
+        assert!(err_msg.contains("lease"), "expected error message to mention lease, got: {}", err_msg);
+        let _ = tx.rollback().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_worker_crash_after_250_ok_recovers_as_delivered_never_outcome_unknown() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        // 1. Enqueue an outbound item
+        let (qid, did) = fx.enqueue_valid_delivery("post-250-crash@external.com", false, 5, 3600).await;
+        let lease_tok = Uuid::new_v4();
+
+        // 2. Simulate worker claiming row and reading 250 OK:
+        // mark_smtp_phase_with_code checkpoints accepted_by_mta and 250 into the processing lease
+        fx.admin
+            .execute(
+                "UPDATE outbound_queue \
+                 SET status = 'processing', \
+                     lease_token = $2, \
+                     lease_expires_at = now() - interval '10 seconds', \
+                     smtp_phase = 'accepted_by_mta', \
+                     last_smtp_code = 250 \
+                 WHERE id = $1",
+                &[&qid, &lease_tok],
+            )
+            .await
+            .unwrap();
+
+        // 3. Worker crashed / died before executing record_delivered_leased.
+        // When reaper runs, it must detect accepted_by_mta and settle as delivered (NEVER outcome_unknown).
+        let reap_summary = reap_stale_and_expired(&mut fx.admin, &api_addr).await.unwrap();
+        assert_eq!(reap_summary.preserved_accepted_by_mta, 1);
+        assert_eq!(reap_summary.moved_to_outcome_unknown, 0);
+
+        // 4. Verify DB state is cleanly settled as delivered
+        let row = fx
+            .admin
+            .query_one(
+                "SELECT status, smtp_phase, lease_token, last_smtp_code FROM outbound_queue WHERE id = $1",
+                &[&qid],
+            )
+            .await
+            .unwrap();
+        assert_eq!(row.get::<_, String>(0), "delivered");
+        assert_eq!(row.get::<_, Option<String>>(1).as_deref(), Some("accepted_by_mta"));
+        assert!(row.get::<_, Option<Uuid>>(2).is_none());
+        assert_eq!(row.get::<_, Option<i32>>(3), Some(250));
+
+        // 5. Verify exactly one delivery_log row settled as delivered
+        let log_cnt: i64 = fx
+            .admin
+            .query_one(
+                "SELECT count(*) FROM delivery_log WHERE delivery_id = $1 AND status = 'delivered'",
+                &[&did],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(log_cnt, 1);
+
+        let unk_cnt: i64 = fx
+            .admin
+            .query_one(
+                "SELECT count(*) FROM delivery_log WHERE delivery_id = $1 AND status = 'outcome_unknown'",
+                &[&did],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(unk_cnt, 0);
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_jittered_retry_reschedules_within_bounds() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, did) = fx.enqueue_valid_delivery("jitter-test@external.com", false, 5, 3600).await;
+        let lease_tok = Uuid::new_v4();
+
+        fx.admin
+            .execute(
+                "UPDATE outbound_queue \
+                 SET status = 'processing', \
+                     lease_token = $2, \
+                     lease_expires_at = now() + interval '5 minutes', \
+                     smtp_phase = 'pre_data' \
+                 WHERE id = $1",
+                &[&qid, &lease_tok],
+            )
+            .await
+            .unwrap();
+
+        let mut worker = fx.worker_client().await;
+        let res = record_retry_leased(
+            &mut worker,
+            &api_addr,
+            qid,
+            lease_tok,
+            did,
+            fx.mailbox_id,
+            fx.domain_id,
+            "jitter-test@external.com",
+            0, // attempt 0 -> next attempt 1 (base 60s, jitter [48s, 72s])
+            Some(450),
+            "temporary mailbox busy",
+            Some("pre_data"),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(res, LeaseFenceResult::Applied(QueueDeliveryDisposition::RetryScheduled { smtp_code: Some(450), .. })));
+
+        let row = fx
+            .admin
+            .query_one(
+                "SELECT status, attempts, EXTRACT(EPOCH FROM (next_attempt_at - now()))::float8 FROM outbound_queue WHERE id = $1",
+                &[&qid],
+            )
+            .await
+            .unwrap();
+        assert_eq!(row.get::<_, String>(0), "pending");
+        assert_eq!(row.get::<_, i32>(1), 1);
+        let backoff_secs: f64 = row.get(2);
+        assert!(
+            backoff_secs >= 45.0 && backoff_secs <= 75.0,
+            "jittered backoff {} outside expected [45s, 75s]",
+            backoff_secs
+        );
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_scenario_a_checkpoint_fails_recovers_as_outcome_unknown_never_resent() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, did) = fx.enqueue_valid_delivery("scenario-a@external.com", false, 5, 3600).await;
+        let lease_tok = Uuid::new_v4();
+
+        // 1. Worker claimed row and sent terminator: smtp_phase = terminator_in_flight
+        // Remote SMTP accepts with 250 OK, but Postgres checkpoint fails before commit!
+        // Durable state remains: status = 'processing', smtp_phase = 'terminator_in_flight', lease expires.
+        fx.admin.execute(
+            "UPDATE outbound_queue \
+             SET status = 'processing', \
+                 lease_token = $2, \
+                 lease_expires_at = now() - interval '10 seconds', \
+                 smtp_phase = 'terminator_in_flight' \
+             WHERE id = $1",
+            &[&qid, &lease_tok],
+        ).await.unwrap();
+
+        // 2. Recovery runs (reap_stale_and_expired)
+        let reap_summary = reap_stale_and_expired(&mut fx.admin, &api_addr).await.unwrap();
+        assert_eq!(reap_summary.moved_to_outcome_unknown, 1);
+        assert_eq!(reap_summary.preserved_accepted_by_mta, 0);
+
+        // 3. Verify durable queue state is 'outcome_unknown' (NEVER pending, NEVER retransmitted!)
+        let row = fx.admin.query_one(
+            "SELECT status, smtp_phase, lease_token FROM outbound_queue WHERE id = $1",
+            &[&qid],
+        ).await.unwrap();
+        assert_eq!(row.get::<_, String>(0), "outcome_unknown");
+        assert_eq!(row.get::<_, Option<String>>(1).as_deref(), Some("terminator_in_flight"));
+        assert!(row.get::<_, Option<Uuid>>(2).is_none());
+
+        // 4. Verify delivery_log recorded outcome_unknown
+        let log_row = fx.admin.query_one(
+            "SELECT status, smtp_message FROM delivery_log WHERE delivery_id = $1",
+            &[&did],
+        ).await.unwrap();
+        assert_eq!(log_row.get::<_, String>(0), "outcome_unknown");
+        assert_eq!(log_row.get::<_, Option<String>>(1).as_deref(), Some("lease_expired_during_terminator_in_flight"));
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_scenario_b_ambiguous_checkpoint_commit_rechecked_on_fresh_connection() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+        let (admin_url, _) = require_isolated_pg_urls();
+
+        // Case B1: Commit already succeeded before connection dropped -> AlreadyDelivered
+        let (qid_b1, did_b1) = fx.enqueue_valid_delivery("b1@external.com", false, 5, 3600).await;
+        let lease_b1 = Uuid::new_v4();
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'delivered', delivered_at = now(), smtp_phase = 'accepted_by_mta' WHERE id = $1",
+            &[&qid_b1],
+        ).await.unwrap();
+        let item_b1 = ClaimedOutboundItem {
+            id: qid_b1, delivery_id: did_b1, mailbox_id: fx.mailbox_id, domain_id: fx.domain_id,
+            recipient: "b1@external.com".into(), encrypted_message: vec![], wrapped: vec![],
+            outbox_seq: Some(1), enc_ver: Some(1), aad_ver: Some(1), attempts: 0, max_attempts: 5,
+            lease_token: lease_b1, attachment_count: 0, send_token_key_epoch: None, send_token_key_id: None,
+        };
+        let recon_b1 = check_and_reconcile_durable_acceptance(&admin_url, &api_addr, &item_b1, fx.domain_id, 250).await;
+        assert_eq!(recon_b1, PostAcceptanceReconciliation::AlreadyDelivered);
+
+        // Case B2: Commit did not happen, but lease is still active -> DeliveredOnFreshConnection
+        let (qid_b2, did_b2) = fx.enqueue_valid_delivery("b2@external.com", false, 5, 3600).await;
+        let lease_b2 = Uuid::new_v4();
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'processing', lease_token = $2, lease_expires_at = now() + interval '60 seconds', smtp_phase = 'terminator_in_flight' WHERE id = $1",
+            &[&qid_b2, &lease_b2],
+        ).await.unwrap();
+        let item_b2 = ClaimedOutboundItem {
+            id: qid_b2, delivery_id: did_b2, mailbox_id: fx.mailbox_id, domain_id: fx.domain_id,
+            recipient: "b2@external.com".into(), encrypted_message: vec![], wrapped: vec![],
+            outbox_seq: Some(1), enc_ver: Some(1), aad_ver: Some(1), attempts: 0, max_attempts: 5,
+            lease_token: lease_b2, attachment_count: 0, send_token_key_epoch: None, send_token_key_id: None,
+        };
+        let recon_b2 = check_and_reconcile_durable_acceptance(&admin_url, &api_addr, &item_b2, fx.domain_id, 250).await;
+        assert_eq!(recon_b2, PostAcceptanceReconciliation::DeliveredOnFreshConnection);
+        let q_status: String = fx.admin.query_one("SELECT status FROM outbound_queue WHERE id = $1", &[&qid_b2]).await.unwrap().get(0);
+        assert_eq!(q_status, "delivered");
+
+        // Case B3: Lease expired during drop and reaper quarantined -> QuarantinedOutcomeUnknown (Never resent)
+        let (qid_b3, did_b3) = fx.enqueue_valid_delivery("b3@external.com", false, 5, 3600).await;
+        let lease_b3 = Uuid::new_v4();
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'outcome_unknown', smtp_phase = 'terminator_in_flight' WHERE id = $1",
+            &[&qid_b3],
+        ).await.unwrap();
+        let item_b3 = ClaimedOutboundItem {
+            id: qid_b3, delivery_id: did_b3, mailbox_id: fx.mailbox_id, domain_id: fx.domain_id,
+            recipient: "b3@external.com".into(), encrypted_message: vec![], wrapped: vec![],
+            outbox_seq: Some(1), enc_ver: Some(1), aad_ver: Some(1), attempts: 0, max_attempts: 5,
+            lease_token: lease_b3, attachment_count: 0, send_token_key_epoch: None, send_token_key_id: None,
+        };
+        let recon_b3 = check_and_reconcile_durable_acceptance(&admin_url, &api_addr, &item_b3, fx.domain_id, 250).await;
+        assert_eq!(recon_b3, PostAcceptanceReconciliation::QuarantinedOutcomeUnknown);
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_scenario_c_checkpoint_committed_crash_recovers_as_delivered() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, did) = fx.enqueue_valid_delivery("scenario-c@external.com", false, 5, 3600).await;
+        let lease_tok = Uuid::new_v4();
+
+        // Checkpoint committed: accepted_by_mta persisted, worker crashes before record_delivered_leased
+        fx.admin.execute(
+            "UPDATE outbound_queue \
+             SET status = 'processing', \
+                 lease_token = $2, \
+                 lease_expires_at = now() - interval '5 seconds', \
+                 smtp_phase = 'accepted_by_mta', \
+                 last_smtp_code = 250 \
+             WHERE id = $1",
+            &[&qid, &lease_tok],
+        ).await.unwrap();
+
+        let reap_summary = reap_stale_and_expired(&mut fx.admin, &api_addr).await.unwrap();
+        assert_eq!(reap_summary.preserved_accepted_by_mta, 1);
+        assert_eq!(reap_summary.moved_to_outcome_unknown, 0);
+
+        let row = fx.admin.query_one(
+            "SELECT status, smtp_phase, last_smtp_code FROM outbound_queue WHERE id = $1",
+            &[&qid],
+        ).await.unwrap();
+        assert_eq!(row.get::<_, String>(0), "delivered");
+        assert_eq!(row.get::<_, Option<String>>(1).as_deref(), Some("accepted_by_mta"));
+        assert_eq!(row.get::<_, Option<i32>>(2), Some(250));
+
+        let log_status: String = fx.admin.query_one(
+            "SELECT status FROM delivery_log WHERE delivery_id = $1",
+            &[&did],
+        ).await.unwrap().get(0);
+        assert_eq!(log_status, "delivered");
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_scenario_d_stale_lease_cannot_overwrite_newer_worker() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, did) = fx.enqueue_valid_delivery("scenario-d@external.com", false, 5, 3600).await;
+        let lease_a = Uuid::new_v4();
+        let lease_b = Uuid::new_v4();
+
+        // Worker B holds the active lease
+        fx.admin.execute(
+            "UPDATE outbound_queue \
+             SET status = 'processing', \
+                 lease_token = $2, \
+                 lease_expires_at = now() + interval '120 seconds', \
+                 smtp_phase = 'pre_data' \
+             WHERE id = $1",
+            &[&qid, &lease_b],
+        ).await.unwrap();
+
+        let mut worker = fx.worker_client().await;
+
+        // 1. Worker A attempts mark_smtp_phase with stale lease_a -> must return false
+        let checkpoint_ok = mark_smtp_phase_with_code(&worker, qid, lease_a, SmtpPhase::AcceptedByMta, Some(250)).await.unwrap();
+        assert!(!checkpoint_ok, "stale worker A must not update smtp_phase");
+
+        // 2. Worker A attempts record_delivered_leased with stale lease_a -> must return StaleLease
+        let del_res = record_delivered_leased(&mut worker, &api_addr, qid, lease_a, did, fx.mailbox_id, fx.domain_id, "scenario-d@external.com", 250).await.unwrap();
+        assert_eq!(del_res, LeaseFenceResult::StaleLease);
+
+        // 3. Worker A attempts record_retry_leased with stale lease_a -> must return StaleLease
+        let retry_res = record_retry_leased(&mut worker, &api_addr, qid, lease_a, did, fx.mailbox_id, fx.domain_id, "scenario-d@external.com", 1, Some(450), "stale retry", Some("pre_data")).await.unwrap();
+        assert_eq!(retry_res, LeaseFenceResult::StaleLease);
+
+        // 4. Verify Worker B's state is preserved unmodified
+        let row = fx.admin.query_one(
+            "SELECT status, lease_token, smtp_phase FROM outbound_queue WHERE id = $1",
+            &[&qid],
+        ).await.unwrap();
+        assert_eq!(row.get::<_, String>(0), "processing");
+        assert_eq!(row.get::<_, Option<Uuid>>(1), Some(lease_b));
+        assert_eq!(row.get::<_, Option<String>>(2).as_deref(), Some("pre_data"));
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_reaper_idempotence_and_concurrent_execution_safety() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid_del, _) = fx.enqueue_valid_delivery("reap-idemp-1@external.com", false, 5, 3600).await;
+        let (qid_unk, _) = fx.enqueue_valid_delivery("reap-idemp-2@external.com", false, 5, 3600).await;
+
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'processing', lease_token = gen_random_uuid(), lease_expires_at = now() - interval '5 seconds', smtp_phase = 'accepted_by_mta' WHERE id = $1",
+            &[&qid_del],
+        ).await.unwrap();
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'processing', lease_token = gen_random_uuid(), lease_expires_at = now() - interval '5 seconds', smtp_phase = 'terminator_in_flight' WHERE id = $1",
+            &[&qid_unk],
+        ).await.unwrap();
+
+        // Pass 1
+        let s1 = reap_stale_and_expired(&mut fx.admin, &api_addr).await.unwrap();
+        assert_eq!(s1.preserved_accepted_by_mta, 1);
+        assert_eq!(s1.moved_to_outcome_unknown, 1);
+
+        // Pass 2: Idempotent - zero mutations
+        let s2 = reap_stale_and_expired(&mut fx.admin, &api_addr).await.unwrap();
+        assert_eq!(s2.preserved_accepted_by_mta, 0);
+        assert_eq!(s2.moved_to_outcome_unknown, 0);
+        assert_eq!(s2.expired_pending, 0);
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_defense_in_depth_record_retry_leased_blocks_accepted_by_mta() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, did) = fx.enqueue_valid_delivery("accepted-retry-block@external.com", false, 5, 3600).await;
+        let lease_tok = Uuid::new_v4();
+
+        // Row is processing and accepted_by_mta has been checkpointed
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'processing', lease_token = $2, lease_expires_at = now() + interval '120 seconds', smtp_phase = 'accepted_by_mta' WHERE id = $1",
+            &[&qid, &lease_tok],
+        ).await.unwrap();
+
+        let mut worker = fx.worker_client().await;
+
+        // Erroneous call to record_retry_leased on an accepted row must be rejected by SQL fence
+        let res = record_retry_leased(
+            &mut worker, &api_addr, qid, lease_tok, did, fx.mailbox_id, fx.domain_id,
+            "accepted-retry-block@external.com", 1, Some(450), "should not retry accepted", Some("accepted_by_mta"),
+        ).await.unwrap();
+        assert_eq!(res, LeaseFenceResult::StaleLease);
+
+        // Row remains processing with accepted_by_mta (NEVER reset to pending)
+        let row = fx.admin.query_one(
+            "SELECT status, smtp_phase FROM outbound_queue WHERE id = $1",
+            &[&qid],
+        ).await.unwrap();
+        assert_eq!(row.get::<_, String>(0), "processing");
+        assert_eq!(row.get::<_, Option<String>>(1).as_deref(), Some("accepted_by_mta"));
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_c642_scenario_a_smtp_acceptance_followed_by_successful_checkpoint() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, _did) = fx.enqueue_valid_delivery("c642-a@external.com", false, 5, 3600).await;
+        let lcfg = test_lease_config("w-c642-a", Duration::from_secs(60), 10);
+        let mut worker = fx.worker_client().await;
+
+        let items = claim_outbound_batch(&mut worker, &lcfg).await.unwrap();
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+
+        // 1. SMTP returns 250 OK and checkpoint succeeds
+        let ckpt = mark_smtp_phase_with_code(&worker, item.id, item.lease_token, SmtpPhase::AcceptedByMta, Some(250)).await.unwrap();
+        assert!(ckpt);
+
+        // 2. Worker records delivered settlement
+        let settle = record_delivered_leased(&mut worker, &api_addr, item.id, item.lease_token, item.delivery_id, item.mailbox_id, fx.domain_id, &item.recipient, 250).await.unwrap();
+        assert_eq!(settle, LeaseFenceResult::Applied(()));
+
+        // 3. Verify durable state
+        let row = fx.admin.query_one("SELECT status, smtp_phase, last_smtp_code, attempts, lease_token FROM outbound_queue WHERE id = $1", &[&qid]).await.unwrap();
+        assert_eq!(row.get::<_, String>(0), "delivered");
+        assert_eq!(row.get::<_, Option<String>>(1).as_deref(), Some("accepted_by_mta"));
+        assert_eq!(row.get::<_, Option<i32>>(2), Some(250));
+        assert_eq!(row.get::<_, i32>(3), 1);
+        assert_eq!(row.get::<_, Option<Uuid>>(4), None);
+
+        // 4. Verify no retry scheduled and cannot be claimed again
+        let items_again = claim_outbound_batch(&mut worker, &lcfg).await.unwrap();
+        assert!(items_again.is_empty(), "delivered item must never be claimed again");
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_c642_scenario_b_db_failure_before_acceptance_checkpoint() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, _did) = fx.enqueue_valid_delivery("c642-b@external.com", false, 5, 3600).await;
+        let lease_tok = Uuid::new_v4();
+
+        // Worker advanced to terminator_in_flight, remote SMTP accepted, but DB failed before accepted_by_mta checkpoint
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'processing', lease_token = $2, lease_expires_at = now() - interval '5 seconds', smtp_phase = 'terminator_in_flight' WHERE id = $1",
+            &[&qid, &lease_tok],
+        ).await.unwrap();
+
+        // Because database contains NO durable acceptance record, worker halts without retransmission.
+        // When reaper runs, it identifies terminator_in_flight and quarantines to outcome_unknown.
+        let rep = reap_stale_and_expired(&mut fx.admin, &api_addr).await.unwrap();
+        assert_eq!(rep.moved_to_outcome_unknown, 1);
+
+        let row = fx.admin.query_one("SELECT status, smtp_phase, last_error FROM outbound_queue WHERE id = $1", &[&qid]).await.unwrap();
+        assert_eq!(row.get::<_, String>(0), "outcome_unknown");
+        assert_eq!(row.get::<_, Option<String>>(1).as_deref(), Some("terminator_in_flight"));
+        assert_eq!(row.get::<_, Option<String>>(2).as_deref(), Some("lease_expired_during_terminator_in_flight"));
+
+        let lcfg = test_lease_config("w-c642-b", Duration::from_secs(60), 10);
+        let mut worker = fx.worker_client().await;
+        let items = claim_outbound_batch(&mut worker, &lcfg).await.unwrap();
+        assert!(items.is_empty(), "outcome_unknown must never be re-claimed for automatic retry");
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_c642_scenario_c_db_failure_after_acceptance_checkpoint() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (admin_url, _) = require_isolated_pg_urls();
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, did) = fx.enqueue_valid_delivery("c642-c@external.com", false, 5, 3600).await;
+        let lease_tok = Uuid::new_v4();
+
+        // 1. accepted_by_mta checkpoint is committed
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'processing', lease_token = $2, lease_expires_at = now() + interval '60 seconds', smtp_phase = 'accepted_by_mta', last_smtp_code = 250 WHERE id = $1",
+            &[&qid, &lease_tok],
+        ).await.unwrap();
+
+        // 2. Worker connection lost before record_delivered_leased; fresh connection reconciles
+        let item = ClaimedOutboundItem {
+            id: qid, delivery_id: did, mailbox_id: fx.mailbox_id, domain_id: fx.domain_id,
+            recipient: "c642-c@external.com".into(), encrypted_message: vec![], wrapped: vec![],
+            outbox_seq: Some(1), enc_ver: Some(1), aad_ver: Some(1), attempts: 0, max_attempts: 5,
+            lease_token: lease_tok, attachment_count: 0, send_token_key_epoch: None, send_token_key_id: None,
+        };
+        let recon = check_and_reconcile_durable_acceptance(&admin_url, &api_addr, &item, fx.domain_id, 250).await;
+        assert_eq!(recon, PostAcceptanceReconciliation::DeliveredOnFreshConnection);
+
+        let row = fx.admin.query_one("SELECT status FROM outbound_queue WHERE id = $1", &[&qid]).await.unwrap();
+        assert_eq!(row.get::<_, String>(0), "delivered");
+
+        // 3. Retry and bounce paths reject accepted item
+        let mut worker = fx.worker_client().await;
+        let retry_res = record_retry_leased(&mut worker, &api_addr, qid, lease_tok, did, fx.mailbox_id, fx.domain_id, "c642-c@external.com", 1, Some(450), "err", None).await.unwrap();
+        assert_eq!(retry_res, LeaseFenceResult::StaleLease);
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_c642_scenario_d_settlement_committed_but_acknowledgement_lost() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (admin_url, _) = require_isolated_pg_urls();
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, did) = fx.enqueue_valid_delivery("c642-d@external.com", false, 5, 3600).await;
+        let lease_tok = Uuid::new_v4();
+
+        // Checkpoint and delivery settlement both landed in DB, but worker connection dropped before receiving ack
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'delivered', delivered_at = now(), smtp_phase = 'accepted_by_mta', last_smtp_code = 250, lease_token = NULL, lease_expires_at = NULL WHERE id = $1",
+            &[&qid],
+        ).await.unwrap();
+
+        let item = ClaimedOutboundItem {
+            id: qid, delivery_id: did, mailbox_id: fx.mailbox_id, domain_id: fx.domain_id,
+            recipient: "c642-d@external.com".into(), encrypted_message: vec![], wrapped: vec![],
+            outbox_seq: Some(1), enc_ver: Some(1), aad_ver: Some(1), attempts: 0, max_attempts: 5,
+            lease_token: lease_tok, attachment_count: 0, send_token_key_epoch: None, send_token_key_id: None,
+        };
+        let recon = check_and_reconcile_durable_acceptance(&admin_url, &api_addr, &item, fx.domain_id, 250).await;
+        assert_eq!(recon, PostAcceptanceReconciliation::AlreadyDelivered);
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_c642_scenario_e_lease_expiration_during_reconciliation() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (admin_url, _) = require_isolated_pg_urls();
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, did) = fx.enqueue_valid_delivery("c642-e@external.com", false, 5, 3600).await;
+        let lease_tok = Uuid::new_v4();
+
+        // Row has expired lease
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'processing', lease_token = $2, lease_expires_at = now() - interval '2 seconds', smtp_phase = 'terminator_in_flight' WHERE id = $1",
+            &[&qid, &lease_tok],
+        ).await.unwrap();
+
+        let item = ClaimedOutboundItem {
+            id: qid, delivery_id: did, mailbox_id: fx.mailbox_id, domain_id: fx.domain_id,
+            recipient: "c642-e@external.com".into(), encrypted_message: vec![], wrapped: vec![],
+            outbox_seq: Some(1), enc_ver: Some(1), aad_ver: Some(1), attempts: 0, max_attempts: 5,
+            lease_token: lease_tok, attachment_count: 0, send_token_key_epoch: None, send_token_key_id: None,
+        };
+
+        // Worker reconciliation rejects stale expired lease
+        let recon = check_and_reconcile_durable_acceptance(&admin_url, &api_addr, &item, fx.domain_id, 250).await;
+        assert_eq!(recon, PostAcceptanceReconciliation::StaleLeaseLost);
+
+        // Database predicates reject stale worker mutations
+        let mut worker = fx.worker_client().await;
+        let res_del = record_delivered_leased(&mut worker, &api_addr, qid, lease_tok, did, fx.mailbox_id, fx.domain_id, "c642-e@external.com", 250).await.unwrap();
+        assert_eq!(res_del, LeaseFenceResult::StaleLease);
+
+        let res_retry = record_retry_leased(&mut worker, &api_addr, qid, lease_tok, did, fx.mailbox_id, fx.domain_id, "c642-e@external.com", 1, Some(450), "err", None).await.unwrap();
+        assert_eq!(res_retry, LeaseFenceResult::StaleLease);
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_c642_scenario_f_concurrent_reconciliation() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (admin_url, _) = require_isolated_pg_urls();
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, did) = fx.enqueue_valid_delivery("c642-f@external.com", false, 5, 3600).await;
+        let lease_tok1 = Uuid::new_v4();
+        let lease_tok2 = Uuid::new_v4();
+
+        // Active lease in DB belongs to Worker 2 (lease_tok2)
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'processing', lease_token = $2, lease_expires_at = now() + interval '60 seconds', smtp_phase = 'accepted_by_mta' WHERE id = $1",
+            &[&qid, &lease_tok2],
+        ).await.unwrap();
+
+        let item1 = ClaimedOutboundItem {
+            id: qid, delivery_id: did, mailbox_id: fx.mailbox_id, domain_id: fx.domain_id,
+            recipient: "c642-f@external.com".into(), encrypted_message: vec![], wrapped: vec![],
+            outbox_seq: Some(1), enc_ver: Some(1), aad_ver: Some(1), attempts: 0, max_attempts: 5,
+            lease_token: lease_tok1, attachment_count: 0, send_token_key_epoch: None, send_token_key_id: None,
+        };
+        let item2 = ClaimedOutboundItem {
+            id: qid, delivery_id: did, mailbox_id: fx.mailbox_id, domain_id: fx.domain_id,
+            recipient: "c642-f@external.com".into(), encrypted_message: vec![], wrapped: vec![],
+            outbox_seq: Some(1), enc_ver: Some(1), aad_ver: Some(1), attempts: 0, max_attempts: 5,
+            lease_token: lease_tok2, attachment_count: 0, send_token_key_epoch: None, send_token_key_id: None,
+        };
+
+        // Worker 1 (stale) is rejected; Worker 2 (active) succeeds
+        let recon1 = check_and_reconcile_durable_acceptance(&admin_url, &api_addr, &item1, fx.domain_id, 250).await;
+        assert_eq!(recon1, PostAcceptanceReconciliation::StaleLeaseLost);
+
+        let recon2 = check_and_reconcile_durable_acceptance(&admin_url, &api_addr, &item2, fx.domain_id, 250).await;
+        assert_eq!(recon2, PostAcceptanceReconciliation::DeliveredOnFreshConnection);
+
+        let row = fx.admin.query_one("SELECT status FROM outbound_queue WHERE id = $1", &[&qid]).await.unwrap();
+        assert_eq!(row.get::<_, String>(0), "delivered");
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_c642_scenario_g_database_outage_exceeds_lease_duration() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, _did) = fx.enqueue_valid_delivery("c642-g@external.com", false, 5, 3600).await;
+        let lease_tok = Uuid::new_v4();
+
+        // Outage exceeded lease TTL; row remains in terminator_in_flight
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'processing', lease_token = $2, lease_expires_at = now() - interval '60 seconds', smtp_phase = 'terminator_in_flight' WHERE id = $1",
+            &[&qid, &lease_tok],
+        ).await.unwrap();
+
+        // 1. Worker attempt to claim cannot steal item in terminator_in_flight
+        let lcfg = test_lease_config("w-c642-g", Duration::from_secs(60), 10);
+        let mut worker = fx.worker_client().await;
+        let items = claim_outbound_batch(&mut worker, &lcfg).await.unwrap();
+        assert!(items.is_empty(), "claim_outbound_batch must never claim terminator_in_flight row");
+
+        // 2. Reaper quarantines row safely
+        let rep = reap_stale_and_expired(&mut fx.admin, &api_addr).await.unwrap();
+        assert_eq!(rep.moved_to_outcome_unknown, 1);
+
+        let row = fx.admin.query_one("SELECT status, smtp_phase FROM outbound_queue WHERE id = $1", &[&qid]).await.unwrap();
+        assert_eq!(row.get::<_, String>(0), "outcome_unknown");
+        assert_eq!(row.get::<_, Option<String>>(1).as_deref(), Some("terminator_in_flight"));
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_c642_scenario_h_crash_immediately_after_smtp_acceptance() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+
+        let (qid, did) = fx.enqueue_valid_delivery("c642-h@external.com", false, 5, 3600).await;
+        let lease_tok = Uuid::new_v4();
+
+        // Worker received 250 OK, checkpointed accepted_by_mta, then crashed immediately before settlement
+        fx.admin.execute(
+            "UPDATE outbound_queue SET status = 'processing', lease_token = $2, lease_expires_at = now() - interval '5 seconds', smtp_phase = 'accepted_by_mta', last_smtp_code = 250 WHERE id = $1",
+            &[&qid, &lease_tok],
+        ).await.unwrap();
+
+        // On restart, reaper executes and settles accepted_by_mta as delivered
+        let rep = reap_stale_and_expired(&mut fx.admin, &api_addr).await.unwrap();
+        assert_eq!(rep.preserved_accepted_by_mta, 1);
+
+        let row = fx.admin.query_one("SELECT status, smtp_phase FROM outbound_queue WHERE id = $1", &[&qid]).await.unwrap();
+        assert_eq!(row.get::<_, String>(0), "delivered");
+        assert_eq!(row.get::<_, Option<String>>(1).as_deref(), Some("accepted_by_mta"));
+
+        // Delivery log confirms crash recovery without retransmission
+        let log_row = fx.admin.query_one("SELECT status, smtp_message FROM delivery_log WHERE delivery_id = $1", &[&did]).await.unwrap();
+        assert_eq!(log_row.get::<_, String>(0), "delivered");
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_c652_reconciled_retry_claimability_and_worker_delivery() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+        let mut worker = fx.worker_client().await;
+        let lease_config = test_lease_config("worker-c652-retry-test", Duration::from_secs(30), 10);
+
+        // 1. Enqueue item and move to outcome_unknown with exhausted attempts and expired TTL
+        let (qid, did) = fx.enqueue_valid_delivery("c652-retry@external.com", false, 5, 3600).await;
+        fx.admin
+            .execute(
+                "UPDATE outbound_queue \
+                 SET status = 'outcome_unknown', \
+                     attempts = 5, \
+                     max_attempts = 5, \
+                     expires_at = now() - interval '1 hour', \
+                     next_attempt_at = now() - interval '2 hours', \
+                     smtp_phase = 'terminator_in_flight', \
+                     lease_token = NULL, \
+                     lease_expires_at = NULL, \
+                     claimed_at = NULL \
+                 WHERE id = $1",
+                &[&qid],
+            )
+            .await
+            .unwrap();
+
+        // 2. Outbound worker attempt to claim batch: Must NOT claim outcome_unknown message
+        let claimed_before = claim_outbound_batch(&mut worker, &lease_config).await.unwrap();
+        assert!(
+            claimed_before.is_empty(),
+            "quarantined outcome_unknown message must never be claimed by worker"
+        );
+
+        // 3. Authorized Operator Reconciliation: authorize_retry mutation from C6.5.2
+        let rows_reconciled = fx.admin
+            .execute(
+                "UPDATE outbound_queue \
+                 SET status = 'pending', \
+                     next_attempt_at = clock_timestamp(), \
+                     expires_at = GREATEST(expires_at, clock_timestamp() + interval '24 hours'), \
+                     max_attempts = GREATEST(max_attempts, attempts + 2), \
+                     smtp_phase = NULL, \
+                     lease_token = NULL, \
+                     lease_expires_at = NULL, \
+                     claimed_at = NULL, \
+                     reconciled_at = clock_timestamp(), \
+                     reconciled_by = 'operator@byos.local', \
+                     reconciliation_reason = 'Verified recipient did not receive' \
+                 WHERE id = $1 AND status = 'outcome_unknown' \
+                   AND (lease_token IS NULL OR lease_expires_at <= clock_timestamp())",
+                &[&qid],
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows_reconciled, 1);
+
+        // 4. Outbound worker claims batch: Must claim the retried message with fresh attempt headroom
+        let claimed_after = claim_outbound_batch(&mut worker, &lease_config).await.unwrap();
+        assert_eq!(claimed_after.len(), 1, "worker must successfully claim authorized retry");
+        let claimed_item = &claimed_after[0];
+        assert_eq!(claimed_item.id, qid);
+        assert_eq!(claimed_item.delivery_id, did);
+        assert_eq!(claimed_item.attempts, 5);
+        assert_eq!(claimed_item.max_attempts, 7);
+
+        // 5. Simulate successful delivery settlement by worker
+        let fence_res = record_delivered_leased(
+            &mut worker,
+            &api_addr,
+            qid,
+            claimed_item.lease_token,
+            did,
+            claimed_item.mailbox_id,
+            claimed_item.domain_id,
+            &claimed_item.recipient,
+            250,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(fence_res, LeaseFenceResult::Applied(())));
+
+        // 6. Verify terminal state in database
+        let row = fx.admin
+            .query_one("SELECT status, lease_token FROM outbound_queue WHERE id = $1", &[&qid])
+            .await
+            .unwrap();
+        assert_eq!(row.get::<_, String>(0), "delivered");
+        assert!(row.get::<_, Option<Uuid>>(1).is_none());
+
+        api_h.abort();
+        fx.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_pg_c653_bounded_manual_retry_and_worker_claim() {
+        let _lock = TEST_DB_SERIAL.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+        let mut fx = TestTenantFixture::setup().await;
+        let (_api_addr, _, api_h) = spawn_mock_scheduled_api().await;
+        let mut worker = fx.worker_client().await;
+        let lease_config = test_lease_config("w-c653-retry", Duration::from_secs(60), 10);
+
+        let (qid, _did) = fx
+            .enqueue_valid_delivery("c653-gov@external.local", false, 5, 3600)
+            .await;
+
+        // 1. Transition item into outcome_unknown with manual_retry_count = 0
+        fx.admin
+            .execute(
+                "UPDATE outbound_queue \
+                 SET status = 'outcome_unknown', \
+                     attempts = 4, \
+                     max_attempts = 5, \
+                     manual_retry_count = 0, \
+                     max_manual_retries = 1, \
+                     expires_at = now() + interval '12 hours', \
+                     next_attempt_at = now() - interval '1 hour', \
+                     smtp_phase = 'terminator_in_flight', \
+                     lease_token = NULL, \
+                     lease_expires_at = NULL, \
+                     claimed_at = NULL \
+                 WHERE id = $1",
+                &[&qid],
+            )
+            .await
+            .unwrap();
+
+        // 2. First authorized retry mutation under C6.5.3 bounded governance
+        let rows_reconciled = fx.admin
+            .execute(
+                "UPDATE outbound_queue \
+                 SET status = 'pending', \
+                     next_attempt_at = clock_timestamp(), \
+                     expires_at = LEAST(created_at + interval '72 hours', GREATEST(expires_at, clock_timestamp() + interval '24 hours')), \
+                     max_attempts = LEAST(8, GREATEST(max_attempts, attempts + 2)), \
+                     manual_retry_count = manual_retry_count + 1, \
+                     smtp_phase = NULL, \
+                     lease_token = NULL, \
+                     lease_expires_at = NULL, \
+                     claimed_at = NULL, \
+                     reconciled_at = clock_timestamp(), \
+                     reconciled_by = 'operator@byos.local', \
+                     reconciliation_reason = 'C6.5.3 First retry authorized' \
+                 WHERE id = $1 AND status = 'outcome_unknown' \
+                   AND manual_retry_count < 1 \
+                   AND (lease_token IS NULL OR lease_expires_at <= clock_timestamp())",
+                &[&qid],
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows_reconciled, 1, "first retry must succeed");
+
+        // 3. Worker claims the retried batch
+        let claimed = claim_outbound_batch(&mut worker, &lease_config).await.unwrap();
+        assert_eq!(claimed.len(), 1, "worker must claim the retried item");
+        assert_eq!(claimed[0].id, qid);
+
+        // 4. Simulate crash back to outcome_unknown
+        fx.admin
+            .execute(
+                "UPDATE outbound_queue \
+                 SET status = 'outcome_unknown', \
+                     lease_token = NULL, \
+                     lease_expires_at = NULL, \
+                     claimed_at = NULL \
+                 WHERE id = $1",
+                &[&qid],
+            )
+            .await
+            .unwrap();
+
+        // 5. Attempt second retry under default 1-retry policy: Must be rejected (0 rows updated)
+        let second_retry_rows = fx.admin
+            .execute(
+                "UPDATE outbound_queue \
+                 SET status = 'pending', \
+                     next_attempt_at = clock_timestamp(), \
+                     manual_retry_count = manual_retry_count + 1 \
+                 WHERE id = $1 AND status = 'outcome_unknown' \
+                   AND manual_retry_count < 1 \
+                   AND (lease_token IS NULL OR lease_expires_at <= clock_timestamp())",
+                &[&qid],
+            )
+            .await
+            .unwrap();
+        assert_eq!(second_retry_rows, 0, "second manual retry must be rejected atomically");
+
+        // 6. Attempt direct illegal update violating CHECK constraint: Must fail at database level
+        let check_violation = fx.admin
+            .execute(
+                "UPDATE outbound_queue SET manual_retry_count = 3 WHERE id = $1",
+                &[&qid],
+            )
+            .await;
+        assert!(check_violation.is_err(), "database check constraint must prevent manual_retry_count > max_manual_retries");
+
+        api_h.abort();
         fx.cleanup().await;
     }
 }

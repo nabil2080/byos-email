@@ -302,6 +302,10 @@ func domainsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
+		if !isAdmin(userID, orgID, conn) {
+			http.Error(w, "admin or owner role required to add domains", http.StatusForbidden)
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var req struct {
 			Domain string `json:"domain"`
@@ -460,6 +464,11 @@ func domainVerifyHandler(w http.ResponseWriter, r *http.Request) {
 	err = conn.QueryRow(ctx, `SELECT id::text FROM users WHERE id=$1 AND org_id=$2 AND is_active=true`, userID, orgID).Scan(&memberID)
 	if err != nil {
 		http.Error(w, "not authorized for this organization", http.StatusForbidden)
+		return
+	}
+
+	if !isAdmin(userID, orgID, conn) {
+		http.Error(w, "admin or owner role required to verify domains", http.StatusForbidden)
 		return
 	}
 

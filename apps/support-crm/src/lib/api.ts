@@ -505,3 +505,203 @@ export async function sendTicketReply(params: {
 }
 
 export const fetchSupportAgents = getSupportAgents;
+
+// ============================================================================
+// Release C6.5 / C6.5.1: Outbound Delivery Operations & Queue Observability
+// ============================================================================
+
+export interface QueueOverviewResponse {
+  status: "healthy" | "degraded" | "critical";
+  counts: {
+    pending: number;
+    processing: number;
+    retry_scheduled: number;
+    outcome_unknown: number;
+    delivered: number;
+    bounced: number;
+    expired: number;
+    delivered_24h: number;
+    bounced_24h: number;
+    expired_24h: number;
+    [key: string]: number;
+  };
+  oldest_age_seconds: {
+    pending: number;
+    processing: number;
+    outcome_unknown: number;
+    [key: string]: number;
+  };
+  timestamp: string;
+}
+
+export interface QueueMessageItem {
+  id: string;
+  delivery_id: string;
+  mailbox_id: string;
+  domain_id: string;
+  recipient: string;
+  status: "pending" | "processing" | "outcome_unknown" | "delivered" | "bounced" | "expired" | string;
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string;
+  created_at: string;
+  delivered_at?: string;
+  failed_at?: string;
+  expires_at: string;
+  lease_token?: string;
+  lease_owner?: string;
+  claimed_at?: string;
+  lease_expires_at?: string;
+  is_lease_active: boolean;
+  smtp_phase?: string;
+  last_smtp_code?: number;
+  last_error?: string;
+  reconciled_at?: string;
+  reconciled_by?: string;
+  reconciliation_reason?: string;
+  manual_retry_count?: number;
+  max_manual_retries?: number;
+}
+
+export interface QueueMessageListResponse {
+  messages: QueueMessageItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DeliveryLogHistoryItem {
+  id: string;
+  delivery_id: string;
+  direction: string;
+  status: string;
+  smtp_code?: number;
+  smtp_message?: string;
+  attempted_at: string;
+  lease_token?: string;
+  smtp_phase?: string;
+}
+
+export interface OperatorAuditItem {
+  id: string;
+  created_at: string;
+  actor_id: string;
+  actor_email: string;
+  actor_role: string;
+  action: "investigate" | "add_note" | "resolve_accepted" | "authorize_retry" | "resolve_bounced" | string;
+  queue_id: string;
+  delivery_id: string;
+  previous_status: string;
+  resulting_status: string;
+  resolution_category?: string;
+  operator_reason: string;
+  evidence_category?: string;
+  evidence_reference?: string;
+  evidence_provenance?: "operator_attested" | "independent_verified" | "insufficient" | string;
+  is_independently_verified?: boolean;
+  idempotency_key?: string;
+  request_fingerprint?: string;
+  ip_address?: string;
+  user_agent?: string;
+}
+
+export interface QueueMessageDetailResponse {
+  message: QueueMessageItem;
+  delivery_logs: DeliveryLogHistoryItem[];
+  audit_trail: OperatorAuditItem[];
+}
+
+export interface ReconcileRequest {
+  action: "resolve_accepted" | "authorize_retry" | "resolve_bounced" | "add_note";
+  operator_reason: string;
+  resolution_category?: string;
+  evidence_category?: string;
+  evidence_reference?: string;
+  duplicate_risk_acknowledged?: boolean;
+  idempotency_key?: string;
+}
+
+export interface ReconcileResponse {
+  success: boolean;
+  action: string;
+  queue_id: string;
+  delivery_id: string;
+  previous_status: string;
+  resulting_status: string;
+  reconciled_at: string;
+  reconciled_by: string;
+  audit_id: string;
+  evidence_provenance?: string;
+  is_independently_verified?: boolean;
+  idempotent_replay?: boolean;
+}
+
+export interface QueueAlertItem {
+  type: "stale_lease" | "stuck_pending" | "outcome_unknown_quarantine" | string;
+  severity: "warning" | "critical" | string;
+  count: number;
+  message: string;
+  sample_ids: string[];
+}
+
+export interface QueueAlertsResponse {
+  status: "healthy" | "warning" | "critical" | string;
+  alerts: QueueAlertItem[];
+}
+
+export async function fetchQueueOverview(): Promise<QueueOverviewResponse> {
+  return adminFetch<QueueOverviewResponse>("/admin/v1/queue/overview");
+}
+
+export async function fetchQueueMessages(params?: {
+  status?: string;
+  recipient?: string;
+  domain_id?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<QueueMessageListResponse> {
+  const query = new URLSearchParams();
+  if (params?.status && params.status !== "all") query.set("status", params.status);
+  if (params?.recipient) query.set("recipient", params.recipient);
+  if (params?.domain_id) query.set("domain_id", params.domain_id);
+  if (params?.limit) query.set("limit", String(params.limit));
+  if (params?.offset !== undefined) query.set("offset", String(params.offset));
+  const qs = query.toString();
+  return adminFetch<QueueMessageListResponse>(`/admin/v1/queue/messages${qs ? `?${qs}` : ""}`);
+}
+
+export async function fetchQueueMessageDetail(id: string): Promise<QueueMessageDetailResponse> {
+  return adminFetch<QueueMessageDetailResponse>(`/admin/v1/queue/messages/${encodeURIComponent(id)}`);
+}
+
+export async function fetchQueueMessageAudit(id: string): Promise<{
+  queue_id: string;
+  audit_count: number;
+  audit_trail: OperatorAuditItem[];
+}> {
+  return adminFetch<{
+    queue_id: string;
+    audit_count: number;
+    audit_trail: OperatorAuditItem[];
+  }>(`/admin/v1/queue/messages/${encodeURIComponent(id)}/audit`);
+}
+
+export async function reconcileQueueMessage(
+  id: string,
+  req: ReconcileRequest
+): Promise<ReconcileResponse> {
+  const headers: Record<string, string> = {};
+  if (req.idempotency_key) {
+    headers["Idempotency-Key"] = req.idempotency_key;
+  }
+  return adminFetch<ReconcileResponse>(`/admin/v1/queue/messages/${encodeURIComponent(id)}/reconcile`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(req),
+  });
+}
+
+export async function fetchQueueAlerts(): Promise<QueueAlertsResponse> {
+  return adminFetch<QueueAlertsResponse>("/admin/v1/queue/alerts");
+}
+

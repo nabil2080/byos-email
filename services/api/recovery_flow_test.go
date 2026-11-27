@@ -1135,7 +1135,17 @@ func TestExceptionalRecoveryEndToEndKeyPreservation(t *testing.T) {
 	reqReactivate := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/reactivate-keys", bytes.NewReader(reactivatePayload))
 	reqReactivate.SetPathValue("mailbox_id", mailboxID)
 	reqReactivate.SetPathValue("id", mailboxID)
-	reqReactivate.AddCookie(&http.Cookie{Name: "byos_session", Value: resetResp.Token})
+	var resetCookieToken string
+	for _, c := range recReset.Result().Cookies() {
+		if c.Name == "byos_session" && c.Value != "" {
+			resetCookieToken = c.Value
+			break
+		}
+	}
+	if resetCookieToken == "" {
+		t.Fatalf("expected byos_session cookie from reset-with-approval")
+	}
+	reqReactivate.AddCookie(&http.Cookie{Name: "byos_session", Value: resetCookieToken})
 	recReactivate := httptest.NewRecorder()
 	mailboxReactivateKeysHandler(recReactivate, reqReactivate)
 	if recReactivate.Code != http.StatusOK {
@@ -1529,7 +1539,17 @@ func TestExceptionalCryptographicRecoveryEndToEnd(t *testing.T) {
 	reqReactivate := httptest.NewRequest(http.MethodPost, "/v1/mailboxes/"+mailboxID+"/reactivate-keys", bytes.NewReader(reactivatePayload))
 	reqReactivate.SetPathValue("mailbox_id", mailboxID)
 	reqReactivate.SetPathValue("id", mailboxID)
-	reqReactivate.AddCookie(&http.Cookie{Name: "byos_session", Value: resetResp.Token})
+	var resetCookieToken string
+	for _, c := range recReset.Result().Cookies() {
+		if c.Name == "byos_session" && c.Value != "" {
+			resetCookieToken = c.Value
+			break
+		}
+	}
+	if resetCookieToken == "" {
+		t.Fatalf("expected byos_session cookie from reset-with-approval")
+	}
+	reqReactivate.AddCookie(&http.Cookie{Name: "byos_session", Value: resetCookieToken})
 	recReactivate := httptest.NewRecorder()
 	mailboxReactivateKeysHandler(recReactivate, reqReactivate)
 	if recReactivate.Code != http.StatusOK {
@@ -2373,15 +2393,16 @@ func TestPasswordModificationInvalidatesPendingReactivations(t *testing.T) {
 	}
 	json.NewDecoder(recPrepB.Body).Decode(&prepRespB)
 
-	// User A changes password
-	totpCodeA, _ := computeTOTP(totpSecret, time.Now())
+	// User A changes password (use fresh step-up MFA token to avoid 30s TOTP replay collision with earlier steps)
+	stepUpTokA, _ := generateRandomBase64URL(32)
+	_, _ = db.Exec(`INSERT INTO auth_challenges (user_id, challenge_type, challenge_token, destination, expires_at) VALUES ($1, 'step_up_mfa', $2, 'totp', NOW() + INTERVAL '5 minutes')`, memberID, stepUpTokA)
 	newPassA := "new-password-user-a-999"
 	cpPayloadA := map[string]string{
 		"current_password": "RecFlowNewPassword123!",
 		"new_password":     newPassA,
 		"wrapped_sk_user":  `{"salt":"a_new_salt","envelope":"a_new_env"}`,
 		"mailbox_id":       mailboxID,
-		"mfa_code":         totpCodeA,
+		"mfa_code":         stepUpTokA,
 	}
 	cpBodyA, _ := json.Marshal(cpPayloadA)
 	reqCPA := httptest.NewRequest(http.MethodPost, "/v1/auth/change-password", bytes.NewReader(cpBodyA))

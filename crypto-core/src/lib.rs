@@ -1,3 +1,6 @@
+#[cfg(all(feature = "test-support", not(any(test, debug_assertions))))]
+compile_error!("feature `test-support` cannot be enabled in release builds without debug assertions or tests");
+
 pub mod error;
 pub mod core;
 pub mod envelope;

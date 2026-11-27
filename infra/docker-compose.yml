@@ -15,11 +15,35 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./postgres/migrations:/migrations:ro
+      - postgres-archive:/var/byos/archive
+      - ../tools/byos-backup/byos-backup-linux:/usr/local/bin/byos-backup:ro
+      - ${BYOS_BACKUP_KEY_FILE:-./secrets/backup.key}:/etc/byos/keys/backup.key:ro
+    entrypoint:
+      - "sh"
+      - "-c"
+      - "mkdir -p /var/byos/archive && chown -R postgres:postgres /var/byos/archive && chmod 700 /var/byos/archive && exec docker-entrypoint.sh postgres -c wal_level=replica -c archive_mode=on -c \"archive_command=/usr/local/bin/byos-backup archive-wal --source-path %p --wal-name %f --archive-dir /var/byos/archive --key-file /etc/byos/keys/backup.key\" -c archive_timeout=300"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U byos -d byos"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U byos -d byos"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
+      start_period: 10s
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: tools/byos-migrate/Dockerfile
+    container_name: byos-migrate
+    environment:
+      DATABASE_URL: "postgres://byos:byos_dev_password@postgres:5432/byos?sslmode=disable"
+      MIGRATIONS_DIR: "/migrations"
+    volumes:
+      - ./postgres/migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   redis:
     image: redis:7-alpine
@@ -170,6 +194,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       minio:
@@ -208,6 +234,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       storage-worker:
@@ -251,6 +279,8 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   crypto-worker:
     build:
@@ -324,6 +354,8 @@ services:
     container_name: byos-outbound-worker
     expose:
       - "8086"
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
     user: "65534:65534"
     read_only: true
     tmpfs:
@@ -338,6 +370,7 @@ services:
       POSTFIX_ADDR: "postfix:25"
       OUTBOUND_WORKER_ADDR: ":8086"
       POLL_INTERVAL_MS: "5000"
+      SHUTDOWN_TIMEOUT_SECS: "25"
       RUST_LOG: info
       BYOS_DKIM_DEK_FILE: /run/secrets/byos_dkim_dek
       CRYPTO_WORKER_INTERNAL_KEY_FILE: /run/secrets/crypto_worker_internal_key
@@ -352,6 +385,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       crypto-worker:
         condition: service_started
 
@@ -382,11 +417,14 @@ services:
       - "127.0.0.1:8087:8087"
     environment:
       PORT: "8087"
+      BYOS_ENV: "development"
       BYOS_DEV_MODE: "1"
       SUPPORT_DB_URL: "postgres://role_support_agent:support_crm_password@postgres:5432/byos"
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   control-plane:
     build:
@@ -470,6 +508,7 @@ secrets:
 
 volumes:
   postgres-data:
+  postgres-archive:
   redis-data:
   minio-data:
 

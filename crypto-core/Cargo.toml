@@ -52,6 +52,13 @@ rand_core = { version = "0.6", features = ["std"] }
 getrandom = { version = "0.2", features = ["js"] }
 getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
+[features]
+default = []
+test-support = []
+
+[dev-dependencies]
+crypto-core = { path = ".", features = ["test-support"] }
+
 [profile.release]
 opt-level = "z"
 lto = true

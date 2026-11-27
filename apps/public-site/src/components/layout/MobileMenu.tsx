@@ -33,7 +33,7 @@ export function MobileMenu() {
       <button
         type="button"
         onClick={toggleMenu}
-        class="p-2 rounded-xl border border-[#E2DFD8] bg-white text-[#2B2C2D] hover:bg-[#FAF9F6] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#9E725F]/40 cursor-pointer"
+        class="p-2 rounded-xl border border-[#D8D3C9] bg-[#F6F3ED] text-[#18212A] hover:bg-[#FAF9F6] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#226192]/40 cursor-pointer"
         aria-label="Toggle menu"
         aria-expanded={isOpen()}
       >
@@ -55,36 +55,36 @@ export function MobileMenu() {
       </button>
 
       <Show when={isOpen()}>
-        <div class="fixed inset-x-0 top-[61px] bg-[#F0EEE9]/95 backdrop-blur-lg border-b border-[#E2DFD8] shadow-xl z-50 p-6 space-y-4">
+        <div class="fixed inset-x-0 top-[61px] bg-[#EAE6DE]/95 backdrop-blur-lg border-b border-[#D8D3C9] shadow-xl z-50 p-6 space-y-4">
           <nav class="flex flex-col space-y-1" aria-label="Mobile">
             {links.map((link) => (
               <a
                 href={link.href}
                 onClick={closeMenu}
-                class="text-base font-semibold text-[#2B2C2D] hover:text-[#9E725F] transition-colors py-2.5 px-3 rounded-xl hover:bg-white/60"
+                class="text-base font-semibold text-[#18212A] hover:text-[#226192] transition-colors py-2.5 px-3 rounded-xl hover:bg-[#F6F3ED]/60"
               >
                 {link.label}
               </a>
             ))}
           </nav>
 
-          <div class="pt-4 border-t border-[#E2DFD8] flex flex-col gap-2.5">
+          <div class="pt-4 border-t border-[#D8D3C9] flex flex-col gap-2.5">
             <a
               href={`${cpUrl()}/login`}
-              class="w-full text-center py-2.5 rounded-xl border border-[#E2DFD8] bg-white text-xs font-bold text-[#2B2C2D] hover:bg-[#FAF9F6] transition-colors shadow-2xs"
+              class="w-full text-center py-2.5 rounded-xl border border-[#D8D3C9] bg-[#F6F3ED] text-xs font-bold text-[#18212A] hover:bg-[#FAF9F6] transition-colors shadow-2xs"
             >
               Sign In
             </a>
             <a
               href={`${cpUrl()}/signup`}
-              class="w-full text-center py-2.5 rounded-xl bg-[#9E725F] text-white text-xs font-bold hover:bg-[#865E4D] transition-colors shadow-xs"
+              class="w-full text-center py-2.5 rounded-xl bg-[#226192] text-white text-xs font-bold hover:bg-[#1B4E76] transition-colors shadow-xs"
             >
               Get Started
             </a>
           </div>
 
-          <div class="pt-1 flex items-center gap-2 text-[11px] text-[#6F7173] font-mono">
-            <span class="h-1.5 w-1.5 rounded-full bg-[#9E725F]"></span>
+          <div class="pt-1 flex items-center gap-2 text-[11px] text-[#55616D] font-mono">
+            <span class="h-1.5 w-1.5 rounded-full bg-[#226192]"></span>
             <span>Your email. Your storage. Your control.</span>
           </div>
         </div>

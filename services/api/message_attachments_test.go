@@ -41,7 +41,9 @@ func TestUploadAttachmentChunk_RawBinarySuccess(t *testing.T) {
 	req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", senderMailboxID), bytes.NewReader(rawPayload))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Object-Key", objectKey)
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -85,7 +87,9 @@ func TestUploadAttachmentChunk_Base64JsonFallback(t *testing.T) {
 
 	req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", senderMailboxID), bytes.NewReader(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -123,7 +127,9 @@ func TestUploadAttachmentChunk_ScopeIsolation(t *testing.T) {
 	req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", senderMailboxID), bytes.NewReader([]byte("exploit")))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Object-Key", invalidKey)
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -133,6 +139,7 @@ func TestUploadAttachmentChunk_ScopeIsolation(t *testing.T) {
 
 // 5. CORS preflight allows X-Object-Key
 func TestUploadAttachmentChunk_CORSPreflight(t *testing.T) {
+	t.Setenv("BYOS_ENV", "development")
 	mux := setupAttachmentChunkTestMux()
 	mailboxID := uuid.New().String()
 
@@ -185,7 +192,9 @@ func TestUploadAttachmentChunk_OversizedChunk(t *testing.T) {
 	req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", senderMailboxID), oversizedReader)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Object-Key", objectKey)
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -196,6 +205,7 @@ func TestUploadAttachmentChunk_OversizedChunk(t *testing.T) {
 
 // 7. Storage worker failure propagates as 502 Bad Gateway
 func TestUploadAttachmentChunk_StorageWorkerFailure(t *testing.T) {
+	t.Setenv("BYOS_ALLOWED_ORIGINS", "http://127.0.0.1:3001")
 	db := setupTestDB(t)
 	defer db.Close()
 	mux := setupAttachmentChunkTestMux()
@@ -208,10 +218,15 @@ func TestUploadAttachmentChunk_StorageWorkerFailure(t *testing.T) {
 	objectKey := fmt.Sprintf("mailboxes/%s/attachments/msg-fail/chunk_000.enc", senderMailboxID)
 	validChunk := make([]byte, 29)
 	validChunk[0] = 0x01
+	for i := 1; i < 29; i++ {
+		validChunk[i] = byte(i)
+	}
 	req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", senderMailboxID), bytes.NewReader(validChunk))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Object-Key", objectKey)
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -232,6 +247,9 @@ func TestUploadAttachmentChunk_EndToEndCiphertextIntegrity(t *testing.T) {
 	// Simulate Section 12 AES-256-GCM envelope: 0x01 + 12-byte IV + ciphertext + 16-byte tag
 	ciphertext := make([]byte, 1+12+len(plaintext)+16)
 	ciphertext[0] = 0x01
+	for i := 1; i < 13; i++ {
+		ciphertext[i] = byte(i)
+	}
 	for i := range plaintext {
 		ciphertext[13+i] = plaintext[i] ^ 0x5a
 	}
@@ -244,7 +262,9 @@ func TestUploadAttachmentChunk_EndToEndCiphertextIntegrity(t *testing.T) {
 	req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", senderMailboxID), bytes.NewReader(ciphertext))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Object-Key", objectKey)
-	req.AddCookie(&http.Cookie{Name: "byos_session", Value: senderToken})
+	req.Header.Set("Origin", "http://127.0.0.1:3001")
+	req.Header.Set("X-BYOS-Client", "webmail")
+	req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: senderToken})
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -502,5 +522,44 @@ func TestAdversarialSection12EnvelopeInputs(t *testing.T) {
 			badVerBuf[i] = byte(i)
 		}
 		assert.Error(t, validateSection12BinaryEnvelope(badVerBuf), "Unsupported version 0x%02x must be rejected", badVer)
+	}
+}
+
+func TestUploadAttachmentChunk_CSRFRejection(t *testing.T) {
+	t.Setenv("BYOS_ALLOWED_ORIGINS", "http://127.0.0.1:3001")
+	mux := setupAttachmentChunkTestMux()
+	mbID := uuid.New().String()
+	validChunk := make([]byte, 29)
+	validChunk[0] = 0x01
+	for i := 1; i < 29; i++ {
+		validChunk[i] = byte(i)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		origin  string
+		referer string
+		want    int
+	}{
+		{"Missing_Origin_And_Referer", "", "", http.StatusForbidden},
+		{"Unconfigured_Origin", "https://evil.example", "", http.StatusForbidden},
+		{"Conflicting_Origin_And_Referer", "http://127.0.0.1:3001", "http://127.0.0.1:3000/dashboard", http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", fmt.Sprintf("/v1/mailboxes/%s/attachment-chunks", mbID), bytes.NewReader(validChunk))
+			req.Header.Set("Content-Type", "application/octet-stream")
+			req.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/attachments/msg-csrf/chunk_000.enc", mbID))
+			req.Header.Set("X-BYOS-Client", "webmail")
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.referer != "" {
+				req.Header.Set("Referer", tc.referer)
+			}
+			req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: "tok"})
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			assert.Equal(t, tc.want, rec.Code)
+		})
 	}
 }

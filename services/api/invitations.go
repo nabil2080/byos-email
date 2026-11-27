@@ -612,15 +612,15 @@ func invitationClaimHandler(w http.ResponseWriter, r *http.Request) {
 	auditLog(ctx, conn, orgID, userID, "invitation_claimed", "user", userID, map[string]interface{}{"email": email})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	resp := map[string]interface{}{
 		"success":      true,
 		"user_id":      userID,
 		"email":        email,
 		"org_id":       orgID,
 		"mailbox_id":   mailboxID,
 		"privacy_mode": privacyMode,
-		"token":        token,
-	})
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 // mailboxImpersonateHandler handles POST /v1/organizations/{org_id}/mailboxes/{mailbox_id}/impersonate

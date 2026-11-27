@@ -416,9 +416,6 @@ export const SetupAccount: Component = () => {
         sessionStorage.removeItem("byos_signing_seed_" + data.mailbox_id);
         sessionStorage.removeItem("byos_xwing_seed_" + data.mailbox_id);
       }
-      if (claimRes.token) {
-        sessionStorage.setItem("byos_active_session_token", claimRes.token);
-      }
 
       // Persist newly activated account into byos_connected_accounts for multi-mailbox support
       const newAccount = {

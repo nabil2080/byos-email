@@ -1,4 +1,6 @@
 ---
+import { FlutedGlassCanvas } from "../hero/FlutedGlassCanvas";
+
 interface Props {
   title: string;
   badge?: string;
@@ -8,33 +10,40 @@ interface Props {
 const { title, badge, description } = Astro.props;
 ---
 
-<div class="relative overflow-hidden bg-[#2B2C2D] text-white border-b border-[#3C3D3E] shadow-lg">
-  {/* Cryptographic dot grid texture */}
-  <div class="absolute inset-0 opacity-15 crypto-dot-grid pointer-events-none"></div>
+<header class="relative overflow-hidden rounded-[22px] md:rounded-[32px] mx-2 md:mx-4 bg-[#0B131B] text-[#EAE6DE] shadow-[0_24px_70px_-30px_rgba(20,14,11,0.6)]">
+  {/* Soft WebGL Fluted Glass Shader */}
+  <div class="pointer-events-none absolute inset-0 z-0 overflow-hidden" aria-hidden="true">
+    <div
+      class="absolute -right-24 -top-28 h-[420px] w-[420px] rounded-full blur-[130px] opacity-55"
+      style="background: radial-gradient(circle, #226192 0%, transparent 72%)"
+    ></div>
+    <div
+      class="absolute -left-20 -bottom-24 h-[360px] w-[360px] rounded-full blur-[120px] opacity-50"
+      style="background: radial-gradient(circle, #EF8557 0%, transparent 72%)"
+    ></div>
+    <FlutedGlassCanvas client:load />
+    <div class="absolute inset-0 backdrop-blur-[1px]"></div>
+  </div>
 
-  {/* Ambient Mocha Mousse glow */}
-  <div class="absolute -top-24 left-1/2 -translate-x-1/2 w-[600px] h-[250px] bg-[#9E725F]/20 rounded-full blur-3xl pointer-events-none"></div>
+  <div class="pointer-events-none absolute inset-0 z-[2] film-grain opacity-[0.04]" aria-hidden="true"></div>
 
   {/* Content Container */}
-  <div class="relative max-w-7xl mx-auto px-6 py-14 sm:py-20 text-center flex flex-col items-center justify-center min-h-[200px]">
+  <div class="relative z-10 max-w-5xl mx-auto px-6 pt-24 pb-16 sm:pt-32 sm:pb-20 text-center flex flex-col items-center justify-center">
     {badge && (
-      <div class="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-[#9E725F]/20 border border-[#9E725F]/40 text-[#F3ECE8] text-xs font-mono font-medium mb-4 shadow-2xs">
-        <span class="h-1.5 w-1.5 rounded-full bg-[#9E725F]"></span>
+      <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-black/25 backdrop-blur-md border border-[#EAE6DE]/20 text-[#EF8557] text-[11px] font-mono uppercase tracking-[0.18em] mb-5">
+        <span class="h-1.5 w-1.5 rounded-full bg-[#EF8557]"></span>
         <span>{badge}</span>
       </div>
     )}
 
-    <h1 class="text-3xl sm:text-5xl font-extrabold text-white tracking-tight">
+    <h1 class="font-display text-3xl sm:text-5xl lg:text-[3.5rem] font-extrabold text-[#EAE6DE] tracking-tight leading-[1.05]">
       {title}
     </h1>
 
     {description && (
-      <p class="mt-4 text-sm sm:text-base text-[#E2DFD8]/80 max-w-2xl mx-auto leading-relaxed">
+      <p class="mt-5 text-base sm:text-lg text-[#EAE6DE]/80 max-w-2xl mx-auto leading-relaxed">
         {description}
       </p>
     )}
   </div>
-
-  {/* Subtle bottom bevel highlight */}
-  <div class="absolute bottom-0 inset-x-0 h-[1px] bg-gradient-to-r from-transparent via-[#9E725F]/30 to-transparent"></div>
-</div>
+</header>

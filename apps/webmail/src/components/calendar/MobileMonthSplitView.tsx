@@ -220,34 +220,39 @@ export const MobileMonthSplitView: Component<MobileMonthSplitViewProps> = (props
                   type="button"
                   data-testid="month-cell"
                   onClick={() => props.onSelectDate(day.date)}
-                  class={`h-11 flex flex-col items-center justify-start pt-1 rounded-xl transition-all cursor-pointer relative ${
+                  class={`h-11 flex flex-col items-center justify-start pt-0.5 rounded-xl transition-all cursor-pointer relative group focus:outline-none focus:ring-1 focus:ring-[#9E725F] ${
                     day.isSelected
-                      ? "bg-[#3C3D3E] dark:bg-[#ECEBE8] text-white dark:text-[#18191D] font-bold shadow-xs"
-                      : day.isToday
-                      ? "text-[#9E725F] font-bold ring-1 ring-[#9E725F]/60"
-                      : day.isCurrentMonth
-                      ? "text-[#3C3D3E] dark:text-[#ECEBE8] hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35]"
-                      : "text-[#B8B6B0] dark:text-[#565961] hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35]"
+                      ? "bg-[#F2E8E2]/50 dark:bg-[#3D2C24]/25"
+                      : "hover:bg-[#F0EEE9] dark:hover:bg-[#2A2D35]"
                   }`}
                   aria-label={day.date.toDateString()}
                   aria-selected={day.isSelected}
                 >
-                  <span class="text-xs leading-none">
+                  {/* Circular Date Badge */}
+                  <span
+                    class={`w-7 h-7 flex items-center justify-center text-xs rounded-full transition-all ${
+                      day.isSelected
+                        ? "bg-[#9E725F] text-white font-bold shadow-2xs"
+                        : day.isToday
+                        ? "bg-[#F2E8E2] text-[#9E725F] dark:bg-[#3D2C24] dark:text-[#D4A38F] font-bold ring-1 ring-[#9E725F]/40"
+                        : day.isCurrentMonth
+                        ? "text-[#3C3D3E] dark:text-[#ECEBE8] font-medium"
+                        : "text-[#B8B6B0] dark:text-[#565961]"
+                    }`}
+                  >
                     {day.dayNum}
                   </span>
 
                   {/* Indicator Dots for Events */}
-                  <div class="flex items-center justify-center gap-0.5 mt-1 h-1.5 overflow-hidden">
+                  <div class="flex items-center justify-center gap-0.5 mt-0.5 h-1.5 overflow-hidden">
                     <For each={dots().slice(0, 3)}>
                       {(ev) => {
                         const cal = props.calendars.find((c) => c.id === ev.calendarId);
                         const dotColor = ev.details?.color || cal?.color || "#9E725F";
                         return (
                           <span
-                            class={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                              day.isSelected ? "bg-white dark:bg-[#18191D]" : ""
-                            }`}
-                            style={{ "background-color": day.isSelected ? undefined : dotColor }}
+                            class="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                            style={{ "background-color": dotColor }}
                           />
                         );
                       }}

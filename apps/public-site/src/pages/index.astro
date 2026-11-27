@@ -6,26 +6,36 @@ import { BigIdeaSeparation } from "../components/interactive/BigIdeaSeparation";
 const cpUrl = import.meta.env.PUBLIC_CP_URL || "http://localhost:3000";
 
 const stack = [
-  { label: "Your domain", value: "company.com" },
-  { label: "BYOS", value: "Delivery & mailboxes" },
-  { label: "Your mailbox", value: "you@company.com" },
-  { label: "Your storage", value: "S3 · Drive · R2" },
+  { step: "01", label: "Your domain", value: "company.com" },
+  { step: "02", label: "BYOS", value: "Delivery & mailboxes" },
+  { step: "03", label: "Your mailbox", value: "you@company.com" },
+  { step: "04", label: "Your storage", value: "S3 · Drive · R2" },
+];
+
+const providers = [
+  "Amazon S3",
+  "Cloudflare R2",
+  "Google Drive",
+  "Backblaze B2",
+  "Wasabi",
+  "Azure Blob",
+  "Self-Hosted MinIO",
 ];
 
 const securityDocs = [
-  { label: "Security architecture", status: "Documented" },
-  { label: "Privacy boundaries", status: "Documented" },
-  { label: "Recovery model", status: "Designed" },
-  { label: "Storage model", status: "Implemented" },
-  { label: "Interoperability limits", status: "Documented" },
-  { label: "Threat model", status: "Under review" },
+  { label: "Security architecture", href: "/security#architecture", status: "Documented" },
+  { label: "Privacy boundaries", href: "/security#threats", status: "Documented" },
+  { label: "Recovery model", href: "/security#architecture", status: "Designed" },
+  { label: "Storage model", href: "/security#threats", status: "Implemented" },
+  { label: "Interoperability limits", href: "/security#standards", status: "Documented" },
+  { label: "Threat model", href: "/security#threats", status: "Under review" },
 ];
 
 const statusTone: Record<string, string> = {
-  Implemented: "border-[#9E725F]/30 bg-[#F3ECE8] text-[#865E4D]",
-  Documented: "border-[#E2DFD8] bg-white text-[#6F7173]",
-  Designed: "border-[#E2DFD8] bg-white text-[#6F7173]",
-  "Under review": "border-[#E2DFD8] bg-white text-[#8B8E91]",
+  Implemented: "border-[#226192]/35 bg-[#E2E7EB] text-[#1B4E76]",
+  Documented: "border-[#D8D3C9] bg-[#F6F3ED] text-[#55616D]",
+  Designed: "border-[#D8D3C9] bg-[#F6F3ED] text-[#55616D]",
+  "Under review": "border-[#D8D3C9] bg-[#F6F3ED] text-[#647280]",
 };
 ---
 
@@ -36,18 +46,31 @@ const statusTone: Record<string, string> = {
   {/* 1 — Hero */}
   <AnimatedHero client:load />
 
+  {/* Provider Marquee Strip */}
+  <div class="relative overflow-hidden border-y border-[#D8D3C9] bg-[#F6F3ED]/70 py-4 mt-6">
+    <div class="animate-marquee items-center gap-10">
+      {[...providers, ...providers].map((p) => (
+        <span class="inline-flex items-center gap-3 px-4 font-mono text-xs uppercase tracking-[0.18em] text-[#55616D]">
+          <span class="h-1.5 w-1.5 rounded-full bg-[#226192]/70" />
+          <span>{p}</span>
+        </span>
+      ))}
+    </div>
+  </div>
+
   {/* 2 — The idea */}
-  <section class="relative overflow-hidden py-24 sm:py-32">
+  <section id="the-idea" class="scroll-mt-24 relative overflow-hidden py-24 sm:py-32">
     <div class="absolute inset-0 bg-editorial-rules opacity-50 pointer-events-none" aria-hidden="true"></div>
     <div class="relative mx-auto max-w-7xl px-6 grid lg:grid-cols-2 gap-16 items-center">
       <div data-reveal>
-        <h2 class="font-display text-4xl sm:text-5xl lg:text-[3.5rem] font-extrabold leading-[1.05] text-[#2B2C2D]">
+        <span class="eyebrow">Architecture</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl lg:text-[3.5rem] font-extrabold leading-[1.05] text-[#18212A]">
           Your email shouldn't decide where your data lives.
         </h2>
-        <p class="mt-6 max-w-lg text-lg text-[#6F7173] leading-relaxed">
+        <p class="mt-6 max-w-lg text-lg text-[#55616D] leading-relaxed">
           Most providers bundle the mailbox and the storage together, so leaving means losing
           access. BYOS keeps the two separate: we run the service, and your persistent mailbox
-          data stays in storage you control.
+          data stays encrypted in storage you control.
         </p>
       </div>
       <div data-reveal style="--reveal-delay: 120ms">
@@ -56,58 +79,66 @@ const statusTone: Record<string, string> = {
     </div>
   </section>
 
-  {/* 3 — How it works: one compact strip, not four separate sections */}
-  <section id="how-it-works" class="scroll-mt-24 py-20 sm:py-24 border-t border-[#E2DFD8]">
+  {/* 3 — How it works */}
+  <section id="how-it-works" class="scroll-mt-24 py-20 sm:py-24 border-t border-[#D8D3C9]">
     <div class="mx-auto max-w-7xl px-6">
       <div class="max-w-xl" data-reveal>
-        <h2 class="font-display text-3xl sm:text-4xl font-extrabold text-[#2B2C2D] leading-[1.1]">
+        <span class="eyebrow">How it works</span>
+        <h2 class="mt-4 font-display text-3xl sm:text-4xl font-extrabold text-[#18212A] leading-[1.1]">
           Normal email on the outside. Your control underneath.
         </h2>
       </div>
 
       <div class="relative mt-14" data-reveal style="--reveal-delay: 100ms">
-        <div class="hidden md:block absolute left-0 right-0 top-[13px] h-px bg-[#E2DFD8]" aria-hidden="true"></div>
-        <div class="grid gap-8 md:grid-cols-4 md:gap-4">
+        <div class="hidden md:block absolute left-0 right-0 top-[13px] h-px bg-[#D8D3C9]" aria-hidden="true"></div>
+        <div class="grid gap-8 md:grid-cols-4 md:gap-6">
           {stack.map((s) => (
-            <div class="relative pt-8 md:pt-9">
-              <span class="hidden md:block absolute left-0 top-1.5 h-3 w-3 rounded-full border-2 border-[#F0EEE9] bg-[#9E725F]" aria-hidden="true"></span>
-              <h3 class="font-display text-lg font-bold text-[#2B2C2D]">{s.label}</h3>
-              <p class="mt-1 text-sm font-mono text-[#6F7173]">{s.value}</p>
+            <div class="group relative pt-8 md:pt-10">
+              <span class="hidden md:flex absolute left-0 top-1.5 h-3 w-3 items-center justify-center rounded-full border-2 border-[#EAE6DE] bg-[#226192] transition-transform duration-300 group-hover:scale-125" aria-hidden="true"></span>
+              <span class="text-[11px] font-mono uppercase tracking-[0.2em] text-[#226192] font-semibold">{s.step}</span>
+              <h3 class="mt-1.5 font-display text-lg font-bold text-[#18212A] group-hover:text-[#226192] transition-colors">{s.label}</h3>
+              <p class="mt-1 text-sm font-mono text-[#55616D]">{s.value}</p>
             </div>
           ))}
         </div>
       </div>
 
-      <p class="mt-10 max-w-2xl text-base text-[#6F7173] leading-relaxed" data-reveal style="--reveal-delay: 160ms">
+      <p class="mt-10 max-w-2xl text-base text-[#55616D] leading-relaxed" data-reveal style="--reveal-delay: 160ms">
         BYOS handles the email infrastructure. You control where your persistent mailbox data
         lives — that's the one decision that makes it different.
       </p>
     </div>
   </section>
 
-  {/* 4 — What's included: consolidated bento, replaces six separate full-height sections */}
-  <section id="features" class="scroll-mt-24 py-24 sm:py-32 border-t border-[#E2DFD8]">
+  {/* 4 — What's included: consolidated bento with cursor spotlights */}
+  <section id="features" class="scroll-mt-24 py-24 sm:py-32 border-t border-[#D8D3C9]">
     <div class="mx-auto max-w-7xl px-6">
       <div class="max-w-xl" data-reveal>
-        <h2 class="font-display text-4xl sm:text-5xl font-extrabold text-[#2B2C2D] leading-[1.06]">
+        <span class="eyebrow">Capabilities</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold text-[#18212A] leading-[1.06]">
           Everything a business mailbox needs.
         </h2>
-        <p class="mt-5 text-lg text-[#6F7173] leading-relaxed">
-          A complete, believable mailbox — not a stripped-down privacy experiment.
+        <p class="mt-5 text-lg text-[#55616D] leading-relaxed">
+          A complete, believable workspace — mail, calendar, and notes — not a stripped-down privacy experiment.
         </p>
       </div>
 
-      <div class="mt-14 grid gap-4 lg:grid-cols-6" data-reveal style="--reveal-delay: 100ms">
+      <div class="mt-14 grid gap-5 lg:grid-cols-6" data-reveal style="--reveal-delay: 100ms">
         {/* Storage — the emphasis cell, spans wider */}
-        <div class="lg:col-span-4 card-editorial p-7 sm:p-8">
-          <h3 class="font-display text-xl font-bold text-[#2B2C2D]">Storage, your choice</h3>
-          <p class="mt-2 max-w-md text-sm text-[#6F7173] leading-relaxed">
+        <div class="lg:col-span-4 card-editorial card-spotlight card-hover-elevate p-7 sm:p-8">
+          <div class="flex items-center justify-between gap-4">
+            <h3 class="font-display text-xl font-bold text-[#18212A]">Storage, your choice</h3>
+            <span class="rounded-full border border-[#226192]/30 bg-[#E2E7EB] px-3 py-1 font-mono text-[11px] font-semibold text-[#1B4E76]">
+              0% markup
+            </span>
+          </div>
+          <p class="mt-3 max-w-lg text-sm text-[#55616D] leading-relaxed">
             Connect the storage you already trust. BYOS uses a provider-neutral interface, so
             your persistent mailbox data stays under your account, not locked inside ours.
           </p>
-          <div class="mt-5 flex flex-wrap gap-2">
+          <div class="mt-6 flex flex-wrap gap-2">
             {["Amazon S3", "Cloudflare R2", "Google Drive", "Backblaze B2", "Wasabi", "Azure Blob"].map((tag) => (
-              <span class="rounded-md border border-[#E2DFD8] bg-[#FBFAF7] px-2.5 py-1 font-mono text-[11px] text-[#3C3D3E]">
+              <span class="rounded-lg border border-[#D8D3C9] bg-[#F6F3ED] px-3 py-1.5 font-mono text-xs text-[#18212A]">
                 {tag}
               </span>
             ))}
@@ -115,23 +146,25 @@ const statusTone: Record<string, string> = {
         </div>
 
         {/* Custom domains */}
-        <div class="lg:col-span-2 card-editorial p-7 sm:p-8">
-          <h3 class="font-display text-xl font-bold text-[#2B2C2D]">Custom domains</h3>
-          <p class="mt-2 text-sm text-[#6F7173] leading-relaxed">
-            Bring your own domain. Aliases, mailbox identities, and signatures — no mail server
-            required.
-          </p>
+        <div class="lg:col-span-2 card-editorial card-spotlight card-hover-elevate p-7 sm:p-8 flex flex-col justify-between">
+          <div>
+            <h3 class="font-display text-xl font-bold text-[#18212A]">Custom domains</h3>
+            <p class="mt-3 text-sm text-[#55616D] leading-relaxed">
+              Bring your own domain. Aliases, mailbox identities, DKIM signing, and signatures — no mail server required.
+            </p>
+          </div>
+          <p class="mt-5 font-mono text-xs text-[#226192]">you@yourcompany.com</p>
         </div>
 
         {/* Full mailbox */}
-        <div class="lg:col-span-3 card-editorial p-7 sm:p-8">
-          <h3 class="font-display text-xl font-bold text-[#2B2C2D]">A full mailbox</h3>
-          <p class="mt-2 text-sm text-[#6F7173] leading-relaxed">
-            The tools your team already relies on.
+        <div class="lg:col-span-3 card-editorial card-spotlight card-hover-elevate p-7 sm:p-8">
+          <h3 class="font-display text-xl font-bold text-[#18212A]">A full workspace</h3>
+          <p class="mt-3 text-sm text-[#55616D] leading-relaxed">
+            The daily tools your team already relies on, encrypted client-side.
           </p>
-          <div class="mt-4 flex flex-wrap gap-1.5">
-            {["Inbox", "Folders", "Rules", "Signatures", "Scheduled send", "Attachments"].map((c) => (
-              <span class="rounded-full border border-[#E2DFD8] bg-white px-2.5 py-1 text-[11px] font-medium text-[#3C3D3E]">
+          <div class="mt-5 flex flex-wrap gap-2">
+            {["Inbox", "Calendar", "Notes", "Rules", "Signatures", "Scheduled send", "Attachments"].map((c) => (
+              <span class="rounded-full border border-[#D8D3C9] bg-[#F6F3ED] px-3 py-1 text-xs font-medium text-[#18212A]">
                 {c}
               </span>
             ))}
@@ -139,30 +172,30 @@ const statusTone: Record<string, string> = {
         </div>
 
         {/* Compatibility */}
-        <div class="lg:col-span-3 card-editorial p-7 sm:p-8">
-          <h3 class="font-display text-xl font-bold text-[#2B2C2D]">Works with your client</h3>
-          <p class="mt-2 text-sm text-[#6F7173] leading-relaxed">
+        <div class="lg:col-span-3 card-editorial card-spotlight card-hover-elevate p-7 sm:p-8">
+          <h3 class="font-display text-xl font-bold text-[#18212A]">Works with your client</h3>
+          <p class="mt-3 text-sm text-[#55616D] leading-relaxed">
             Outlook, Apple Mail, Thunderbird, or the built-in webmail — standard protocols, no
             lock-in to one interface.
           </p>
         </div>
 
         {/* Admin modes */}
-        <div class="lg:col-span-3 card-editorial p-7 sm:p-8">
-          <h3 class="font-display text-xl font-bold text-[#2B2C2D]">Two account modes</h3>
-          <p class="mt-2 text-sm text-[#6F7173] leading-relaxed">
-            <span class="font-semibold text-[#3C3D3E]">Organization-managed</span> for business
-            continuity, or <span class="font-semibold text-[#3C3D3E]">Private</span> for stronger
+        <div class="lg:col-span-3 card-editorial card-spotlight card-hover-elevate p-7 sm:p-8">
+          <h3 class="font-display text-xl font-bold text-[#18212A]">Two account modes</h3>
+          <p class="mt-3 text-sm text-[#55616D] leading-relaxed">
+            <span class="font-semibold text-[#18212A]">Organization-managed</span> for business
+            continuity, or <span class="font-semibold text-[#18212A]">Private</span> for stronger
             separation from admin access. Set per mailbox.
           </p>
         </div>
 
         {/* Recovery */}
-        <div class="lg:col-span-3 card-editorial p-7 sm:p-8">
-          <h3 class="font-display text-xl font-bold text-[#2B2C2D]">Own your exit</h3>
-          <p class="mt-2 text-sm text-[#6F7173] leading-relaxed">
+        <div class="lg:col-span-3 card-editorial card-spotlight card-hover-elevate p-7 sm:p-8">
+          <h3 class="font-display text-xl font-bold text-[#18212A]">Own your exit</h3>
+          <p class="mt-3 text-sm text-[#55616D] leading-relaxed">
             Your mail already lives in storage you control, with an independent recovery and
-            export path — not permanently dependent on the service.
+            export path — never permanently dependent on the service.
           </p>
         </div>
       </div>
@@ -170,29 +203,31 @@ const statusTone: Record<string, string> = {
   </section>
 
   {/* 5 — Security */}
-  <section id="security-proof" class="py-24 sm:py-32 border-t border-[#E2DFD8]">
+  <section id="security-proof" class="py-24 sm:py-32 border-t border-[#D8D3C9]">
     <div class="mx-auto max-w-7xl px-6">
       <div class="max-w-xl" data-reveal>
-        <h2 class="font-display text-4xl sm:text-5xl font-extrabold text-[#2B2C2D] leading-[1.06]">
+        <span class="eyebrow">Transparency</span>
+        <h2 class="mt-4 font-display text-4xl sm:text-5xl font-extrabold text-[#18212A] leading-[1.06]">
           Security you can actually inspect.
         </h2>
-        <p class="mt-6 text-lg text-[#6F7173] leading-relaxed">
+        <p class="mt-6 text-lg text-[#55616D] leading-relaxed">
           We publish the architecture and its boundaries so both business owners and technical
           buyers can evaluate BYOS honestly. Independent security review is required before
           production launch and is not yet complete.
         </p>
       </div>
 
-      <div class="mt-12 divide-y divide-[#E2DFD8] border-y border-[#E2DFD8]" data-reveal style="--reveal-delay: 100ms">
+      <div class="mt-12 divide-y divide-[#D8D3C9] border-y border-[#D8D3C9]" data-reveal style="--reveal-delay: 100ms">
         {securityDocs.map((doc) => (
           <a
-            href="/security"
-            class="group flex items-center justify-between py-4 transition-colors hover:bg-[#FBFAF7]"
+            href={doc.href}
+            class="group flex items-center justify-between px-3 py-4 rounded-lg transition-colors hover:bg-[#F6F3ED]"
           >
-            <span class="text-sm font-semibold text-[#2B2C2D] group-hover:text-[#9E725F] transition-colors">
-              {doc.label}
+            <span class="inline-flex items-center gap-3 text-sm sm:text-base font-semibold text-[#18212A] group-hover:text-[#226192] transition-colors">
+              <span>{doc.label}</span>
+              <span class="text-[#226192] opacity-0 -translate-x-1 transition-all group-hover:opacity-100 group-hover:translate-x-0" aria-hidden="true">→</span>
             </span>
-            <span class={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${statusTone[doc.status]}`}>
+            <span class={`shrink-0 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusTone[doc.status]}`}>
               {doc.status}
             </span>
           </a>
@@ -200,43 +235,58 @@ const statusTone: Record<string, string> = {
       </div>
 
       <div class="mt-8 flex flex-wrap gap-3" data-reveal>
-        <a href="/security" class="px-6 py-3 btn-primary text-sm font-semibold">Explore Security</a>
-        <a href="/support" class="px-6 py-3 rounded-[10px] border border-[#E2DFD8] bg-white text-sm font-semibold text-[#2B2C2D] transition-all hover:border-[#9E725F]/40">Support & FAQ</a>
+        <a href="/security" class="px-6 py-3 btn-primary text-sm font-semibold shine-effect">Explore Security</a>
+        <a href="/support" class="px-6 py-3 rounded-[10px] border border-[#D8D3C9] bg-[#F6F3ED] text-sm font-semibold text-[#18212A] transition-all hover:border-[#226192]/40">Support &amp; FAQ</a>
       </div>
     </div>
   </section>
 
   {/* 6 — Pricing teaser */}
-  <section class="py-24 sm:py-28 bg-[#F3ECE8] border-t border-[#E2DFD8]">
+  <section class="py-24 sm:py-28 bg-[#E2E7EB] border-t border-[#D8D3C9]">
     <div class="mx-auto max-w-3xl px-6 text-center" data-reveal>
-      <h2 class="font-display text-3xl sm:text-4xl font-extrabold text-[#2B2C2D] leading-[1.1]">
+      <span class="eyebrow">Pricing</span>
+      <h2 class="mt-4 font-display text-3xl sm:text-4xl font-extrabold text-[#18212A] leading-[1.1]">
         One complete product. Better pricing as you grow.
       </h2>
-      <p class="mt-5 text-lg text-[#6F7173] leading-relaxed">
+      <p class="mt-5 text-lg text-[#55616D] leading-relaxed">
         No tiers to decode and no feature walls. Every seat gets the full product, storage billed
         at cost, and your rate improves automatically as your team grows.
       </p>
       <div class="mt-8">
-        <a href="/pricing" class="px-7 py-3.5 btn-primary text-base font-semibold">See pricing</a>
+        <a href="/pricing" class="px-7 py-3.5 btn-primary text-base font-semibold shine-effect">See pricing</a>
       </div>
     </div>
   </section>
 
   {/* 7 — Final CTA */}
-  <section class="relative overflow-hidden bg-[#3C3D3E] text-[#F0EEE9]">
-    <div class="absolute left-1/2 top-0 h-72 w-[36rem] -translate-x-1/2 rounded-full blur-[130px] opacity-30 pointer-events-none" style="background-color:#C89F8D" aria-hidden="true"></div>
+  <section class="relative overflow-hidden bg-[#0B131B] text-[#EAE6DE]">
+    <div class="absolute left-1/2 top-0 h-72 w-[36rem] -translate-x-1/2 rounded-full blur-[130px] opacity-30 pointer-events-none" style="background-color:#EF8557" aria-hidden="true"></div>
     <div class="relative mx-auto max-w-3xl px-6 py-28 text-center">
       <h2 class="font-display text-4xl sm:text-6xl font-extrabold leading-[1.04]" data-reveal>
         Bring your business email under your control.
       </h2>
-      <p class="mt-6 text-lg text-[#F0EEE9]/70 leading-relaxed" data-reveal style="--reveal-delay: 100ms">
+      <p class="mt-6 text-lg text-[#EAE6DE]/70 leading-relaxed" data-reveal style="--reveal-delay: 100ms">
         Professional email infrastructure. Customer-controlled storage. Privacy designed into the
         experience. Set up in four steps — domain, storage, mailboxes, done.
       </p>
       <div class="mt-10 flex flex-wrap items-center justify-center gap-4" data-reveal style="--reveal-delay: 160ms">
-        <a href={`${cpUrl}/signup`} class="px-8 py-3.5 btn-primary text-base font-semibold">Get Started</a>
-        <a href="/security" class="px-7 py-3.5 rounded-[10px] border border-white/20 bg-white/5 text-base font-semibold text-[#F0EEE9] transition-all hover:bg-white/10">Explore Security</a>
+        <a href={`${cpUrl()}/signup`} class="px-8 py-3.5 btn-primary text-base font-semibold shine-effect">Get Started</a>
+        <a href="/security" class="px-7 py-3.5 rounded-[10px] border border-white/20 bg-[#F6F3ED]/5 text-base font-semibold text-[#EAE6DE] transition-all hover:bg-[#F6F3ED]/10">Explore Security</a>
       </div>
     </div>
   </section>
+
+  {/* Cursor spotlight tracking for Bento cards */}
+  <script is:inline>
+    (() => {
+      const cards = document.querySelectorAll(".card-spotlight");
+      cards.forEach((card) => {
+        card.addEventListener("pointermove", (e) => {
+          const rect = card.getBoundingClientRect();
+          card.style.setProperty("--spot-x", `${e.clientX - rect.left}px`);
+          card.style.setProperty("--spot-y", `${e.clientY - rect.top}px`);
+        }, { passive: true });
+      });
+    })();
+  </script>
 </Layout>

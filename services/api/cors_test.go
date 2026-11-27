@@ -32,6 +32,14 @@ func TestIsAllowedOrigin(t *testing.T) {
 		{"http://127.0.0.1:8080", "development", true},
 		{"http://evil.com", "development", false},
 		{"http://localhost:3000", "production", false},
+		{"http://localhost:3000", "", false},
+		{"http://localhost:3000", "staging", false},
+		{"http://192.168.1.50:3000", "development", true},
+		{"http://192.168.1.50:3000", "production", false},
+		{"http://192.168.1.50:3000", "", false},
+		{"https://tunnel.trycloudflare.com", "development", true},
+		{"https://tunnel.trycloudflare.com", "production", false},
+		{"https://tunnel.trycloudflare.com", "", false},
 	}
 
 	for _, tc := range cases {
@@ -225,4 +233,52 @@ func TestWithCORS_CSRFProtection(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWithCORS_FailClosedByDefault(t *testing.T) {
+	dummyHandler := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}
+
+	t.Run("UnsetEnvAndUnsetAllowedOriginsRejectsLocalhost", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "")
+		t.Setenv("BYOS_ALLOWED_ORIGINS", "")
+
+		req := httptest.NewRequest(http.MethodOptions, "/v1/test", nil)
+		req.Header.Set("Origin", "http://localhost:3000")
+		rec := httptest.NewRecorder()
+		withCORS(dummyHandler)(rec, req)
+
+		if origin := rec.Header().Get("Access-Control-Allow-Origin"); origin != "" {
+			t.Errorf("expected empty Access-Control-Allow-Origin in unset env, got %q", origin)
+		}
+	})
+
+	t.Run("ProductionEnvAndUnsetAllowedOriginsRejectsLocalhost", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "production")
+		t.Setenv("BYOS_ALLOWED_ORIGINS", "")
+
+		req := httptest.NewRequest(http.MethodOptions, "/v1/test", nil)
+		req.Header.Set("Origin", "http://localhost:3000")
+		rec := httptest.NewRecorder()
+		withCORS(dummyHandler)(rec, req)
+
+		if origin := rec.Header().Get("Access-Control-Allow-Origin"); origin != "" {
+			t.Errorf("expected empty Access-Control-Allow-Origin in production without config, got %q", origin)
+		}
+	})
+
+	t.Run("DevelopmentEnvPermitsLocalhostByDefault", func(t *testing.T) {
+		t.Setenv("BYOS_ENV", "development")
+		t.Setenv("BYOS_ALLOWED_ORIGINS", "")
+
+		req := httptest.NewRequest(http.MethodOptions, "/v1/test", nil)
+		req.Header.Set("Origin", "http://localhost:3000")
+		rec := httptest.NewRecorder()
+		withCORS(dummyHandler)(rec, req)
+
+		if origin := rec.Header().Get("Access-Control-Allow-Origin"); origin != "http://localhost:3000" {
+			t.Errorf("expected Access-Control-Allow-Origin: http://localhost:3000 in dev mode, got %q", origin)
+		}
+	})
 }

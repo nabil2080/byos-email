@@ -200,6 +200,7 @@ func main() {
 	mux.HandleFunc("/health", app.healthHandler)
 	mux.HandleFunc("/v1/inbound", app.inboundHandler)
 	mux.HandleFunc("/v1/messages/latest", app.latestMessageHandler)
+	mux.HandleFunc("/v1/recipients/verify", app.verifyRecipientHandler)
 
 	// HealthPort is exposed separately (compose publishes only the main
 	// port mapping; the health listener must actually exist for it).
@@ -241,6 +242,9 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Defect C6-04: Limit request body to 65MB to prevent unbounded memory exhaustion
+	r.Body = http.MaxBytesReader(w, r.Body, 65<<20)
+
 	var req InboundRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -258,6 +262,10 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 	rawMessage, err := base64.StdEncoding.DecodeString(req.RawMessageB64)
 	if err != nil {
 		http.Error(w, "raw_message_b64 is invalid", http.StatusBadRequest)
+		return
+	}
+	if len(rawMessage) > 40*1024*1024 {
+		http.Error(w, "raw message exceeds 40MB limit", http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -304,11 +312,21 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 
 	_ = g.Wait()
 
+	// Phase 3 (C6.1): Every recipient accepted by SMTP must receive a durable delivery outcome.
+	// If ANY recipient in the batch experienced a failure, we must return an error status (502/503).
+	// This prompts the sending MTA via inbound-bridge's SMTP 451 to retry delivery.
+	// For recipients that already succeeded in this batch, their message was committed with delivery_identity;
+	// subsequent retries by the sending MTA are safely deduplicated without duplicate storage.
+	var successfulStored []StoredMessage
 	var firstErr error
-	for _, err := range errs {
+	for i, err := range errs {
 		if err != nil {
-			firstErr = err
-			break
+			if firstErr == nil {
+				firstErr = err
+			}
+			log.Printf("[WARN] inbound recipient failed: %v", err)
+		} else if stored[i].MessageID != "" {
+			successfulStored = append(successfulStored, stored[i])
 		}
 	}
 
@@ -319,12 +337,7 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]string{"status": "error", "code": "storage_disconnected", "message": "Mailbox storage is currently unavailable. Please reconnect storage."})
 			return
 		}
-		log.Printf("%v", firstErr)
-		// Try to extract the original error message for the HTTP response to maintain compatibility
-		// Since we wrapped it, let's just return err.Error() but it might have "process recipient ...:" prefix.
-		// For safety and compatibility, we'll unwrap it or just return it.
-		// Actually the previous code returned err.Error() directly.
-		// Let's get the underlying error if possible.
+		log.Printf("[inboundHandler] delivery failure for recipient(s): %v", firstErr)
 		unwrapped := firstErr
 		if unwrappedInner := errors.Unwrap(firstErr); unwrappedInner != nil {
 			unwrapped = unwrappedInner
@@ -333,7 +346,7 @@ func (a *App) inboundHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, InboundResponse{Stored: stored})
+	writeJSON(w, http.StatusAccepted, InboundResponse{Stored: successfulStored})
 }
 
 func isSupportRecipient(localPart, domain string) bool {
@@ -507,7 +520,11 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 	}
 	storageObjectID = fmt.Sprintf("%s/%020d.eml.enc", objectPrefix, messageSeq)
 
-	cryptoResp, err := a.encryptMessage(ctx, route, messageSeq, storageObjectID, rawMessage)
+	// Phase 2 (C6.1): Strip incoming Bcc headers from the stored raw MIME bytes
+	// so that neither To/Cc recipients nor other BCC recipients ever have BCC disclosed in stored ciphertext.
+	storedMime := stripBccHeader(rawMessage)
+
+	cryptoResp, err := a.encryptMessage(ctx, route, messageSeq, storageObjectID, storedMime)
 	if err != nil {
 		return StoredMessage{}, err
 	}
@@ -558,7 +575,7 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 		threadID = ""
 	}
 
-	sizeBytes := int64(len(rawMessage))
+	sizeBytes := int64(len(storedMime))
 	folder := "inbox"
 	isRead := false
 
@@ -576,6 +593,12 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 		if markRead {
 			isRead = true
 		}
+	}
+
+	// Defect C6-02: Compute visible recipients specifically for this mailbox to preserve BCC privacy
+	mailboxRecipients := extractVisibleRecipients(rawMessage, recipient)
+	if len(mailboxRecipients) == 0 {
+		mailboxRecipients = []string{normalizedRecipient}
 	}
 
 	// No duplicate - insert new message
@@ -596,7 +619,7 @@ func (a *App) processRecipient(ctx context.Context, envelopeFrom, recipient stri
 			NULLIF($23, '')
 		)
 		RETURNING id`,
-		route.MailboxID, route.DomainID, messageSeq, deliveryIdentity[:], normalizeAddress(envelopeFrom), normalizedRecipients,
+		route.MailboxID, route.DomainID, messageSeq, deliveryIdentity[:], normalizeAddress(envelopeFrom), mailboxRecipients,
 		storageObjectID, wrappedKey, wrappedKeyAlg, route.MailboxSKVersion, cryptoResp.EncryptionVersion, iv, cryptoResp.AADVersion, bundleHash,
 		msgID, inReplyTo, threadID,
 		folder, isRead, sizeBytes, hasAttachments, attachmentCount,
@@ -1078,4 +1101,240 @@ func (a *App) evaluateAutoReply(ctx context.Context, route mailboxRoute, sender 
 
 	log.Printf("auto-reply triggered for mailbox=%s to=%s rule=%s", route.MailboxID, sender, ruleID)
 }
+
+// extractVisibleRecipients parses the visible RFC 5322 "To" and "Cc" headers
+// from rawMessage to ensure BCC privacy (Defect C6-02).
+// Inbound envelope recipients who were BCC'd must never be exposed in other
+// recipients' metadata or reading panes.
+func extractVisibleRecipients(rawMessage []byte, currentRecipient string) []string {
+	normCurrent := normalizeAddress(currentRecipient)
+	parsedMsg, err := mail.ReadMessage(bytes.NewReader(rawMessage))
+	if err != nil || parsedMsg == nil {
+		if normCurrent != "" {
+			return []string{normCurrent}
+		}
+		return nil
+	}
+
+	var visible []string
+	seen := make(map[string]struct{})
+
+	for _, hdrName := range []string{"To", "Cc"} {
+		headerVal := parsedMsg.Header.Get(hdrName)
+		if strings.TrimSpace(headerVal) == "" {
+			continue
+		}
+		addrs, err := mail.ParseAddressList(headerVal)
+		if err != nil {
+			// Fallback: split by comma if header is slightly non-standard
+			for _, part := range strings.Split(headerVal, ",") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				if addr, err := mail.ParseAddress(part); err == nil {
+					norm := normalizeAddress(addr.Address)
+					if norm != "" {
+						if _, exists := seen[norm]; !exists {
+							seen[norm] = struct{}{}
+							visible = append(visible, norm)
+						}
+					}
+				} else {
+					norm := normalizeAddress(part)
+					if norm != "" {
+						if _, exists := seen[norm]; !exists {
+							seen[norm] = struct{}{}
+							visible = append(visible, norm)
+						}
+					}
+				}
+			}
+			continue
+		}
+
+		for _, addr := range addrs {
+			norm := normalizeAddress(addr.Address)
+			if norm != "" {
+				if _, exists := seen[norm]; !exists {
+					seen[norm] = struct{}{}
+					visible = append(visible, norm)
+				}
+			}
+		}
+	}
+
+	if len(visible) == 0 {
+		if normCurrent != "" {
+			return []string{normCurrent}
+		}
+		return nil
+	}
+
+	return visible
+}
+
+// verifyRecipientHandler checks whether an inbound recipient address is routable
+// (support subsystem, active masked email alias, or active mailbox route).
+// Called by inbound-bridge during SMTP RCPT TO for early rejection (Defect C6-03).
+func (a *App) verifyRecipientHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !requireMailRouterInternalKey(w, r) {
+		return
+	}
+
+	recipient := strings.TrimSpace(r.URL.Query().Get("recipient"))
+	if recipient == "" {
+		http.Error(w, "recipient query param required", http.StatusBadRequest)
+		return
+	}
+
+	norm := normalizeAddress(recipient)
+	dom, lp, err := splitAddress(norm)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"valid": false, "error": "invalid recipient format"})
+		return
+	}
+
+	// 1. Check support recipient
+	if isSupportRecipient(lp, dom) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"valid": true, "type": "support", "recipient": norm})
+		return
+	}
+
+	// 2. Check masked email alias
+	if strings.EqualFold(dom, "masked.byos.local") {
+		var aliasID string
+		err := a.pool.QueryRow(r.Context(), `
+			SELECT mea.id::text
+			FROM masked_email_aliases mea
+			JOIN mailboxes m ON m.id = mea.mailbox_id
+			JOIN mailbox_storage ms ON ms.mailbox_id = m.id
+			WHERE mea.alias_address = $1
+			  AND mea.is_active = true
+			  AND m.is_active = true
+			  AND ms.status = 'active'
+			LIMIT 1
+		`, norm).Scan(&aliasID)
+		if err == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{"valid": true, "type": "alias", "recipient": norm})
+			return
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("[WARN] verify recipient db error checking alias: %v", err)
+			http.Error(w, "database error", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"valid": false, "error": "unknown or inactive alias"})
+		return
+	}
+
+	// 3. Check regular mailbox route
+	var mailboxID string
+	err = a.pool.QueryRow(r.Context(), `
+		SELECT m.id::text
+		FROM mailboxes m
+		JOIN domains d ON d.id = m.domain_id
+		JOIN mailbox_storage ms ON ms.mailbox_id = m.id
+		WHERE lower(d.name) = lower($1)
+		  AND lower(m.local_part) = lower($2)
+		  AND m.is_active = true
+		  AND ms.status = 'active'
+		LIMIT 1
+	`, dom, lp).Scan(&mailboxID)
+
+	if err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"valid": true, "type": "mailbox", "recipient": norm})
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		log.Printf("[WARN] verify recipient db error checking mailbox: %v", err)
+		http.Error(w, "database error", http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	json.NewEncoder(w).Encode(map[string]any{"valid": false, "error": "user unknown"})
+}
+
+// stripBccHeader removes any incoming Bcc header lines and their continuation lines
+// from raw RFC 5322 MIME data, preventing BCC leakage into stored recipient ciphertexts.
+func stripBccHeader(rawMessage []byte) []byte {
+	// Find boundary between headers and body: \r\n\r\n or \n\n
+	sep := []byte("\r\n\r\n")
+	idx := bytes.Index(rawMessage, sep)
+	sepLen := 4
+	if idx == -1 {
+		sep = []byte("\n\n")
+		idx = bytes.Index(rawMessage, sep)
+		sepLen = 2
+	}
+	if idx == -1 {
+		idx = len(rawMessage)
+		sepLen = 0
+	}
+
+	headerBlock := rawMessage[:idx]
+	var bodyBlock []byte
+	if sepLen > 0 && idx+sepLen <= len(rawMessage) {
+		bodyBlock = rawMessage[idx+sepLen:]
+	}
+
+	isCRLF := bytes.Contains(headerBlock, []byte("\r\n"))
+	var lines [][]byte
+	if isCRLF {
+		lines = bytes.Split(headerBlock, []byte("\r\n"))
+	} else {
+		lines = bytes.Split(headerBlock, []byte("\n"))
+	}
+
+	lineEnd := []byte("\n")
+	if isCRLF {
+		lineEnd = []byte("\r\n")
+	}
+
+	var newHeaders bytes.Buffer
+	inBcc := false
+	for _, line := range lines {
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+			if inBcc {
+				continue
+			}
+		} else {
+			lower := bytes.ToLower(line)
+			if bytes.HasPrefix(lower, []byte("bcc:")) || bytes.HasPrefix(lower, []byte("bcc ")) {
+				inBcc = true
+				continue
+			}
+			inBcc = false
+		}
+		if newHeaders.Len() > 0 {
+			newHeaders.Write(lineEnd)
+		}
+		newHeaders.Write(line)
+	}
+
+	var result bytes.Buffer
+	result.Write(newHeaders.Bytes())
+	if sepLen > 0 {
+		result.Write(sep)
+		result.Write(bodyBlock)
+	}
+	return result.Bytes()
+}
+
 

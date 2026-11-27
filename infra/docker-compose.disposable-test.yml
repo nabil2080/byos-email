@@ -1,0 +1,78 @@
+# Compose override for isolated disposable testing in Phase 3
+# Remaps all host port bindings and container names to prevent collisions
+services:
+  postgres:
+    container_name: byos-test-c631-postgres
+    ports: !override
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./postgres/migrations:/migrations:ro
+
+  migrate:
+    container_name: byos-test-c631-migrate
+
+  api:
+    container_name: byos-test-c631-api
+    ports: !override
+      - "127.0.0.1:18080:8080"
+
+  outbound-worker:
+    container_name: byos-test-c631-outbound-worker
+
+  admin-api:
+    container_name: byos-test-c631-admin-api
+    ports: !override
+      - "127.0.0.1:18087:8087"
+
+  redis:
+    container_name: byos-test-c631-redis
+    ports: !override
+      - "127.0.0.1:16379:6379"
+
+  minio:
+    container_name: byos-test-c631-minio
+    ports: !override
+      - "127.0.0.1:19000:9000"
+      - "127.0.0.1:19001:9001"
+
+  crypto-worker:
+    container_name: byos-test-c631-crypto-worker
+
+  inbound-bridge:
+    container_name: byos-test-c631-inbound-bridge
+    ports: !override
+      - "127.0.0.1:12525:25"
+      - "127.0.0.1:18085:8085"
+
+  control-plane:
+    container_name: byos-test-c631-control-plane
+    ports: !override
+      - "127.0.0.1:13000:3000"
+
+  webmail:
+    container_name: byos-test-c631-webmail
+    ports: !override
+      - "127.0.0.1:13001:3001"
+
+  support-crm:
+    container_name: byos-test-c631-support-crm
+    ports: !override
+      - "127.0.0.1:13003:3003"
+
+  mailpit:
+    container_name: byos-test-c631-mailpit
+    ports: !override
+      - "127.0.0.1:18025:8025"
+      - "127.0.0.1:11025:1025"
+
+  postfix:
+    container_name: byos-test-c631-postfix
+    ports: !override
+      - "127.0.0.1:12526:587"
+
+volumes:
+  postgres-data:
+    name: ${COMPOSE_TEST_VOLUME}
+    external: true

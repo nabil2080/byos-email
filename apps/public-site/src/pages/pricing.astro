@@ -11,6 +11,25 @@ const byosMonthlyCost = pricingMonthly.baseMonthlyTotal;
 const byosAnnualCost = pricingAnnual.annualTotal;
 const googleAnnual = 1728;
 const savingsAnnual = googleAnnual - byosAnnualCost;
+
+const faqs = [
+  {
+    q: "How does storage billing work?",
+    a: "You connect your own storage account (Cloudflare R2, Amazon S3, Backblaze B2, or Google Drive). Your cloud provider bills you directly at standard raw commodity rates (~$0.015–$0.023/GB). BYOS takes zero markup or commission on storage.",
+  },
+  {
+    q: "Can I use self-hosted storage like MinIO?",
+    a: "Yes. BYOS supports any S3-compatible storage system, including self-hosted MinIO servers in your private cloud or datacenter.",
+  },
+  {
+    q: "Can BYOS read my emails?",
+    a: "No. Your emails are locked and unlocked strictly on your laptop or phone inside our client-side cryptographic engine. BYOS servers and cloud storage buckets only handle sealed ciphertext.",
+  },
+  {
+    q: "Can I keep using Apple Mail or Microsoft Outlook?",
+    a: "Yes. You can use our built-in webmail workspace (Mail, Calendar, Notes), or connect Apple Mail, Outlook, or Thunderbird using standard email protocols.",
+  },
+];
 ---
 
 <Layout title="Simple & Honest Pricing | Zero Storage Markup">
@@ -21,52 +40,74 @@ const savingsAnnual = googleAnnual - byosAnnualCost;
   />
 
   {/* Dynamic Provisioning Calculator */}
-  <section class="py-8 px-4 sm:px-6 max-w-4xl mx-auto">
+  <section class="py-12 px-4 sm:px-6 max-w-4xl mx-auto">
     <DynamicPricingCalculator client:load initialSeats={10} />
   </section>
 
   {/* Visual ROI Calculator (Secondary Section) */}
   <section class="py-16 px-6 max-w-7xl mx-auto">
-    <div class="rounded-3xl border border-[#E2DFD8] bg-white p-8 sm:p-12 shadow-xs">
+    <div class="card-editorial p-8 sm:p-12">
       <div class="max-w-3xl">
-        <span class="text-xs font-mono text-[#9E725F] font-bold uppercase tracking-wider">Annual Cost Comparison</span>
-        <h2 class="mt-2 text-2xl sm:text-4xl font-extrabold text-[#2B2C2D] tracking-tight">
-          How Much You Save with BYOS
+        <span class="eyebrow">Annual Cost Comparison</span>
+        <h2 class="mt-3 font-display text-3xl sm:text-4xl font-extrabold text-[#18212A] tracking-tight">
+          How much you save with BYOS
         </h2>
-        <p class="mt-3 text-sm text-[#6F7173] leading-relaxed">
-          Traditional email providers charge massive markups on storage — up to $7 to $18 per user per month. With BYOS, raw cloud storage in Cloudflare R2 or Amazon S3 costs just pennies per gigabyte.
+        <p class="mt-4 text-base text-[#55616D] leading-relaxed">
+          Traditional email providers bundle and mark up storage — $6 to $18 per user every month. With BYOS, raw cloud storage in Cloudflare R2 or Amazon S3 costs pennies per gigabyte.
         </p>
       </div>
 
       {/* Comparison Grid (20 Users Example) */}
       <div class="mt-10 grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Google Workspace */}
-        <div class="p-6 rounded-2xl bg-[#FBFBFA] border border-[#E2DFD8] shadow-xs">
-          <div class="text-xs font-semibold text-[#6F7173]">Google Workspace (Business Starter)</div>
-          <div class="mt-3 text-3xl font-extrabold text-[#2B2C2D]">$144<span class="text-xs font-normal text-[#6F7173]">/mo</span></div>
-          <div class="text-xs text-[#6F7173] mt-1">20 users &times; $7.20 / user / month</div>
-          <div class="mt-4 pt-4 border-t border-[#E2DFD8] text-xs text-[#6F7173]">
-            Total Annual: <strong class="text-[#2B2C2D]">$1,728 / year</strong>
+        <div class="p-6 sm:p-7 rounded-2xl bg-[#F6F3ED] border border-[#D8D3C9] flex flex-col justify-between">
+          <div>
+            <div class="text-xs font-mono uppercase tracking-wider text-[#55616D]">Google Workspace</div>
+            <div class="mt-1 text-sm font-semibold text-[#18212A]">Business Starter</div>
+            <div class="mt-4 font-display text-4xl font-extrabold text-[#18212A]">
+              $144<span class="text-sm font-normal text-[#55616D]">/mo</span>
+            </div>
+            <div class="text-sm text-[#55616D] mt-1.5">20 users &times; $7.20 / user / month</div>
+          </div>
+          <div class="mt-6 pt-4 border-t border-[#D8D3C9] text-sm text-[#55616D]">
+            Total annual: <strong class="text-[#18212A]">$1,728 / year</strong>
           </div>
         </div>
 
         {/* Microsoft 365 */}
-        <div class="p-6 rounded-2xl bg-[#FBFBFA] border border-[#E2DFD8] shadow-xs">
-          <div class="text-xs font-semibold text-[#6F7173]">Microsoft 365 (Business Basic)</div>
-          <div class="mt-3 text-3xl font-extrabold text-[#2B2C2D]">$120<span class="text-xs font-normal text-[#6F7173]">/mo</span></div>
-          <div class="text-xs text-[#6F7173] mt-1">20 users &times; $6.00 / user / month</div>
-          <div class="mt-4 pt-4 border-t border-[#E2DFD8] text-xs text-[#6F7173]">
-            Total Annual: <strong class="text-[#2B2C2D]">$1,440 / year</strong>
+        <div class="p-6 sm:p-7 rounded-2xl bg-[#F6F3ED] border border-[#D8D3C9] flex flex-col justify-between">
+          <div>
+            <div class="text-xs font-mono uppercase tracking-wider text-[#55616D]">Microsoft 365</div>
+            <div class="mt-1 text-sm font-semibold text-[#18212A]">Business Basic</div>
+            <div class="mt-4 font-display text-4xl font-extrabold text-[#18212A]">
+              $120<span class="text-sm font-normal text-[#55616D]">/mo</span>
+            </div>
+            <div class="text-sm text-[#55616D] mt-1.5">20 users &times; $6.00 / user / month</div>
+          </div>
+          <div class="mt-6 pt-4 border-t border-[#D8D3C9] text-sm text-[#55616D]">
+            Total annual: <strong class="text-[#18212A]">$1,440 / year</strong>
           </div>
         </div>
 
         {/* BYOS Sovereign Email */}
-        <div class="p-6 rounded-2xl bg-[#F3ECE8]/50 border-2 border-[#9E725F] relative overflow-hidden shadow-xs">
-          <div class="text-xs font-bold text-[#9E725F]">BYOS Business Email ({comparisonSeats} Seats)</div>
-          <div class="mt-3 text-3xl font-extrabold text-emerald-800">${byosMonthlyCost.toFixed(2)}<span class="text-xs font-normal text-[#6F7173]">/mo</span></div>
-          <div class="text-xs text-[#6F7173] mt-1">${byosMonthlyCost.toFixed(2)} BYOS Capacity (10 &times; $3.00 + 10 &times; $2.85)</div>
-          <div class="mt-4 pt-4 border-t border-[#9E725F]/30 text-xs text-emerald-800 font-bold">
-            Total Annual: ${byosAnnualCost} / year &bull; <span class="underline">Save up to ${savingsAnnual} / year</span>
+        <div class="p-6 sm:p-7 rounded-2xl bg-[#E2E7EB] border-2 border-[#226192] relative overflow-hidden flex flex-col justify-between shadow-sm">
+          <div>
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-mono uppercase tracking-wider font-bold text-[#1B4E76]">BYOS Business Email</span>
+              <span class="rounded-full bg-[#226192] px-2.5 py-0.5 text-[11px] font-mono font-semibold text-white">
+                {comparisonSeats} Seats
+              </span>
+            </div>
+            <div class="mt-1 text-sm font-semibold text-[#18212A]">Full Workspace + Your Storage</div>
+            <div class="mt-4 font-display text-4xl font-extrabold text-[#18212A]">
+              ${byosMonthlyCost.toFixed(2)}<span class="text-sm font-normal text-[#55616D]">/mo</span>
+            </div>
+            <div class="text-sm text-[#55616D] mt-1.5">
+              10 &times; $3.00 + 10 &times; $2.85 capacity
+            </div>
+          </div>
+          <div class="mt-6 pt-4 border-t border-[#226192]/30 text-sm text-[#1B4E76] font-semibold">
+            ${byosAnnualCost} / year &bull; Save up to ${savingsAnnual} / year
           </div>
         </div>
       </div>
@@ -74,37 +115,29 @@ const savingsAnnual = googleAnnual - byosAnnualCost;
   </section>
 
   {/* FAQ Section */}
-  <section class="py-16 px-6 max-w-4xl mx-auto">
-    <h2 class="text-2xl sm:text-3xl font-bold text-[#2B2C2D] text-center">Frequently Asked Questions</h2>
-    
-    <div class="mt-10 space-y-4">
-      <div class="p-6 rounded-2xl bg-white border border-[#E2DFD8] shadow-xs">
-        <h4 class="font-bold text-sm text-[#2B2C2D]">How does storage billing work?</h4>
-        <p class="mt-2 text-xs text-[#6F7173] leading-relaxed">
-          You connect your own storage account (Cloudflare R2, Amazon AWS S3, or Google Drive). Your cloud provider bills you directly at standard raw commodity rates (~$0.015 - $0.023/GB). We take zero markup or commission on storage.
-        </p>
-      </div>
+  <section class="py-16 pb-24 px-6 max-w-4xl mx-auto">
+    <div class="text-center">
+      <span class="eyebrow">FAQ</span>
+      <h2 class="mt-3 font-display text-3xl sm:text-4xl font-extrabold text-[#18212A]">
+        Frequently asked questions
+      </h2>
+    </div>
 
-      <div class="p-6 rounded-2xl bg-white border border-[#E2DFD8] shadow-xs">
-        <h4 class="font-bold text-sm text-[#2B2C2D]">Can I use self-hosted storage like MinIO?</h4>
-        <p class="mt-2 text-xs text-[#6F7173] leading-relaxed">
-          Yes. BYOS supports any S3-compatible storage system, including self-hosted MinIO servers in your private cloud or datacenter.
-        </p>
-      </div>
-
-      <div class="p-6 rounded-2xl bg-white border border-[#E2DFD8] shadow-xs">
-        <h4 class="font-bold text-sm text-[#2B2C2D]">Can BYOS read my emails?</h4>
-        <p class="mt-2 text-xs text-[#6F7173] leading-relaxed">
-          No. Your emails are locked and unlocked strictly on your laptop or phone. BYOS servers and cloud storage buckets only receive locked data that cannot be read without your device key.
-        </p>
-      </div>
-
-      <div class="p-6 rounded-2xl bg-white border border-[#E2DFD8] shadow-xs">
-        <h4 class="font-bold text-sm text-[#2B2C2D]">Can I keep using Apple Mail or Microsoft Outlook?</h4>
-        <p class="mt-2 text-xs text-[#6F7173] leading-relaxed">
-          Yes. You can use our fast webmail client, or connect Apple Mail, Outlook, or Thunderbird using standard email protocols.
-        </p>
-      </div>
+    <div class="mt-10 space-y-3">
+      {faqs.map((item, idx) => (
+        <details
+          open={idx === 0}
+          class="group card-editorial px-6 py-5 transition-colors open:bg-[#F6F3ED]"
+        >
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-4 font-display text-base font-bold text-[#18212A]">
+            <span>{item.q}</span>
+            <span class="shrink-0 text-[#226192] font-mono text-lg transition-transform duration-200 group-open:rotate-45" aria-hidden="true">+</span>
+          </summary>
+          <p class="mt-3 text-sm text-[#55616D] leading-relaxed pr-6">
+            {item.a}
+          </p>
+        </details>
+      ))}
     </div>
   </section>
 </Layout>

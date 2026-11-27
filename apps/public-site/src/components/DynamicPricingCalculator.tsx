@@ -159,7 +159,7 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
 
   return (
     <div
-      class={`w-full rounded-3xl bg-white border border-[#E2DFD8] shadow-lg ${
+      class={`w-full rounded-3xl bg-[#F6F3ED] border border-[#D8D3C9] shadow-lg ${
         props.compact ? "p-5 space-y-4" : "p-6 sm:p-10 space-y-8"
       }`}
     >
@@ -167,7 +167,7 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <div class="flex items-center gap-2">
-              <span class="inline-block w-2.5 h-2.5 rounded-full bg-[#9E725F] animate-pulse" />
+              <span class="inline-block w-2.5 h-2.5 rounded-full bg-[#226192] animate-pulse" />
               <h3 class="text-xl sm:text-2xl font-extrabold text-[#242424] tracking-tight">
                 Infrastructure Capacity Provisioning
               </h3>
@@ -177,7 +177,7 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
             </p>
           </div>
 
-          <div class="flex items-center gap-2.5 self-start sm:self-auto bg-[#F0EEE9] border border-[#D1C4B8] rounded-2xl px-4 py-2 shadow-xs">
+          <div class="flex items-center gap-2.5 self-start sm:self-auto bg-[#EAE6DE] border border-[#D1C4B8] rounded-2xl px-4 py-2 shadow-xs">
             <label for="seat-input-pub" class="text-xs font-bold text-[#4A4A4A] uppercase tracking-wider">
               Mailboxes:
             </label>
@@ -190,7 +190,7 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
               onInput={(e) => handleInputChange(e.currentTarget.value)}
               onChange={() => handleInputBlur()}
               onBlur={handleInputBlur}
-              class="w-24 bg-white font-mono font-extrabold text-center text-base text-[#242424] rounded-xl border border-[#D1C4B8] py-1.5 px-2 focus:border-[#A47764] focus:ring-2 focus:ring-[#A47764]/20 focus:outline-none transition-all"
+              class="w-24 bg-[#F6F3ED] font-mono font-extrabold text-center text-base text-[#242424] rounded-xl border border-[#D1C4B8] py-1.5 px-2 focus:border-[#A47764] focus:ring-2 focus:ring-[#A47764]/20 focus:outline-none transition-all"
             />
             <span class="text-xs font-semibold text-[#6E6E6E]">Seats</span>
           </div>
@@ -198,13 +198,13 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
 
         {/* UI: Pill-shaped Billing Cycle Toggle Switch */}
         <div class="flex items-center justify-center pt-2">
-          <div class="inline-flex p-1 bg-[#F0EEE9] border border-[#D1C4B8] rounded-full text-xs sm:text-sm font-semibold shadow-xs">
+          <div class="inline-flex p-1 bg-[#EAE6DE] border border-[#D1C4B8] rounded-full text-xs sm:text-sm font-semibold shadow-xs">
             <button
               type="button"
               onClick={() => setBillingCycle("monthly")}
               class={`px-5 py-2 rounded-full transition-all cursor-pointer ${
                 billingCycle() === "monthly"
-                  ? "bg-white text-[#242424] shadow-xs font-bold"
+                  ? "bg-[#F6F3ED] text-[#242424] shadow-xs font-bold"
                   : "text-[#6E6E6E] hover:text-[#242424]"
               }`}
             >
@@ -215,14 +215,14 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
               onClick={() => setBillingCycle("annual")}
               class={`px-5 py-2 rounded-full transition-all flex items-center gap-2 cursor-pointer ${
                 billingCycle() === "annual"
-                  ? "bg-[#9E725F] text-white shadow-xs font-bold"
+                  ? "bg-[#226192] text-white shadow-xs font-bold"
                   : "text-[#6E6E6E] hover:text-[#242424]"
               }`}
             >
               <span>Annual</span>
               <span
                 class={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
-                  billingCycle() === "annual" ? "bg-white text-[#9E725F]" : "bg-[#9E725F]/15 text-[#9E725F]"
+                  billingCycle() === "annual" ? "bg-[#F6F3ED] text-[#226192]" : "bg-[#226192]/15 text-[#226192]"
                 }`}
               >
                 2 Months Free
@@ -241,7 +241,7 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
               value={seats() > maxLimit() ? maxLimit() : seats()}
               onInput={(e) => handleSliderChange(parseInt(e.currentTarget.value, 10))}
               onChange={(e) => handleSliderChange(parseInt(e.currentTarget.value, 10))}
-              class="w-full h-3 bg-[#EAE3DB] rounded-lg appearance-none cursor-pointer accent-[#9E725F] focus:outline-none"
+              class="w-full h-3 bg-[#EAE3DB] rounded-lg appearance-none cursor-pointer accent-[#226192] focus:outline-none"
             />
           </div>
 
@@ -258,8 +258,8 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
                     }}
                     class={`px-3 py-1 rounded-full text-xs font-mono transition-colors cursor-pointer border ${
                       seats() === preset
-                        ? "bg-[#9E725F] text-white border-[#9E725F] font-bold shadow-xs"
-                        : "bg-[#FAF8F5] text-[#4A4A4A] border-[#D1C4B8] hover:border-[#9E725F] hover:text-[#242424]"
+                        ? "bg-[#226192] text-white border-[#226192] font-bold shadow-xs"
+                        : "bg-[#FAF8F5] text-[#4A4A4A] border-[#D1C4B8] hover:border-[#226192] hover:text-[#242424]"
                     }`}
                   >
                     {preset} Seats
@@ -272,10 +272,10 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
       </div>
 
       {/* Dynamic Waterfall Receipt */}
-      <div class="space-y-3.5 pt-4 border-t border-[#E2DFD8]">
+      <div class="space-y-3.5 pt-4 border-t border-[#D8D3C9]">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
-            <svg class="w-4 h-4 text-[#9E725F]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4 text-[#226192]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
             </svg>
             <span class="text-xs font-bold uppercase tracking-wider text-[#242424]">
@@ -302,7 +302,7 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
             <tbody class="divide-y divide-[#D1C4B8]/60 font-mono text-xs sm:text-sm">
               <For each={breakdown().lines}>
                 {(line) => (
-                  <tr class="hover:bg-white/70 transition-colors">
+                  <tr class="hover:bg-[#F6F3ED]/70 transition-colors">
                     <td class="py-3.5 px-4 sm:px-6 font-sans">
                       <div class="font-bold text-[#242424] flex items-center gap-2 flex-wrap">
                         <span>{line.name}</span>
@@ -341,17 +341,17 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
         </div>
 
         {/* Reactive Resource Limits Feature Strip */}
-        <div class="rounded-2xl bg-[#F0EEE9] border border-[#D1C4B8] p-4 text-xs sm:text-sm">
+        <div class="rounded-2xl bg-[#EAE6DE] border border-[#D1C4B8] p-4 text-xs sm:text-sm">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div class="flex items-center gap-2.5 text-[#242424]">
-              <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-[#9E725F]/20 text-[#9E725F] text-xs font-bold">✓</span>
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-[#226192]/20 text-[#226192] text-xs font-bold">✓</span>
               <span>
                 <strong class="font-bold text-[#242424]">{breakdown().resourceLimits.maxDomains} Custom Domains Included</strong>
                 <span class="text-stone-500 font-mono text-xs ml-1.5">(+${breakdown().resourceLimits.extraDomainPriceMonthly.toFixed(2)}/mo per extra domain)</span>
               </span>
             </div>
             <div class="flex items-center gap-2.5 text-[#242424]">
-              <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-[#9E725F]/20 text-[#9E725F] text-xs font-bold">✓</span>
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-[#226192]/20 text-[#226192] text-xs font-bold">✓</span>
               <span>
                 <strong class="font-bold text-[#242424]">{breakdown().resourceLimits.maxAliases.toLocaleString()} Email Aliases</strong>
                 <span class="text-stone-500 font-mono text-xs ml-1.5">({seats()} × 10)</span>
@@ -385,16 +385,16 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
             </span>
           </div>
           <div class="text-right">
-            <span class="text-2xl sm:text-3xl font-extrabold font-mono text-[#9E725F]">
+            <span class="text-2xl sm:text-3xl font-extrabold font-mono text-[#226192]">
               ${breakdown().blendedRate.toFixed(2)}
             </span>
             <span class="text-xs text-[#4A4A4A] font-mono"> /box/mo</span>
           </div>
         </div>
 
-        <div class="p-5 rounded-2xl bg-[#9E725F]/15 border-2 border-[#9E725F] flex items-center justify-between">
+        <div class="p-5 rounded-2xl bg-[#226192]/15 border-2 border-[#226192] flex items-center justify-between">
           <div>
-            <span class="block text-xs uppercase tracking-wider text-[#9E725F] font-extrabold">
+            <span class="block text-xs uppercase tracking-wider text-[#226192] font-extrabold">
               {billingCycle() === "annual" ? "Total Upfront Cost" : "Total Monthly Cost"}
             </span>
             <span class="text-xs text-[#4A4A4A]">
@@ -419,7 +419,7 @@ export const DynamicPricingCalculator: Component<DynamicPricingCalculatorProps> 
         <button
           type="button"
           onClick={handleCta}
-          class="w-full py-4 px-6 rounded-2xl bg-[#9E725F] hover:bg-[#865E4D] text-white text-sm sm:text-base font-bold shadow-lg shadow-[#9E725F]/20 flex items-center justify-center gap-2 transition-all cursor-pointer"
+          class="w-full py-4 px-6 rounded-2xl bg-[#226192] hover:bg-[#1B4E76] text-white text-sm sm:text-base font-bold shadow-lg shadow-[#226192]/20 flex items-center justify-center gap-2 transition-all cursor-pointer"
         >
           <span>{props.ctaText || `Deploy Infrastructure Capacity with ${seats()} Mailboxes`}</span>
           <span>→</span>

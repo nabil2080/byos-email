@@ -711,7 +711,7 @@ export const SupportFaqHub: Component = () => {
             onInput={(e) => setSearchQuery(e.currentTarget.value)}
             placeholder="Please enter your question"
             aria-label="Please enter your question"
-            class="w-full pl-10 pr-20 py-2.5 sm:py-3 text-xs sm:text-sm bg-white rounded-md sm:rounded-lg border border-[#DDD8CE] shadow-2xs text-[#1A1B1E] placeholder:text-[#999B9E] focus:outline-none focus:ring-1 focus:ring-[#800020] focus:border-[#800020] transition-all"
+            class="w-full pl-10 pr-20 py-2.5 sm:py-3 text-xs sm:text-sm bg-[#F6F3ED] rounded-md sm:rounded-lg border border-[#DDD8CE] shadow-2xs text-[#1A1B1E] placeholder:text-[#999B9E] focus:outline-none focus:ring-1 focus:ring-[#800020] focus:border-[#800020] transition-all"
           />
 
           <div class="absolute inset-y-0 right-0 pr-2.5 flex items-center gap-1.5">
@@ -757,7 +757,7 @@ export const SupportFaqHub: Component = () => {
                 class={`flex flex-col items-center justify-center p-4 sm:p-5 rounded-lg border text-center transition-all duration-150 cursor-pointer group focus:outline-none focus:ring-2 focus:ring-[#800020]/30 ${
                   isSelected()
                     ? "bg-[#FFF9F9] border-2 border-[#800020] shadow-xs"
-                    : "bg-white border-[#800020] hover:bg-[#FFFDFC] hover:shadow-xs"
+                    : "bg-[#F6F3ED] border-[#800020] hover:bg-[#FFFDFC] hover:shadow-xs"
                 }`}
               >
                 <div class="mb-2.5 transition-transform duration-150 group-hover:scale-105">
@@ -778,8 +778,8 @@ export const SupportFaqHub: Component = () => {
 
       {/* Active Filter Notification Bar */}
       <Show when={selectedCategory() || searchQuery()}>
-        <div class="mb-5 flex items-center justify-between p-3 rounded-lg bg-[#FAF7F2] border border-[#E2DFD8] text-xs">
-          <div class="flex items-center gap-2 text-[#3C3D3E]">
+        <div class="mb-5 flex items-center justify-between p-3 rounded-lg bg-[#FAF7F2] border border-[#D8D3C9] text-xs">
+          <div class="flex items-center gap-2 text-[#18212A]">
             <span class="font-medium">
               <Show
                 when={searchQuery()}
@@ -806,7 +806,7 @@ export const SupportFaqHub: Component = () => {
         <Show
           when={activeQuestions().length > 0}
           fallback={
-            <div class="text-center py-10 rounded-xl bg-white border border-[#E2DFD8] p-6 text-xs sm:text-sm text-[#6F7173]">
+            <div class="text-center py-10 rounded-xl bg-[#F6F3ED] border border-[#D8D3C9] p-6 text-xs sm:text-sm text-[#55616D]">
               <p class="font-medium text-[#1A1B1E] mb-1">No matching questions found</p>
               <p class="mb-4">Try searching for keywords like "recovery phrase", "DNS", "storage", or "pricing".</p>
               <button
@@ -826,10 +826,10 @@ export const SupportFaqHub: Component = () => {
 
               return (
                 <div
-                  class={`rounded-lg bg-white border transition-all duration-150 overflow-hidden ${
+                  class={`rounded-lg bg-[#F6F3ED] border transition-all duration-150 overflow-hidden ${
                     isExpanded()
                       ? "border-[#800020] shadow-xs"
-                      : "border-[#E2DFD8] hover:border-[#800020]/50"
+                      : "border-[#D8D3C9] hover:border-[#800020]/50"
                   }`}
                 >
                   {/* Accordion Header Row */}
@@ -859,7 +859,7 @@ export const SupportFaqHub: Component = () => {
 
                   {/* Accordion Expandable Answer Body */}
                   <Show when={isExpanded()}>
-                    <div class="px-4 sm:px-6 pb-5 pt-1 border-t border-[#F0EEE9] bg-[#FFFDFC] text-xs sm:text-sm text-[#3C3D3E] leading-relaxed space-y-4">
+                    <div class="px-4 sm:px-6 pb-5 pt-1 border-t border-[#EAE6DE] bg-[#FFFDFC] text-xs sm:text-sm text-[#18212A] leading-relaxed space-y-4">
                       {/* Lead Paragraph */}
                       <p class="font-medium text-[#1A1B1E] pt-2">{item.answer.lead}</p>
 
@@ -881,16 +881,16 @@ export const SupportFaqHub: Component = () => {
 
                       {/* Clean Technical / Pricing Table */}
                       <Show when={item.answer.table}>
-                        <div class="overflow-x-auto rounded-lg border border-[#E2DFD8] bg-white">
+                        <div class="overflow-x-auto rounded-lg border border-[#D8D3C9] bg-[#F6F3ED]">
                           <table class="w-full text-left text-xs">
-                            <thead class="bg-[#FAF7F2] border-b border-[#E2DFD8] text-[#1A1B1E] font-bold">
+                            <thead class="bg-[#FAF7F2] border-b border-[#D8D3C9] text-[#1A1B1E] font-bold">
                               <tr>
                                 <For each={item.answer.table!.headers}>
                                   {(h) => <th class="px-3.5 py-2">{h}</th>}
                                 </For>
                               </tr>
                             </thead>
-                            <tbody class="divide-y divide-[#E2DFD8]">
+                            <tbody class="divide-y divide-[#D8D3C9]">
                               <For each={item.answer.table!.rows}>
                                 {(row) => (
                                   <tr class="hover:bg-[#FAF9F6]">
@@ -921,7 +921,7 @@ export const SupportFaqHub: Component = () => {
                               ? "bg-amber-50/80 border border-amber-200/80 text-amber-900"
                               : item.answer.callout!.type === "tip"
                               ? "bg-emerald-50/80 border border-emerald-200/80 text-emerald-900"
-                              : "bg-[#F5F2EB] border border-[#DDD8CE] text-[#3C3D3E]"
+                              : "bg-[#F5F2EB] border border-[#DDD8CE] text-[#18212A]"
                           }`}
                         >
                           <svg class="w-4 h-4 shrink-0 mt-0.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -948,7 +948,7 @@ export const SupportFaqHub: Component = () => {
                       </Show>
 
                       {/* Was this answer helpful? */}
-                      <div class="pt-3 border-t border-[#E2DFD8]/60 flex items-center justify-between text-xs text-[#878A8E]">
+                      <div class="pt-3 border-t border-[#D8D3C9]/60 flex items-center justify-between text-xs text-[#878A8E]">
                         <span>Was this answer helpful?</span>
                         <div class="flex items-center gap-2">
                           <Show
@@ -988,7 +988,7 @@ export const SupportFaqHub: Component = () => {
       {/* ─────────────────────────────────────────────────────────────────────────
           6. Direct Support Escalation Banner
       ────────────────────────────────────────────────────────────────────────── */}
-      <div class="rounded-2xl border border-[#E2DFD8] bg-white p-6 sm:p-8 shadow-2xs">
+      <div class="rounded-2xl border border-[#D8D3C9] bg-[#F6F3ED] p-6 sm:p-8 shadow-2xs">
         <div class="max-w-xl mb-6">
           <span class="text-[11px] font-mono font-bold uppercase tracking-wider text-[#800020]">
             Direct Support Channels
@@ -996,14 +996,14 @@ export const SupportFaqHub: Component = () => {
           <h3 class="mt-1 text-lg sm:text-xl font-extrabold text-[#1A1B1E] tracking-tight">
             Still have questions or need technical assistance?
           </h3>
-          <p class="mt-1 text-xs text-[#6F7173] leading-relaxed">
+          <p class="mt-1 text-xs text-[#55616D] leading-relaxed">
             Our engineering and trust team provides dedicated support for custom storage setups, domain routing, and enterprise migrations.
           </p>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3.5">
           {/* Help Desk */}
-          <div class="p-4 rounded-xl bg-[#FAF8F5] border border-[#E2DFD8] flex flex-col justify-between space-y-3 hover:border-[#800020]/40 transition">
+          <div class="p-4 rounded-xl bg-[#FAF8F5] border border-[#D8D3C9] flex flex-col justify-between space-y-3 hover:border-[#800020]/40 transition">
             <div>
               <div class="w-7 h-7 rounded-lg bg-[#F5E6E8] text-[#800020] flex items-center justify-center mb-2">
                 <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -1011,7 +1011,7 @@ export const SupportFaqHub: Component = () => {
                 </svg>
               </div>
               <h4 class="font-bold text-xs sm:text-sm text-[#1A1B1E]">Customer Help Desk</h4>
-              <p class="text-[11px] text-[#6F7173] mt-1 leading-relaxed">
+              <p class="text-[11px] text-[#55616D] mt-1 leading-relaxed">
                 Open a database-backed support ticket inside your Control Panel with live status tracking.
               </p>
             </div>
@@ -1024,7 +1024,7 @@ export const SupportFaqHub: Component = () => {
           </div>
 
           {/* Direct Email */}
-          <div class="p-4 rounded-xl bg-[#FAF8F5] border border-[#E2DFD8] flex flex-col justify-between space-y-3 hover:border-[#800020]/40 transition">
+          <div class="p-4 rounded-xl bg-[#FAF8F5] border border-[#D8D3C9] flex flex-col justify-between space-y-3 hover:border-[#800020]/40 transition">
             <div>
               <div class="w-7 h-7 rounded-lg bg-[#F5E6E8] text-[#800020] flex items-center justify-center mb-2">
                 <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -1033,7 +1033,7 @@ export const SupportFaqHub: Component = () => {
                 </svg>
               </div>
               <h4 class="font-bold text-xs sm:text-sm text-[#1A1B1E]">Direct Email Support</h4>
-              <p class="text-[11px] text-[#6F7173] mt-1 leading-relaxed">
+              <p class="text-[11px] text-[#55616D] mt-1 leading-relaxed">
                 Email our support team directly. Inbound replies are authenticated and synced with your tickets.
               </p>
             </div>
@@ -1046,7 +1046,7 @@ export const SupportFaqHub: Component = () => {
           </div>
 
           {/* Security Disclosure */}
-          <div class="p-4 rounded-xl bg-[#FAF8F5] border border-[#E2DFD8] flex flex-col justify-between space-y-3 hover:border-[#800020]/40 transition">
+          <div class="p-4 rounded-xl bg-[#FAF8F5] border border-[#D8D3C9] flex flex-col justify-between space-y-3 hover:border-[#800020]/40 transition">
             <div>
               <div class="w-7 h-7 rounded-lg bg-[#F5E6E8] text-[#800020] flex items-center justify-center mb-2">
                 <svg class="w-3.5 h-3.5 stroke-current fill-none stroke-[2]" viewBox="0 0 24 24">
@@ -1054,7 +1054,7 @@ export const SupportFaqHub: Component = () => {
                 </svg>
               </div>
               <h4 class="font-bold text-xs sm:text-sm text-[#1A1B1E]">Security & Vulnerability</h4>
-              <p class="text-[11px] text-[#6F7173] mt-1 leading-relaxed">
+              <p class="text-[11px] text-[#55616D] mt-1 leading-relaxed">
                 Report security concerns, abusive senders, or cryptographic findings to our Trust & Safety team.
               </p>
             </div>

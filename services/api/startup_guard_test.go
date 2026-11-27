@@ -51,6 +51,7 @@ func TestStartupWarnDetectsStrayBucket(t *testing.T) {
 }
 
 func TestStartupWarnDetectsKeyMismatch(t *testing.T) {
+	t.Setenv("BYOS_ENV", "development")
 	t.Setenv("BYOS_DEV_MODE", "1")
 	db := setupTestDB(t)
 	defer db.Close()
@@ -273,7 +274,8 @@ func TestCleanTestDataPreservesSeed(t *testing.T) {
 }
 
 func TestKeyMismatchCheckSkippedWithoutDevMode(t *testing.T) {
-	os.Unsetenv("BYOS_DEV_MODE")
+	t.Setenv("BYOS_ENV", "")
+	t.Setenv("BYOS_DEV_MODE", "")
 	db := setupTestDB(t)
 	defer db.Close()
 
@@ -325,15 +327,32 @@ func TestKeyMismatchCheckSkippedWithoutDevMode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	warnings := CheckTestPollution(ctx, testDSN, "", "", "")
-	for _, w := range warnings {
-		if strings.Contains(w, "Ed25519 public key does not match derived key") {
-			t.Fatalf("expected key mismatch check to be skipped without BYOS_DEV_MODE, but got warning: %s", w)
-		}
+	for _, tc := range []struct {
+		name string
+		env  string
+		dev  string
+	}{
+		{"Unset", "", ""},
+		{"Production_With_DevFlag", "production", "1"},
+		{"Staging_With_DevFlag", "staging", "1"},
+		{"UnsetEnv_With_DevFlag", "", "1"},
+		{"DevEnv_InvalidDevFlag", "development", "invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("BYOS_ENV", tc.env)
+			t.Setenv("BYOS_DEV_MODE", tc.dev)
+			warnings := CheckTestPollution(ctx, testDSN, "", "", "")
+			for _, w := range warnings {
+				if strings.Contains(w, "Ed25519 public key does not match derived key") {
+					t.Fatalf("expected key mismatch check to be skipped for %s, got warning: %s", tc.name, w)
+				}
+			}
+		})
 	}
 }
 
 func TestKeyMismatchCheckRunsWithDevMode(t *testing.T) {
+	t.Setenv("BYOS_ENV", "development")
 	t.Setenv("BYOS_DEV_MODE", "1")
 	db := setupTestDB(t)
 	defer db.Close()

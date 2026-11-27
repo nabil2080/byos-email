@@ -47,25 +47,25 @@ export const ArchitectureComparison: Component = () => {
     <section class="py-16 sm:py-24 px-4 sm:px-6 max-w-7xl mx-auto">
       {/* Section Header */}
       <div class="text-center max-w-3xl mx-auto mb-12">
-        <span class="text-xs uppercase tracking-widest font-mono text-[#9E725F] font-bold">
+        <span class="text-xs uppercase tracking-widest font-mono text-[#226192] font-bold">
           Why Companies Are Switching
         </span>
-        <h2 class="text-2xl sm:text-4xl lg:text-5xl font-extrabold text-[#2B2C2D] mt-2 tracking-tight">
+        <h2 class="text-2xl sm:text-4xl lg:text-5xl font-extrabold text-[#18212A] mt-2 tracking-tight">
           Traditional Email vs. BYOS
         </h2>
-        <p class="text-xs sm:text-base text-[#6F7173] mt-3 max-w-xl mx-auto">
+        <p class="text-xs sm:text-base text-[#55616D] mt-3 max-w-xl mx-auto">
           See why forward-thinking companies are moving their business email to their own cloud storage.
         </p>
 
         {/* Mobile View Toggle */}
-        <div class="flex items-center justify-center gap-1 mt-6 p-1 bg-white border border-[#E2DFD8] rounded-xl inline-flex shadow-2xs">
+        <div class="flex items-center justify-center gap-1 mt-6 p-1 bg-[#F6F3ED] border border-[#D8D3C9] rounded-xl inline-flex shadow-2xs">
           <button
             type="button"
             onClick={() => setActiveTab("both")}
             class={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
               activeTab() === "both"
-                ? "bg-[#9E725F] text-white"
-                : "text-[#6F7173] hover:text-[#3C3D3E]"
+                ? "bg-[#226192] text-white"
+                : "text-[#55616D] hover:text-[#18212A]"
             }`}
           >
             Side by Side
@@ -75,8 +75,8 @@ export const ArchitectureComparison: Component = () => {
             onClick={() => setActiveTab("byos")}
             class={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
               activeTab() === "byos"
-                ? "bg-[#9E725F] text-white"
-                : "text-[#6F7173] hover:text-[#3C3D3E]"
+                ? "bg-[#226192] text-white"
+                : "text-[#55616D] hover:text-[#18212A]"
             }`}
           >
             BYOS Advantage
@@ -86,8 +86,8 @@ export const ArchitectureComparison: Component = () => {
             onClick={() => setActiveTab("traditional")}
             class={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
               activeTab() === "traditional"
-                ? "bg-[#9E725F] text-white"
-                : "text-[#6F7173] hover:text-[#3C3D3E]"
+                ? "bg-[#226192] text-white"
+                : "text-[#55616D] hover:text-[#18212A]"
             }`}
           >
             Traditional Email
@@ -102,7 +102,7 @@ export const ArchitectureComparison: Component = () => {
           <div
             class={`${
               activeTab() === "both" ? "lg:col-span-6" : "lg:col-span-12"
-            } rounded-3xl border border-stone-300 bg-white p-6 sm:p-8 shadow-xs flex flex-col justify-between`}
+            } rounded-3xl border border-stone-300 bg-[#F6F3ED] p-6 sm:p-8 shadow-xs flex flex-col justify-between`}
           >
             <div>
               <div class="flex items-center justify-between pb-4 border-b border-stone-200">
@@ -110,7 +110,7 @@ export const ArchitectureComparison: Component = () => {
                   <span class="text-xs font-mono uppercase tracking-wider text-rose-700 font-bold">
                     The Old Way
                   </span>
-                  <h3 class="text-xl font-bold text-[#2B2C2D] mt-0.5">
+                  <h3 class="text-xl font-bold text-[#18212A] mt-0.5">
                     Traditional Big Tech Email
                   </h3>
                 </div>
@@ -124,7 +124,7 @@ export const ArchitectureComparison: Component = () => {
                   {(item) => (
                     <div class="p-3.5 rounded-2xl bg-[#FAF9F6] border border-stone-200/80">
                       <div class="text-xs font-bold text-stone-700">{item.feature}</div>
-                      <div class="text-xs text-[#6F7173] mt-1 leading-relaxed">
+                      <div class="text-xs text-[#55616D] mt-1 leading-relaxed">
                         {item.traditional}
                       </div>
                     </div>
@@ -144,18 +144,18 @@ export const ArchitectureComparison: Component = () => {
           <div
             class={`${
               activeTab() === "both" ? "lg:col-span-6" : "lg:col-span-12"
-            } rounded-3xl border-2 border-[#9E725F] bg-[#FAF9F6] p-6 sm:p-8 shadow-md flex flex-col justify-between relative overflow-hidden`}
+            } rounded-3xl border-2 border-[#226192] bg-[#FAF9F6] p-6 sm:p-8 shadow-md flex flex-col justify-between relative overflow-hidden`}
           >
             {/* Ambient Corner Accent */}
-            <div class="absolute -top-16 -right-16 w-32 h-32 bg-[#9E725F]/15 rounded-full blur-2xl pointer-events-none" />
+            <div class="absolute -top-16 -right-16 w-32 h-32 bg-[#226192]/15 rounded-full blur-2xl pointer-events-none" />
 
             <div>
-              <div class="flex items-center justify-between pb-4 border-b border-[#E2DFD8]">
+              <div class="flex items-center justify-between pb-4 border-b border-[#D8D3C9]">
                 <div>
-                  <span class="text-xs font-mono uppercase tracking-wider text-[#9E725F] font-bold">
+                  <span class="text-xs font-mono uppercase tracking-wider text-[#226192] font-bold">
                     The Sovereign Way
                   </span>
-                  <h3 class="text-xl font-bold text-[#2B2C2D] mt-0.5">
+                  <h3 class="text-xl font-bold text-[#18212A] mt-0.5">
                     BYOS Business Email
                   </h3>
                 </div>
@@ -167,14 +167,14 @@ export const ArchitectureComparison: Component = () => {
               <div class="mt-6 space-y-5">
                 <For each={comparisons}>
                   {(item) => (
-                    <div class="p-3.5 rounded-2xl bg-white border border-[#E2DFD8] shadow-2xs group hover:border-[#9E725F]/50 transition-colors">
+                    <div class="p-3.5 rounded-2xl bg-[#F6F3ED] border border-[#D8D3C9] shadow-2xs group hover:border-[#226192]/50 transition-colors">
                       <div class="flex items-center justify-between">
-                        <span class="text-xs font-bold text-[#2B2C2D]">{item.feature}</span>
+                        <span class="text-xs font-bold text-[#18212A]">{item.feature}</span>
                         <span class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
                           {item.highlight}
                         </span>
                       </div>
-                      <div class="text-xs text-[#3C3D3E] mt-1 leading-relaxed">
+                      <div class="text-xs text-[#18212A] mt-1 leading-relaxed">
                         {item.byos}
                       </div>
                     </div>
@@ -183,7 +183,7 @@ export const ArchitectureComparison: Component = () => {
               </div>
             </div>
 
-            <div class="mt-8 pt-4 border-t border-[#E2DFD8] text-xs text-[#9E725F] font-medium text-center">
+            <div class="mt-8 pt-4 border-t border-[#D8D3C9] text-xs text-[#226192] font-medium text-center">
               Built for businesses that care about ownership and honest pricing.
             </div>
           </div>

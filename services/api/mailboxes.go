@@ -136,6 +136,10 @@ func mailboxesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodGet {
+		if !isAdmin(userID, orgID, conn) {
+			http.Error(w, "admin or owner role required to list organization mailboxes", http.StatusForbidden)
+			return
+		}
 		rows, err := conn.Query(ctx, `
 			SELECT m.id::text, m.local_part, m.domain_id::text, m.mode, COALESCE(m.status, 'active'),
 			       COALESCE(d.name, '')
@@ -667,19 +671,19 @@ func mailboxGetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
+		http.Error(w, errMsg, status)
+		return
+	}
 	var id, localPart, domainID, mode, orgID string
 	var rootSecretID *string
 	var mailboxSkWrapped []byte
 	var mailboxPk []byte
 	var mailboxSkVersion int
 	var wrappedSkUser, previousWrappedSkUser *string
-	err = conn.QueryRow(ctx, `SELECT id::text, local_part, domain_id::text, mode, org_id::text, root_secret_id::text, mailbox_sk_wrapped, mailbox_pk, mailbox_sk_version, wrapped_sk_user, previous_wrapped_sk_user FROM mailboxes WHERE id=$1`, mailboxID).Scan(&id, &localPart, &domainID, &mode, &orgID, &rootSecretID, &mailboxSkWrapped, &mailboxPk, &mailboxSkVersion, &wrappedSkUser, &previousWrappedSkUser)
+	err = conn.QueryRow(ctx, `SELECT id::text, local_part, domain_id::text, mode, org_id::text, root_secret_id::text, mailbox_sk_wrapped, mailbox_pk, mailbox_sk_version, wrapped_sk_user, previous_wrapped_sk_user FROM mailboxes WHERE id=$1 AND org_id=$2`, mailboxID, userOrgID).Scan(&id, &localPart, &domainID, &mode, &orgID, &rootSecretID, &mailboxSkWrapped, &mailboxPk, &mailboxSkVersion, &wrappedSkUser, &previousWrappedSkUser)
 	if err != nil {
 		http.Error(w, "mailbox not found", http.StatusNotFound)
-		return
-	}
-	if status, errMsg, authOk := verifyMailboxSession(r, userID, mailboxID, conn, ctx); !authOk {
-		http.Error(w, errMsg, status)
 		return
 	}
 	wskStr := ""
@@ -736,13 +740,6 @@ func mailboxAliasesHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not authorized", http.StatusForbidden)
 		return
 	}
-	var mailboxOrgID, mailboxDomainID string
-	err = conn.QueryRow(ctx, `SELECT org_id::text, domain_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID, &mailboxDomainID)
-	if err != nil {
-		http.Error(w, "mailbox not found", http.StatusNotFound)
-		return
-	}
-
 	activeHeader := strings.TrimSpace(r.Header.Get("X-BYOS-Active-Mailbox"))
 	if activeHeader != "" && activeHeader != mailboxID {
 		http.Error(w, "X-BYOS-Active-Mailbox mismatch with target mailbox", http.StatusForbidden)
@@ -751,6 +748,18 @@ func mailboxAliasesHandler(w http.ResponseWriter, r *http.Request) {
 
 	callerHash, _ := getCallerTokenHash(r)
 	isAuthorized := isMailboxAuthorizedForSession(callerHash, userID, mailboxID, conn, ctx)
+
+	var mailboxOrgID, mailboxDomainID string
+	err = conn.QueryRow(ctx, `SELECT org_id::text, domain_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID, &mailboxDomainID)
+	if err != nil {
+		if !isAuthorized {
+			http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
+			return
+		}
+		http.Error(w, "mailbox not found", http.StatusNotFound)
+		return
+	}
+
 	isOrgAdmin := (mailboxOrgID == userOrgID) && (userRole == "admin" || userRole == "owner")
 	if !isAuthorized && !isOrgAdmin {
 		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
@@ -940,6 +949,11 @@ func organizationAliasesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !isAdmin(userID, orgID, conn) {
+		http.Error(w, "admin or owner role required to view organization aliases", http.StatusForbidden)
+		return
+	}
+
 	rows, err := conn.Query(ctx, `
 		SELECT 
 			a.id::text, 
@@ -1033,13 +1047,6 @@ func mailboxAliasItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var mailboxOrgID string
-	err = conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID)
-	if err != nil {
-		http.Error(w, "mailbox not found", http.StatusNotFound)
-		return
-	}
-
 	activeHeader := strings.TrimSpace(r.Header.Get("X-BYOS-Active-Mailbox"))
 	if activeHeader != "" && activeHeader != mailboxID {
 		http.Error(w, "X-BYOS-Active-Mailbox mismatch with target mailbox", http.StatusForbidden)
@@ -1048,6 +1055,18 @@ func mailboxAliasItemHandler(w http.ResponseWriter, r *http.Request) {
 
 	callerHash, _ := getCallerTokenHash(r)
 	isAuthorized := isMailboxAuthorizedForSession(callerHash, userID, mailboxID, conn, ctx)
+
+	var mailboxOrgID string
+	err = conn.QueryRow(ctx, `SELECT org_id::text FROM mailboxes WHERE id=$1`, mailboxID).Scan(&mailboxOrgID)
+	if err != nil {
+		if !isAuthorized {
+			http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
+			return
+		}
+		http.Error(w, "mailbox not found", http.StatusNotFound)
+		return
+	}
+
 	isOrgAdmin := (mailboxOrgID == userOrgID) && (userRole == "admin" || userRole == "owner")
 	if !isAuthorized && !isOrgAdmin {
 		http.Error(w, "not authorized for this mailbox", http.StatusForbidden)
@@ -1099,9 +1118,8 @@ func userMailboxesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	var userOrgID, userRole string
 	var userActive bool
-	err = conn.QueryRow(ctx, `SELECT org_id::text, COALESCE(role, 'member'), is_active FROM users WHERE id=$1`, userID).Scan(&userOrgID, &userRole, &userActive)
+	err = conn.QueryRow(ctx, `SELECT is_active FROM users WHERE id=$1`, userID).Scan(&userActive)
 	if err != nil || !userActive {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -1121,7 +1139,7 @@ func userMailboxesHandler(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN users mu ON mu.id = m.user_id
 		LEFT JOIN mailbox_settings ms ON ms.mailbox_id = m.id
 		LEFT JOIN domains d ON d.id = m.domain_id
-		WHERE (m.user_id = $1 OR (m.org_id = u.org_id AND u.role IN ('admin', 'owner')))
+		WHERE m.user_id = $1
 		ORDER BY email ASC, m.id::text ASC
 	`
 	rows, err := conn.Query(ctx, query, userID)

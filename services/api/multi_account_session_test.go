@@ -198,6 +198,7 @@ func TestMultiAccount_TwoMailboxLifecycleIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	attachSession := func(req *http.Request) {
+		req.Header.Set("X-BYOS-Client", "webmail")
 		req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawToken})
 	}
 
@@ -387,6 +388,7 @@ func TestMultiAccount_ElevenGaps_UserSessionIsolation(t *testing.T) {
 	authorizeMailboxForSession(tokenHash, secondaryMailboxID, secondaryUserID, orgID, expiresAt)
 
 	attachSession := func(req *http.Request) {
+		req.Header.Set("X-BYOS-Client", "webmail")
 		req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawToken})
 	}
 
@@ -494,6 +496,7 @@ func getSafeTestDSN(t *testing.T) (string, *pgx.Conn, context.Context) {
 // across all 11 endpoints, testing primary success, linked secondary success, unlinked 403,
 // unrelated 403, selector mismatch 403, unauthenticated 401, org admin boundaries, and internal service separation.
 func TestMultiAccount_RouteLevelAuthorizationCoverage(t *testing.T) {
+	t.Setenv("BYOS_ALLOWED_ORIGINS", "http://localhost:3001")
 	_, conn, ctx := getSafeTestDSN(t)
 	if conn == nil {
 		return
@@ -730,14 +733,14 @@ func TestMultiAccount_RouteLevelAuthorizationCoverage(t *testing.T) {
 				return []byte("sample-storage-data-payload")
 			},
 			addHeaders: func(req *http.Request, mbID string) {
-				req.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/chunk-1", mbID))
+				req.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/notes/manifest.enc", mbID))
 			},
 		},
 		{
 			name:   "6. Storage Retrieve",
 			method: http.MethodGet,
 			makePath: func(mbID string) string {
-				return fmt.Sprintf("/v1/mailboxes/%s/storage/retrieve?key=mailboxes/%s/chunk-1", mbID, mbID)
+				return fmt.Sprintf("/v1/mailboxes/%s/storage/retrieve?key=mailboxes/%s/notes/manifest.enc", mbID, mbID)
 			},
 		},
 		{
@@ -879,6 +882,7 @@ func TestMultiAccount_RouteLevelAuthorizationCoverage(t *testing.T) {
 	t.Run("Org Admin Privacy Boundary - Bridge Credentials", func(t *testing.T) {
 		// Admin attempting GET on secondary mailbox bridge credentials without linked session -> 403 Forbidden
 		reqAdminGet := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/mailboxes/%s/bridge/credentials", secondaryMailboxID), nil)
+		reqAdminGet.Header.Set("X-BYOS-Client", "webmail")
 		reqAdminGet.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawAdminToken})
 		reqAdminGet.Header.Set("X-BYOS-Active-Mailbox", secondaryMailboxID)
 		recAdminGet := httptest.NewRecorder()
@@ -914,6 +918,7 @@ func TestMultiAccount_RouteLevelAuthorizationCoverage(t *testing.T) {
 	t.Run("Org Admin Permission - Aliases Administration", func(t *testing.T) {
 		// Non-admin peer member attempting GET on unlinked mailbox aliases -> 403 Forbidden
 		reqMemberGet := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/mailboxes/%s/aliases", unlinkedMailboxID), nil)
+		reqMemberGet.Header.Set("X-BYOS-Client", "webmail")
 		reqMemberGet.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawToken})
 		reqMemberGet.Header.Set("X-BYOS-Active-Mailbox", unlinkedMailboxID)
 		recMemberGet := httptest.NewRecorder()
@@ -924,6 +929,7 @@ func TestMultiAccount_RouteLevelAuthorizationCoverage(t *testing.T) {
 
 		// Org Admin attempting GET on unlinked mailbox aliases -> 200 OK
 		reqAdminGetAliases := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/mailboxes/%s/aliases", unlinkedMailboxID), nil)
+		reqAdminGetAliases.Header.Set("X-BYOS-Client", "webmail")
 		reqAdminGetAliases.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawAdminToken})
 		reqAdminGetAliases.Header.Set("X-BYOS-Active-Mailbox", unlinkedMailboxID)
 		recAdminGetAliases := httptest.NewRecorder()
@@ -943,7 +949,7 @@ func TestMultiAccount_RouteLevelAuthorizationCoverage(t *testing.T) {
 		// A. Valid storage key on storage store route -> passes service auth (does NOT return 401 or 403)
 		reqStorageValid := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/mailboxes/%s/storage/store", primaryMailboxID), bytes.NewReader([]byte("chunk-data")))
 		reqStorageValid.Header.Set("X-Internal-Key", storageKey)
-		reqStorageValid.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/chunk-1", primaryMailboxID))
+		reqStorageValid.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/notes/manifest.enc", primaryMailboxID))
 		recStorageValid := httptest.NewRecorder()
 		mux.ServeHTTP(recStorageValid, reqStorageValid)
 		if recStorageValid.Code == http.StatusUnauthorized || recStorageValid.Code == http.StatusForbidden {
@@ -953,7 +959,7 @@ func TestMultiAccount_RouteLevelAuthorizationCoverage(t *testing.T) {
 		// B. Outbound worker key (INTERNAL_API_KEY) on storage store route -> 403 Forbidden
 		reqOutboundOnStorage := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/mailboxes/%s/storage/store", primaryMailboxID), bytes.NewReader([]byte("chunk-data")))
 		reqOutboundOnStorage.Header.Set("X-Internal-Key", outboundKey)
-		reqOutboundOnStorage.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/chunk-1", primaryMailboxID))
+		reqOutboundOnStorage.Header.Set("X-Object-Key", fmt.Sprintf("mailboxes/%s/notes/manifest.enc", primaryMailboxID))
 		recOutboundOnStorage := httptest.NewRecorder()
 		mux.ServeHTTP(recOutboundOnStorage, reqOutboundOnStorage)
 		if recOutboundOnStorage.Code != http.StatusForbidden {
@@ -1061,6 +1067,7 @@ func TestMultiAccount_MFAStateMachine_FullLifecycle(t *testing.T) {
 	// -------------------------------------------------------------
 	// Wrong password returns 401
 	reqWrongPw := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"wrong-password"}`, secEmail)))
+	reqWrongPw.Header.Set("X-BYOS-Client", "webmail")
 	reqWrongPw.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqWrongPw.Header.Set("Content-Type", "application/json")
 	recWrongPw := httptest.NewRecorder()
@@ -1071,6 +1078,7 @@ func TestMultiAccount_MFAStateMachine_FullLifecycle(t *testing.T) {
 
 	// Correct password initiates challenge; primary session cookie is NOT modified
 	reqInit := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"Secret-Pass-123!"}`, secEmail)))
+	reqInit.Header.Set("X-BYOS-Client", "webmail")
 	reqInit.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqInit.Header.Set("Content-Type", "application/json")
 	recInit := httptest.NewRecorder()
@@ -1140,6 +1148,7 @@ func TestMultiAccount_MFAStateMachine_FullLifecycle(t *testing.T) {
 		t.Fatalf("failed to insert expired challenge: %v", err)
 	}
 	reqExpired := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"challenge_token":"%s","code":"123456"}`, expiredTok)))
+	reqExpired.Header.Set("X-BYOS-Client", "webmail")
 	reqExpired.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqExpired.Header.Set("Content-Type", "application/json")
 	recExpired := httptest.NewRecorder()
@@ -1158,6 +1167,7 @@ func TestMultiAccount_MFAStateMachine_FullLifecycle(t *testing.T) {
 
 	// Eve attempts to verify Alice's challenge with Eve's session cookie rawTokenB
 	reqReplay := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"challenge_token":"%s","code":"%s"}`, challengeToken, validTOTPCode)))
+	reqReplay.Header.Set("X-BYOS-Client", "webmail")
 	reqReplay.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenB}) // Eve's session!
 	reqReplay.Header.Set("Content-Type", "application/json")
 	recReplay := httptest.NewRecorder()
@@ -1168,6 +1178,7 @@ func TestMultiAccount_MFAStateMachine_FullLifecycle(t *testing.T) {
 
 	// Eve attempts to replay via login2FAVerifyHandler -> also 403 Forbidden
 	reqReplay2FA := httptest.NewRequest(http.MethodPost, "/v1/auth/2fa/verify-login", strings.NewReader(fmt.Sprintf(`{"challenge_token":"%s","code":"%s"}`, challengeToken, validTOTPCode)))
+	reqReplay2FA.Header.Set("X-BYOS-Client", "webmail")
 	reqReplay2FA.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenB}) // Eve's session!
 	reqReplay2FA.Header.Set("Content-Type", "application/json")
 	recReplay2FA := httptest.NewRecorder()
@@ -1180,6 +1191,7 @@ func TestMultiAccount_MFAStateMachine_FullLifecycle(t *testing.T) {
 	// Property 8: Invalid TOTP code cannot establish mailbox access
 	// -------------------------------------------------------------
 	reqInvalidCode := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"challenge_token":"%s","code":"000000"}`, challengeToken)))
+	reqInvalidCode.Header.Set("X-BYOS-Client", "webmail")
 	reqInvalidCode.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqInvalidCode.Header.Set("Content-Type", "application/json")
 	recInvalidCode := httptest.NewRecorder()
@@ -1197,6 +1209,7 @@ func TestMultiAccount_MFAStateMachine_FullLifecycle(t *testing.T) {
 	// Property 5 & Property 10: Consumed only once (single-use deletion) & successful linking preserves session
 	// -------------------------------------------------------------
 	reqValid := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"challenge_token":"%s","code":"%s"}`, challengeToken, validTOTPCode)))
+	reqValid.Header.Set("X-BYOS-Client", "webmail")
 	reqValid.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqValid.Header.Set("Content-Type", "application/json")
 	recValid := httptest.NewRecorder()
@@ -1217,6 +1230,7 @@ func TestMultiAccount_MFAStateMachine_FullLifecycle(t *testing.T) {
 
 	// Re-attempting with the same challenge token must fail with 401 (single-use deletion)
 	reqSecondAttempt := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"challenge_token":"%s","code":"%s"}`, challengeToken, validTOTPCode)))
+	reqSecondAttempt.Header.Set("X-BYOS-Client", "webmail")
 	reqSecondAttempt.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqSecondAttempt.Header.Set("Content-Type", "application/json")
 	recSecondAttempt := httptest.NewRecorder()
@@ -1240,6 +1254,7 @@ func TestMultiAccount_MFAStateMachine_FullLifecycle(t *testing.T) {
 		t.Fatalf("failed to deactivate secondary user: %v", err)
 	}
 	reqInactiveUser := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"Secret-Pass-123!"}`, secEmail)))
+	reqInactiveUser.Header.Set("X-BYOS-Client", "webmail")
 	reqInactiveUser.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqInactiveUser.Header.Set("Content-Type", "application/json")
 	recInactiveUser := httptest.NewRecorder()
@@ -1262,6 +1277,7 @@ func TestMultiAccount_MFAStateMachine_FullLifecycle(t *testing.T) {
 		}
 	}
 	reqSuspendedMb := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"Secret-Pass-123!","code":"%s"}`, secEmail, validTOTPCode)))
+	reqSuspendedMb.Header.Set("X-BYOS-Client", "webmail")
 	reqSuspendedMb.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqSuspendedMb.Header.Set("Content-Type", "application/json")
 	recSuspendedMb := httptest.NewRecorder()
@@ -1290,6 +1306,7 @@ func TestMultiAccount_MFAStateMachine_FullLifecycle(t *testing.T) {
 		defer redisClient.Del(ctx, rKey)
 
 		reqRateLimit := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"Secret-Pass-123!"}`, secEmail)))
+		reqRateLimit.Header.Set("X-BYOS-Client", "webmail")
 		reqRateLimit.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 		reqRateLimit.Header.Set("Content-Type", "application/json")
 		reqRateLimit.RemoteAddr = testIP + ":12345"

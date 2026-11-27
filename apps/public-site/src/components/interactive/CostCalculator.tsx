@@ -60,16 +60,16 @@ export const CostCalculator: Component = () => {
   }
 
   return (
-    <div class="bg-white rounded-3xl border border-[#E2DFD8] shadow-sm p-6 sm:p-10 space-y-8">
+    <div class="bg-[#F6F3ED] rounded-3xl border border-[#D8D3C9] shadow-sm p-6 sm:p-10 space-y-8">
       {/* Header */}
       <div class="text-center max-w-xl mx-auto">
-        <span class="text-xs uppercase tracking-widest font-mono text-[#9E725F] font-bold">
+        <span class="text-xs uppercase tracking-widest font-mono text-[#226192] font-bold">
           Transparent Capacity Economics
         </span>
-        <h3 class="text-2xl sm:text-3xl font-bold text-[#3C3D3E] mt-1.5">
+        <h3 class="text-2xl sm:text-3xl font-bold text-[#18212A] mt-1.5">
           See How Much You Save on BYOS
         </h3>
-        <p class="text-xs sm:text-sm text-[#6F7173] mt-2">
+        <p class="text-xs sm:text-sm text-[#55616D] mt-2">
           Legacy email suites charge exponential per-seat fees that punish company growth. BYOS charges raw infrastructure capacity with compounding volume discounts.
         </p>
       </div>
@@ -77,10 +77,10 @@ export const CostCalculator: Component = () => {
       {/* Slider Controls */}
       <div class="max-w-xl mx-auto space-y-3">
         <div class="flex items-center justify-between">
-          <label class="text-xs font-bold uppercase tracking-wider text-[#6F7173]">
+          <label class="text-xs font-bold uppercase tracking-wider text-[#55616D]">
             Number of Organization Mailboxes
           </label>
-          <span class="text-lg font-mono font-bold text-[#9E725F] bg-[#F3ECE8] px-3 py-1 rounded-xl">
+          <span class="text-lg font-mono font-bold text-[#226192] bg-[#E2E7EB] px-3 py-1 rounded-xl">
             {mailboxCount()} {mailboxCount() === 1 ? "Mailbox" : "Mailboxes"}
           </span>
         </div>
@@ -91,36 +91,36 @@ export const CostCalculator: Component = () => {
           max={200}
           value={mailboxCount()}
           onInput={(e) => setMailboxCount(parseInt(e.currentTarget.value, 10))}
-          class="w-full h-2.5 bg-[#F0EEE9] rounded-lg appearance-none cursor-pointer accent-[#9E725F]"
+          class="w-full h-2.5 bg-[#EAE6DE] rounded-lg appearance-none cursor-pointer accent-[#226192]"
         />
 
-        <div class="flex justify-between text-[11px] font-mono text-[#6F7173]">
+        <div class="flex justify-between text-[11px] font-mono text-[#55616D]">
           <span>1 Solo</span>
           <button
             type="button"
             onClick={() => setMailboxCount(10)}
-            class="hover:text-[#9E725F] underline cursor-pointer"
+            class="hover:text-[#226192] underline cursor-pointer"
           >
             10 seats
           </button>
           <button
             type="button"
             onClick={() => setMailboxCount(25)}
-            class="hover:text-[#9E725F] underline cursor-pointer"
+            class="hover:text-[#226192] underline cursor-pointer"
           >
             25 seats
           </button>
           <button
             type="button"
             onClick={() => setMailboxCount(50)}
-            class="hover:text-[#9E725F] underline cursor-pointer"
+            class="hover:text-[#226192] underline cursor-pointer"
           >
             50 seats
           </button>
           <button
             type="button"
             onClick={() => setMailboxCount(100)}
-            class="hover:text-[#9E725F] underline cursor-pointer"
+            class="hover:text-[#226192] underline cursor-pointer"
           >
             100 seats
           </button>
@@ -140,16 +140,16 @@ export const CostCalculator: Component = () => {
           </div>
 
           <div>
-            <div class="text-3xl font-bold text-[#3C3D3E]">
+            <div class="text-3xl font-bold text-[#18212A]">
               ${legacyMonthlyCost().toLocaleString()}
-              <span class="text-xs font-normal text-[#6F7173]"> / month</span>
+              <span class="text-xs font-normal text-[#55616D]"> / month</span>
             </div>
-            <div class="text-xs text-[#6F7173] font-mono mt-1">
+            <div class="text-xs text-[#55616D] font-mono mt-1">
               ${legacyAnnualCost().toLocaleString()} per year ($10.00 / user / mo)
             </div>
           </div>
 
-          <ul class="text-xs text-[#6F7173] space-y-2 pt-2 border-t border-rose-200/60">
+          <ul class="text-xs text-[#55616D] space-y-2 pt-2 border-t border-rose-200/60">
             <li class="flex items-center gap-2 text-rose-900">
               <span>✕</span> Proprietary storage lock-in
             </li>
@@ -163,27 +163,27 @@ export const CostCalculator: Component = () => {
         </div>
 
         {/* BYOS Box */}
-        <div class="p-6 rounded-2xl border-2 border-[#9E725F] bg-[#F3ECE8]/40 space-y-4 relative shadow-sm">
+        <div class="p-6 rounded-2xl border-2 border-[#226192] bg-[#E2E7EB]/40 space-y-4 relative shadow-sm">
           <div class="flex items-center justify-between">
-            <span class="text-xs font-bold uppercase tracking-wider text-[#9E725F] font-mono">
+            <span class="text-xs font-bold uppercase tracking-wider text-[#226192] font-mono">
               BYOS Sovereign Email
             </span>
-            <span class="text-[11px] font-bold bg-[#9E725F] text-white px-2 py-0.5 rounded-full font-mono">
+            <span class="text-[11px] font-bold bg-[#226192] text-white px-2 py-0.5 rounded-full font-mono">
               SAVE {percentSaved()}%
             </span>
           </div>
 
           <div>
-            <div class="text-3xl font-bold text-[#3C3D3E]">
+            <div class="text-3xl font-bold text-[#18212A]">
               ${byosTotalMonthly().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              <span class="text-xs font-normal text-[#6F7173]"> / month</span>
+              <span class="text-xs font-normal text-[#55616D]"> / month</span>
             </div>
-            <div class="text-xs text-[#6F7173] font-mono mt-1">
+            <div class="text-xs text-[#55616D] font-mono mt-1">
               ${byosAnnualCost().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} per year (${byosMonthlyCost().toFixed(2)}/mo capacity + ~${byosStorageEstMonthly().toFixed(2)}/mo storage)
             </div>
           </div>
 
-          <ul class="text-xs text-[#3C3D3E] space-y-2 pt-2 border-t border-[#E2DFD8]">
+          <ul class="text-xs text-[#18212A] space-y-2 pt-2 border-t border-[#D8D3C9]">
             <li class="flex items-center gap-2 text-emerald-800 font-medium">
               <span>✓</span> Zero storage markup (S3 / R2 / MinIO)
             </li>
@@ -198,7 +198,7 @@ export const CostCalculator: Component = () => {
       </div>
 
       {/* Big Annual Savings Banner */}
-      <div class="max-w-2xl mx-auto p-5 rounded-2xl bg-[#9E725F] text-white text-center flex flex-col sm:flex-row items-center justify-between gap-4 shadow-md">
+      <div class="max-w-2xl mx-auto p-5 rounded-2xl bg-[#226192] text-white text-center flex flex-col sm:flex-row items-center justify-between gap-4 shadow-md">
         <div class="text-left">
           <div class="text-xs uppercase tracking-wider font-mono opacity-90">
             Estimated Annual Savings
@@ -211,7 +211,7 @@ export const CostCalculator: Component = () => {
         <a
           href={`${cpBase()}/login?seats=${mailboxCount()}`}
           onClick={handleCtaClick}
-          class="px-5 py-2.5 rounded-xl bg-white text-[#9E725F] text-xs font-bold hover:bg-[#F0EEE9] transition shadow-xs whitespace-nowrap cursor-pointer"
+          class="px-5 py-2.5 rounded-xl bg-[#F6F3ED] text-[#226192] text-xs font-bold hover:bg-[#EAE6DE] transition shadow-xs whitespace-nowrap cursor-pointer"
         >
           Claim Your Savings →
         </a>

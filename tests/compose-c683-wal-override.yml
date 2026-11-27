@@ -1,0 +1,19 @@
+# BYOS C6.8.3: Isolated Disposable Compose Override for Continuous WAL Archiving Test
+name: byos-c683-wal-test
+
+services:
+  postgres:
+    container_name: byos-c683-wal-test-pg
+    ports: !override
+      - "127.0.0.1:15444:5432"
+    volumes: !override
+      - c683_test_pgdata:/var/lib/postgresql/data
+      - ../infra/postgres/init:/docker-entrypoint-initdb.d:ro
+      - ../infra/postgres/migrations:/migrations:ro
+      - c683_test_archive:/var/byos/archive
+      - ../tools/byos-backup/byos-backup-linux:/usr/local/bin/byos-backup:ro
+      - ../infra/secrets/backup.key:/etc/byos/keys/backup.key:ro
+
+volumes:
+  c683_test_pgdata:
+  c683_test_archive:

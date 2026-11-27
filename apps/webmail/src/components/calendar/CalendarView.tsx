@@ -1864,7 +1864,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
         </div>
 
       {/* ── Right Content Column beside CalendarSidebar ── */}
-      <div class="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden gap-0 md:gap-2 pb-0">
+      <div class="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden gap-1.5 sm:gap-2">
         {/* Mobile Google Calendar Top Header (< md) */}
         <MobileCalendarHeader
           periodTitle={periodTitle()}
@@ -1902,7 +1902,7 @@ export const CalendarView: Component<CalendarViewProps> = (props) => {
         </div>
 
         {/* ── Main Workspace Card ── */}
-        <div class="flex-1 rounded-none sm:rounded-2xl border-0 sm:border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex flex-col min-w-0 min-h-0">
+        <div class="flex-1 rounded-2xl border border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] shadow-2xs overflow-hidden flex flex-col min-w-0 min-h-0">
           {/* Toolbar */}
           <CalendarToolbar
             hideRedundantTopBarItems={true}

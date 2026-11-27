@@ -397,8 +397,8 @@ export const MessageRow: Component<MessageRowProps> = (props) => {
           : props.isChecked
           ? "bg-[#F2E8E2] dark:bg-[#2D2522] border-l-4 border-[#A27561]"
           : isUnread()
-          ? "bg-white dark:bg-[#18191D] hover:bg-[#FAF9F6] dark:hover:bg-[#202227]"
-          : "bg-[#FAF9F6]/80 dark:bg-[#18191D]/80 hover:bg-white dark:hover:bg-[#202227]"
+          ? "bg-white dark:bg-[#18191D] hover:bg-[#F9F7F2] dark:hover:bg-[#202227]"
+          : "bg-white dark:bg-[#18191D] hover:bg-[#F9F7F2] dark:hover:bg-[#202227]"
       }`}
     >
       <Show

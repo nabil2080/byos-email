@@ -1,10 +1,9 @@
 import { Component, createSignal, Show } from "solid-js";
-import { MiniMonthPicker } from "./MiniMonthPicker";
 
 export interface MobileCalendarHeaderProps {
   periodTitle: string;
-  selectedDate: Date;
-  onSelectDate: (d: Date) => void;
+  selectedDate?: Date;
+  onSelectDate?: (d: Date) => void;
   onToday: () => void;
   onOpenSidebar: () => void;
   searchQuery: string;
@@ -14,15 +13,9 @@ export interface MobileCalendarHeaderProps {
 }
 
 export const MobileCalendarHeader: Component<MobileCalendarHeaderProps> = (props) => {
-  const [isMonthPickerOpen, setIsMonthPickerOpen] = createSignal(false);
   const [isSearchOpen, setIsSearchOpen] = createSignal(false);
 
   const todayDateNum = () => new Date().getDate();
-
-  const userInitial = () => {
-    if (!props.currentUserEmail) return "U";
-    return props.currentUserEmail.charAt(0).toUpperCase();
-  };
 
   return (
     <header
@@ -33,7 +26,7 @@ export const MobileCalendarHeader: Component<MobileCalendarHeaderProps> = (props
         when={isSearchOpen()}
         fallback={
           <>
-            {/* ── Left Cluster: Hamburger + Period Title Dropdown ── */}
+            {/* ── Left Cluster: Hamburger + Period Title ── */}
             <div class="flex items-center gap-1.5 min-w-0 flex-1">
               {/* Hamburger Button */}
               <button
@@ -51,27 +44,13 @@ export const MobileCalendarHeader: Component<MobileCalendarHeaderProps> = (props
                 </svg>
               </button>
 
-              {/* Period Title Button with Chevron (Google Calendar Phone pattern) */}
-              <button
-                type="button"
-                onClick={() => setIsMonthPickerOpen(!isMonthPickerOpen())}
-                class="flex items-center gap-1 px-2.5 py-2 min-h-[44px] min-w-[44px] rounded-xl hover:bg-[#E8E5DF] dark:hover:bg-[#2A2D35] text-[#3C3D3E] dark:text-[#ECEBE8] transition-colors cursor-pointer"
-                data-testid="calendar-month-dropdown-btn"
-                aria-expanded={isMonthPickerOpen()}
-                aria-label="Toggle month picker"
+              {/* Period Title */}
+              <h2
+                class="text-sm font-bold truncate max-w-[180px] sm:max-w-[240px] text-[#3C3D3E] dark:text-[#ECEBE8] px-1"
+                data-testid="calendar-period-title"
               >
-                <span class="text-sm font-bold truncate max-w-[160px] sm:max-w-[220px]">
-                  {props.periodTitle}
-                </span>
-                <svg
-                  class={`w-4 h-4 text-[#6F7173] dark:text-[#878A8E] stroke-current fill-none stroke-[2.2] transition-transform duration-200 flex-shrink-0 ${
-                    isMonthPickerOpen() ? "rotate-180" : ""
-                  }`}
-                  viewBox="0 0 24 24"
-                >
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
-              </button>
+                <span>{props.periodTitle}</span>
+              </h2>
             </div>
 
             {/* ── Right Cluster: Search Toggle + Dynamic Today + Avatar ── */}
@@ -151,27 +130,6 @@ export const MobileCalendarHeader: Component<MobileCalendarHeaderProps> = (props
               </button>
             </Show>
           </div>
-        </div>
-      </Show>
-
-      {/* ── Collapsible Mini-Month Dropdown Picker ── */}
-      <Show when={isMonthPickerOpen()}>
-        <div
-          class="fixed inset-0 top-14 bg-black/25 z-40 backdrop-blur-2xs"
-          onClick={() => setIsMonthPickerOpen(false)}
-          data-testid="mobile-month-picker-backdrop"
-        />
-        <div
-          class="absolute top-full left-2 right-2 sm:left-4 sm:right-auto sm:w-80 mt-1 z-50 bg-white dark:bg-[#1E1F23] rounded-2xl shadow-2xl border border-[#E2DFD8] dark:border-[#2A2D35] p-2 animate-in fade-in slide-in-from-top-2 duration-150"
-          data-testid="mobile-month-picker-dropdown"
-        >
-          <MiniMonthPicker
-            selectedDate={props.selectedDate}
-            onSelectDate={(d) => {
-              props.onSelectDate(d);
-              setIsMonthPickerOpen(false);
-            }}
-          />
         </div>
       </Show>
     </header>

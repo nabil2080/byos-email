@@ -33,6 +33,7 @@ import { EditLabelsModal } from "./EditLabelsModal";
 import { DrawingModal } from "./DrawingModal";
 import { VersionHistoryModal } from "./VersionHistoryModal";
 import { TopFixedBar, AppModule } from "../TopFixedBar";
+import { MobileNotesFab } from "./MobileNotesFab";
 import { getMailboxKeyFor } from "../../session_isolation";
 import {
   getNotesSyncStatus,
@@ -698,6 +699,11 @@ export const NotesView: Component<NotesViewProps> = (props) => {
           </Show>
         </div>
       </div>
+
+      {/* ── Mobile Notes Floating Action Button ── */}
+      <Show when={mobilePane() === "list"}>
+        <MobileNotesFab onNewNote={handleNewNote} />
+      </Show>
 
       {/* ── Modals: Edit Labels, Drawing, Version History ── */}
       <EditLabelsModal

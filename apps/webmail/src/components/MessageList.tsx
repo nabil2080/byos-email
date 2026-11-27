@@ -148,11 +148,11 @@ export const MessageList: Component<MessageListProps> = (props) => {
   return (
     <div
       data-testid="message-list"
-      class="w-full h-full bg-[#FAF9F6] dark:bg-[#1E2025] flex flex-col min-w-0 min-h-0 overflow-hidden flex-shrink-0"
+      class="w-full h-full bg-white dark:bg-[#18191D] flex flex-col min-w-0 min-h-0 overflow-hidden flex-shrink-0"
     >
       {/* Label Filter Chip Row */}
       <Show when={props.activeLabel}>
-        <div class="px-3.5 py-2 bg-[#FAF9F6] dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between text-xs flex-shrink-0">
+        <div class="px-3.5 py-2 bg-white dark:bg-[#18191D] border-b border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between text-xs flex-shrink-0">
           <div class="flex items-center gap-2 truncate min-w-0">
             <span class="text-[#6F7173] dark:text-[#878A8E] text-[11px] font-medium flex-shrink-0">Label filter:</span>
             <span
@@ -241,7 +241,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
       {/* Focused Inbox Tabs (Inbox view only, when enabled) */}
       <Show when={props.currentFolder === "inbox" && props.focusedInboxEnabled !== false && props.onSelectCategory}>
         <div
-          class="relative hidden md:flex items-center gap-1 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-[#FAF9F6] dark:bg-[#1A1B20] px-2.5 py-1.5 overflow-x-auto no-scrollbar flex-shrink-0"
+          class="relative hidden md:flex items-center gap-1 border-b border-[#E2DFD8] dark:border-[#2A2D35] bg-white dark:bg-[#18191D] px-2.5 py-1.5 overflow-x-auto no-scrollbar flex-shrink-0"
           role="tablist"
           aria-label="Focused Inbox Categories"
           data-testid="focused-inbox-tabs"

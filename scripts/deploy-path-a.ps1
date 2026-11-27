@@ -10,7 +10,7 @@
 $ErrorActionPreference = "Stop"
 
 Write-Host "1. Applying migration 041..."
-Get-Content infra/postgres/init/041_scheduled_path_a.sql | docker exec -i byos-postgres psql -U byos -d byos
+Get-Content infra/postgres/migrations/041_scheduled_path_a.sql | docker exec -i byos-postgres psql -U byos -d byos
 
 Write-Host "2. Rebuilding api and outbound-worker..."
 docker compose -f infra/docker-compose.yml up -d --build api outbound-worker

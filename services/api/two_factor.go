@@ -933,7 +933,7 @@ func login2FAVerifyHandler(w http.ResponseWriter, r *http.Request) {
 	auditLog(ctx, conn, orgID, userID, "login_2fa", "user", userID, nil)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	resp := map[string]interface{}{
 		"id":                       userID,
 		"email":                    userEmail,
 		"org_id":                   orgID,
@@ -941,13 +941,13 @@ func login2FAVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		"role":                     role,
 		"seat_count":               seatCount,
 		"subscription_status":      subscriptionStatus,
-		"token":                    token,
 		"mailbox_id":               mailboxID,
 		"mailbox_local_part":       mailboxLocalPart,
 		"mailbox_mode":             mailboxMode,
 		"wrapped_sk_user":          wrappedSkUserStr,
 		"previous_wrapped_sk_user": previousWrappedSkUserStr,
-	})
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 // login2FASendCodeHandler handles POST /v1/auth/2fa/send-code

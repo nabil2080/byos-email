@@ -349,6 +349,7 @@ func TestTOTP_ReplayPrevention_FullLifecycle_9Properties(t *testing.T) {
 	// Wait, even if Alice tries to link her own account or secondary account with the same code:
 	// -------------------------------------------------------------
 	reqInitLink := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"Secret-Pass-123!"}`, secEmail)))
+	reqInitLink.Header.Set("X-BYOS-Client", "webmail")
 	reqInitLink.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqInitLink.Header.Set("Content-Type", "application/json")
 	recInitLink := httptest.NewRecorder()
@@ -374,6 +375,7 @@ func TestTOTP_ReplayPrevention_FullLifecycle_9Properties(t *testing.T) {
 		primUserID, linkChalAlice, callerHexA)
 
 	reqCrossFlow := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"challenge_token":"%s","code":"%s"}`, linkChalAlice, validLoginTOTP)))
+	reqCrossFlow.Header.Set("X-BYOS-Client", "webmail")
 	reqCrossFlow.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqCrossFlow.Header.Set("Content-Type", "application/json")
 	recCrossFlow := httptest.NewRecorder()
@@ -390,6 +392,7 @@ func TestTOTP_ReplayPrevention_FullLifecycle_9Properties(t *testing.T) {
 		secUserID, expiredLinkChal, callerHexA)
 
 	reqExpired := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"challenge_token":"%s","code":"123456"}`, expiredLinkChal)))
+	reqExpired.Header.Set("X-BYOS-Client", "webmail")
 	reqExpired.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqExpired.Header.Set("Content-Type", "application/json")
 	recExpired := httptest.NewRecorder()
@@ -403,6 +406,7 @@ func TestTOTP_ReplayPrevention_FullLifecycle_9Properties(t *testing.T) {
 	// (Eve attempts to submit Alice's secondary account challenge token)
 	// -------------------------------------------------------------
 	reqCrossSession := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"challenge_token":"%s","code":"123456"}`, linkChalToken)))
+	reqCrossSession.Header.Set("X-BYOS-Client", "webmail")
 	reqCrossSession.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenB}) // Eve's session cookie
 	reqCrossSession.Header.Set("Content-Type", "application/json")
 	recCrossSession := httptest.NewRecorder()
@@ -416,6 +420,7 @@ func TestTOTP_ReplayPrevention_FullLifecycle_9Properties(t *testing.T) {
 	// -------------------------------------------------------------
 	// Alice submits bogus code "000000" against Bob's link challenge
 	reqBogus := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"challenge_token":"%s","code":"000000"}`, linkChalToken)))
+	reqBogus.Header.Set("X-BYOS-Client", "webmail")
 	reqBogus.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqBogus.Header.Set("Content-Type", "application/json")
 	recBogus := httptest.NewRecorder()
@@ -434,6 +439,7 @@ func TestTOTP_ReplayPrevention_FullLifecycle_9Properties(t *testing.T) {
 	}
 
 	reqBobValid := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(fmt.Sprintf(`{"challenge_token":"%s","code":"%s"}`, linkChalToken, validBobTOTP)))
+	reqBobValid.Header.Set("X-BYOS-Client", "webmail")
 	reqBobValid.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 	reqBobValid.Header.Set("Content-Type", "application/json")
 	recBobValid := httptest.NewRecorder()
@@ -473,6 +479,7 @@ func TestTOTP_ReplayPrevention_FullLifecycle_9Properties(t *testing.T) {
 
 			body := fmt.Sprintf(`{"email":"%s","password":"Secret-Pass-123!","code":"%s"}`, concEmail, concCode)
 			req := httptest.NewRequest(http.MethodPost, "/v1/auth/linked-accounts", strings.NewReader(body))
+			req.Header.Set("X-BYOS-Client", "webmail")
 			req.AddCookie(&http.Cookie{Name: "byos_webmail_session", Value: rawTokenA})
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()

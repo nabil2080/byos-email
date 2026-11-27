@@ -22,8 +22,9 @@ import {
   type SupportAgent,
   type SupportStats,
 } from "./lib/api";
+import { DeliveryOperationsConsole } from "./components/queue/DeliveryOperationsConsole";
 
-type NavTab = "tickets" | "organizations" | "audit_logs";
+type NavTab = "tickets" | "organizations" | "queue" | "audit_logs";
 
 export const App: Component = () => {
   const [currentTab, setCurrentTab] = createSignal<NavTab>("tickets");
@@ -573,6 +574,33 @@ export const App: Component = () => {
             <button
               type="button"
               onClick={() => {
+                setCurrentTab("queue");
+                setMobileDrawerOpen(false);
+              }}
+              class={`w-full flex items-center justify-between rounded-xl text-sm font-medium px-3 py-2.5 transition cursor-pointer ${
+                currentTab() === "queue"
+                  ? "bg-[#9E725F] text-white font-semibold shadow-xs"
+                  : "text-[#55575B] hover:bg-black/5"
+              }`}
+            >
+              <div class="flex items-center gap-2.5">
+                <svg class="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                  <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                </svg>
+                <span>Delivery Queue</span>
+              </div>
+              <span
+                class={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold ${
+                  currentTab() === "queue" ? "bg-white/20 text-white" : "bg-black/5 text-[#55575B]"
+                }`}
+              >
+                Ops
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
                 setCurrentTab("audit_logs");
                 setMobileDrawerOpen(false);
               }}
@@ -750,6 +778,41 @@ export const App: Component = () => {
                 </button>
               </li>
 
+              {/* Tab: Outbound Queue (Release C6.5 / C6.5.1) */}
+              <li>
+                <button
+                  type="button"
+                  ref={(el) => {
+                    if (el) {
+                      navRefs.set("queue", el);
+                      if (currentTab() === "queue") updateNavPill();
+                    }
+                  }}
+                  onClick={() => setCurrentTab("queue")}
+                  class={`relative z-10 w-full flex items-center justify-between rounded-xl text-[13px] font-medium transition-colors duration-150 px-3 py-2 cursor-pointer focus:outline-none ${
+                    currentTab() === "queue"
+                      ? "text-white font-semibold"
+                      : "text-[#55575B] hover:bg-black/5 hover:text-[#1A1B1E]"
+                  }`}
+                >
+                  <div class="flex items-center gap-2.5">
+                    <svg class="w-4 h-4 shrink-0 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+                      <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                    </svg>
+                    <span>Delivery Queue</span>
+                  </div>
+                  <span
+                    class={`text-[10px] font-mono px-1.5 py-0.2 rounded-md font-bold ${
+                      currentTab() === "queue"
+                        ? "bg-white/20 text-white"
+                        : "bg-purple-100 text-purple-800"
+                    }`}
+                  >
+                    Ops
+                  </span>
+                </button>
+              </li>
+
               {/* Tab 3: Audit Logs */}
               <li>
                 <button
@@ -864,6 +927,8 @@ export const App: Component = () => {
                   ? "Support Ticket Queue"
                   : currentTab() === "organizations"
                   ? "Organization Management"
+                  : currentTab() === "queue"
+                  ? "Delivery Operations Console"
                   : "Immutable Audit Ledger"}
               </span>
             </div>
@@ -1703,6 +1768,18 @@ export const App: Component = () => {
                 </div>
               </Show>
 
+              {/* ─────────────────────────────────────────────────────────────
+                  TAB 4: OUTBOUND DELIVERY OPERATIONS (Release C6.5 / C6.5.1)
+                 ───────────────────────────────────────────────────────────── */}
+              <Show when={currentTab() === "queue"}>
+                <DeliveryOperationsConsole
+                  onNotification={(notif) => {
+                    setActionNotification(notif);
+                    setTimeout(() => setActionNotification(null), 6000);
+                  }}
+                />
+              </Show>
+
             </ErrorBoundary>
           </main>
         </div>
@@ -2020,6 +2097,18 @@ export const App: Component = () => {
             <rect x="3" y="16" width="7" height="5" rx="1.5" />
           </svg>
           <span class="text-[10px] mt-0.5">Orgs</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setCurrentTab("queue")}
+          class={`flex flex-col items-center justify-center flex-1 py-1 text-xs cursor-pointer ${
+            currentTab() === "queue" ? "text-[#9E725F] font-bold" : "text-[#6E7075] font-medium"
+          }`}
+        >
+          <svg class="w-5 h-5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+          </svg>
+          <span class="text-[10px] mt-0.5">Queue</span>
         </button>
         <button
           type="button"

@@ -2,16 +2,16 @@
 
 @layer base {
   :root {
-    --cloud-dancer: #F0EEE9;
-    --mocha-mousse: #9E725F;
-    --mocha-mousse-hover: #865E4D;
-    --mocha-mousse-soft: #F3ECE8;
-    --neutral-charcoal: #3C3D3E;
-    --neutral-muted: #6F7173;
-    --hairline-border: #E2DFD8;
+    --cloud-dancer: #EAE6DE;
+    --mocha-mousse: #226192;
+    --mocha-mousse-hover: #1B4E76;
+    --mocha-mousse-soft: #E2E7EB;
+    --neutral-charcoal: #18212A;
+    --neutral-muted: #55616D;
+    --hairline-border: #D8D3C9;
     --pure-white: #FFFFFF;
-    --foreground: #3C3D3E;
-    --background: #F0EEE9;
+    --foreground: #18212A;
+    --background: #EAE6DE;
   }
 
   html {
@@ -40,14 +40,14 @@
     width: 8px;
   }
   ::-webkit-scrollbar-track {
-    background: #F0EEE9;
+    background: #EAE6DE;
   }
   ::-webkit-scrollbar-thumb {
-    background: #E2DFD8;
+    background: #D8D3C9;
     border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #9E725F;
+    background: #226192;
   }
 }
 
@@ -56,16 +56,16 @@
    Warm, precise, minimal. Quiet luxury for business infrastructure.
 ---------------------------------------------------------------- */
 @theme {
-  --color-cloud-dancer: #F0EEE9;
-  --color-soft-badge: #F3ECE8;
-  --color-mocha: #9E725F;
-  --color-mocha-dark: #865E4D;
-  --color-obsidian: #2B2C2D;
-  --color-charcoal: #3C3D3E;
-  --color-slate: #6F7173;
-  --color-faint-slate: #8B8E91;
-  --color-hairline: #E2DFD8;
-  --color-terracotta: #C89F8D;
+  --color-cloud-dancer: #EAE6DE;
+  --color-soft-badge: #E2E7EB;
+  --color-mocha: #226192;
+  --color-mocha-dark: #1B4E76;
+  --color-obsidian: #18212A;
+  --color-charcoal: #18212A;
+  --color-slate: #55616D;
+  --color-faint-slate: #647280;
+  --color-hairline: #D8D3C9;
+  --color-terracotta: #EF8557;
   --font-sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
@@ -102,7 +102,7 @@
 
 /* Hairline card used across editorial surfaces */
 .card-editorial {
-  background-color: #FBFAF7;
+  background-color: #F6F3ED;
   border: 1px solid var(--hairline-border);
   border-radius: 18px;
   box-shadow: 0 1px 2px rgba(43, 44, 45, 0.03);
@@ -215,7 +215,7 @@
   border-radius: 999px;
   background: var(--mocha-mousse);
   border: 3px solid #ffffff;
-  box-shadow: 0 2px 8px rgba(158, 114, 95, 0.35);
+  box-shadow: 0 2px 8px rgba(34, 97, 146, 0.35);
   cursor: pointer;
   transition: background 0.2s ease, transform 0.2s ease;
 }
@@ -229,7 +229,7 @@
   border-radius: 999px;
   background: var(--mocha-mousse);
   border: 3px solid #ffffff;
-  box-shadow: 0 2px 8px rgba(158, 114, 95, 0.35);
+  box-shadow: 0 2px 8px rgba(34, 97, 146, 0.35);
   cursor: pointer;
 }
 .seat-slider:focus-visible::-webkit-slider-thumb {
@@ -255,14 +255,14 @@
 /* Subtle architectural grid on Cloud Dancer */
 .bg-architectural-grid {
   background-image: 
-    linear-gradient(to right, rgba(158, 114, 95, 0.08) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(158, 114, 95, 0.08) 1px, transparent 1px);
+    linear-gradient(to right, rgba(34, 97, 146, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(34, 97, 146, 0.08) 1px, transparent 1px);
   background-size: 40px 40px;
 }
 
 /* Warm ambient glow for light background */
 .ambient-glow {
-  background: radial-gradient(circle 800px at 50% -100px, rgba(158, 114, 95, 0.15), transparent 70%);
+  background: radial-gradient(circle 800px at 50% -100px, rgba(34, 97, 146, 0.15), transparent 70%);
 }
 
 .reveal-text {
@@ -272,8 +272,8 @@
 /* Ambient warm Mocha Mousse mesh */
 .bg-ambient-mesh {
   background: 
-    radial-gradient(at 15% 10%, rgba(158, 114, 95, 0.12) 0px, transparent 55%),
-    radial-gradient(at 85% 15%, rgba(158, 114, 95, 0.08) 0px, transparent 50%),
+    radial-gradient(at 15% 10%, rgba(34, 97, 146, 0.12) 0px, transparent 55%),
+    radial-gradient(at 85% 15%, rgba(34, 97, 146, 0.08) 0px, transparent 50%),
     radial-gradient(at 50% 60%, rgba(243, 236, 232, 0.6) 0px, transparent 65%);
 }
 
@@ -389,7 +389,7 @@
 }
 .card-hover-elevate:hover {
   transform: translateY(-2px);
-  box-shadow: 0 12px 28px -6px rgba(158, 114, 95, 0.12), 0 4px 10px -2px rgba(60, 61, 62, 0.05);
+  box-shadow: 0 12px 28px -6px rgba(34, 97, 146, 0.12), 0 4px 10px -2px rgba(60, 61, 62, 0.05);
 }
 
 /* Active Packet Flow Animation */
@@ -552,22 +552,22 @@
 
 /* Primary & Secondary Action Button Utilities */
 .btn-primary {
-  background-color: var(--mocha-mousse);
-  color: #ffffff;
-  font-weight: 600;
+  background-color: #EF8557;
+  color: #0B131B;
+  font-weight: 700;
   border-radius: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 12px rgba(158, 114, 95, 0.25);
-  transition: all 0.5s ease-in-out;
+  box-shadow: 0 6px 18px rgba(239, 133, 87, 0.28);
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
   cursor: pointer;
 }
 .btn-primary:hover {
-  border-radius: 15px;
-  background-color: var(--mocha-mousse-hover);
+  border-radius: 14px;
+  background-color: #E27343;
   transform: translateY(-1px);
-  box-shadow: 0 8px 20px -4px rgba(158, 114, 95, 0.35);
+  box-shadow: 0 10px 24px -4px rgba(239, 133, 87, 0.42);
 }
 
 .btn-second {
@@ -575,7 +575,7 @@
   font-weight: 600;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   transition: all 0.5s ease-in-out;
-  background-color: #E2DFD8;
+  background-color: #D8D3C9;
   color: var(--neutral-charcoal);
   cursor: pointer;
   display: inline-flex;
@@ -597,7 +597,7 @@
 
 /* Inverted corner notches connecting hanging DesktopNav to top canvas */
 nav.desktop-nav {
-  box-shadow: 0 -20px 0 0 var(--background, #F0EEE9);
+  box-shadow: 0 -20px 0 0 var(--background, #EAE6DE);
 }
 
 nav.desktop-nav::after,
@@ -609,7 +609,7 @@ nav:not(.sticky-nav)::before {
   background-color: transparent;
   height: 40px;
   width: 20px;
-  box-shadow: 0 -20px 0 0 var(--background, #F0EEE9);
+  box-shadow: 0 -20px 0 0 var(--background, #EAE6DE);
   top: 0;
   pointer-events: none;
 }
@@ -653,3 +653,129 @@ nav:not(.sticky-nav)::before {
   overflow: hidden;
 }
 
+
+/* ---------------------------------------------------------------
+   Awwwards Fluted Glass & Kinetic Motion Utilities
+---------------------------------------------------------------- */
+.fluted-glass-ribs {
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.08) 0px,
+    rgba(255, 255, 255, 0.015) 3px,
+    rgba(10, 6, 4, 0.42) 14px,
+    rgba(255, 240, 228, 0.06) 24px,
+    rgba(10, 6, 4, 0.28) 28px
+  );
+  backdrop-filter: blur(28px) saturate(135%);
+  -webkit-backdrop-filter: blur(28px) saturate(135%);
+}
+
+.fluted-glass-sheen {
+  background-image: repeating-linear-gradient(
+    90deg,
+    transparent 0px,
+    rgba(255, 255, 255, 0.05) 1px,
+    transparent 2px,
+    transparent 28px
+  );
+  mix-blend-mode: overlay;
+}
+
+.film-grain {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@keyframes text-shimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.animate-text-shimmer {
+  background-size: 200% auto;
+  animation: text-shimmer 7s ease-in-out infinite;
+}
+
+@keyframes beam-vertical {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(500%);
+    opacity: 0;
+  }
+}
+
+.animate-beam-vertical {
+  animation: beam-vertical 3.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-text-shimmer,
+  .animate-beam-vertical {
+    animation: none !important;
+  }
+}
+
+/* Infinite marquee for storage providers */
+@keyframes marquee-scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  display: flex;
+  width: max-content;
+  animation: marquee-scroll 28s linear infinite;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+/* Cursor spotlight glow on editorial cards */
+.card-spotlight {
+  position: relative;
+  overflow: hidden;
+}
+
+.card-spotlight::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    420px circle at var(--spot-x, 50%) var(--spot-y, 50%),
+    rgba(34, 97, 146, 0.12),
+    transparent 65%
+  );
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+}
+
+.card-spotlight:hover::before {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-marquee {
+    animation: none !important;
+  }
+}

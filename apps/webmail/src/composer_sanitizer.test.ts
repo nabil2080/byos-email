@@ -179,5 +179,157 @@ export async function runComposerSanitizerTests(): Promise<{ passed: number; fai
     assert(allowedResult.sanitized.includes("src=\"https://tracker.example.com/pixel.gif\""), "Remote image src preserved");
   });
 
+  await test("test_sanitize_strips_svg_data_uris", () => {
+    const maliciousSvg = `<p>Test</p><img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' onload='alert(1)'></svg>" alt="svg" />`;
+    const sendClean = sanitizeOnSend(maliciousSvg);
+    assert(!sendClean.includes("image/svg+xml"), "sanitizeOnSend must block data:image/svg+xml");
+    assert(!sendClean.includes("src="), "sanitizeOnSend must strip src with svg data URI");
+
+    const receiveClean = sanitizeOnReceive(maliciousSvg);
+    assert(!receiveClean.sanitized.includes("image/svg+xml"), "sanitizeOnReceive must block data:image/svg+xml");
+    assert(!receiveClean.sanitized.includes("onload"), "sanitizeOnReceive must not contain onload payload");
+
+    // Safe PNG data URI must be preserved
+    const safePng = `<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mOMjY2tBwAEOQFj8j8UkwAAAABJRU5ErkJggg==" alt="dot" />`;
+    const sendSafe = sanitizeOnSend(safePng);
+    assert(sendSafe.includes("data:image/png;base64,"), "sanitizeOnSend preserves valid PNG data URI");
+  });
+
+  await test("test_sanitize_strips_css_url_remote_loading", () => {
+    const dangerousCss = `<div style="background-image: url('https://evil.com/leak.png'); color: #1a1b1e; font-size: 14px;">Styled text</div>`;
+    const sendClean = sanitizeOnSend(dangerousCss);
+    assert(!sendClean.includes("url("), "sanitizeOnSend must strip CSS url(...) declaration");
+    assert(!sendClean.includes("evil.com"), "sanitizeOnSend must remove remote leak URL");
+    assert(sendClean.includes("color: #1a1b1e"), "sanitizeOnSend preserves safe color style");
+    assert(sendClean.includes("font-size: 14px"), "sanitizeOnSend preserves safe font-size style");
+
+    const receiveClean = sanitizeOnReceive(dangerousCss);
+    assert(!receiveClean.sanitized.includes("url("), "sanitizeOnReceive must strip CSS url(...)");
+    assert(receiveClean.sanitized.includes("color: #1a1b1e"), "sanitizeOnReceive preserves safe styles");
+  });
+
+  await test("test_sanitize_strips_css_expression_and_import", () => {
+    const exploitCss = `<div style="width: expression(alert(1)); @import 'https://evil.com/style.css'; behavior: url(x); -moz-binding: url(y); margin: 10px;">Content</div>`;
+    const sendClean = sanitizeOnSend(exploitCss);
+    assert(!sendClean.includes("expression"), "sanitizeOnSend strips CSS expression");
+    assert(!sendClean.includes("@import"), "sanitizeOnSend strips CSS @import");
+    assert(!sendClean.includes("behavior"), "sanitizeOnSend strips CSS behavior");
+    assert(!sendClean.includes("-moz-binding"), "sanitizeOnSend strips CSS -moz-binding");
+    assert(sendClean.includes("margin: 10px"), "sanitizeOnSend preserves benign margin");
+  });
+
+  await test("test_sanitize_forbids_svg_and_mathml_tags", () => {
+    const svgExploit = `<svg><script>alert('svg-xss')</script><circle r="10"/></svg><p>Safe</p>`;
+    const sendClean = sanitizeOnSend(svgExploit);
+    assert(!sendClean.includes("<svg"), "sanitizeOnSend strips <svg> tag");
+    assert(!sendClean.includes("svg-xss"), "sanitizeOnSend strips svg script content");
+    assert(sendClean.includes("Safe"), "sanitizeOnSend preserves benign content");
+
+    const mathMlExploit = `<math><mi xlink:href="javascript:alert(1)">click</mi></math>`;
+    const receiveClean = sanitizeOnReceive(mathMlExploit);
+    assert(!receiveClean.sanitized.includes("<math"), "sanitizeOnReceive strips <math> tag");
+    assert(!receiveClean.sanitized.includes("xlink:href"), "sanitizeOnReceive strips xlink:href attribute");
+  });
+
+  await test("test_sanitize_strips_all_event_handlers", () => {
+    const eventHandlers = `<img src="https://example.com/pic.jpg" onerror="alert('err')" onload="alert('load')" onanimationstart="alert('anim')" />`;
+    const sendClean = sanitizeOnSend(eventHandlers);
+    assert(!sendClean.includes("onerror"), "sanitizeOnSend strips onerror");
+    assert(!sendClean.includes("onload"), "sanitizeOnSend strips onload");
+    assert(!sendClean.includes("onanimationstart"), "sanitizeOnSend strips onanimationstart");
+
+    const receiveClean = sanitizeOnReceive(eventHandlers, { allowRemoteImages: true });
+    assert(!receiveClean.sanitized.includes("onerror"), "sanitizeOnReceive strips onerror");
+    assert(!receiveClean.sanitized.includes("onload"), "sanitizeOnReceive strips onload");
+    assert(!receiveClean.sanitized.includes("onanimationstart"), "sanitizeOnReceive strips onanimationstart");
+  });
+
+  await test("test_sanitize_enforces_target_blank_and_rel_noopener", () => {
+    const linkInput = `<p><a href="https://example.com">Example</a> and <a href="mailto:test@byos.local">Email</a></p>`;
+    const sendClean = sanitizeOnSend(linkInput);
+    assert(sendClean.includes('target="_blank"'), "sanitizeOnSend adds target=\"_blank\"");
+    assert(sendClean.includes('rel="noopener noreferrer"'), "sanitizeOnSend adds rel=\"noopener noreferrer\"");
+
+    const receiveClean = sanitizeOnReceive(linkInput);
+    assert(receiveClean.sanitized.includes('target="_blank"'), "sanitizeOnReceive adds target=\"_blank\"");
+    assert(receiveClean.sanitized.includes('rel="noopener noreferrer"'), "sanitizeOnReceive adds rel=\"noopener noreferrer\"");
+  });
+
+  await test("test_sanitize_overwrites_target_top_and_parent", () => {
+    const topLink = `<a href="https://evil.com" target="_top">Navigate Top</a>`;
+    const parentLink = `<a href="https://evil.com" target="_parent">Navigate Parent</a>`;
+
+    const sendTop = sanitizeOnSend(topLink);
+    assert(!sendTop.includes('target="_top"'), "sanitizeOnSend overwrites target=\"_top\"");
+    assert(sendTop.includes('target="_blank"'), "sanitizeOnSend forces target=\"_blank\"");
+    assert(sendTop.includes('rel="noopener noreferrer"'), "sanitizeOnSend enforces rel=\"noopener noreferrer\"");
+
+    const receiveParent = sanitizeOnReceive(parentLink);
+    assert(!receiveParent.sanitized.includes('target="_parent"'), "sanitizeOnReceive overwrites target=\"_parent\"");
+    assert(receiveParent.sanitized.includes('target="_blank"'), "sanitizeOnReceive forces target=\"_blank\"");
+    assert(receiveParent.sanitized.includes('rel="noopener noreferrer"'), "sanitizeOnReceive enforces rel=\"noopener noreferrer\"");
+  });
+
+  await test("test_sanitize_handles_malformed_html_safely", () => {
+    const malformed = `<<SCRIPT>alert("XSS");//<</SCRIPT><img src="javascript:alert(1)" onerror=alert(2)><a href="jav&#x09;ascript:alert(1)">Click</a>`;
+    const sendClean = sanitizeOnSend(malformed);
+    assert(!sendClean.includes("<script"), "Malformed script tag eliminated");
+    assert(!sendClean.includes("javascript:"), "Malformed javascript URI eliminated");
+    assert(!sendClean.includes("onerror"), "Malformed onerror eliminated");
+
+    const receiveClean = sanitizeOnReceive(malformed);
+    assert(!receiveClean.sanitized.includes("<script"), "sanitizeOnReceive eliminates malformed script tag");
+    assert(!receiveClean.sanitized.includes("javascript:"), "sanitizeOnReceive eliminates malformed javascript URI");
+    assert(!receiveClean.sanitized.includes("onerror"), "sanitizeOnReceive eliminates malformed onerror");
+  });
+
+  await test("test_sanitize_rejects_unsafe_and_relative_link_schemes", () => {
+    const maliciousLinks = `
+      <p>
+        <a id="l1" href="javascript:alert(1)">JS Link</a>
+        <a id="l2" href="data:text/html,<script>alert(1)</script>">Data Link</a>
+        <a id="l3" href="vbscript:msgbox(1)">VBScript Link</a>
+        <a id="l4" href="file:///C:/Windows/System32">File Link</a>
+        <a id="l5" href="blob:https://byos.local/1234">Blob Link</a>
+        <a id="l6" href="//evil.com/phish">Protocol-Relative Link</a>
+        <a id="l7" href="/relative/inbox">Root-Relative Link</a>
+        <a id="l8" href="relative/path.html">Relative Path Link</a>
+        <a id="l9" href="#section">Hash Link</a>
+        <a id="l10" href="https://example.com/safe">Safe HTTPS</a>
+        <a id="l11" href="http://example.com/safe">Safe HTTP</a>
+        <a id="l12" href="mailto:support@byos.local">Safe Mailto</a>
+      </p>
+    `;
+
+    const resReceive = sanitizeOnReceive(maliciousLinks).sanitized;
+    // Unsafe and relative schemes must have href completely stripped
+    assert(!resReceive.includes('href="javascript:'), "Strips javascript: link");
+    assert(!resReceive.includes('href="data:'), "Strips data: link");
+    assert(!resReceive.includes('href="vbscript:'), "Strips vbscript: link");
+    assert(!resReceive.includes('href="file:'), "Strips file: link");
+    assert(!resReceive.includes('href="blob:'), "Strips blob: link");
+    assert(!resReceive.includes('href="//evil.com'), "Strips protocol-relative link");
+    assert(!resReceive.includes('href="/relative/'), "Strips root-relative link");
+    assert(!resReceive.includes('href="relative/'), "Strips relative path link");
+    assert(!resReceive.includes('href="#section"'), "Strips hash link");
+
+    // Safe schemes must be preserved and decorated with target="_blank" and rel="noopener noreferrer"
+    assert(resReceive.includes('href="https://example.com/safe" target="_blank" rel="noopener noreferrer"'), "Preserves safe HTTPS link with target and rel");
+    assert(resReceive.includes('href="http://example.com/safe" target="_blank" rel="noopener noreferrer"'), "Preserves safe HTTP link with target and rel");
+    assert(resReceive.includes('href="mailto:support@byos.local" target="_blank" rel="noopener noreferrer"'), "Preserves safe mailto link with target and rel");
+
+    const resSend = sanitizeOnSend(maliciousLinks);
+    assert(!resSend.includes('href="javascript:'), "sanitizeOnSend strips javascript: link");
+    assert(!resSend.includes('href="data:'), "sanitizeOnSend strips data: link");
+    assert(!resSend.includes('href="vbscript:'), "sanitizeOnSend strips vbscript: link");
+    assert(!resSend.includes('href="file:'), "sanitizeOnSend strips file: link");
+    assert(!resSend.includes('href="blob:'), "sanitizeOnSend strips blob: link");
+    assert(!resSend.includes('href="//evil.com'), "sanitizeOnSend strips protocol-relative link");
+    assert(!resSend.includes('href="/relative/'), "sanitizeOnSend strips root-relative link");
+    assert(!resSend.includes('href="relative/'), "sanitizeOnSend strips relative path link");
+    assert(!resSend.includes('href="#section"'), "sanitizeOnSend strips hash link");
+    assert(resSend.includes('href="https://example.com/safe" target="_blank" rel="noopener noreferrer"'), "sanitizeOnSend preserves safe HTTPS link");
+  });
+
   return { passed, failed };
 }

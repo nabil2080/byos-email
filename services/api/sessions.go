@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -25,16 +24,7 @@ type SessionItem struct {
 }
 
 func getCallerTokenHash(r *http.Request) ([]byte, bool) {
-	var token string
-	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) != "" {
-		token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-	} else if cookie, err := r.Cookie("byos_session"); err == nil && cookie.Value != "" {
-		token = cookie.Value
-	} else if cookie, err := r.Cookie("byos_cp_session"); err == nil && cookie.Value != "" {
-		token = cookie.Value
-	} else if cookie, err := r.Cookie("byos_webmail_session"); err == nil && cookie.Value != "" {
-		token = cookie.Value
-	}
+	token := extractSessionToken(r)
 	if token == "" {
 		return nil, false
 	}
@@ -56,10 +46,7 @@ func sessionsHandler(w http.ResponseWriter, r *http.Request) {
 
 	callerHash, _ := getCallerTokenHash(r)
 
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getDatabaseDSN()
 	ctx := r.Context()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -119,10 +106,7 @@ func revokeOtherSessionsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getDatabaseDSN()
 	ctx := r.Context()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -229,10 +213,7 @@ func verifyPasswordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://byos:byos_dev_password@localhost:5432/byos?sslmode=disable"
-	}
+	dsn := getDatabaseDSN()
 	ctx := r.Context()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {

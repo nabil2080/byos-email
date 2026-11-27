@@ -111,14 +111,11 @@ export async function fetchAndParseUrlFeed(
     const proxyUrl = `${base}/v1/calendar/feed-proxy?url=${encodeURIComponent(normalized)}`;
     const impersonationToken =
       typeof window !== "undefined" ? sessionStorage.getItem("byos_impersonation_token") : null;
-    const activeToken =
-      typeof window !== "undefined" ? sessionStorage.getItem("byos_active_session_token") : null;
     const authHeaders: Record<string, string> = {
       Accept: "text/calendar, text/plain, */*",
+      "X-BYOS-Client": "webmail",
     };
-    if (activeToken) {
-      authHeaders["Authorization"] = `Bearer ${activeToken}`;
-    } else if (impersonationToken) {
+    if (impersonationToken) {
       authHeaders["Authorization"] = `Bearer ${impersonationToken}`;
     }
 

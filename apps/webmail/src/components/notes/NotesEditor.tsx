@@ -1350,7 +1350,7 @@ export const NotesEditor: Component<NotesEditorProps> = (props) => {
         />
 
         {/* ── Top Header Actions Bar ── */}
-        <div class="h-13 px-2.5 sm:px-4 border-b border-[#E2DFD8] dark:border-[#2E3138] flex items-center justify-between gap-2 bg-white dark:bg-[#1E2025] flex-shrink-0 select-none">
+        <div class="h-13 px-2.5 sm:px-4 border-b border-[#E2DFD8] dark:border-[#2A2D35] flex items-center justify-between gap-2 bg-[#FAF9F6] dark:bg-[#18191D] flex-shrink-0 select-none">
           {/* Left: Back button + Prev/Next navigation (matches email ReadingPane) */}
           <div class="flex items-center gap-1.5 sm:gap-2">
             {/* Back to Notes List */}
